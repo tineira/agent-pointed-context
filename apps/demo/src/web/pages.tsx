@@ -182,7 +182,11 @@ export function DownloadCsv(props: { seed: number }) {
     link.click();
     URL.revokeObjectURL(link.href);
   };
-  return <button onClick={download}>Download mrr-by-customer.csv</button>;
+  return (
+    <button type="button" onClick={download} className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament">
+      Download mrr-by-customer.csv
+    </button>
+  );
 }
 
 /** One agent: its mark, its label, the client that connected, and its MCP URL. */
@@ -208,8 +212,10 @@ export function AgentCard(props: { sid: string; grant: GrantState; initials: str
 export function AddAgentButtons(props: { api: Api; state: SandboxState; onChanged: () => void }) {
   const hasRestricted = props.state.grants.some((g) => g.regions);
   return (
-    <div className="row">
+    <div className="flex flex-wrap gap-2">
       <button
+        type="button"
+        className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
         onClick={async () => {
           await props.api.addAgent();
           props.onChanged();
@@ -219,6 +225,8 @@ export function AddAgentButtons(props: { api: Api; state: SandboxState; onChange
       </button>
       {!hasRestricted && (
         <button
+          type="button"
+          className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
           onClick={async () => {
             await props.api.addRestricted("latam");
             props.onChanged();

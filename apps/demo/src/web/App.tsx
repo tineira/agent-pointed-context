@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { HowTo } from "./howto.tsx";
+import { Landing } from "./landing/landing.tsx";
+import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
 
 type Screen = "howto" | "overview" | "customers" | "agents";
@@ -29,7 +31,7 @@ function readRoute(): { route: Route; filters: Filters } {
 }
 
 function writeRoute(route: Route, filters: Filters): void {
-  const path = route.screen === "customer" ? `/customers/${route.id}` : `/${route.screen}`;
+  const path = route.screen === "customer" ? `/customers/${route.id}` : route.screen === "howto" ? "/how-to" : `/${route.screen}`;
   const q = new URLSearchParams();
   if (route.screen === "overview" || route.screen === "customers" || route.screen === "customer") {
     q.set("month", filters.month);
@@ -40,14 +42,30 @@ function writeRoute(route: Route, filters: Filters): void {
   if (next !== `${location.pathname}${location.search}`) history.pushState(null, "", next);
 }
 
+/** The landing is public and opens no sandbox; every other page belongs to the visitor's sandbox. */
 export function App() {
+  const [path, setPath] = useState(location.pathname);
+  useEffect(() => {
+    const onPop = () => setPath(location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  return (
+    <div className="flex min-h-svh flex-col">
+      {path === "/" ? <Landing /> : <SandboxGate />}
+      <SiteFooter />
+    </div>
+  );
+}
+
+function SandboxGate() {
   const [sid, setSid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     openSession().then(setSid, (e: unknown) => setError(String(e)));
   }, []);
-  if (error) return <p className="boot">Could not open a sandbox: {error}</p>;
-  if (!sid) return <p className="boot">Opening your sandbox…</p>;
+  if (error) return <p className="py-12 text-center text-sm text-muted">Could not open a sandbox: {error}</p>;
+  if (!sid) return <p className="py-12 text-center text-sm text-muted">Opening your sandbox…</p>;
   return <Sandbox sid={sid} />;
 }
 
@@ -156,31 +174,31 @@ function Sandbox({ sid }: { sid: string }) {
     }
   });
 
-  if (!state || !data) return <p className="boot">Loading…</p>;
+  if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   const nav = (screen: Screen) => navigate({ screen }, filters);
 
+  const tab = (screen: Screen, label: string, on: boolean) => (
+    <button key={screen} type="button" onClick={() => nav(screen)} className={`cursor-pointer rounded-md border px-3 py-1.5 text-sm ${on ? "border-line bg-cream font-medium" : "border-transparent text-muted hover:text-foreground"}`}>
+      {label}
+    </button>
+  );
+
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="logo">Pulse</span>
-          <span className="tag">Agent Pointed Context demo</span>
-        </div>
-        <nav>
-          <button className={route.screen === "howto" ? "on" : ""} onClick={() => nav("howto")}>
-            How to
-          </button>
-          <button className={route.screen === "overview" ? "on" : ""} onClick={() => nav("overview")}>
-            Overview
-          </button>
-          <button className={route.screen === "customers" || route.screen === "customer" ? "on" : ""} onClick={() => nav("customers")}>
-            Customers
-          </button>
-          <button className={route.screen === "agents" ? "on" : ""} onClick={() => nav("agents")}>
-            Agents
-          </button>
-        </nav>
-        <div className="marks">
+    <div className="flex flex-1 flex-col">
+      <header className="sticky top-0 z-10 border-b border-line bg-background">
+        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
+          <AppLink href="/" className="flex items-center gap-2.5">
+            <LogoMark />
+            <span className="text-sm font-semibold tracking-tight">Pulse</span>
+            <span className="hidden font-mono text-[11px] uppercase tracking-[0.06em] text-muted sm:inline">APC demo</span>
+          </AppLink>
+          <nav className="flex flex-wrap gap-1">
+            {tab("howto", "How-to", route.screen === "howto")}
+            {tab("overview", "Overview", route.screen === "overview")}
+            {tab("customers", "Customers", route.screen === "customers" || route.screen === "customer")}
+            {tab("agents", "Agents", route.screen === "agents")}
+          </nav>
+          <div className="marks">
           {state.grants.map((g) => {
             const last = Math.max(Date.parse(g.last_active_at ?? "") || 0, pulse[g.id] ?? 0);
             const status = markState(last ? new Date(last).toISOString() : null);
@@ -206,19 +224,22 @@ function Sandbox({ sid }: { sid: string }) {
               </div>
             );
           })}
+          </div>
+          <ThemeToggle />
         </div>
       </header>
-      {notice && <div className="notice">{notice}</div>}
-      <main>
+      {notice && (
+        <div className="mx-auto mt-3 w-full max-w-7xl px-5">
+          <div className="rounded-lg border border-filament/40 bg-filament-soft px-3 py-2 text-sm">{notice}</div>
+        </div>
+      )}
+      <main className={`mx-auto flex w-full flex-1 flex-col gap-4 px-5 py-8 ${route.screen === "howto" ? "max-w-4xl" : "max-w-7xl"}`}>
         {route.screen === "overview" && <Overview data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}
         {route.screen === "customers" && <Customers data={data} filters={filters} onFilters={(f) => navigate(route, f)} onOpen={(id) => navigate({ screen: "customer", id }, filters)} />}
         {route.screen === "customer" && <CustomerDetail data={data} id={route.id} onBack={() => navigate({ screen: "customers" }, filters)} />}
-        {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} go={nav} />}
+        {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} />}
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} />}
       </main>
-      <footer>
-        Synthetic data. Pulse holds no revenue. Paper: <a href="https://doi.org/10.5281/zenodo.23382909">Agent Pointed Context</a>.
-      </footer>
     </div>
   );
 }

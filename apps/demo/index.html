@@ -1,11 +1,25 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="slate-light" data-scheme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pulse · Agent Pointed Context demo</title>
+    <title>Agent Pointed Context · point your AI agent at what you see</title>
+    <meta name="description" content="Point your own AI agent at what you see in an app, without sharing the screen. A live demo over MCP." />
+    <!-- Before first paint: the stored theme (src/web/theme.ts, key apc-theme), else the system's. -->
+    <script>
+      (function () {
+        var d = document.documentElement, t = null;
+        try { t = localStorage.getItem("apc-theme"); } catch (e) {}
+        if (t !== "slate" && t !== "slate-light") t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "slate" : "slate-light";
+        d.setAttribute("data-theme", t);
+        d.setAttribute("data-scheme", t === "slate" ? "dark" : "light");
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet" />
   </head>
-  <body>
+  <body class="min-h-full">
     <div id="root"></div>
     <script type="module" src="/src/web/main.tsx"></script>
   </body>

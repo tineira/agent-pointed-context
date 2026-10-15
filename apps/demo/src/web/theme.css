@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+/* The look of hue.tineira.com (github.com/tineira/hue-switch-console, app/globals.css): its two
+   default themes, Slate Light and Slate. Slate Light is also :root, the no-JS default. Values
+   come from the Omarchy palettes (github.com/basecamp/omarchy, MIT), with muted and status
+   colours nudged to pass WCAG AA. */
+:root,
+html[data-theme="slate-light"] {
+  color-scheme: light;
+  --background: #f3f5f8;
+  --foreground: #141a24;
+  --cream: #ffffff;
+  --muted: #56627a;
+  --line: #d6dce5;
+  --filament: #b85209;
+  --filament-ink: #ffffff;
+  --filament-soft: #f6eae1;
+  --ok: #157a3a;
+  --ok-soft: #e3efe7;
+  --warn: #92400e;
+  --warn-soft: #f2e8e2;
+  --danger: #b42318;
+  --danger-soft: #f6e5e3;
+}
+
+html[data-theme="slate"] {
+  color-scheme: dark;
+  --background: #0b0e13;
+  --foreground: #e9edf3;
+  --cream: #131820;
+  --muted: #8a96a8;
+  --line: #242c38;
+  --filament: #ff9f1c;
+  --filament-ink: #1a1206;
+  --filament-soft: #342b1f;
+  --ok: #6fd3a0;
+  --ok-soft: #203232;
+  --warn: #f5c451;
+  --warn-soft: #333027;
+  --danger: #f47a72;
+  --danger-soft: #33262b;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-cream: var(--cream);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-filament: var(--filament);
+  --color-filament-ink: var(--filament-ink);
+  --color-filament-soft: var(--filament-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Geist", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--filament-soft);
+  color: var(--foreground);
+}
+
+select,
+option {
+  background-color: var(--cream);
+  color: var(--foreground);
+  color-scheme: inherit;
+}
+
+/* The blueprint grid behind drawings (hue: .lv-grid / needs-row GRID). */
+.bp-grid {
+  background-position: center;
+  background-image:
+    repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 24px);
+}
+
+/* Hero drawing: an agent's mark travels onto a bar, the pin is stored, the agent reads it.
+   One 9 s loop; everything sits still with reduced motion. */
+.pd-mark { animation: pd-mark 9s ease-in-out infinite; }
+.pd-target { animation: pd-target 9s step-end infinite; }
+.pd-key { animation: pd-key 9s ease-in-out infinite; }
+.pd-wire { stroke-dasharray: 4 5; animation: pd-wire 1.2s linear infinite; }
+.pd-read { animation: pd-read 9s ease-in-out infinite; }
+.pd-answer { animation: pd-answer 9s ease-in-out infinite; }
+.pd-pulse { animation: pd-pulse 9s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+
+@keyframes pd-mark {
+  0%, 8% { transform: translate(0, 0); }
+  30%, 100% { transform: translate(var(--pd-dx), var(--pd-dy)); }
+}
+@keyframes pd-target {
+  0% { opacity: 0; }
+  30% { opacity: 1; }
+}
+@keyframes pd-key {
+  0%, 34% { opacity: 0; transform: translateY(6px); }
+  42%, 100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes pd-read {
+  0%, 52% { opacity: 0; }
+  60%, 100% { opacity: 1; }
+}
+@keyframes pd-answer {
+  0%, 70% { opacity: 0; transform: translateY(6px); }
+  78%, 100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes pd-pulse {
+  0%, 52% { opacity: 0; transform: scale(1); }
+  56% { opacity: 0.9; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(1.8); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pd-mark { animation: none; transform: translate(var(--pd-dx), var(--pd-dy)); }
+  .pd-target, .pd-key, .pd-read, .pd-answer { animation: none; opacity: 1; }
+  .pd-wire, .pd-pulse { animation: none; }
+  .pd-pulse { opacity: 0; }
+}

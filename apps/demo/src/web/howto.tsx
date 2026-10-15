@@ -1,150 +1,559 @@
-import type { Api, SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, CompatTable, Copy, DownloadCsv } from "./pages.tsx";
+/**
+ * The how-to, presented like hue.tineira.com/how-to (hue-switch-console app/how-to/how-to-guide.tsx):
+ * pick your agent (cards), then what to do (tabs), then numbered steps on a line, each with what
+ * your screen or your agent shows at that point. The visitor's own URL and file are in it.
+ */
+import { useEffect, useState, type ReactNode } from "react";
+import { mcpUrl, type Api, type SandboxState } from "./api.ts";
+import { AddAgentButtons, CompatTable, DownloadCsv } from "./pages.tsx";
+import { AppLink, GROUP_LABEL } from "./ui.tsx";
 
-function Step(props: { n: number; title: string; children: React.ReactNode }) {
+const AGENTS = ["claude-code", "claude-ai", "other"] as const;
+type AgentKind = (typeof AGENTS)[number];
+const TOPICS = ["connect", "point", "ask", "examples"] as const;
+type Topic = (typeof TOPICS)[number];
+
+const AGENT_INFO: Record<AgentKind, { name: string; blurb: string; marks: string[] }> = {
+  "claude-code": { name: "Claude Code", blurb: "In your terminal · one command", marks: ["CC"] },
+  "claude-ai": { name: "claude.ai or Desktop", blurb: "Custom connector · paste a URL", marks: ["CL"] },
+  other: { name: "Another agent", blurb: "ChatGPT, Grok, Cursor, Codex… · remote MCP URL", marks: ["GP", "GR", "CU"] },
+};
+
+const TOPIC_INFO: Record<Topic, { label: string; hint: string }> = {
+  connect: { label: "Connect", hint: "Add your MCP URL" },
+  point: { label: "Point", hint: "Drag your agent's mark" },
+  ask: { label: "Ask or wait", hint: "What it sees, or wait for a pin" },
+  examples: { label: "Examples", hint: "Questions to try, and results" },
+};
+
+const SELECTED = "border-filament shadow-[0_0_0_1px_var(--filament)]";
+
+function readQuery(): { agent: AgentKind | null; topic: Topic | null } {
+  const q = new URLSearchParams(location.search);
+  const agent = q.get("agent");
+  const topic = q.get("topic");
+  return {
+    agent: (AGENTS as readonly string[]).includes(agent ?? "") ? (agent as AgentKind) : null,
+    topic: (TOPICS as readonly string[]).includes(topic ?? "") ? (topic as Topic) : null,
+  };
+}
+
+function hrefFor(agent: AgentKind | null, topic: Topic | null): string {
+  const q = new URLSearchParams();
+  if (agent) q.set("agent", agent);
+  if (topic) q.set("topic", topic);
+  return `/how-to${q.size ? `?${q}` : ""}`;
+}
+
+// ---- small pieces ----
+
+function Chevron({ open }: { open: boolean }) {
   return (
-    <section className="card step">
-      <h2>
-        <span className="step-n">{props.n}</span> {props.title}
-      </h2>
+    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16" aria-hidden="true" className={`shrink-0 text-muted transition-transform duration-150 ${open ? "rotate-180" : ""}`}>
+      <path d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" />
+    </svg>
+  );
+}
+
+export function CopyField(props: { text: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <div className="flex min-w-0 items-stretch overflow-hidden rounded-lg border border-line bg-background">
+      <code className="min-w-0 flex-1 whitespace-pre-wrap break-all px-3 py-2 font-mono text-[12.5px] leading-relaxed">{props.text}</code>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard.writeText(props.text);
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        }}
+        className="shrink-0 cursor-pointer border-l border-line px-3 text-xs font-medium text-filament hover:bg-filament-soft"
+      >
+        {done ? "Copied" : (props.label ?? "Copy")}
+      </button>
+    </div>
+  );
+}
+
+function Prompt({ text }: { text: string }) {
+  return <CopyField text={text} label="Copy prompt" />;
+}
+
+function Mark({ text, dim = false, accent = false }: { text: string; dim?: boolean; accent?: boolean }) {
+  return (
+    <span className={`grid h-[26px] w-[26px] place-items-center rounded-[4px] font-mono text-[10px] font-semibold ${accent ? "bg-filament text-filament-ink" : "bg-foreground text-cream"} ${dim ? "opacity-40" : ""}`}>
+      {text}
+    </span>
+  );
+}
+
+function Snippet({ children }: { children: string }) {
+  return <pre className="w-full overflow-x-auto rounded-md border border-line bg-cream px-2.5 py-2 text-left font-mono text-[10.5px] leading-[1.55]">{children}</pre>;
+}
+
+function Chips({ items }: { items: string[] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="mr-0.5 text-xs text-muted">You need</span>
+      {items.map((need) => (
+        <span key={need} className="rounded-full border border-line px-2 py-1 text-xs">
+          {need}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+interface StepDef {
+  title: string;
+  where?: { label: string; href: string };
+  body: ReactNode;
+  note?: ReactNode;
+  now?: { label: string; content: ReactNode; caption?: string };
+}
+
+/** Numbered steps on a line, then a green done card (hue: SetupSection). */
+function Steps({ steps, done }: { steps: StepDef[]; done: { title: string; text: ReactNode } }) {
+  return (
+    <ol className="flex flex-col">
+      {steps.map((step, i) => (
+        <li key={step.title} className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-4">
+          <div className="flex flex-col items-center">
+            <span className="mt-4 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-filament-soft text-xs font-semibold tabular-nums text-filament">{i + 1}</span>
+            <span className="mt-1.5 w-px flex-1 bg-line" />
+          </div>
+          <div className="mb-3 flex flex-wrap gap-4 rounded-xl border border-line bg-cream p-4 text-sm">
+            <div className="flex min-w-0 flex-[1_1_280px] flex-col gap-2">
+              <p className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-semibold">{step.title}</span>
+                {step.where ? (
+                  <AppLink href={step.where.href} className="text-xs text-filament underline underline-offset-2">
+                    {step.where.label}
+                  </AppLink>
+                ) : null}
+              </p>
+              <div className="flex flex-col gap-2.5 text-muted">{step.body}</div>
+              {step.note ? <p className="border-t border-line pt-2 text-xs text-muted">{step.note}</p> : null}
+            </div>
+            {step.now ? (
+              <div className="flex flex-[1_1_148px] flex-col items-center gap-2.5 self-start rounded-[10px] bg-background p-3 text-center sm:flex-[0_0_200px]">
+                <span className={`${GROUP_LABEL} text-balance`}>{step.now.label}</span>
+                <div className="flex min-h-16 w-full items-center justify-center">{step.now.content}</div>
+                {step.now.caption ? <span className="text-xs text-balance">{step.now.caption}</span> : null}
+              </div>
+            ) : null}
+          </div>
+        </li>
+      ))}
+      <li className="grid grid-cols-[24px_minmax(0,1fr)] gap-x-4">
+        <div className="flex justify-center">
+          <span className="mt-4 flex h-6 w-6 items-center justify-center rounded-full bg-ok-soft text-ok">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">
+              <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L8 12.58l7.3-7.3a1 1 0 0 1 1.4 0Z" />
+            </svg>
+          </span>
+        </div>
+        <div className="flex flex-col gap-1 rounded-xl border border-ok/40 bg-ok-soft p-4 text-sm">
+          <span className="font-semibold text-ok">{done.title}</span>
+          <span className="text-muted">{done.text}</span>
+        </div>
+      </li>
+    </ol>
+  );
+}
+
+function Section(props: { id: string; title: string; lead: ReactNode; children: ReactNode }) {
+  return (
+    <section id={props.id} className="flex scroll-mt-6 flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <h2 className="text-lg font-medium">{props.title}</h2>
+        <p className="text-sm text-muted">{props.lead}</p>
+      </div>
       {props.children}
     </section>
   );
 }
 
-function Expect(props: { children: React.ReactNode }) {
+// ---- the four topics ----
+
+interface Ctx {
+  api: Api;
+  sid: string;
+  state: SandboxState;
+  initials: Map<string, string>;
+  onChanged: () => void;
+  agent: AgentKind;
+}
+
+function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
+  const grant = state.grants.find((g) => !g.regions) ?? state.grants[0]!;
+  const url = mcpUrl(sid, grant);
+  const mine = initials.get(grant.id) ?? "AG";
+  const connected = !!grant.client_name;
+  const markPanel = {
+    label: "Top bar shows now",
+    content: (
+      <div className="flex items-center gap-2">
+        <Mark text={mine} dim={!connected} />
+        <span className="text-left text-xs">{connected ? `Connected as ${grant.client_name}` : "Waiting for your agent"}</span>
+      </div>
+    ),
+  };
+  const first: StepDef =
+    agent === "claude-code"
+      ? {
+          title: "Add Pulse to Claude Code",
+          body: (
+            <>
+              <span>Run this in your terminal, in the folder you will work from. It adds Pulse as a remote MCP server.</span>
+              <CopyField text={`claude mcp add --transport http pulse ${url}`} />
+            </>
+          ),
+        }
+      : {
+          title: "Copy your MCP URL",
+          body: (
+            <>
+              <span>This URL is your agent's access to your sandbox. No login and no API key: the secret in the URL is the access.</span>
+              <CopyField text={url} />
+            </>
+          ),
+          note: "Keep it to yourself. Anyone with it can read this sandbox's synthetic data, but only this browser can point.",
+        };
+  const second: StepDef =
+    agent === "claude-code"
+      ? {
+          title: "Start Claude Code and check it",
+          body: (
+            <>
+              <span>
+                Start <code className="font-mono text-foreground">claude</code> in any folder and run <code className="font-mono text-foreground">/mcp</code>. Pulse should be listed as connected, with five tools.
+              </span>
+            </>
+          ),
+          now: markPanel,
+        }
+      : agent === "claude-ai"
+        ? {
+            title: "Add a custom connector",
+            body: (
+              <span>
+                In claude.ai or Claude Desktop, open <span className="font-medium text-foreground">Settings → Connectors → Add custom connector</span>, name it Pulse and paste the URL. Leave the OAuth fields empty.
+              </span>
+            ),
+            now: markPanel,
+          }
+        : {
+            title: "Add it as a remote MCP server",
+            body: <span>Wherever your agent accepts a remote MCP server by URL (Streamable HTTP), paste it. Leave any OAuth or API key fields empty. In a chat, make sure the Pulse tools are turned on.</span>,
+            note: "Exact menus differ per agent and change often; a guide per agent is coming.",
+            now: markPanel,
+          };
   return (
-    <p className="expect">
-      <strong>You should see:</strong> {props.children}
-    </p>
+    <Section id="connect" title={`Connect ${AGENT_INFO[agent].name}`} lead="About two minutes, once per agent. The sandbox, its URL and its log last 6 hours after you last use them.">
+      <Chips items={["An agent that speaks MCP", "This page open in this browser"]} />
+      <Steps
+        steps={[
+          first,
+          second,
+          {
+            title: "One URL per agent",
+            body: (
+              <>
+                <span>Trying several agents? Give each its own URL, so each gets its own mark and you can tell which one answered. All URLs are on the Agents page.</span>
+                <AddAgentButtons api={api} state={state} onChanged={onChanged} />
+              </>
+            ),
+            where: { label: "Agents", href: "/agents" },
+          },
+        ]}
+        done={{ title: "Your mark shows your agent's initials.", text: <>Once your agent connects, its initials replace AG in the top bar, and the mark lights up each time it uses a tool.</> }}
+      />
+    </Section>
   );
 }
 
-/** The walkthrough, with the visitor's own URL, file and live results in it. */
-export function HowTo(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; onChanged: () => void; go: (screen: "overview" | "customers" | "agents") => void }) {
-  const { api, sid, state, initials } = props;
-  const first = state.grants.find((g) => !g.regions) ?? state.grants[0]!;
-  const mark = initials.get(first.id) ?? "AG";
+function PointTopic({ initials, state }: Ctx) {
+  const grant = state.grants.find((g) => !g.regions) ?? state.grants[0]!;
+  const mine = initials.get(grant.id) ?? "AG";
+  return (
+    <Section id="point" title="Point your agent at something" lead="Pointing is one gesture, and it sends your agent a key, not a picture. It reads the numbers itself, under its own access.">
+      <Steps
+        steps={[
+          {
+            title: "Open a page with data",
+            where: { label: "Overview", href: "/overview" },
+            body: <span>Overview has the active customers per month and the customer bridge; Customers has one row per customer. Everything with a number on it can be pointed at.</span>,
+          },
+          {
+            title: "Drag your agent's mark onto it",
+            body: <span>Press on your mark in the top right and drag it onto a bar, a step of the bridge, a customer row or a single cell. While you drag, everything you can point at shows a dashed outline; the target under the mark turns solid.</span>,
+            note: "Each agent has one pin. A new drop replaces it, and the × next to the mark removes it.",
+            now: {
+              label: "Screen shows now",
+              content: (
+                <div className="relative flex h-[64px] items-end gap-1.5">
+                  {[24, 32, 28, 40, 36, 48].map((h, i) => (
+                    <span key={i} className={`block w-3.5 rounded-[2px] border border-foreground ${i === 4 ? "bg-filament-soft outline-2 outline-offset-1 outline-dashed outline-filament" : "bg-line"}`} style={{ height: h }} />
+                  ))}
+                  <span className="absolute -top-3 left-[72px]">
+                    <Mark text={mine} />
+                  </span>
+                </div>
+              ),
+              caption: "The target is outlined",
+            },
+          },
+          {
+            title: "Watch the chip next to your mark",
+            body: (
+              <span>
+                It says <span className="rounded-full bg-filament-soft px-2 py-0.5 text-xs text-filament">pinned</span> until your agent reads the pin, then <span className="rounded-full bg-ok-soft px-2 py-0.5 text-xs text-ok">seen</span>.
+              </span>
+            ),
+            now: {
+              label: "Top bar shows now",
+              content: (
+                <div className="flex items-center gap-2">
+                  <Mark text={mine} />
+                  <span className="rounded-full bg-filament-soft px-2 py-0.5 text-xs text-filament">pinned ×</span>
+                </div>
+              ),
+            },
+          },
+        ]}
+        done={{ title: "Your agent has a pin waiting.", text: "It learns about it on its next tool call, or right away when you ask it about “this”." }}
+      />
+    </Section>
+  );
+}
+
+function AskTopic(_: Ctx) {
+  return (
+    <Section id="ask" title="Ask what it sees, or let it wait" lead="Your agent reads your screen as identifiers and your pin as a key, then fetches the facts behind them.">
+      <Steps
+        steps={[
+          {
+            title: "Ask what you are looking at",
+            body: (
+              <>
+                <span>Ask your agent:</span>
+                <Prompt text="What am I looking at in Pulse?" />
+                <span>It calls get_current_view: your page, month and filters, at most one selected customer, and your pin if there is one. Reading the pin marks it seen.</span>
+              </>
+            ),
+            now: { label: "Your agent gets", content: <Snippet>{'{ "view": {\n  "screen": "overview",\n  "params": { "month": "2026-09" } },\n  "focus": { "kind": "figure", … } }'}</Snippet> },
+          },
+          {
+            title: "Or let it wait for a pin",
+            body: (
+              <>
+                <span>Ask:</span>
+                <Prompt text="Wait until I point you at something in Pulse, then tell me what it is." />
+                <span>It calls wait_for_focus, which holds for up to 45 seconds. Drop your mark while it waits.</span>
+              </>
+            ),
+            note: "If it times out, ask it to wait again. Some agents cap how long one tool call may take.",
+            now: { label: "Your agent gets", content: <Snippet>{'{ "focus": { "kind": "customer",\n    "id": "cus_0042", … },\n  "timed_out": false }'}</Snippet> },
+          },
+          {
+            title: "Already talking? Just point",
+            body: <span>You need neither of the above in a conversation. Point, then ask about “this”: the pin also travels on your agent's next tool call, with a note that you pointed.</span>,
+            now: { label: "Any tool result carries", content: <Snippet>{'"attention": {\n  "focus": { … },\n  "note": "The person pinned\n   you to something…" }'}</Snippet> },
+          },
+        ]}
+        done={{ title: "Your agent describes what you pointed at.", text: "And the chip next to your mark turns to seen." }}
+      />
+    </Section>
+  );
+}
+
+function ExamplesTopic(ctx: Ctx) {
+  const [open, setOpen] = useState(0);
+  const items: Array<{ title: string; steps: ReactNode[] }> = [
+    {
+      title: "Why did these customers leave?",
+      steps: [
+        <>
+          Open{" "}
+          <AppLink href="/overview" className="text-filament underline underline-offset-2">
+            Overview
+          </AppLink>
+          . In Customer bridge, drag your mark onto the red <span className="font-medium text-foreground">Churned</span> step.
+        </>,
+        <>Ask: “Why is this number what it is? Who are these customers?”</>,
+        <>Your agent reads the bridge for that month and lists the churned customers with their plan, region and seats. The answer comes from the data behind the step, not from a picture of it.</>,
+      ],
+    },
+    {
+      title: "How much MRR is this? (with your own file)",
+      steps: [
+        <>
+          Pulse does not know revenue. Download this file, which stands in for your billing data: <DownloadCsv seed={ctx.state.seed} />
+        </>,
+        <>Give it to your agent, not to Pulse: attach it in the chat, or put it in the folder your agent works in.</>,
+        <>
+          On{" "}
+          <AppLink href="/overview" className="text-filament underline underline-offset-2">
+            Overview
+          </AppLink>
+          , drag your mark onto a bar of Active customers per month.
+        </>,
+        <>Ask: “How much MRR is this, and which customer has the best MRR per seat?”</>,
+        <>Your agent gets the customers and seats behind the bar from Pulse, matches their ids with your file, and answers. Pulse never receives an MRR value: the matching happens in your agent.</>,
+      ],
+    },
+    {
+      title: "What does a restricted agent see?",
+      steps: [
+        <>
+          On{" "}
+          <AppLink href="/agents" className="text-filament underline underline-offset-2">
+            Agents
+          </AppLink>
+          , add a restricted agent (LATAM only) and connect it with its own URL.
+        </>,
+        <>Point it at a bar of Active customers per month, over all regions, and ask how many customers it is.</>,
+        <>It answers for LATAM only and says the figure was cut to what it may see. Pointing never grants access.</>,
+      ],
+    },
+  ];
   return (
     <>
-      <section className="card intro">
-        <h2>Point your own AI agent at what you see</h2>
-        <p>
-          Pulse is a small analytics app for a fictional SaaS, with synthetic data. In a few minutes you will connect <em>your own</em> AI agent to it, point that agent at things on the screen, and ask about "this". Pulse never sends your agent a picture of the screen: it
-          sends a key, and your agent reads the facts behind it with its own tools. Pulse never sees your chat or your files.
-        </p>
-        <p className="hint">
-          This is the demo of <a href="https://doi.org/10.5281/zenodo.23382909">Agent Pointed Context</a>. Your sandbox is private to this browser and is deleted after 6 hours without use.
-        </p>
+      <Section id="examples" title="Questions to try" lead="Each one takes a minute. The second is the one the app could never answer alone.">
+        <div className="flex flex-col divide-y divide-line overflow-hidden rounded-xl border border-line bg-cream text-sm">
+          {items.map((task, i) => {
+            const expanded = open === i;
+            return (
+              <div key={task.title}>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => setOpen(expanded ? -1 : i)}
+                  className="flex min-h-11 w-full cursor-pointer touch-manipulation items-center justify-between gap-3 px-4 py-3.5 text-left font-medium hover:bg-filament-soft/40"
+                >
+                  <span>{task.title}</span>
+                  <Chevron open={expanded} />
+                </button>
+                {expanded ? (
+                  <ol className="flex flex-col gap-2 px-4 pb-4">
+                    {task.steps.map((step, j) => (
+                      <li key={j} className="grid grid-cols-[20px_minmax(0,1fr)] gap-2.5 text-muted">
+                        <span className="text-xs font-semibold leading-5 tabular-nums text-filament">{j + 1}</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+      <Section id="results" title="What your agents did" lead="Live from this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.">
+        <div className="overflow-hidden rounded-xl border border-line bg-cream p-2">
+          <CompatTable api={ctx.api} initials={ctx.initials} refreshKey={ctx.state} />
+        </div>
+      </Section>
+    </>
+  );
+}
+
+// ---- the guide ----
+
+export function HowTo(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; onChanged: () => void }) {
+  const [{ agent, topic }, setView] = useState(readQuery);
+  useEffect(() => {
+    const onPop = () => setView(readQuery());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const go = (next: { agent: AgentKind | null; topic: Topic | null }) => {
+    history.pushState(null, "", hrefFor(next.agent, next.topic));
+    setView(next);
+  };
+  const shownTopic: Topic | null = agent ? (topic ?? "connect") : topic;
+  const compact = agent !== null;
+  const ctx: Ctx | null = agent ? { ...props, agent } : null;
+  const nextOf: Partial<Record<Topic, Topic>> = { connect: "point", point: "ask", ask: "examples" };
+  const next = shownTopic ? nextOf[shownTopic] : undefined;
+
+  return (
+    <div className="flex w-full flex-col gap-5">
+      <section className="flex flex-col gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight">How-to</h1>
+        <p className="text-sm text-muted">Connect your own agent, point it at things, and ask about them. Pick your agent to start.</p>
       </section>
 
-      <Step n={1} title="Connect your agent">
-        <p>Add this URL to your agent as a remote MCP server (Streamable HTTP). There is no login: the secret in the URL gives your agent read access to this sandbox only.</p>
-        <AgentCard sid={sid} grant={first} initials={mark} />
-        <ul>
-          <li>
-            <strong>Claude Code:</strong> run
-            <Copy text={`claude mcp add --transport http pulse ${`${location.origin}/mcp/${sid}/${first.secret}`}`} />
-          </li>
-          <li>
-            <strong>claude.ai or Claude Desktop:</strong> Settings → Connectors → Add custom connector, and paste the URL.
-          </li>
-          <li>
-            <strong>Any other agent</strong> (ChatGPT, Grok, Cursor, Codex…): wherever it accepts a remote MCP server by URL.
-          </li>
-        </ul>
-        <p>
-          Trying more than one agent? Give each its own URL, so each gets its own mark and you can tell which one answered. The URLs are on the <button className="link" onClick={() => props.go("agents")}>Agents</button> page.
-        </p>
-        <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
-        <Expect>
-          once your agent connects, its mark in the top right shows its initials (for example <span className="mark-inline">CC</span> for Claude Code) and lights up each time it uses a tool.
-        </Expect>
-      </Step>
-
-      <Step n={2} title="Point your agent at something">
-        <p>
-          Drag your agent's mark <span className="mark-inline">{mark}</span> from the top right onto anything on the{" "}
-          <button className="link" onClick={() => props.go("overview")}>
-            Overview
-          </button>{" "}
-          or{" "}
-          <button className="link" onClick={() => props.go("customers")}>
-            Customers
-          </button>{" "}
-          page: a bar, a step of the customer bridge, a customer row, a single cell. While you drag, everything you can point at shows a dashed outline; the target under the mark turns solid.
-        </p>
-        <ul>
-          <li>Each agent has one pin. A new drop replaces it; the × next to the mark removes it.</li>
-          <li>Your agent receives only a key for what you pointed at, never the picture or the numbers. It reads the numbers itself, under its own access.</li>
-        </ul>
-        <Expect>
-          the target keeps a blue outline and the chip next to the mark says <span className="pin">pinned</span>. When your agent reads the pin, the chip turns to <span className="pin seen">seen</span>.
-        </Expect>
-      </Step>
-
-      <Step n={3} title="Ask what it can see, or let it wait">
-        <p>
-          <strong>Ask:</strong> <q>What am I looking at in Pulse?</q>
-        </p>
-        <p className="hint">Your agent calls get_current_view and gets your screen as identifiers (page, month, filters, a selected customer) plus your pin, if there is one.</p>
-        <p>
-          <strong>Or let it wait:</strong> <q>Wait until I point you at something in Pulse, then tell me what it is.</q>
-        </p>
-        <p className="hint">
-          Your agent calls wait_for_focus, which holds for up to 45 seconds: drop the mark while it waits. If it times out, ask it to wait again. Some agents cap how long one tool call may take.
-        </p>
-        <p>
-          <strong>Already talking with your agent?</strong> You need neither. Point, then ask about "this": the pin also travels on your agent's next tool call, with a note that you pointed.
-        </p>
-        <Expect>the agent describes the page and the thing you pointed at, and the chip turns to seen.</Expect>
-      </Step>
-
-      <Step n={4} title="A simple example">
-        <ol>
-          <li>
-            Open{" "}
-            <button className="link" onClick={() => props.go("overview")}>
-              Overview
+      <div className="grid grid-cols-1 gap-2.5 min-[600px]:grid-cols-3" role="radiogroup" aria-label="Which agent">
+        {AGENTS.map((id) => {
+          const info = AGENT_INFO[id];
+          const selected = id === agent;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => id !== agent && go({ agent: id, topic: shownTopic })}
+              className={`flex min-w-0 cursor-pointer touch-manipulation overflow-hidden rounded-xl border bg-cream text-left ${compact ? "flex-row items-center" : "flex-col"} ${selected ? SELECTED : "border-line hover:border-muted"}`}
+            >
+              <span className={`bp-grid relative flex shrink-0 items-center justify-center gap-1.5 bg-background ${compact ? "w-16 self-stretch border-r border-line sm:w-[92px]" : "aspect-[16/10] w-full border-b border-line"}`}>
+                {info.marks.map((m, i) => (
+                  <span key={m} className={`grid place-items-center rounded-[5px] font-mono font-semibold ${compact ? "h-6 w-6 text-[9px]" : "h-11 w-11 text-[13px]"} ${i === 0 ? "bg-foreground text-cream" : "border border-foreground bg-cream text-foreground"} ${compact && i > 0 ? "hidden" : ""}`}>
+                    {m}
+                  </span>
+                ))}
+              </span>
+              <span className={`flex min-w-0 flex-col gap-0.5 ${compact ? "px-3 py-2" : "px-3.5 pb-3.5 pt-3"}`}>
+                <span className={`font-semibold ${compact ? "text-sm" : "text-[15px]"}`}>{info.name}</span>
+                <span className={`text-xs text-muted ${compact ? "hidden sm:block" : ""}`}>{info.blurb}</span>
+              </span>
             </button>
-            . In <em>Customer bridge</em>, drag your mark onto the red <strong>Churned</strong> step.
-          </li>
-          <li>
-            Ask: <q>Why is this number what it is? Who are these customers?</q>
-          </li>
-        </ol>
-        <Expect>
-          your agent reads the bridge for that month, says how many customers churned out of how many at the start, and lists them with their plan, region and seats. The answer comes from the data behind the step, not from a picture of it.
-        </Expect>
-      </Step>
+          );
+        })}
+      </div>
 
-      <Step n={5} title="Bring what you know: MRR per customer">
-        <p>
-          Pulse does not know revenue. In real life you would have it in your billing system or a spreadsheet, and you would not hand it to an analytics vendor. This file stands in for that knowledge:
-        </p>
-        <DownloadCsv seed={state.seed} />
-        <ol>
-          <li>Give the file to your agent, not to Pulse: attach it in the chat, or put it in the folder your agent works in.</li>
-          <li>
-            On{" "}
-            <button className="link" onClick={() => props.go("overview")}>
-              Overview
+      {agent ? (
+        <div className="grid grid-cols-2 gap-2 min-[600px]:grid-cols-4" role="radiogroup" aria-label="What you want to do">
+          {TOPICS.map((id) => {
+            const on = id === shownTopic;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => go({ agent, topic: id })}
+                className={`flex min-w-0 cursor-pointer touch-manipulation flex-col gap-0.5 rounded-[10px] border px-3 py-2.5 text-left ${on ? "border-filament bg-filament-soft" : "border-line hover:bg-cream"}`}
+              >
+                <span className={`text-[13.5px] font-semibold ${on ? "text-filament" : ""}`}>{TOPIC_INFO[id].label}</span>
+                <span className="text-[11.5px] leading-snug text-muted">{TOPIC_INFO[id].hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="py-2 text-center text-sm text-muted">Pick your agent: the connect steps differ, the rest is the same.</p>
+      )}
+
+      {ctx && shownTopic ? (
+        <div key={`${agent}-${shownTopic}`} className="flex flex-col gap-8 border-t border-line pt-6">
+          {shownTopic === "connect" ? <ConnectTopic {...ctx} /> : shownTopic === "point" ? <PointTopic {...ctx} /> : shownTopic === "ask" ? <AskTopic {...ctx} /> : <ExamplesTopic {...ctx} />}
+          {next ? (
+            <button
+              type="button"
+              onClick={() => {
+                go({ agent, topic: next });
+                window.scrollTo({ top: 0 });
+              }}
+              className="cursor-pointer self-start text-sm font-medium text-filament underline underline-offset-2"
+            >
+              Next: {TOPIC_INFO[next].label} →
             </button>
-            , drag your mark onto a bar of <em>Active customers per month</em>.
-          </li>
-          <li>
-            Ask: <q>How much MRR is this, and which customer has the best MRR per seat?</q>
-          </li>
-        </ol>
-        <Expect>
-          your agent gets the customers and seats behind the bar from Pulse, matches their ids with your file, and gives you the total MRR and the ranking. Pulse never receives an MRR value: the matching happens in your agent.
-        </Expect>
-      </Step>
-
-      <Step n={6} title="See what your agents did">
-        <p className="hint">Live from this sandbox's log. "Envelopes" are tool results that told your agent you pointed; "Followed next" counts pins whose exact call your agent made.</p>
-        <CompatTable api={api} initials={initials} refreshKey={state} />
-      </Step>
-    </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
