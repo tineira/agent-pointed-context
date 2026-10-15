@@ -117,6 +117,8 @@ app.all("/mcp/:sid/:secret", async (c) => {
   return stubFor(c.env, sid).fetch(c.req.raw);
 });
 
+/** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
+app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 

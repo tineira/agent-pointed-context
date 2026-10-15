@@ -260,6 +260,8 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   private async mcp(request: Request, secret: string, origin: string): Promise<Response> {
+    // Stateless: no server-to-client stream (GET) and no session to end (DELETE). 405 is what the spec allows.
+    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "sandbox_expired" }, { status: 404 });
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant) return Response.json({ error: "unknown_grant" }, { status: 404 });
@@ -315,7 +317,10 @@ export class Sandbox extends DurableObject<Env> {
 
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
-    return transport.handleRequest(request);
+    // Answers are always JSON, never a stream: a client that accepts only application/json is fine too.
+    const headers = new Headers(request.headers);
+    headers.set("accept", "application/json, text/event-stream");
+    return transport.handleRequest(new Request(request, { headers }));
   }
 
   /**
