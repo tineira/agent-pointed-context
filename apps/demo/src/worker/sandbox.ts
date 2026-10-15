@@ -4,14 +4,11 @@
  * Visitors never share state: a URL leads to exactly one sandbox.
  */
 import { DurableObject } from "cloudflare:workers";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow, FocusTarget } from "@apc/protocol";
-import { APC_INSTRUCTIONS, attachAttention, attentionFor, envelopeBytes, isUnread, presenceEvent, registerApcTools, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, attachAttention, attentionFor, envelopeBytes, isUnread, presenceEvent, type ToolResult } from "@apc/server";
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
-import { registerPulseTools } from "./pulse-tools.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
 const SERVER_VERSION = "0.1.0";
@@ -111,8 +108,24 @@ export class Sandbox extends DurableObject<Env> {
   private log(type: string, grantId: string | null, data: Record<string, unknown>): void {
     this.sql.exec("insert into events (at, type, grant_id, data) values (?, ?, ?, ?)", new Date().toISOString(), type, grantId, JSON.stringify(data));
   }
+  /**
+   * Extend the sandbox's life. Expiry is checked on every access (alive()),
+   * so it holds with or without alarms; the alarm only deletes an idle
+   * sandbox proactively. It is skipped under `vite dev` because the local
+   * runtime on Windows drops the request of a Durable Object that sets one.
+   */
   private async touch(): Promise<void> {
-    await this.ctx.storage.setAlarm(Date.now() + SANDBOX_TTL_MS);
+    const expiresAt = Date.now() + SANDBOX_TTL_MS;
+    this.setMeta("expires_at", String(expiresAt));
+    if (!(import.meta as { env?: { DEV?: boolean } }).env?.DEV) await this.ctx.storage.setAlarm(expiresAt);
+  }
+
+  /** An initialized sandbox that has not expired. An expired one is deleted on the spot. */
+  private async alive(): Promise<boolean> {
+    if (!this.meta("owner")) return false;
+    if (Number(this.meta("expires_at") ?? 0) > Date.now()) return true;
+    await this.alarm();
+    return false;
   }
   private broadcast(message: Record<string, unknown>): void {
     const text = JSON.stringify(message);
@@ -128,6 +141,8 @@ export class Sandbox extends DurableObject<Env> {
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "sandbox expired");
     await this.ctx.storage.deleteAll();
+    this.cached = null;
+    this.migrate();
   }
 
   // ---- owner RPC (the worker checked the owner secret first) ----
@@ -147,8 +162,8 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   async isOwner(secret: string): Promise<boolean> {
-    const owner = this.meta("owner");
-    if (!owner || owner !== secret) return false;
+    if (!(await this.alive())) return false;
+    if (this.meta("owner") !== secret) return false;
     await this.touch();
     return true;
   }
@@ -158,7 +173,7 @@ export class Sandbox extends DurableObject<Env> {
       seed: Number(this.meta("seed")),
       settings: { share_view: this.meta("share_view") !== "0", show_activity: this.meta("show_activity") !== "0" },
       grants: this.grants().map((g) => ({ ...g, pin: this.focusRow(g.id) })),
-      expires_at: new Date((await this.ctx.storage.getAlarm()) ?? Date.now()).toISOString(),
+      expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
     };
   }
 
@@ -179,7 +194,7 @@ export class Sandbox extends DurableObject<Env> {
     if (name === "share_view" && !on) this.sql.exec("delete from view_state");
   }
 
-  async pin(grantId: string, raw: unknown): Promise<{ ok: true; pin: FocusRow } | { ok: false; error: string }> {
+  async pin(grantId: string, raw: unknown): Promise<{ ok: boolean; error?: string; pin?: FocusRow }> {
     const grant = this.grants().find((g) => g.id === grantId);
     if (!grant) return { ok: false, error: "unknown_grant" };
     const checked = checkPin(raw, grant, this.data());
@@ -245,7 +260,7 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   private async mcp(request: Request, secret: string, origin: string): Promise<Response> {
-    if (!this.meta("owner")) return Response.json({ error: "sandbox_expired" }, { status: 404 });
+    if (!(await this.alive())) return Response.json({ error: "sandbox_expired" }, { status: 404 });
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant) return Response.json({ error: "unknown_grant" }, { status: 404 });
     await this.touch();
@@ -265,6 +280,14 @@ export class Sandbox extends DurableObject<Env> {
       }
     }
 
+    // The MCP SDK loads only when an agent calls: owner requests and new sandboxes stay light.
+    const [{ McpServer }, { WebStandardStreamableHTTPServerTransport }, { CfWorkerJsonSchemaValidator }, { registerApcTools }, { registerPulseTools }] = await Promise.all([
+      import("@modelcontextprotocol/sdk/server/mcp.js"),
+      import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
+      import("@modelcontextprotocol/sdk/validation/cfworker"),
+      import("@apc/server"),
+      import("./pulse-tools.ts"),
+    ]);
     const data = this.data();
     const server = new McpServer(
       { name: "pulse-apc-demo", version: SERVER_VERSION },
