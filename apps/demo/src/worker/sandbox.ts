@@ -8,6 +8,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow, FocusTarget } from "@apc/protocol";
 import { APC_INSTRUCTIONS, attachAttention, attentionFor, envelopeBytes, isUnread, presenceEvent, type ToolResult } from "@apc/server";
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
+import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -217,6 +218,15 @@ export class Sandbox extends DurableObject<Env> {
     this.broadcast({ type: "pin", grant_id: grantId, pin: null });
   }
 
+  /** Another agent with full access: one URL and one mark per client, so each client's behaviour is measured apart. */
+  async addAgentGrant(): Promise<Grant> {
+    const id = `g_${randomHex(4)}`;
+    const n = this.grants().filter((g) => !g.regions).length + 1;
+    this.sql.exec("insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, null, ?)", id, randomHex(16), `Agent ${n}`, new Date().toISOString());
+    this.broadcast({ type: "grants" });
+    return this.grants().find((g) => g.id === id)!;
+  }
+
   async addRestrictedGrant(region: Region): Promise<Grant> {
     const existing = this.grants().find((g) => g.regions?.length === 1 && g.regions[0] === region);
     if (existing) return existing;
@@ -229,13 +239,23 @@ export class Sandbox extends DurableObject<Env> {
     return this.grants().find((g) => g.id === id)!;
   }
 
-  /** The event log as JSON lines, oldest first. */
-  async eventsJsonl(): Promise<string> {
+  private allEvents(): LoggedEvent[] {
     return this.sql
       .exec<{ id: number; at: string; type: string; grant_id: string | null; data: string }>("select * from events order by id")
       .toArray()
-      .map((e) => JSON.stringify({ id: e.id, at: e.at, type: e.type, grant_id: e.grant_id, ...JSON.parse(e.data) }) + "\n")
+      .map((e) => ({ id: e.id, at: e.at, type: e.type, grant_id: e.grant_id, ...(JSON.parse(e.data) as Record<string, unknown>) }));
+  }
+
+  /** The event log as JSON lines, oldest first. */
+  async eventsJsonl(): Promise<string> {
+    return this.allEvents()
+      .map((e) => JSON.stringify(e) + "\n")
       .join("");
+  }
+
+  /** What each agent did with APC: one row of the client compatibility matrix per grant. */
+  async compat(): Promise<CompatRow[]> {
+    return compatSummary(this.grants(), this.allEvents());
   }
 
   // ---- fetch: the MCP endpoint and the owner's WebSocket ----
@@ -271,11 +291,25 @@ export class Sandbox extends DurableObject<Env> {
       try {
         const body = (await request.clone().json()) as unknown;
         const messages = Array.isArray(body) ? body : [body];
-        const init = messages.find((m) => (m as { method?: string })?.method === "initialize") as { params?: { clientInfo?: { name?: string } } } | undefined;
-        const name = init?.params?.clientInfo?.name;
-        if (typeof name === "string" && name.length <= 100) {
-          this.sql.exec("update grants set client_name = ? where id = ?", name, grant.id);
-          this.broadcast({ type: "grants" });
+        const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
+        for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown } } } | null>) {
+          if (m?.method === "initialize") {
+            const name = m.params?.clientInfo?.name;
+            const version = m.params?.clientInfo?.version;
+            const protocol = m.params?.protocolVersion;
+            this.log("initialize", grant.id, {
+              client_name: typeof name === "string" ? name.slice(0, 100) : null,
+              client_version: typeof version === "string" ? version.slice(0, 40) : null,
+              protocol_version: typeof protocol === "string" ? protocol.slice(0, 20) : null,
+              user_agent: userAgent,
+            });
+            if (typeof name === "string" && name.length <= 100) {
+              this.sql.exec("update grants set client_name = ? where id = ?", name, grant.id);
+              this.broadcast({ type: "grants" });
+            }
+          } else if (m?.method === "tools/list") {
+            this.log("tools_list", grant.id, { user_agent: userAgent });
+          }
         }
       } catch {
         // not JSON: the transport answers the error
@@ -298,7 +332,9 @@ export class Sandbox extends DurableObject<Env> {
         jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
       },
     );
-    this.instrument(server, grant, data, origin);
+    // Which tool this request runs, so a "seen" stamp records how the pin was read.
+    const call = { tool: "" };
+    this.instrument(server, grant, data, origin, call);
     registerApcTools(server, {
       readView: async () => trimView(this.storedView(), grant, data, origin),
       readFocus: async () => resolveFocus(this.focusRow(grant.id), grant, data, origin),
@@ -308,7 +344,7 @@ export class Sandbox extends DurableObject<Env> {
         if (!row || !isUnread(row)) return;
         const seenAt = new Date().toISOString();
         this.sql.exec("update agent_focus set seen_at = ? where grant_id = ?", seenAt, grant.id);
-        this.log("seen", grant.id, { pinned_at: row.pinned_at, seen_at: seenAt });
+        this.log("seen", grant.id, { pinned_at: row.pinned_at, seen_at: seenAt, via: call.tool });
         this.broadcast({ type: "pin", grant_id: grant.id, pin: this.focusRow(grant.id) });
       },
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -328,12 +364,13 @@ export class Sandbox extends DurableObject<Env> {
    * check), attach the attention envelope while the pin is unread, measure
    * bytes and latency, and announce the call on the presence channel.
    */
-  private instrument(server: McpServer, grant: Grant, data: Dataset, origin: string): void {
+  private instrument(server: McpServer, grant: Grant, data: Dataset, origin: string, call: { tool: string }): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>
       register(name, config, async (args: Record<string, unknown>, extra: unknown) => {
         const started = Date.now();
         const tool = String(name);
+        call.tool = tool;
         this.log("inbound", grant.id, { tool, args });
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grant.id);
 

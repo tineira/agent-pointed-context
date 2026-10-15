@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
-import { mcpUrl, type Api, type GrantState, type SandboxState } from "./api.ts";
+import { mcpUrl, type Api, type CompatRow, type GrantState, type SandboxState } from "./api.ts";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { customerFocus } from "./focus.ts";
 
@@ -154,7 +154,7 @@ export function CustomerDetail(props: { data: Dataset; id: string; onBack: () =>
   );
 }
 
-function Copy(props: { text: string }) {
+export function Copy(props: { text: string }) {
   const [done, setDone] = useState(false);
   return (
     <div className="copy">
@@ -172,62 +172,149 @@ function Copy(props: { text: string }) {
   );
 }
 
-export function Connect(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; onChanged: () => void }) {
-  const { api, sid, state } = props;
+/** Download the person's own file. The browser makes it from the seed; Pulse's server has no MRR code. */
+export function DownloadCsv(props: { seed: number }) {
   const download = () => {
-    const blob = new Blob([mrrCsv(state.seed)], { type: "text/csv" });
+    const blob = new Blob([mrrCsv(props.seed)], { type: "text/csv" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = "mrr-by-customer.csv";
     link.click();
     URL.revokeObjectURL(link.href);
   };
-  const hasRestricted = state.grants.some((g) => g.regions);
+  return <button onClick={download}>Download mrr-by-customer.csv</button>;
+}
+
+/** One agent: its mark, its label, the client that connected, and its MCP URL. */
+export function AgentCard(props: { sid: string; grant: GrantState; initials: string | undefined; command?: boolean }) {
+  const g = props.grant;
+  return (
+    <div className="grant">
+      <h3>
+        <span className="mark-inline">{props.initials}</span> {g.label}
+        {g.client_name ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
+      </h3>
+      <Copy text={mcpUrl(props.sid, g)} />
+      {props.command && (
+        <>
+          <p className="hint">Claude Code:</p>
+          <Copy text={`claude mcp add --transport http ${g.regions ? "pulse-restricted" : "pulse"} ${mcpUrl(props.sid, g)}`} />
+        </>
+      )}
+    </div>
+  );
+}
+
+export function AddAgentButtons(props: { api: Api; state: SandboxState; onChanged: () => void }) {
+  const hasRestricted = props.state.grants.some((g) => g.regions);
+  return (
+    <div className="row">
+      <button
+        onClick={async () => {
+          await props.api.addAgent();
+          props.onChanged();
+        }}
+      >
+        Add another agent
+      </button>
+      {!hasRestricted && (
+        <button
+          onClick={async () => {
+            await props.api.addRestricted("latam");
+            props.onChanged();
+          }}
+        >
+          Add a restricted agent (LATAM only)
+        </button>
+      )}
+    </div>
+  );
+}
+
+const ms = (v: number | null) => (v === null ? "–" : v < 10_000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v / 1000)} s`);
+const yes = (ok: boolean) => (ok ? "yes" : "–");
+
+/** The client compatibility matrix, live from this sandbox's event log. */
+export function CompatTable(props: { api: Api; initials: Map<string, string>; refreshKey: unknown }) {
+  const [rows, setRows] = useState<CompatRow[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => props.api.compat().then((r) => live && setRows(r), () => undefined);
+    void load();
+    const id = setInterval(load, 5000);
+    return () => {
+      live = false;
+      clearInterval(id);
+    };
+  }, [props.api, props.refreshKey]);
+  if (!rows) return <p className="hint">Loading…</p>;
+  return (
+    <div className="table-wrap">
+      <table className="compat">
+        <thead>
+          <tr>
+            <th>Agent</th>
+            <th>Client</th>
+            <th>Connected</th>
+            <th className="num">Calls</th>
+            <th className="num">Pins</th>
+            <th className="num">Envelopes</th>
+            <th>Read the pin with</th>
+            <th>After an envelope</th>
+            <th>Followed next</th>
+            <th className="num">Pin → read</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.grant_id}>
+              <td>
+                <span className="mark-inline">{props.initials.get(r.grant_id)}</span> {r.label}
+              </td>
+              <td title={r.user_agent ?? ""}>{r.client_name ? `${r.client_name}${r.client_version ? ` ${r.client_version}` : ""}` : "–"}</td>
+              <td>{yes(r.connected)}</td>
+              <td className="num">{r.tool_calls}</td>
+              <td className="num">{r.pins}</td>
+              <td className="num">{r.envelopes}</td>
+              <td>
+                {r.pins_read === 0
+                  ? "–"
+                  : [r.read_via.get_current_view && `get_current_view ×${r.read_via.get_current_view}`, r.read_via.wait_for_focus && `wait_for_focus ×${r.read_via.wait_for_focus}`].filter(Boolean).join(", ")}
+              </td>
+              <td>{r.pins_read ? `${r.read_after_envelope} of ${r.pins_read}` : "–"}</td>
+              <td>{r.pins ? `${r.next_reads} of ${r.pins}` : "–"}</td>
+              <td className="num">{ms(r.median_pin_to_seen_ms)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function Agents(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; onChanged: () => void }) {
+  const { api, sid, state } = props;
   return (
     <>
       <section className="card">
-        <h2>1. Connect your own agent</h2>
-        <p>Paste this URL as a remote MCP server (Streamable HTTP) in any agent that supports one. The secret in the URL is this agent's access to your sandbox; it expires with the sandbox.</p>
-        {state.grants.map((g: GrantState) => (
-          <div key={g.id} className="grant">
-            <h3>
-              <span className="mark-inline">{props.initials.get(g.id)}</span> {g.label}
-              {g.client_name && <span className="muted"> · connected as {g.client_name}</span>}
-            </h3>
-            <Copy text={mcpUrl(sid, g)} />
-            <p className="hint">Claude Code:</p>
-            <Copy text={`claude mcp add --transport http pulse${g.regions ? "-restricted" : ""} ${mcpUrl(sid, g)}`} />
-          </div>
+        <h2>Your agents</h2>
+        <p>
+          Each agent gets its own URL and its own mark. Paste a URL as a remote MCP server (Streamable HTTP) in your agent. The secret in the URL is that agent's read access to this sandbox; it expires with the sandbox. Using several agents? Give each one its own URL, so you can see which one
+          answered.
+        </p>
+        {state.grants.map((g) => (
+          <AgentCard key={g.id} sid={sid} grant={g} initials={props.initials.get(g.id)} command />
         ))}
-        {!hasRestricted && (
-          <button
-            onClick={async () => {
-              await api.addRestricted("latam");
-              props.onChanged();
-            }}
-          >
-            Add a restricted agent (LATAM only)
-          </button>
-        )}
+        <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>
       </section>
       <section className="card">
-        <h2>2. Bring what you know</h2>
-        <p>
-          Pulse knows customers, plans, seats and activity. It does not know revenue. In real life you would have that in your billing system or a spreadsheet and keep it to yourself. Here, this file stands in for it. Give it to your agent, not to Pulse: Pulse never sees it.
-        </p>
-        <button onClick={download}>Download mrr-by-customer.csv</button>
+        <h2>What your agents did</h2>
+        <p className="hint">From this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>
+        <CompatTable api={api} initials={props.initials} refreshKey={state} />
       </section>
       <section className="card">
-        <h2>3. Point and ask</h2>
-        <p>Drag your agent's mark (top right) onto a bar, a step of the bridge or a customer row. Then ask your agent, for example:</p>
-        <ul>
-          <li>"How much MRR is this, and which customer has the best MRR per seat?"</li>
-          <li>"Why did this step go up?"</li>
-        </ul>
-      </section>
-      <section className="card">
-        <h2>Switches and measurements</h2>
+        <h2>Switches and log</h2>
         <label className="switch">
           <input
             type="checkbox"
@@ -251,7 +338,7 @@ export function Connect(props: { api: Api; sid: string; state: SandboxState; ini
           Show agent activity on screen
         </label>
         <p>
-          Every tool call, pin and envelope is logged in this sandbox: <a href={api.eventsUrl}>events.jsonl</a>. The sandbox and its log are deleted {new Date(state.expires_at).toLocaleString()}.
+          Every tool call, pin and envelope is logged in this sandbox: <a href={api.eventsUrl}>events.jsonl</a>. The sandbox and its log are deleted {new Date(state.expires_at).toLocaleString()} unless you keep using it.
         </p>
       </section>
     </>

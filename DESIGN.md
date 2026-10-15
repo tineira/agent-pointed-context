@@ -63,7 +63,8 @@ The person comes to the application **with their own agent**, and that agent alr
 - **Overview:** active customers per month (bar chart), the customer bridge for a month (start, new, reactivated, churned, end), seats per month.
 - **Plans:** plan × month matrix of active customers.
 - **Customers:** a table of rows, and a customer detail pane (plan, seats, usage, status).
-- **Connect:** the visitor's MCP URL, the private-file download, "add a restricted agent", and the switches (share view, show agent activity).
+- **How to** (the landing page): a six-step walkthrough with the visitor's own URL and file in it: connect, point, ask what it sees or let it wait, a simple example, the MRR example, and what your agents did.
+- **Agents:** one MCP URL per agent, "add another agent", "add a restricted agent", the compatibility matrix, the switches (share view, show agent activity) and the event log.
 
 **Pin kinds:**
 
@@ -126,7 +127,7 @@ Derived metrics, shown on a sandbox metrics page and exported for the paper: foc
 - **Content-free channels:** the presence message type has no content field; the view and pin refuse amounts and free text.
 - **C7:** no server module references `user-side/` or the MRR generator; the canary is 0 after the scripted scenario.
 
-**Client compatibility matrix (C8, by hand in cut 1).** Every MCP client available to the author (Claude, Codex, Cursor, Grok, Grok bot, AGY, others as they come), one row each: connects to the remote URL (directly or through `mcp-remote`); the model sees the envelope; the model calls `get_current_view` on "this"; the pin resolves through `next`; the MRR join is answered. Published with each release.
+**Client compatibility matrix (C8).** Recorded automatically per agent from the event log (`apps/demo/src/worker/compat.ts`, shown on the How to and Agents pages and served as `compat.json`): client name, version and user agent from `initialize`, tool list, pins, envelopes, how each pin was read (`get_current_view` or `wait_for_focus`, and whether after an envelope), whether the pin's `next` call was made, and the median time from pin to read. One URL per agent keeps each client apart. Run by hand over every MCP client available to the author (Claude, Codex, Cursor, Grok, Grok bot, AGY, others as they come), one row each: connects to the remote URL (directly or through `mcp-remote`); the model sees the envelope; the model calls `get_current_view` on "this"; the pin resolves through `next`; the MRR join is answered. Published with each release.
 
 ## 10. Cuts
 

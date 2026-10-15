@@ -3,9 +3,11 @@ import { createViewReporter, enablePinning, flashTargets, initials as initialsOf
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
-import { Connect, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
+import { HowTo } from "./howto.tsx";
+import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
 
-type Route = { screen: "overview" | "customers" | "connect" } | { screen: "customer"; id: string };
+type Screen = "howto" | "overview" | "customers" | "agents";
+type Route = { screen: Screen } | { screen: "customer"; id: string };
 
 function readRoute(): { route: Route; filters: Filters } {
   const url = new URL(location.href);
@@ -21,14 +23,15 @@ function readRoute(): { route: Route; filters: Filters } {
   const customer = url.pathname.match(/^\/customers\/(cus_\d{4})$/);
   if (customer) return { route: { screen: "customer", id: customer[1]! }, filters };
   if (url.pathname.startsWith("/customers")) return { route: { screen: "customers" }, filters };
-  if (url.pathname.startsWith("/connect")) return { route: { screen: "connect" }, filters };
-  return { route: { screen: "overview" }, filters };
+  if (url.pathname.startsWith("/agents") || url.pathname.startsWith("/connect")) return { route: { screen: "agents" }, filters };
+  if (url.pathname.startsWith("/overview")) return { route: { screen: "overview" }, filters };
+  return { route: { screen: "howto" }, filters };
 }
 
 function writeRoute(route: Route, filters: Filters): void {
   const path = route.screen === "customer" ? `/customers/${route.id}` : `/${route.screen}`;
   const q = new URLSearchParams();
-  if (route.screen !== "connect") {
+  if (route.screen === "overview" || route.screen === "customers" || route.screen === "customer") {
     q.set("month", filters.month);
     if (filters.plan) q.set("plan", filters.plan);
     if (filters.region) q.set("region", filters.region);
@@ -154,7 +157,7 @@ function Sandbox({ sid }: { sid: string }) {
   });
 
   if (!state || !data) return <p className="boot">Loading…</p>;
-  const nav = (screen: "overview" | "customers" | "connect") => navigate({ screen }, filters);
+  const nav = (screen: Screen) => navigate({ screen }, filters);
 
   return (
     <div className="app">
@@ -164,14 +167,17 @@ function Sandbox({ sid }: { sid: string }) {
           <span className="tag">Agent Pointed Context demo</span>
         </div>
         <nav>
+          <button className={route.screen === "howto" ? "on" : ""} onClick={() => nav("howto")}>
+            How to
+          </button>
           <button className={route.screen === "overview" ? "on" : ""} onClick={() => nav("overview")}>
             Overview
           </button>
           <button className={route.screen === "customers" || route.screen === "customer" ? "on" : ""} onClick={() => nav("customers")}>
             Customers
           </button>
-          <button className={route.screen === "connect" ? "on" : ""} onClick={() => nav("connect")}>
-            Connect
+          <button className={route.screen === "agents" ? "on" : ""} onClick={() => nav("agents")}>
+            Agents
           </button>
         </nav>
         <div className="marks">
@@ -207,7 +213,8 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "overview" && <Overview data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}
         {route.screen === "customers" && <Customers data={data} filters={filters} onFilters={(f) => navigate(route, f)} onOpen={(id) => navigate({ screen: "customer", id }, filters)} />}
         {route.screen === "customer" && <CustomerDetail data={data} id={route.id} onBack={() => navigate({ screen: "customers" }, filters)} />}
-        {route.screen === "connect" && <Connect api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} />}
+        {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} go={nav} />}
+        {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} />}
       </main>
       <footer>
         Synthetic data. Pulse holds no revenue. Paper: <a href="https://doi.org/10.5281/zenodo.23382909">Agent Pointed Context</a>.

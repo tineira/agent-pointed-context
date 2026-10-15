@@ -29,7 +29,7 @@ export function customerVisible(data: Dataset, grant: Grant, id: string): boolea
 
 // ---- view ----
 
-export const SCREENS = ["overview", "customers", "customer", "connect"] as const;
+export const SCREENS = ["howto", "overview", "customers", "customer", "agents"] as const;
 export interface StoredView {
   screen: (typeof SCREENS)[number];
   params: FocusParams;

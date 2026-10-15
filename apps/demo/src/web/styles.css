@@ -114,3 +114,13 @@ svg [data-apc-pinned] .bar { stroke: var(--accent); stroke-width: 3; }
 /* Presence: an agent read (dotted) or changed (solid) this element. */
 [data-apc-presence="read"] { outline: 2px dotted var(--accent); outline-offset: 1px; }
 [data-apc-presence="write"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.step h2 { display: flex; align-items: center; gap: 10px; }
+.step-n { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; align-items: center; justify-content: center; flex: none; }
+.step ul, .step ol { margin: 8px 0; padding-left: 20px; }
+.step li { margin: 4px 0; }
+.step q { font-style: italic; }
+.expect { margin: 12px 0 0; padding: 8px 12px; border-left: 3px solid var(--up); background: var(--bg); border-radius: 0 6px 6px 0; font-size: 14px; }
+.intro h2 { font-size: 18px; }
+table.compat td, table.compat th { font-size: 13px; }

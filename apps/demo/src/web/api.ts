@@ -1,5 +1,8 @@
 import type { FocusRow, FocusTarget, PresenceEvent } from "@apc/protocol";
 import type { Dataset, Region } from "../model/seed.ts";
+import type { CompatRow } from "../worker/compat.ts";
+
+export type { CompatRow };
 
 export interface GrantState {
   id: string;
@@ -41,6 +44,8 @@ export function createApi(sid: string) {
     pin: (grantId: string, target: FocusTarget) => post<{ ok: boolean; error?: string }>("/pin", { grant_id: grantId, target }),
     unpin: (grantId: string) => post("/unpin", { grant_id: grantId }),
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
+    addAgent: () => post<GrantState>("/grants/agent", {}),
+    compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
     connect(onMessage: (message: ServerMessage) => void): () => void {
       let socket: WebSocket | null = null;
