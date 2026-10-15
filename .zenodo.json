@@ -1,0 +1,19 @@
+{
+  "title": "Agent Pointed Context: reference implementation and demo",
+  "upload_type": "software",
+  "description": "<p>Open reference implementation and live demo of Agent Pointed Context (APC): an application exposes three identifier-only channels to any agent connected over the Model Context Protocol (the person's view, a pin the person drops on a row or on a part of a computed figure, and the agent's presence on screen), and the person's own agent reads what a pin points at through its ordinary, authorized tools, joining it with what it already knows about the person. Three TypeScript packages (protocol, server, web) and Pulse, a synthetic SaaS analytics demo on Cloudflare Workers with one Durable Object per visitor. Live at https://apc.tineira.com.</p>",
+  "creators": [
+    {
+      "name": "Neira, Tomas",
+      "affiliation": "Independent researcher",
+      "orcid": "0009-0008-8234-8460"
+    }
+  ],
+  "license": "MIT",
+  "keywords": ["agent pointed context", "Model Context Protocol", "MCP", "human-agent interaction", "deixis", "joint attention", "LLM agents"],
+  "related_identifiers": [
+    { "identifier": "10.5281/zenodo.23382909", "relation": "isSupplementTo", "resource_type": "publication-preprint", "scheme": "doi" },
+    { "identifier": "10.5281/zenodo.23383101", "relation": "references", "resource_type": "publication-technicalnote", "scheme": "doi" },
+    { "identifier": "https://apc.tineira.com", "relation": "isDocumentedBy", "resource_type": "other", "scheme": "url" }
+  ]
+}

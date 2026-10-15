@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it, and the paper it implements."
+title: "Agent Pointed Context: reference implementation and demo"
+version: 0.1.0
+date-released: 2026-10-15
+license: MIT
+repository-code: "https://github.com/tineira/agent-pointed-context"
+url: "https://apc.tineira.com"
+keywords:
+  - agent pointed context
+  - Model Context Protocol
+  - MCP
+  - human-agent interaction
+  - deixis
+  - joint attention
+authors:
+  - family-names: Neira
+    given-names: Tomas
+    affiliation: Independent researcher
+    orcid: "https://orcid.org/0009-0008-8234-8460"
+preferred-citation:
+  type: article
+  status: preprint
+  title: "Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen"
+  authors:
+    - family-names: Neira
+      given-names: Tomas
+      orcid: "https://orcid.org/0009-0008-8234-8460"
+  year: 2026
+  doi: "10.5281/zenodo.23382909"
+  url: "https://doi.org/10.5281/zenodo.23382909"
