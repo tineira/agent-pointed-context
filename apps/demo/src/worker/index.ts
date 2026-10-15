@@ -43,10 +43,24 @@ function session(cookie: string | undefined): { sid: string; owner: string } | n
   return m ? { sid: m[1]!, owner: m[2]! } : null;
 }
 
+/** A rate limit that fails open: no binding (local tests) or a limiter error never blocks a visitor. */
+async function allowed(limiter: RateLimit | undefined, key: string): Promise<boolean> {
+  if (!limiter) return true;
+  try {
+    return (await limiter.limit({ key })).success;
+  } catch {
+    return true;
+  }
+}
+const tooMany = (c: { json: (body: unknown, status: 429, headers: Record<string, string>) => Response }) =>
+  c.json({ error: "rate_limited", message: "Too many requests; try again in a minute." }, 429, { "retry-after": "60" });
+
 /** Resume the visitor's sandbox, or open a new one. */
 app.post("/api/session", async (c) => {
   const current = session(getCookie(c, COOKIE));
   if (current && (await rpc(c.env, current.sid, (s) => s.isOwner(current.owner)))) return c.json({ sid: current.sid, created: false });
+  const loadTest = !!c.env.LOADTEST_KEY && c.req.header("x-apc-loadtest") === c.env.LOADTEST_KEY;
+  if (!loadTest && !(await allowed(c.env.NEW_SANDBOX, `ip:${c.req.header("cf-connecting-ip") ?? "unknown"}`))) return tooMany(c);
   const sid = randomHex(16);
   const { owner } = await rpc(c.env, sid, (s) => s.init());
   setCookie(c, COOKIE, `${sid}.${owner}`, {
@@ -63,6 +77,7 @@ app.post("/api/session", async (c) => {
 app.use("/api/s/:sid/*", async (c, next) => {
   const current = session(getCookie(c, COOKIE));
   if (!current || current.sid !== c.req.param("sid")) return c.json({ error: "forbidden" }, 403);
+  if (!(await allowed(c.env.SANDBOX_CALLS, `s:${current.sid}`))) return tooMany(c);
   if (!(await rpc(c.env, current.sid, (s) => s.isOwner(current.owner)))) return c.json({ error: "sandbox_expired" }, 404);
   c.set("sid", current.sid);
   c.set("owner", current.owner);
@@ -70,7 +85,6 @@ app.use("/api/s/:sid/*", async (c, next) => {
 });
 
 app.get("/api/s/:sid/state", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.state())));
-app.get("/api/s/:sid/data", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.dataset())));
 app.post("/api/s/:sid/view", async (c) => {
   const view = await c.req.json().catch(() => null);
   return c.json(await rpc(c.env, c.var.sid, (s) => s.reportView(view)));
@@ -116,6 +130,7 @@ app.get("/api/s/:sid/ws", async (c) => {
 app.all("/mcp/:sid/:secret", async (c) => {
   const sid = c.req.param("sid");
   if (!/^[0-9a-f]{32}$/.test(sid)) return c.json({ error: "not_found" }, 404);
+  if (!(await allowed(c.env.SANDBOX_CALLS, `s:${sid}`))) return tooMany(c);
   return stubFor(c.env, sid).fetch(c.req.raw);
 });
 

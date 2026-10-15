@@ -1,7 +1,7 @@
 import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protocol";
 import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, markState } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
+import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
@@ -76,6 +76,8 @@ function Sandbox({ sid }: { sid: string }) {
   const [{ route, filters }, setNav] = useState(readRoute);
   const [pulse, setPulse] = useState<Record<string, number>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  // Bumped by every message from the sandbox: what the compatibility matrix reloads on.
+  const [activity, setActivity] = useState(0);
   const [, tick] = useState(0);
   const stateRef = useRef<SandboxState | null>(null);
   stateRef.current = state;
@@ -83,8 +85,13 @@ function Sandbox({ sid }: { sid: string }) {
   const refresh = useCallback(() => api.state().then(setState), [api]);
   useEffect(() => {
     void refresh();
-    void api.data().then(setData);
-  }, [api, refresh]);
+  }, [refresh]);
+  // The data is deterministic from the sandbox's seed: the page rebuilds it with the same function
+  // the sandbox uses, instead of downloading it (the heaviest call in the load test).
+  const seed = state?.seed;
+  useEffect(() => {
+    if (seed !== undefined) setData(generateDataset(seed));
+  }, [seed]);
 
   const navigate = useCallback((nextRoute: Route, nextFilters: Filters) => {
     writeRoute(nextRoute, nextFilters);
@@ -114,6 +121,8 @@ function Sandbox({ sid }: { sid: string }) {
   useEffect(
     () =>
       api.connect((message) => {
+        setActivity((n) => n + 1);
+        if (message.type === "activity") return;
         if (message.type === "presence") {
           setPulse((p) => ({ ...p, [message.event.grant_id]: Date.now() }));
           if (stateRef.current?.settings.show_activity) flashTargets(message.event, initialsRef.current.get(message.event.grant_id) ?? "AG");
@@ -237,8 +246,8 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "overview" && <Overview data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}
         {route.screen === "customers" && <Customers data={data} filters={filters} onFilters={(f) => navigate(route, f)} onOpen={(id) => navigate({ screen: "customer", id }, filters)} />}
         {route.screen === "customer" && <CustomerDetail data={data} id={route.id} onBack={() => navigate({ screen: "customers" }, filters)} />}
-        {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} />}
-        {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} onChanged={() => void refresh()} />}
+        {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
+        {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
     </div>
   );

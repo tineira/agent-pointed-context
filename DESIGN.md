@@ -129,6 +129,26 @@ Derived metrics, shown on a sandbox metrics page and exported for the paper: foc
 
 **Client compatibility matrix (C8).** Recorded automatically per agent from the event log (`apps/demo/src/worker/compat.ts`, shown on the How to and Agents pages and served as `compat.json`): client name, version and user agent from `initialize`, tool list, pins, envelopes, how each pin was read (`get_current_view` or `wait_for_focus`, and whether after an envelope), whether the pin's `next` call was made, and the median time from pin to read. One URL per agent keeps each client apart. Run by hand over every MCP client available to the author (Claude, Codex, Cursor, Grok, Grok bot, AGY, others as they come), one row each: connects to the remote URL (directly or through `mcp-remote`); the model sees the envelope; the model calls `get_current_view` on "this"; the pin resolves through `next`; the MRR join is answered. Published with each release.
 
+## 9b. Capacity (measured 2026-10-15, production)
+
+Each visitor is its own Durable Object, so concurrency is not shared: nothing serialises one visitor behind another. What bounds the hosted demo is the Cloudflare plan's quotas and its CPU limit per request.
+
+**Load test** (`scripts/loadtest.mjs`, one client in Santiago): every simulated visitor opens a sandbox, reads its state, reports a view, connects an agent over MCP (initialize, tools/list), pins a figure, makes an unrelated call that carries the envelope, reads the view and follows `next`, and reads the matrix.
+
+| Visitors at once | Requests | Errors | p50 per request | p95 per request |
+|---|---|---|---|---|
+| 20 | 220 | 0 | 240 to 630 ms | up to 2.1 s |
+| 75 | 1,650 | 0 | 230 to 570 ms | up to 1.5 s |
+| 150 | 3,300 | 0 | 240 to 650 ms | 0.9 to 3.6 s |
+
+The p50 is mostly network (Chile to the edge to the sandbox): inside the Durable Object an MCP call took about 24 ms of wall time. The 150-at-once p95 coincides with 150 sandboxes created in the same seconds.
+
+**CPU per invocation** (from `wrangler tail`, sampled): median 1 ms on almost every route, p95 about 10 ms, maximum 17 ms; 2.8% of invocations were over 10 ms, the Free plan's limit, and none failed. The heaviest were downloading the dataset (since removed: the page rebuilds it from the seed with the same function) and MCP calls, which build the SDK server per request (7 to 11 ms).
+
+**Changes from the test:** the compatibility matrix reloads on the sandbox's WebSocket announcements instead of polling every 5 s (one open how-to tab went from about 1,440 Durable Object requests an hour to a handful); the page rebuilds the data from the seed; the WebSocket reconnects with backoff; rate limits of 10 new sandboxes a minute per IP and 300 calls a minute per sandbox (page and agents together; per sandbox, not per IP, because hosted agents share egress IPs). Cloudflare's limiter is approximate: in a test it started answering 429 after about 30 creations in a minute.
+
+**Remaining:** MCP calls rebuild the SDK server per request; caching it per grant would cut their CPU. On the Free plan the daily quota (100,000 Worker and 100,000 Durable Object requests) is the ceiling, roughly 1,000 visits a day; the Paid plan removes it for a few cents per thousand visits.
+
 ## 10. Cuts
 
 1. **Cut 1, the demo runs end to end**, hosted and local: sandboxes, view, pin, envelope, `wait_for_focus`, presence, the four figures, the MRR join scenario, instrumentation, the tests and the client matrix in section 9. README with a two-minute walkthrough.

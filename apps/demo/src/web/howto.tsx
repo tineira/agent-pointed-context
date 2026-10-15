@@ -182,6 +182,7 @@ interface Ctx {
   sid: string;
   state: SandboxState;
   initials: Map<string, string>;
+  activity: number;
   onChanged: () => void;
   agent: AgentKind;
 }
@@ -514,7 +515,7 @@ function ExamplesTopic(ctx: Ctx) {
 
       <Section id="results" title="What your agents did" lead="Live from this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.">
         <div className="overflow-hidden rounded-xl border border-line bg-cream p-2">
-          <CompatTable api={ctx.api} initials={ctx.initials} refreshKey={ctx.state} />
+          <CompatTable api={ctx.api} initials={ctx.initials} refreshKey={ctx.activity} />
         </div>
       </Section>
     </>
@@ -523,7 +524,7 @@ function ExamplesTopic(ctx: Ctx) {
 
 // ---- the guide ----
 
-export function HowTo(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; onChanged: () => void }) {
+export function HowTo(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; activity: number; onChanged: () => void }) {
   const [{ agent, topic }, setView] = useState(readQuery);
   useEffect(() => {
     const onPop = () => setView(readQuery());

@@ -17,6 +17,10 @@ const SERVER_VERSION = "0.1.0";
 export interface Env {
   SANDBOX: DurableObjectNamespace<Sandbox>;
   ASSETS: Fetcher;
+  NEW_SANDBOX?: RateLimit;
+  SANDBOX_CALLS?: RateLimit;
+  /** Secret (wrangler secret put LOADTEST_KEY): a request carrying it in x-apc-loadtest skips the new-sandbox limit. */
+  LOADTEST_KEY?: string;
 }
 
 function randomHex(bytes: number): string {
@@ -176,10 +180,6 @@ export class Sandbox extends DurableObject<Env> {
       grants: this.grants().map((g) => ({ ...g, pin: this.focusRow(g.id) })),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
     };
-  }
-
-  async dataset(): Promise<Dataset> {
-    return this.data();
   }
 
   async reportView(raw: unknown): Promise<{ ok: boolean }> {
@@ -397,6 +397,7 @@ export class Sandbox extends DurableObject<Env> {
           envelope_bytes: envelope,
           error: !!result.isError,
         });
+        if (result.isError) this.broadcast({ type: "activity" });
         if (!result.isError) {
           const targets = tool === "get_customer" && typeof args.id === "string" ? [{ kind: "customer", id: args.id }] : [];
           this.broadcast({ type: "presence", event: presenceEvent({ grantId: grant.id, tool, kind: "read", targets }) });

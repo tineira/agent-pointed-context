@@ -1,5 +1,5 @@
 import type { FocusRow, FocusTarget, PresenceEvent } from "@apc/protocol";
-import type { Dataset, Region } from "../model/seed.ts";
+import type { Region } from "../model/seed.ts";
 import type { CompatRow } from "../worker/compat.ts";
 
 export type { CompatRow };
@@ -25,7 +25,8 @@ export interface SandboxState {
 export type ServerMessage =
   | { type: "presence"; event: PresenceEvent }
   | { type: "pin"; grant_id: string; pin: FocusRow | null }
-  | { type: "grants" };
+  | { type: "grants" }
+  | { type: "activity" };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: "same-origin", ...init, headers: { "content-type": "application/json", ...init?.headers } });
@@ -38,7 +39,6 @@ export function createApi(sid: string) {
   const post = <T>(path: string, body: unknown) => call<T>(`${base}${path}`, { method: "POST", body: JSON.stringify(body) });
   return {
     state: () => call<SandboxState>(`${base}/state`),
-    data: () => call<Dataset>(`${base}/data`),
     reportView: (view: unknown) => post<{ ok: boolean }>("/view", view),
     setting: (name: "share_view" | "show_activity", on: boolean) => post("/settings", { name, on }),
     pin: (grantId: string, target: FocusTarget) => post<{ ok: boolean; error?: string }>("/pin", { grant_id: grantId, target }),
@@ -50,11 +50,18 @@ export function createApi(sid: string) {
     connect(onMessage: (message: ServerMessage) => void): () => void {
       let socket: WebSocket | null = null;
       let closed = false;
+      // Reconnect with backoff (2 s doubling to 60 s), so an expired sandbox is not hammered.
+      let delay = 2000;
       const open = () => {
         socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
+        socket.onopen = () => {
+          delay = 2000;
+        };
         socket.onmessage = (event) => onMessage(JSON.parse(String(event.data)) as ServerMessage);
         socket.onclose = () => {
-          if (!closed) setTimeout(open, 2000);
+          if (closed) return;
+          setTimeout(open, delay);
+          delay = Math.min(60_000, delay * 2);
         };
       };
       open();

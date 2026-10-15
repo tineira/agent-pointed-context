@@ -242,18 +242,28 @@ export function AddAgentButtons(props: { api: Api; state: SandboxState; onChange
 const ms = (v: number | null) => (v === null ? "–" : v < 10_000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v / 1000)} s`);
 const yes = (ok: boolean) => (ok ? "yes" : "–");
 
-/** The client compatibility matrix, live from this sandbox's event log. */
+/**
+ * The client compatibility matrix, from this sandbox's event log. No polling: it reloads when the
+ * sandbox announces activity on the page's WebSocket (refreshKey), at most once a second, and
+ * when the tab comes back into view.
+ */
 export function CompatTable(props: { api: Api; initials: Map<string, string>; refreshKey: unknown }) {
   const [rows, setRows] = useState<CompatRow[] | null>(null);
   useEffect(() => {
     let live = true;
-    const load = () => props.api.compat().then((r) => live && setRows(r), () => undefined);
-    void load();
-    const id = setInterval(load, 5000);
+    const load = () => {
+      // The first load always runs; later reloads wait until the tab is in view.
+      if (!rows || document.visibilityState === "visible") void props.api.compat().then((r) => live && setRows(r), () => undefined);
+    };
+    const timer = setTimeout(load, rows ? 1000 : 0);
+    document.addEventListener("visibilitychange", load);
     return () => {
       live = false;
-      clearInterval(id);
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", load);
     };
+    // rows only decides the first load's delay
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.api, props.refreshKey]);
   if (!rows) return <p className="hint">Loading…</p>;
   return (
@@ -300,7 +310,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; re
   );
 }
 
-export function Agents(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; onChanged: () => void }) {
+export function Agents(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; activity: number; onChanged: () => void }) {
   const { api, sid, state } = props;
   return (
     <>
@@ -319,7 +329,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       <section className="card">
         <h2>What your agents did</h2>
         <p className="hint">From this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>
-        <CompatTable api={api} initials={props.initials} refreshKey={state} />
+        <CompatTable api={api} initials={props.initials} refreshKey={props.activity} />
       </section>
       <section className="card">
         <h2>Switches and log</h2>
