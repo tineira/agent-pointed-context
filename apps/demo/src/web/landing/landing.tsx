@@ -5,7 +5,14 @@
  */
 import type { ReactNode } from "react";
 import { AppLink, CARD_HEADER, EYEBROW, H2, ICON_BUTTON, LogoMark, PAPER_URL, PaperIcon, PartRow, PRIMARY, SECONDARY, SPEC_URL, ThemeToggle } from "../ui.tsx";
+import { JoinCard } from "./join-visuals.tsx";
 import { PinDiagram } from "./pin-diagram.tsx";
+
+const BRING = [
+  { n: "1", name: "Pulse knows the product", text: "Customers, plans, regions, seats and activity. It does not know revenue, and it should not." },
+  { n: "2", name: "You know the money", text: "Revenue per customer lives in your billing system or a spreadsheet, and you never hand it to an analytics vendor." },
+  { n: "=", name: "Your agent has both", text: "Point at a figure: your agent gets the customer ids behind it from Pulse, matches them with your file, and answers what neither side could alone." },
+];
 
 const FACTS: { title: string; text: ReactNode }[] = [
   { title: "Your own agent", text: "Claude, ChatGPT, Grok, Cursor or any agent that speaks MCP. The app hosts no model and no chat." },
@@ -37,7 +44,7 @@ const FOCUS_JSON = `{
 const STEPS = [
   { title: "Connect your agent", text: "Open the demo and copy your MCP URL into your agent, as a remote MCP server. No account and no login: the secret in the URL is your agent's access to your sandbox." },
   { title: "Point at something", text: "Drag your agent's mark from the top bar onto a bar, a step of the bridge or a customer row. The chip next to the mark says pinned, then seen." },
-  { title: "Ask about “this”", text: "Ask your agent what you pointed at, or why. Give it your MRR file and it answers with numbers the app never had." },
+  { title: "Ask with what you know", text: "Give your agent your MRR file, then ask about “this”. It answers with numbers the app never had." },
 ];
 
 function StepVisual({ index }: { index: number }) {
@@ -125,7 +132,7 @@ function NeedArt({ kind }: { kind: "agent" | "url" | "file" }) {
 const NEEDS: { label: string; title: string; text: string; art: "agent" | "url" | "file" }[] = [
   { label: "01 · Agent", title: "An AI agent that speaks MCP", text: "Any client that accepts a remote MCP server by URL (Streamable HTTP): Claude Code, claude.ai, ChatGPT, Grok, Cursor and others.", art: "agent" },
   { label: "02 · URL", title: "Your MCP URL from the demo", text: "Each visitor gets a private sandbox with synthetic data and one URL per agent. It is deleted after 6 hours without use.", art: "url" },
-  { label: "03 · Optional", title: "Something you know that the app does not", text: "The demo gives you a file of MRR per customer, standing in for your billing data. Give it to your agent, never to the app.", art: "file" },
+  { label: "03 · What you know", title: "Something you know that the app does not", text: "The demo gives you a file of MRR per customer, standing in for your billing data. Give it to your agent, never to the app.", art: "file" },
 ];
 
 export function Landing() {
@@ -172,6 +179,27 @@ export function Landing() {
           </section>
         </div>
 
+        <section id="bring" className="grid items-center gap-[clamp(28px,4cqi,56px)] min-[860px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+          <div className="flex flex-col gap-5">
+            <span className={EYEBROW}>Why your own agent</span>
+            <h2 className={H2}>Your agent knows things the app never will.</h2>
+            <p className="text-pretty text-[clamp(16px,1.5cqi,18px)] leading-[1.55] text-muted">
+              An assistant built into an app only knows the app. The agent you already use has your files, your other tools and your memory. Point it at a figure and it puts the two together, on its side. The app never receives yours.
+            </p>
+            <ol className="flex flex-col border-t border-line">
+              {BRING.map((b) => (
+                <PartRow key={b.name} n={b.n} name={b.name} text={b.text} active={b.n === "="} />
+              ))}
+            </ol>
+            <div className="flex flex-wrap gap-2.5">
+              <AppLink href="/how-to?topic=examples" className={PRIMARY}>
+                Try it with your MRR file
+              </AppLink>
+            </div>
+          </div>
+          <JoinCard />
+        </section>
+
         <section className="grid items-start gap-[clamp(28px,4cqi,56px)] min-[860px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
           <div className="flex flex-col gap-4">
             <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-muted">APC · 3 channels</span>
@@ -180,7 +208,7 @@ export function Landing() {
               {CHANNELS.map((c, i) => (
                 <PartRow key={c.name} n={String(i + 1)} name={c.name} text={c.text} active={i === 1} />
               ))}
-              <PartRow n="→" name="Bring what you know" text="Your agent joins the ids behind a figure with your own data, here a file of MRR per customer the app never sees." link={{ href: "/how-to?topic=examples", label: "Try it →" }} />
+              <PartRow n="→" name="Bring what you know" text="The ids behind every figure are the join keys: the same ids your other systems use." link={{ href: "/how-to?topic=examples", label: "Try it →" }} />
             </ol>
           </div>
           <article className="overflow-hidden rounded-[20px] border border-line bg-cream">

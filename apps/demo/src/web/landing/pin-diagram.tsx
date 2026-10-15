@@ -4,7 +4,7 @@ import { CARD_HEADER } from "../ui.tsx";
 /**
  * The hero drawing, in the line style of the Round's exploded view on hue.tineira.com: an
  * agent's mark is dragged onto a bar (1), only a key travels (2), and the person's own agent
- * reads the data behind it with its own tools and joins it with what it already knows (3).
+ * reads the data behind it with its own tools (3) and joins it with the person's own file, which never reaches the app (4).
  * A 9 s CSS loop (theme.css, .pd-*); still with reduced motion.
  */
 const BARS = [70, 84, 96, 92, 110, 124, 118, 132];
@@ -33,7 +33,7 @@ export function PinDiagram() {
         <span>Example</span>
       </div>
       <div className="bp-grid relative aspect-[520/440] w-full">
-        <svg viewBox="0 0 520 440" className="absolute inset-0 h-full w-full" role="img" aria-label="An agent's mark dragged onto a bar of a chart; a key with kind, key and month travels to the person's own agent, which reads the figure and joins it with the person's MRR file.">
+        <svg viewBox="0 0 520 440" className="absolute inset-0 h-full w-full" role="img" aria-label="An agent's mark dragged onto a bar of a chart; a key with kind, key and month travels to the person's own agent, which reads the figure and joins it with the person's own MRR file, kept apart from the app.">
           {/* The app's window */}
           <rect x="24" y="36" width="300" height="230" rx="10" fill="var(--cream)" stroke={ink} strokeWidth="1.3" />
           <line x1="24" y1="60" x2="324" y2="60" stroke={ink} strokeWidth="1" />
@@ -53,7 +53,7 @@ export function PinDiagram() {
 
           {/* The key travels: to the agent, never the pixels */}
           <path className="pd-wire" d={`M ${tx + W + 4} ${BASE - th + 30} C 300 ${BASE - th + 30}, 300 186, 338 186`} fill="none" stroke={accent} strokeWidth="1.4" />
-          <path className="pd-wire" d="M 421 226 L 421 284" fill="none" stroke={accent} strokeWidth="1.4" />
+          <path className="pd-wire" d="M 421 226 L 421 298" fill="none" stroke={accent} strokeWidth="1.4" />
 
           <g className="pd-key">
             <rect x="338" y="148" width="166" height="78" rx="8" fill="var(--cream)" stroke={ink} strokeWidth="1.2" />
@@ -73,20 +73,17 @@ export function PinDiagram() {
           </g>
 
           {/* The person's own agent */}
-          <rect x="300" y="286" width="204" height="124" rx="12" fill="var(--cream)" stroke={ink} strokeWidth="1.3" />
-          <text x="316" y="305" fontSize="8.5" fill={mute} letterSpacing="0.6" style={mono}>
+          <rect x="300" y="300" width="204" height="112" rx="12" fill="var(--cream)" stroke={ink} strokeWidth="1.3" />
+          <text x="316" y="319" fontSize="8.5" fill={mute} letterSpacing="0.6" style={mono}>
             YOUR AGENT
           </text>
           <g className="pd-read">
-            <text x="316" y="326" fontSize="10" fill={ink} style={mono}>
-              <tspan fill={accent}>get_figure</tspan> → 121 customers
+            <text x="316" y="338" fontSize="10" fill={ink} style={mono}>
+              <tspan fill={accent}>get_figure</tspan> → 121 ids, seats
             </text>
-            <g transform="translate(316 336)">
-              <path d="M0 0h8l3 3v10H0z" fill="none" stroke={ink} strokeWidth="1" strokeLinejoin="round" />
-              <text x="16" y="10" fontSize="10" fill={ink} style={mono}>
-                mrr.csv <tspan fill={mute}>· yours, not Pulse's</tspan>
-              </text>
-            </g>
+            <text x="316" y="354" fontSize="10" fill={ink} style={mono}>
+              <tspan fill={accent}>+ your file</tspan> → join on id
+            </text>
           </g>
           <g className="pd-answer">
             <text x="316" y="380" fontSize="14" fontWeight="600" fill={ink}>
@@ -97,11 +94,41 @@ export function PinDiagram() {
             </text>
           </g>
 
+          {/* What the person already knows: a file of their own, outside the app */}
+          <rect x="24" y="300" width="214" height="112" rx="10" fill="var(--cream)" stroke={accent} strokeWidth="1.3" />
+          <g transform="translate(38 312)">
+            <path d="M0 0h8l3 3v10H0z" fill="none" stroke={ink} strokeWidth="1" strokeLinejoin="round" />
+            <text x="17" y="10" fontSize="10" fill={ink} style={mono}>
+              mrr-by-customer.csv
+            </text>
+          </g>
+          <line x1="24" y1="332" x2="238" y2="332" stroke={line} strokeWidth="1" />
+          {[
+            ["cus_0042", "1,204.37"],
+            ["cus_0107", "318.92"],
+            ["cus_0158", "2,087.10"],
+          ].map(([id, v], i) => (
+            <g key={id}>
+              <text x="38" y={348 + i * 15} fontSize="10" fill={ink} style={mono}>
+                {id}
+              </text>
+              <text x="224" y={348 + i * 15} fontSize="10" fill={ink} textAnchor="end" style={mono}>
+                {v}
+              </text>
+            </g>
+          ))}
+          <text x="38" y="403" fontSize="8.5" fill={accent} letterSpacing="0.6" style={mono}>
+            YOURS · PULSE NEVER SEES IT
+          </text>
+          <path className="pd-read" d="M 238 356 L 294 356" fill="none" stroke={accent} strokeWidth="1.6" />
+          <path className="pd-read" d="M 288 351 L 295 356 L 288 361" fill="none" stroke={accent} strokeWidth="1.6" strokeLinejoin="round" />
+
           {/* Callouts, as on the exploded view */}
           {[
             { n: 1, x: tx - 22, y: BASE - th - 40, lx: tx + 2, ly: BASE - th - 10 },
             { n: 2, x: 352, y: 128, lx: 360, ly: 148 },
-            { n: 3, x: 282, y: 300, lx: 300, ly: 304 },
+            { n: 3, x: 486, y: 286, lx: 476, ly: 300 },
+            { n: 4, x: 38, y: 286, lx: 48, ly: 300 },
           ].map((c) => (
             <g key={c.n}>
               <line x1={c.x} y1={c.y} x2={c.lx} y2={c.ly} stroke={mute} strokeWidth="1" />

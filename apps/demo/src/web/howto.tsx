@@ -6,6 +6,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
 import { AddAgentButtons, CompatTable, DownloadCsv } from "./pages.tsx";
+import { FileCard, JoinMini } from "./landing/join-visuals.tsx";
 import { AppLink, GROUP_LABEL } from "./ui.tsx";
 
 const AGENTS = ["claude-code", "claude-ai", "other"] as const;
@@ -23,7 +24,7 @@ const TOPIC_INFO: Record<Topic, { label: string; hint: string }> = {
   connect: { label: "Connect", hint: "Add your MCP URL" },
   point: { label: "Point", hint: "Drag your agent's mark" },
   ask: { label: "Ask or wait", hint: "What it sees, or wait for a pin" },
-  examples: { label: "Examples", hint: "Questions to try, and results" },
+  examples: { label: "Bring what you know", hint: "The MRR example, and more" },
 };
 
 const SELECTED = "border-filament shadow-[0_0_0_1px_var(--filament)]";
@@ -369,8 +370,16 @@ function AskTopic(_: Ctx) {
 }
 
 function ExamplesTopic(ctx: Ctx) {
-  const [open, setOpen] = useState(0);
-  const items: Array<{ title: string; steps: ReactNode[] }> = [
+  const [open, setOpen] = useState(-1);
+  const giveIt =
+    ctx.agent === "claude-code" ? (
+      <span>
+        Save it in the folder where you run <code className="font-mono text-foreground">claude</code>, and tell your agent it is there. Do not upload it to Pulse: there is nowhere to, on purpose.
+      </span>
+    ) : (
+      <span>Attach it to your conversation with your agent. Do not upload it to Pulse: there is nowhere to, on purpose.</span>
+    );
+  const more: Array<{ title: string; steps: ReactNode[] }> = [
     {
       title: "Why did these customers leave?",
       steps: [
@@ -383,24 +392,6 @@ function ExamplesTopic(ctx: Ctx) {
         </>,
         <>Ask: “Why is this number what it is? Who are these customers?”</>,
         <>Your agent reads the bridge for that month and lists the churned customers with their plan, region and seats. The answer comes from the data behind the step, not from a picture of it.</>,
-      ],
-    },
-    {
-      title: "How much MRR is this? (with your own file)",
-      steps: [
-        <>
-          Pulse does not know revenue. Download this file, which stands in for your billing data: <DownloadCsv seed={ctx.state.seed} />
-        </>,
-        <>Give it to your agent, not to Pulse: attach it in the chat, or put it in the folder your agent works in.</>,
-        <>
-          On{" "}
-          <AppLink href="/overview" className="text-filament underline underline-offset-2">
-            Overview
-          </AppLink>
-          , drag your mark onto a bar of Active customers per month.
-        </>,
-        <>Ask: “How much MRR is this, and which customer has the best MRR per seat?”</>,
-        <>Your agent gets the customers and seats behind the bar from Pulse, matches their ids with your file, and answers. Pulse never receives an MRR value: the matching happens in your agent.</>,
       ],
     },
     {
@@ -420,9 +411,79 @@ function ExamplesTopic(ctx: Ctx) {
   ];
   return (
     <>
-      <Section id="examples" title="Questions to try" lead="Each one takes a minute. The second is the one the app could never answer alone.">
+      <section id="bring" className="flex scroll-mt-6 flex-col overflow-hidden rounded-2xl border border-filament/50 bg-cream">
+        <div className="flex flex-wrap items-center gap-5 border-b border-filament/30 bg-filament-soft px-5 py-5">
+          <div className="flex min-w-0 flex-[1_1_320px] flex-col gap-2">
+            <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-filament">The one the app can't answer alone</span>
+            <h2 className="text-xl font-semibold tracking-tight">Bring what you know: MRR per customer</h2>
+            <p className="text-sm text-muted">
+              Pulse knows customers and seats, not revenue. You know revenue, and keep it to yourself. Your agent gets the customer ids behind a figure from Pulse, matches them with your file, and answers with numbers Pulse never had. This is the reason to point <em>your own</em> agent.
+            </p>
+          </div>
+        </div>
+        <div className="p-4 sm:p-5">
+          <Steps
+            steps={[
+              {
+                title: "Download your file",
+                body: (
+                  <>
+                    <span>It stands in for your billing export: one row per customer and month, keyed by the same customer id Pulse uses. Your browser makes it; Pulse's server has no revenue data at all.</span>
+                    <div>
+                      <DownloadCsv seed={ctx.state.seed} />
+                    </div>
+                  </>
+                ),
+                now: { label: "You have now", content: <FileCard compact /> },
+              },
+              {
+                title: "Give it to your agent, not to Pulse",
+                body: giveIt,
+                now: {
+                  label: "Your agent has now",
+                  content: (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <span className="rounded-full border border-filament bg-cream px-2.5 py-1 font-mono text-[11px]">mrr-by-customer.csv</span>
+                      <span className="text-[11px] text-muted">Pulse: nothing new</span>
+                    </div>
+                  ),
+                },
+              },
+              {
+                title: "Point at a bar of Active customers per month",
+                where: { label: "Overview", href: "/overview" },
+                body: <span>Drag your mark onto any month. The pin carries the figure's key and month; your agent will fetch the customers behind it.</span>,
+              },
+              {
+                title: "Ask with both",
+                body: (
+                  <>
+                    <Prompt text="How much MRR is this, and which customer has the best MRR per seat?" />
+                    <span>Your agent calls get_figure (the customer ids and seats in that bar), reads your file, and matches them on customer_id.</span>
+                  </>
+                ),
+                now: { label: "Your agent joins", content: <JoinMini /> },
+              },
+            ]}
+            done={{
+              title: "Your agent answers with numbers Pulse never had.",
+              text: (
+                <>
+                  Total MRR for the bar and the best customer per seat. Check for yourself: in this sandbox's{" "}
+                  <a href={ctx.api.eventsUrl} className="text-filament underline underline-offset-2">
+                    log
+                  </a>
+                  , no MRR value appears in anything your agent sent to Pulse.
+                </>
+              ),
+            }}
+          />
+        </div>
+      </section>
+
+      <Section id="more" title="More to try" lead="Shorter, and Pulse could answer these on its own: they show the pointer, not the join.">
         <div className="flex flex-col divide-y divide-line overflow-hidden rounded-xl border border-line bg-cream text-sm">
-          {items.map((task, i) => {
+          {more.map((task, i) => {
             const expanded = open === i;
             return (
               <div key={task.title}>
@@ -450,6 +511,7 @@ function ExamplesTopic(ctx: Ctx) {
           })}
         </div>
       </Section>
+
       <Section id="results" title="What your agents did" lead="Live from this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.">
         <div className="overflow-hidden rounded-xl border border-line bg-cream p-2">
           <CompatTable api={ctx.api} initials={ctx.initials} refreshKey={ctx.state} />
@@ -472,9 +534,9 @@ export function HowTo(props: { api: Api; sid: string; state: SandboxState; initi
     history.pushState(null, "", hrefFor(next.agent, next.topic));
     setView(next);
   };
-  const shownTopic: Topic | null = agent ? (topic ?? "connect") : topic;
-  const compact = agent !== null;
-  const ctx: Ctx | null = agent ? { ...props, agent } : null;
+  const shownTopic: Topic | null = agent ? (topic ?? "connect") : topic && topic !== "connect" ? topic : null;
+  const compact = agent !== null || shownTopic !== null;
+  const ctx: Ctx | null = shownTopic ? { ...props, agent: agent ?? "other" } : null;
   const nextOf: Partial<Record<Topic, Topic>> = { connect: "point", point: "ask", ask: "examples" };
   const next = shownTopic ? nextOf[shownTopic] : undefined;
 
@@ -514,7 +576,7 @@ export function HowTo(props: { api: Api; sid: string; state: SandboxState; initi
         })}
       </div>
 
-      {agent ? (
+      {agent || shownTopic ? (
         <div className="grid grid-cols-2 gap-2 min-[600px]:grid-cols-4" role="radiogroup" aria-label="What you want to do">
           {TOPICS.map((id) => {
             const on = id === shownTopic;
@@ -525,7 +587,8 @@ export function HowTo(props: { api: Api; sid: string; state: SandboxState; initi
                 role="radio"
                 aria-checked={on}
                 onClick={() => go({ agent, topic: id })}
-                className={`flex min-w-0 cursor-pointer touch-manipulation flex-col gap-0.5 rounded-[10px] border px-3 py-2.5 text-left ${on ? "border-filament bg-filament-soft" : "border-line hover:bg-cream"}`}
+                disabled={!agent && id === "connect"}
+                className={`flex min-w-0 cursor-pointer touch-manipulation flex-col gap-0.5 rounded-[10px] border px-3 py-2.5 text-left disabled:cursor-default disabled:opacity-40 ${on ? "border-filament bg-filament-soft" : "border-line hover:bg-cream"}`}
               >
                 <span className={`text-[13.5px] font-semibold ${on ? "text-filament" : ""}`}>{TOPIC_INFO[id].label}</span>
                 <span className="text-[11.5px] leading-snug text-muted">{TOPIC_INFO[id].hint}</span>
