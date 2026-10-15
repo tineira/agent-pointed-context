@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+apps/demo/user-side-out/
+apps/demo/worker-configuration.d.ts

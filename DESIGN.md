@@ -57,7 +57,7 @@ The person comes to the application **with their own agent**, and that agent alr
 
 **Domain:** product analytics for a fictional SaaS ("Pulse"). Synthetic, seeded, about 200 customers over 18 months, three plans, three regions.
 
-**Data held by a sandbox (Durable Object SQLite):** `customers` (`id` = external id `cus_NNNN`, name, plan, region, signup month), `activity` (customer, month, active, seats, usage events), `grants`, `view_state`, `agent_focus`, `events` (instrumentation).
+**Data:** `customers` (`id` = external id `cus_NNNN`, name, plan, region, signup month) and `activity` (customer, month, active, seats, usage events) are rebuilt in memory from the sandbox's seed, so a sandbox stores only the seed. Its Durable Object SQLite holds `grants`, `view_state`, `agent_focus` and `events` (instrumentation).
 
 **Screens:**
 - **Overview:** active customers per month (bar chart), the customer bridge for a month (start, new, reactivated, churned, end), seats per month.
@@ -98,10 +98,11 @@ The same as `04-payload-specification.md` (view result, focus payload, `attentio
 
 ## 7. Architecture
 
-A pnpm monorepo with two reusable packages and one app, so the pattern can be adopted, not only watched:
+A pnpm monorepo with three reusable packages and one app, so the pattern can be adopted, not only watched:
 
-- `packages/apc-server`: runtime-agnostic TypeScript. The focus store interface, a wrapper that adds the `attention` envelope to any MCP tool result, the `get_current_view` and `wait_for_focus` tool definitions, the view allowlist, the figure registry types (validator, loader, pure compute, `inputs` with declared join keys, `app_url`), the presence event builder.
-- `packages/apc-web`: framework-agnostic DOM. `data-focus` attributes and their parser, drag-to-pin with the innermost-target rule, a hit-test registry for canvas or SVG surfaces, agent marks and the presence cursor, view reporting (debounced, visible tab only).
+- `packages/protocol` (`@apc/protocol`): the wire types and the target grammar (kinds, parts, key-only params, canonical keys, `data-focus` attributes), shared by both sides.
+- `packages/server` (`@apc/server`): runtime-agnostic TypeScript. The `attention` envelope (structured result and text), the `get_current_view` and `wait_for_focus` tools over a host-supplied context, the presence event builder. The view allowlist and the figure registry are the host's (here `apps/demo/src/worker/domain.ts` and `apps/demo/src/model/figures.ts`).
+- `packages/web` (`@apc/web`): framework-agnostic DOM. `data-focus` attributes and their parser, drag-to-pin with the innermost-target rule, a hit-test registry for canvas or SVG surfaces, agent marks and the presence cursor, view reporting (debounced, visible tab only).
 - `apps/demo`: Pulse. A Cloudflare Worker (Hono) routes to the sandbox Durable Object, which serves MCP over Streamable HTTP (official SDK), the browser API and the WebSocket. The front end is Vite + React, served as Worker static assets. The figure functions live in `apps/demo/src/model/` and are imported by both the page and the Durable Object: that is what C4 tests.
 
 ## 8. Instrumentation
