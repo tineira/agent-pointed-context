@@ -1,5 +1,7 @@
 # Agent Pointed Context
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23404049.svg)](https://doi.org/10.5281/zenodo.23404049) [![CI](https://github.com/tineira/agent-pointed-context/actions/workflows/ci.yml/badge.svg)](https://github.com/tineira/agent-pointed-context/actions/workflows/ci.yml)
+
 Point your own AI agent at what you see in an app, without sharing the screen.
 
 [![Agent Pointed Context: an agent's mark dragged onto a bar of a chart; only a key travels to the person's own agent, which reads the data behind it and joins it with the person's own MRR file, kept apart from the app.](docs/landing.jpg)](https://apc.tineira.com)
@@ -129,7 +131,7 @@ The look follows [hue-switch-console](https://github.com/tineira/hue-switch-cons
 
 ## Cite
 
-See [CITATION.cff](CITATION.cff). Each release is archived on Zenodo with its own DOI.
+This software: T. Neira. *Agent Pointed Context: reference implementation and demo.* Zenodo. https://doi.org/10.5281/zenodo.23404049 (all versions; v0.1.0 is https://doi.org/10.5281/zenodo.23404050). See also [CITATION.cff](CITATION.cff). Please cite the paper for the pattern itself.
 
 ## License
 

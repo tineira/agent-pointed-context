@@ -6,7 +6,7 @@
 | **Paper** | T. Neira, *Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen*, 2026. https://doi.org/10.5281/zenodo.23382909 |
 | **Spec** | Companion record, `04-payload-specification.md`. https://doi.org/10.5281/zenodo.23383101 |
 | **License** | MIT (code). The paper is CC BY 4.0. |
-| **Visibility** | Public since 2026-10-15. A Zenodo software DOI per release (GitHub integration), from v0.1.0. |
+| **Visibility** | Public since 2026-10-15. Software DOI 10.5281/zenodo.23404049 (all versions; v0.1.0 is 10.5281/zenodo.23404050), one per release through the Zenodo GitHub integration. |
 | **Hosting** | Cloudflare Workers + Durable Objects, one sandbox per visitor, at https://apc.tineira.com (also apc-demo.apc-demo.workers.dev). The same code runs locally with `pnpm dev`, no account needed. |
 
 ## 1. Why this repo exists
