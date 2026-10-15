@@ -12,5 +12,7 @@
     "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
+  "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],
+  "workers_dev": true,
   "observability": { "enabled": true }
 }

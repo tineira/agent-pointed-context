@@ -10,7 +10,7 @@ The application exposes three identifier-only channels to any agent connected ov
 
 **Status:** work in progress (cut 1). See [DESIGN.md](DESIGN.md).
 
-**Live demo:** https://apc-demo.apc-demo.workers.dev (each visitor gets a private sandbox that expires after 6 hours).
+**Live demo:** https://apc.tineira.com (each visitor gets a private sandbox that expires after 6 hours).
 
 ## Layout
 
