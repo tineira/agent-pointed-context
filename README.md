@@ -10,6 +10,8 @@ The application exposes three identifier-only channels to any agent connected ov
 
 **Status:** work in progress (cut 1). See [DESIGN.md](DESIGN.md).
 
+**Live demo:** https://apc-demo.apc-demo.workers.dev (each visitor gets a private sandbox that expires after 6 hours).
+
 ## Layout
 
 | Path | What |
@@ -27,7 +29,10 @@ Node 24 and pnpm (through corepack):
 corepack pnpm install
 corepack pnpm test
 corepack pnpm dev        # http://localhost:5173
+cd apps/demo && npx wrangler deploy   # after npx wrangler login
 ```
+
+On Windows, the local Workers runtime needs the Microsoft Visual C++ Redistributable, and it can crash now and then when a new sandbox starts; the page retries. Deployed, this does not happen.
 
 ## License
 
