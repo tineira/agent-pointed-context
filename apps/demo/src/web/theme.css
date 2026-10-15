@@ -87,36 +87,35 @@ option {
     repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 24px);
 }
 
-/* Hero drawing: an agent's mark travels onto a bar, the pin is stored, the agent reads it.
-   One 9 s loop; everything sits still with reduced motion. */
+/* Hero drawing: an agent's mark travels onto a bar, the pin is stored, the agent reads it and joins
+   it with the person's file. One 9 s loop: each wire and callout comes in with the step it points
+   at, and everything fades out before the loop starts again, so nothing is left over. Still with
+   reduced motion. */
 .pd-mark { animation: pd-mark 9s ease-in-out infinite; }
-.pd-target { animation: pd-target 9s step-end infinite; }
-.pd-key { animation: pd-key 9s ease-in-out infinite; }
-.pd-wire { stroke-dasharray: 4 5; animation: pd-wire 1.2s linear infinite; }
-.pd-read { animation: pd-read 9s ease-in-out infinite; }
-.pd-answer { animation: pd-answer 9s ease-in-out infinite; }
+.pd-target, .pd-c1 { animation: pd-at-30 9s ease-in-out infinite; }
+.pd-key, .pd-c2 { animation: pd-at-38 9s ease-in-out infinite; }
+.pd-w1 { animation: pd-dash 1.2s linear infinite, pd-at-34 9s ease-in-out infinite; }
+.pd-w2 { animation: pd-dash 1.2s linear infinite, pd-at-46 9s ease-in-out infinite; }
+.pd-wire { stroke-dasharray: 4 5; }
+.pd-read, .pd-c3, .pd-c4 { animation: pd-at-54 9s ease-in-out infinite; }
+.pd-answer { animation: pd-at-70 9s ease-in-out infinite; }
 .pd-pulse { animation: pd-pulse 9s ease-out infinite; transform-box: fill-box; transform-origin: center; }
 
+/* The mark fades in at its start, moves onto the bar, stays, and fades out with the rest. */
 @keyframes pd-mark {
-  0%, 8% { transform: translate(0, 0); }
-  30%, 100% { transform: translate(var(--pd-dx), var(--pd-dy)); }
+  0% { opacity: 0; transform: translate(0, 0); }
+  4%, 8% { opacity: 1; transform: translate(0, 0); }
+  28%, 90% { opacity: 1; transform: translate(var(--pd-dx), var(--pd-dy)); }
+  97%, 100% { opacity: 0; transform: translate(var(--pd-dx), var(--pd-dy)); }
 }
-@keyframes pd-target {
-  0% { opacity: 0; }
-  30% { opacity: 1; }
-}
-@keyframes pd-key {
-  0%, 34% { opacity: 0; transform: translateY(6px); }
-  42%, 100% { opacity: 1; transform: translateY(0); }
-}
-@keyframes pd-read {
-  0%, 52% { opacity: 0; }
-  60%, 100% { opacity: 1; }
-}
-@keyframes pd-answer {
-  0%, 70% { opacity: 0; transform: translateY(6px); }
-  78%, 100% { opacity: 1; transform: translateY(0); }
-}
+/* Visible from N% of the loop until the shared fade-out at 90-97%. */
+@keyframes pd-at-30 { 0%, 28% { opacity: 0; } 32%, 90% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes pd-at-34 { 0%, 32% { opacity: 0; } 36%, 90% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes pd-at-38 { 0%, 36% { opacity: 0; } 42%, 90% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes pd-at-46 { 0%, 44% { opacity: 0; } 48%, 90% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes pd-at-54 { 0%, 52% { opacity: 0; } 58%, 90% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes pd-at-70 { 0%, 68% { opacity: 0; } 74%, 90% { opacity: 1; } 97%, 100% { opacity: 0; } }
+@keyframes pd-dash { to { stroke-dashoffset: -18; } }
 @keyframes pd-pulse {
   0%, 52% { opacity: 0; transform: scale(1); }
   56% { opacity: 0.9; transform: scale(1); }
@@ -125,7 +124,6 @@ option {
 
 @media (prefers-reduced-motion: reduce) {
   .pd-mark { animation: none; transform: translate(var(--pd-dx), var(--pd-dy)); }
-  .pd-target, .pd-key, .pd-read, .pd-answer { animation: none; opacity: 1; }
-  .pd-wire, .pd-pulse { animation: none; }
-  .pd-pulse { opacity: 0; }
+  .pd-target, .pd-key, .pd-read, .pd-answer, .pd-w1, .pd-w2, .pd-c1, .pd-c2, .pd-c3, .pd-c4 { animation: none; opacity: 1; }
+  .pd-pulse { animation: none; opacity: 0; }
 }

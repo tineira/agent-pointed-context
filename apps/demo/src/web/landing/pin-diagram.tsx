@@ -45,15 +45,16 @@ export function PinDiagram() {
           </text>
           <line x1="40" y1={BASE} x2="308" y2={BASE} stroke={mute} strokeWidth="1" />
           {BARS.map((h, i) => (
-            <rect key={i} x={X0 + i * STEP} y={BASE - h} width={W} height={h} rx="2" fill={i === TARGET ? "var(--filament-soft)" : line} stroke={ink} strokeWidth="1.1" />
+            <rect key={i} x={X0 + i * STEP} y={BASE - h} width={W} height={h} rx="2" fill={line} stroke={ink} strokeWidth="1.1" />
           ))}
 
           {/* What the person pointed at */}
+          <rect className="pd-target" x={tx} y={BASE - th} width={W} height={th} rx="2" fill="var(--filament-soft)" stroke={ink} strokeWidth="1.1" />
           <rect className="pd-target" x={tx - 4} y={BASE - th - 4} width={W + 8} height={th + 8} rx="4" fill="none" stroke={accent} strokeWidth="1.6" strokeDasharray="4 3" />
 
           {/* The key travels: to the agent, never the pixels */}
-          <path className="pd-wire" d={`M ${tx + W + 4} ${BASE - th + 30} C 300 ${BASE - th + 30}, 300 186, 338 186`} fill="none" stroke={accent} strokeWidth="1.4" />
-          <path className="pd-wire" d="M 421 226 L 421 298" fill="none" stroke={accent} strokeWidth="1.4" />
+          <path className="pd-wire pd-w1" d={`M ${tx + W + 4} ${BASE - th + 30} C 300 ${BASE - th + 30}, 300 186, 338 186`} fill="none" stroke={accent} strokeWidth="1.4" />
+          <path className="pd-wire pd-w2" d="M 421 226 L 421 298" fill="none" stroke={accent} strokeWidth="1.4" />
 
           <g className="pd-key">
             <rect x="338" y="148" width="166" height="78" rx="8" fill="var(--cream)" stroke={ink} strokeWidth="1.2" />
@@ -130,7 +131,7 @@ export function PinDiagram() {
             { n: 3, x: 486, y: 286, lx: 476, ly: 300 },
             { n: 4, x: 38, y: 286, lx: 48, ly: 300 },
           ].map((c) => (
-            <g key={c.n}>
+            <g key={c.n} className={`pd-c${c.n}`}>
               <line x1={c.x} y1={c.y} x2={c.lx} y2={c.ly} stroke={mute} strokeWidth="1" />
               <circle cx={c.x} cy={c.y} r="9" fill="var(--cream)" stroke={mute} strokeWidth="1.1" />
               <text x={c.x} y={c.y + 3.5} textAnchor="middle" fontSize="10" fill={mute} style={mono}>
