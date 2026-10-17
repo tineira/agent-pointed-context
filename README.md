@@ -102,6 +102,8 @@ npx wrangler login
 node node_modules/vite/bin/vite.js build && npx wrangler deploy
 ```
 
+apc.tineira.com itself deploys from CI: every push to `main` that passes the checks runs `wrangler deploy` (`.github/workflows/ci.yml`, with the repository secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`).
+
 On Windows the local Workers runtime needs the Microsoft Visual C++ Redistributable, and it sometimes crashes when a new sandbox starts; the page retries. Deployed, this does not happen.
 
 ## Layout
