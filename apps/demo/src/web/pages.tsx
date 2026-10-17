@@ -1,3 +1,4 @@
+import { encode } from "uqr";
 import { useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
@@ -172,6 +173,24 @@ export function Copy(props: { text: string }) {
   );
 }
 
+/** Black modules on a white plate, so a phone camera can read it in either theme. */
+export function Qr(props: { text: string }) {
+  const code = useMemo(() => encode(props.text, { ecc: "M", border: 4 }), [props.text]);
+  const n = code.size;
+  let d = "";
+  for (let y = 0; y < n; y++) {
+    const row = code.data[y];
+    if (!row) continue;
+    for (let x = 0; x < n; x++) if (row[x]) d += `M${x} ${y}h1v1h-1z`;
+  }
+  return (
+    <svg className="qr" viewBox={`0 0 ${n} ${n}`} width="196" height="196" role="img" aria-label="QR code of the MCP URL" shapeRendering="crispEdges">
+      <rect width={n} height={n} fill="#fff" />
+      <path d={d} fill="#141a24" />
+    </svg>
+  );
+}
+
 /** Download the person's own file. The browser makes it from the seed; Pulse's server has no MRR code. */
 export function DownloadCsv(props: { seed: number }) {
   const download = () => {
@@ -199,6 +218,10 @@ export function AgentCard(props: { sid: string; grant: GrantState; initials: str
         {g.client_name ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
       </h3>
       <Copy text={mcpUrl(props.sid, g)} />
+      <div className="qr-row">
+        <Qr text={mcpUrl(props.sid, g)} />
+        <p className="hint">Scan with a phone, then paste the URL into the agent. Opening the link in the browser does not connect it.</p>
+      </div>
       {props.command && (
         <>
           <p className="hint">Claude Code:</p>
@@ -317,8 +340,8 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       <section className="card">
         <h2>Your agents</h2>
         <p>
-          Each agent gets its own URL and its own mark. Paste a URL as a remote MCP server (Streamable HTTP) in your agent. The secret in the URL is that agent's read access to this sandbox; it expires with the sandbox. Using several agents? Give each one its own URL, so you can see which one
-          answered.
+          Each agent gets its own URL and its own mark. Paste a URL as a remote MCP server (Streamable HTTP) in your agent, or scan its QR and paste that same URL into an agent on a phone. The secret in the URL is that agent's read access to this sandbox; it expires with the sandbox. Using several
+          agents? Give each one its own URL, so you can see which one answered.
         </p>
         {state.grants.map((g) => (
           <AgentCard key={g.id} sid={sid} grant={g} initials={props.initials.get(g.id)} command />

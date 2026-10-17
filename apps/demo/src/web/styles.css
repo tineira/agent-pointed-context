@@ -71,6 +71,9 @@ tbody tr:hover { background: var(--bg); }
 .grant { margin: 12px 0 16px; }
 .copy { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
 .copy code { flex: 1; overflow-x: auto; white-space: nowrap; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.qr-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
+.qr { width: 196px; height: 196px; flex: none; display: block; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.qr-row .hint { margin: 0; max-width: 32ch; }
 .switch { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
 
 /* APC: targets outline while a mark is dragged; the target under the pointer is solid. */
