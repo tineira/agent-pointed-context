@@ -339,7 +339,7 @@ function AskTopic(_: Ctx) {
               <>
                 <span>Ask:</span>
                 <Prompt text="Wait until I point you at something in Pulse, then tell me what it is." />
-                <span>It calls wait_for_focus, which holds for up to 45 seconds. Drop your mark while it waits.</span>
+                <span>It calls wait_for_focus, which holds for 25 seconds by default (50 at most). Drop your mark while it waits.</span>
               </>
             ),
             note: "If it times out, ask it to wait again. Some agents cap how long one tool call may take.",
@@ -347,7 +347,7 @@ function AskTopic(_: Ctx) {
           },
           {
             title: "Already talking? Just point",
-            body: <span>You need neither of the above in a conversation. Point, then ask about “this”: the pin also travels on your agent's next tool call, with a note that you pointed.</span>,
+            body: <span>You need neither of the above in a conversation. Point, then ask about “this”: the pin also travels on your agent's next tool call, with a note that you pointed. After it answers, it waits for your next pin by itself while this page is open.</span>,
             now: { label: "Any tool result carries", content: <Snippet>{'"attention": {\n  "focus": { … },\n  "note": "The person pinned\n   you to something…" }'}</Snippet> },
           },
         ]}

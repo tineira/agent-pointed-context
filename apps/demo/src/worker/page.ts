@@ -1,0 +1,29 @@
+/**
+ * Whether a page of the person's is open, from its sockets alone. The page
+ * sends "ping" every HEARTBEAT_MS over its WebSocket and the sandbox answers
+ * "pong" without waking (the hibernation API's auto-response), which stamps
+ * the socket. A socket counts as open only while it is OPEN and was stamped,
+ * or accepted, within PAGE_WINDOW_MS: a proxy that never reports a closed tab
+ * (the Vite dev proxy does this) stops counting once the pings stop.
+ */
+export const HEARTBEAT_MS = 30_000;
+/** Two heartbeats, plus slack for a background tab whose timers the browser throttles. */
+export const PAGE_WINDOW_MS = 2 * HEARTBEAT_MS + 15_000;
+
+export interface PageSocket {
+  open: boolean;
+  /** When the sandbox last answered this socket's ping (ms), or null before the first. */
+  lastPongAt: number | null;
+  /** When the sandbox accepted the socket (ms); 0 when unknown. */
+  acceptedAt: number;
+}
+
+export function socketAlive(socket: PageSocket, now: number): boolean {
+  if (!socket.open) return false;
+  const lastSign = Math.max(socket.lastPongAt ?? 0, socket.acceptedAt);
+  return now - lastSign <= PAGE_WINDOW_MS;
+}
+
+export function anyPageOpen(sockets: PageSocket[], now: number): boolean {
+  return sockets.some((socket) => socketAlive(socket, now));
+}
