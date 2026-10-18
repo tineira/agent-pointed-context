@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, claudeCommand, CopyField, defaultGrant, QrRow } from "./connect.tsx";
+import { AddAgentButtons, AgentCard, claudeCommand, CopyField, defaultGrant, QrRow, SKILL_COMMAND } from "./connect.tsx";
 import { CompatTable, DownloadCsv } from "./pages.tsx";
 import { FileCard, JoinMini } from "./landing/join-visuals.tsx";
 import { AppLink, GROUP_LABEL } from "./ui.tsx";
@@ -213,7 +213,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
           body: (
             <>
               <span>
-                Start <code className="font-mono text-foreground">claude</code> in any folder and run <code className="font-mono text-foreground">/mcp</code>. Pulse should be listed as connected, with five tools.
+                Start <code className="font-mono text-foreground">claude</code> in any folder and run <code className="font-mono text-foreground">/mcp</code>. Pulse should be listed as connected, with five tools and one prompt (guide).
               </span>
             </>
           ),
@@ -227,11 +227,17 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
                 In claude.ai or Claude Desktop, open <span className="font-medium text-foreground">Settings → Connectors → Add custom connector</span>, name it Pulse and paste the URL. Leave the OAuth fields empty.
               </span>
             ),
+            note: "Pulse also offers a prompt named guide: the manual for your agent, loaded only when you pick it. In Claude Desktop it is in the + menu, under Pulse.",
             now: markPanel,
           }
         : {
             title: "Add it as a remote MCP server",
-            body: <span>Wherever your agent accepts a remote MCP server by URL (Streamable HTTP), paste it. Leave any OAuth or API key fields empty. In a chat, make sure the Pulse tools are turned on.</span>,
+            body: (
+              <>
+                <span>Wherever your agent accepts a remote MCP server by URL (Streamable HTTP), paste it. Leave any OAuth or API key fields empty. In a chat, make sure the Pulse tools are turned on.</span>
+                <span>The server also offers a prompt named guide, the manual for your agent. If your agent lists MCP prompts, pick it once per session.</span>
+              </>
+            ),
             note: "Exact menus differ per agent and change often; a guide per agent is coming.",
             now: markPanel,
           };
@@ -242,6 +248,24 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
         steps={[
           first,
           second,
+          ...(agent === "claude-code"
+            ? [
+                {
+                  title: "Optional: install the Pulse skill",
+                  body: (
+                    <>
+                      <span>The skill is the manual for your agent: how you point it, when it waits for your next pin, and what stays with you. Claude Code loads it in any session with Pulse connected.</span>
+                      <CopyField text={SKILL_COMMAND} />
+                    </>
+                  ),
+                  note: (
+                    <>
+                      Or, for one session only, type <code className="font-mono">/mcp__pulse__guide</code> in Claude Code: the server's prompt with the same text.
+                    </>
+                  ),
+                },
+              ]
+            : []),
           {
             title: "One URL per agent",
             body: (

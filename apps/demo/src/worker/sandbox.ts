@@ -326,6 +326,9 @@ export class Sandbox extends DurableObject<Env> {
             }
           } else if (m?.method === "tools/list") {
             this.log("tools_list", grant.id, { user_agent: userAgent });
+          } else if (m?.method === "prompts/get") {
+            const name = (m.params as { name?: unknown } | undefined)?.name;
+            this.log("prompt_get", grant.id, { name: typeof name === "string" ? name.slice(0, 100) : null, user_agent: userAgent });
           }
         }
       } catch {
@@ -334,12 +337,13 @@ export class Sandbox extends DurableObject<Env> {
     }
 
     // The MCP SDK loads only when an agent calls: owner requests and new sandboxes stay light.
-    const [{ McpServer }, { WebStandardStreamableHTTPServerTransport }, { CfWorkerJsonSchemaValidator }, { registerApcTools }, { registerPulseTools }] = await Promise.all([
+    const [{ McpServer }, { WebStandardStreamableHTTPServerTransport }, { CfWorkerJsonSchemaValidator }, { registerApcPrompts, registerApcTools }, { registerPulseTools }, { PULSE_GUIDE }] = await Promise.all([
       import("@modelcontextprotocol/sdk/server/mcp.js"),
       import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
       import("@modelcontextprotocol/sdk/validation/cfworker"),
       import("@apc/server"),
       import("./pulse-tools.ts"),
+      import("./guide.ts"),
     ]);
     const data = this.data();
     const server = new McpServer(
@@ -369,6 +373,8 @@ export class Sandbox extends DurableObject<Env> {
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
     registerPulseTools(server, data, grant, origin);
+    // The manual, for the person to load on purpose (a slash command or a menu item in their client).
+    registerApcPrompts(server, PULSE_GUIDE);
 
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);

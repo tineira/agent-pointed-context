@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
+import { AddAgentButtons, AgentCard, ConnectPanel, serverName, SKILL_COMMAND } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { customerFocus } from "./focus.ts";
 
@@ -212,6 +212,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; re
             <th>Agent</th>
             <th>Client</th>
             <th>Connected</th>
+            <th title="The person loaded the guide prompt in their client">Read the guide</th>
             <th className="num">Calls</th>
             <th className="num">Pins</th>
             <th className="num">Envelopes</th>
@@ -230,6 +231,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; re
               </td>
               <td title={r.user_agent ?? ""}>{r.client_name ? `${r.client_name}${r.client_version ? ` ${r.client_version}` : ""}` : "–"}</td>
               <td>{yes(r.connected)}</td>
+              <td>{yes(r.read_guide)}</td>
               <td className="num">{r.tool_calls}</td>
               <td className="num">{r.pins}</td>
               <td className="num">{r.envelopes}</td>
@@ -261,7 +263,12 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           agents? Give each one its own URL, so you can see which one answered.
         </p>
         {state.grants.map((g) => (
-          <AgentCard key={g.id} sid={sid} grant={g} initials={props.initials.get(g.id)} command />
+          <Fragment key={g.id}>
+            <AgentCard sid={sid} grant={g} initials={props.initials.get(g.id)} command />
+            <p className="hint">
+              Its manual, if you want it to have one: <code>/mcp__{serverName(g)}__guide</code> in Claude Code, the + menu in Claude Desktop, or the pulse-agent skill (<code>{SKILL_COMMAND}</code>).
+            </p>
+          </Fragment>
         ))}
         <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>

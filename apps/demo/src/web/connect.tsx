@@ -59,6 +59,10 @@ export function QrRow(props: { text: string; hint?: string }) {
 }
 
 export const claudeCommand = (name: string, url: string) => `claude mcp add --transport http ${name} ${url}`;
+/** The agent's manual as a skill for Claude Code and other CLIs (skills/pulse-agent/SKILL.md in the repo). */
+export const SKILL_COMMAND = "npx skills add https://github.com/tineira/agent-pointed-context --skill pulse-agent";
+/** The MCP server name an agent card's Claude Code command uses. */
+export const serverName = (grant: { regions: unknown[] | null }) => (grant.regions ? "pulse-restricted" : "pulse");
 
 /** The agent most people connect first: the first unrestricted one. */
 export const defaultGrant = (state: SandboxState): GrantState => state.grants.find((g) => !g.regions) ?? state.grants[0]!;
@@ -78,7 +82,7 @@ export function AgentCard(props: { sid: string; grant: GrantState; initials: str
       {props.command && (
         <>
           <p className="hint">Claude Code:</p>
-          <CopyField text={claudeCommand(g.regions ? "pulse-restricted" : "pulse", url)} />
+          <CopyField text={claudeCommand(serverName(g), url)} />
         </>
       )}
     </div>
