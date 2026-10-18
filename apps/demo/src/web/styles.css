@@ -16,8 +16,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-size: 15px; line-height: 1.5; }
 .card a, .grant a { color: var(--accent); }
-.card button:not(.link):not(.unpin), .grant button { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
-.card button:not(.link):not(.unpin):hover { border-color: var(--filament); }
+.card button:not(.link):not(.unpin):not(.copy-button), .grant button:not(.copy-button) { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.card button:not(.link):not(.unpin):not(.copy-button):hover { border-color: var(--filament); }
 select { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; margin-left: 6px; }
 .mono, code { font-family: var(--font-mono); font-size: 0.92em; }
 .muted { color: var(--muted); font-weight: normal; }
@@ -69,11 +69,21 @@ tbody tr:hover { background: var(--bg); }
 .spark-bar.inactive { background: var(--line); }
 
 .grant { margin: 12px 0 16px; }
-.copy { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
-.copy code { flex: 1; overflow-x: auto; white-space: nowrap; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.grant h3 { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+/* In the how-to's steps: a boxed card, spaced by the step's own gap. */
+.grant-compact { margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
 .qr-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
 .qr { width: 196px; height: 196px; flex: none; display: block; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
 .qr-row .hint { margin: 0; max-width: 32ch; }
+/* Above Overview and Customers while no agent is connected. */
+.connect-panel { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.connect-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.connect-head .dismiss { font-size: 20px; line-height: 1; color: var(--muted); padding: 0 4px; cursor: pointer; }
+.connect-head .dismiss:hover { color: var(--ink); }
+.connect-body { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-start; }
+.connect-fields { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.connect-fields .hint { margin: 4px 0 0; }
+.connect-body .qr-row { margin: 0; }
 .switch { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
 
 /* APC: targets outline while a mark is dragged; the target under the pointer is solid. */

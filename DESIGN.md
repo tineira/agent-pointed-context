@@ -65,6 +65,7 @@ The person comes to the application **with their own agent**, and that agent alr
 - **Customers:** a table of rows, and a customer detail pane (plan, seats, usage, status).
 - **How to** (the landing page): a six-step walkthrough with the visitor's own URL and file in it: connect, point, ask what it sees or let it wait, a simple example, the MRR example, and what your agents did.
 - **Agents:** one MCP URL per agent, "add another agent", "add a restricted agent", the compatibility matrix, the switches (share view, show agent activity) and the event log.
+- Every MCP URL shown (Agents, the how-to's connect steps) has its QR beside it; while no agent of the sandbox has connected, Overview and Customers open with a dismissible connect panel (URL, QR, Claude Code command).
 
 **Pin kinds:**
 

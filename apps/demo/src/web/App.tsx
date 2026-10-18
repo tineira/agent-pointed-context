@@ -243,9 +243,9 @@ function Sandbox({ sid }: { sid: string }) {
         </div>
       )}
       <main className={`mx-auto flex w-full flex-1 flex-col gap-4 px-5 py-8 ${route.screen === "howto" ? "max-w-4xl" : "max-w-7xl"}`}>
-        {route.screen === "overview" && <Overview data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}
-        {route.screen === "customers" && <Customers data={data} filters={filters} onFilters={(f) => navigate(route, f)} onOpen={(id) => navigate({ screen: "customer", id }, filters)} />}
-        {route.screen === "customer" && <CustomerDetail data={data} id={route.id} onBack={() => navigate({ screen: "customers" }, filters)} />}
+        {route.screen === "overview" && <Overview sid={sid} state={state} data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}
+        {route.screen === "customers" && <Customers sid={sid} state={state} data={data} filters={filters} onFilters={(f) => navigate(route, f)} onOpen={(id) => navigate({ screen: "customer", id }, filters)} />}
+        {route.screen === "customer" && <CustomerDetail sid={sid} state={state} data={data} id={route.id} onBack={() => navigate({ screen: "customers" }, filters)} />}
         {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
