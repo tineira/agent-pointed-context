@@ -6,13 +6,15 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow, FocusTarget } from "@apc/protocol";
-import { APC_INSTRUCTIONS, attachAttention, attentionFor, envelopeBytes, isUnread, presenceEvent, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, type ToolResult } from "@apc/server";
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
 const SERVER_VERSION = "0.1.0";
+/** wait_for_focus ceiling on this host (TIN-95 measurement in DESIGN.md). WAIT_CEILING_S in .dev.vars overrides it for a local probe. */
+export const WAIT_CEILING_S = 50;
 
 export interface Env {
   SANDBOX: DurableObjectNamespace<Sandbox>;
@@ -21,6 +23,8 @@ export interface Env {
   SANDBOX_CALLS?: RateLimit;
   /** Secret (wrangler secret put LOADTEST_KEY): a request carrying it in x-apc-loadtest skips the new-sandbox limit. */
   LOADTEST_KEY?: string;
+  /** Local probes only (scripts/wait-ceiling.mjs): a higher wait_for_focus ceiling than WAIT_CEILING_S. */
+  WAIT_CEILING_S?: string;
 }
 
 function randomHex(bytes: number): string {
@@ -131,6 +135,10 @@ export class Sandbox extends DurableObject<Env> {
     if (Number(this.meta("expires_at") ?? 0) > Date.now()) return true;
     await this.alarm();
     return false;
+  }
+  /** A page of the person's is open: at least one of its WebSockets is attached and open. */
+  private pageOpen(): boolean {
+    return this.ctx.getWebSockets().some((ws) => ws.readyState === WebSocket.OPEN);
   }
   private broadcast(message: Record<string, unknown>): void {
     const text = JSON.stringify(message);
@@ -347,7 +355,9 @@ export class Sandbox extends DurableObject<Env> {
         this.log("seen", grant.id, { pinned_at: row.pinned_at, seen_at: seenAt, via: call.tool });
         this.broadcast({ type: "pin", grant_id: grant.id, pin: this.focusRow(grant.id) });
       },
+      pageOpen: async () => this.pageOpen(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
     registerPulseTools(server, data, grant, origin);
 
@@ -361,8 +371,9 @@ export class Sandbox extends DurableObject<Env> {
 
   /**
    * Wrap every tool the server registers: log what came in (for the canary
-   * check), attach the attention envelope while the pin is unread, measure
-   * bytes and latency, and announce the call on the presence channel.
+   * check), attach the attention envelope while the pin is unread and the
+   * loop hint while a page is open, measure bytes and latency, and announce
+   * the call on the presence channel.
    */
   private instrument(server: McpServer, grant: Grant, data: Dataset, origin: string, call: { tool: string }): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
@@ -385,6 +396,10 @@ export class Sandbox extends DurableObject<Env> {
           envelope = envelopeBytes(attention);
           this.log("envelope_delivered", grant.id, { tool, pinned_at: row.pinned_at, bytes: envelope });
         }
+        // The loop hint, while a page is open. A wait that returned no focus carries its own note and ends the loop.
+        const loopEnds = tool === "wait_for_focus" && result.structuredContent?.focus == null;
+        const hinted = !loopEnds && this.pageOpen();
+        result = attachThen(result, hinted);
         if (row && focus && tool === focus.next && stable(args) === stable(focus.next_args)) {
           const already = this.sql.exec("select 1 from events where type = 'next_read' and grant_id = ? and data like ?", grant.id, `%"pinned_at":"${row.pinned_at}"%`).toArray().length;
           if (!already) this.log("next_read", grant.id, { tool, pinned_at: row.pinned_at });
@@ -395,6 +410,7 @@ export class Sandbox extends DurableObject<Env> {
           args_bytes: bytes(args),
           result_bytes: bytes(result.content.map((c) => c.text).join("")),
           envelope_bytes: envelope,
+          then_bytes: thenBytes(hinted),
           error: !!result.isError,
         });
         if (result.isError) this.broadcast({ type: "activity" });
