@@ -5,7 +5,8 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
-import { AddAgentButtons, CompatTable, DownloadCsv } from "./pages.tsx";
+import { AddAgentButtons, AgentCard, claudeCommand, CopyField, defaultGrant, QrRow } from "./connect.tsx";
+import { CompatTable, DownloadCsv } from "./pages.tsx";
 import { FileCard, JoinMini } from "./landing/join-visuals.tsx";
 import { AppLink, GROUP_LABEL } from "./ui.tsx";
 
@@ -53,26 +54,6 @@ function Chevron({ open }: { open: boolean }) {
     <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16" aria-hidden="true" className={`shrink-0 text-muted transition-transform duration-150 ${open ? "rotate-180" : ""}`}>
       <path d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" />
     </svg>
-  );
-}
-
-export function CopyField(props: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <div className="flex min-w-0 items-stretch overflow-hidden rounded-lg border border-line bg-background">
-      <code className="min-w-0 flex-1 whitespace-pre-wrap break-all px-3 py-2 font-mono text-[12.5px] leading-relaxed">{props.text}</code>
-      <button
-        type="button"
-        onClick={() => {
-          void navigator.clipboard.writeText(props.text);
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        }}
-        className="shrink-0 cursor-pointer border-l border-line px-3 text-xs font-medium text-filament hover:bg-filament-soft"
-      >
-        {done ? "Copied" : (props.label ?? "Copy")}
-      </button>
-    </div>
   );
 }
 
@@ -188,8 +169,9 @@ interface Ctx {
 }
 
 function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
-  const grant = state.grants.find((g) => !g.regions) ?? state.grants[0]!;
+  const grant = defaultGrant(state);
   const url = mcpUrl(sid, grant);
+  const others = state.grants.filter((g) => g.id !== grant.id);
   const mine = initials.get(grant.id) ?? "AG";
   const connected = !!grant.client_name;
   const markPanel = {
@@ -208,7 +190,8 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
           body: (
             <>
               <span>Run this in your terminal, in the folder you will work from. It adds Pulse as a remote MCP server.</span>
-              <CopyField text={`claude mcp add --transport http pulse ${url}`} />
+              <CopyField text={claudeCommand("pulse", url)} />
+              <QrRow text={url} hint="Claude Code on another machine: scan, then paste the URL into the command." />
             </>
           ),
         }
@@ -218,6 +201,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
             <>
               <span>This URL is your agent's access to your sandbox. No login and no API key: the secret in the URL is the access.</span>
               <CopyField text={url} />
+              <QrRow text={url} />
             </>
           ),
           note: "Keep it to yourself. Anyone with it can read this sandbox's synthetic data, but only this browser can point.",
@@ -262,8 +246,11 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
             title: "One URL per agent",
             body: (
               <>
-                <span>Trying several agents? Give each its own URL, so each gets its own mark and you can tell which one answered. All URLs are on the Agents page.</span>
+                <span>Trying several agents? Give each its own URL, so each gets its own mark and you can tell which one answered. A new agent's URL and QR show up here; all URLs are on the Agents page.</span>
                 <AddAgentButtons api={api} state={state} onChanged={onChanged} />
+                {others.map((g) => (
+                  <AgentCard key={g.id} sid={sid} grant={g} initials={initials.get(g.id)} command={agent === "claude-code"} compact />
+                ))}
               </>
             ),
             where: { label: "Agents", href: "/agents" },
@@ -276,7 +263,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
 }
 
 function PointTopic({ initials, state }: Ctx) {
-  const grant = state.grants.find((g) => !g.regions) ?? state.grants[0]!;
+  const grant = defaultGrant(state);
   const mine = initials.get(grant.id) ?? "AG";
   return (
     <Section id="point" title="Point your agent at something" lead="Pointing is one gesture, and it sends your agent a key, not a picture. It reads the numbers itself, under its own access.">
@@ -399,11 +386,15 @@ function ExamplesTopic(ctx: Ctx) {
       title: "What does a restricted agent see?",
       steps: [
         <>
-          On{" "}
+          In{" "}
+          <AppLink href={hrefFor(ctx.agent, "connect")} className="text-filament underline underline-offset-2">
+            Connect
+          </AppLink>
+          , step 3 (or on{" "}
           <AppLink href="/agents" className="text-filament underline underline-offset-2">
             Agents
           </AppLink>
-          , add a restricted agent (LATAM only) and connect it with its own URL.
+          ), add a restricted agent (LATAM only); its URL and QR appear right there. Connect it with that URL.
         </>,
         <>Point it at a bar of Active customers per month, over all regions, and ask how many customers it is.</>,
         <>It answers for LATAM only and says the figure was cut to what it may see. Pointing never grants access.</>,

@@ -1,8 +1,8 @@
-import { encode } from "uqr";
 import { useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
-import { mcpUrl, type Api, type CompatRow, type GrantState, type SandboxState } from "./api.ts";
+import type { Api, CompatRow, SandboxState } from "./api.ts";
+import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { customerFocus } from "./focus.ts";
 
@@ -48,10 +48,11 @@ export function FilterBar(props: { filters: Filters; onChange: (f: Filters) => v
   );
 }
 
-export function Overview(props: { data: Dataset; filters: Filters; onFilters: (f: Filters) => void }) {
+export function Overview(props: { sid: string; state: SandboxState; data: Dataset; filters: Filters; onFilters: (f: Filters) => void }) {
   const { data, filters } = props;
   return (
     <>
+      <ConnectPanel sid={props.sid} state={props.state} />
       <FilterBar filters={filters} onChange={props.onFilters} />
       <section className="card">
         <h2>Active customers per month</h2>
@@ -67,7 +68,7 @@ export function Overview(props: { data: Dataset; filters: Filters; onFilters: (f
   );
 }
 
-export function Customers(props: { data: Dataset; filters: Filters; onFilters: (f: Filters) => void; onOpen: (id: string) => void }) {
+export function Customers(props: { sid: string; state: SandboxState; data: Dataset; filters: Filters; onFilters: (f: Filters) => void; onOpen: (id: string) => void }) {
   const { data, filters } = props;
   const rows = useMemo(() => {
     const at = new Map(data.activity.filter((a) => a.month === filters.month).map((a) => [a.customer_id, a]));
@@ -78,6 +79,7 @@ export function Customers(props: { data: Dataset; filters: Filters; onFilters: (
   }, [data, filters]);
   return (
     <>
+      <ConnectPanel sid={props.sid} state={props.state} />
       <FilterBar filters={filters} onChange={props.onFilters} />
       <section className="card">
         <h2>
@@ -116,78 +118,45 @@ export function Customers(props: { data: Dataset; filters: Filters; onFilters: (
   );
 }
 
-export function CustomerDetail(props: { data: Dataset; id: string; onBack: () => void }) {
+export function CustomerDetail(props: { sid: string; state: SandboxState; data: Dataset; id: string; onBack: () => void }) {
   const customer = props.data.customers.find((c) => c.id === props.id);
   if (!customer) return <p>No such customer.</p>;
   const activity = props.data.activity.filter((a) => a.customer_id === customer.id);
   const max = Math.max(1, ...activity.map((a) => a.seats));
   return (
-    <section className="card" {...customerFocus(customer.id)}>
-      <button className="link" onClick={props.onBack}>
-        ← Customers
-      </button>
-      <h2>
-        {customer.name} <span className="mono muted">{customer.id}</span>
-      </h2>
-      <dl className="facts">
-        <div {...customerFocus(customer.id, "plan")}>
-          <dt>Plan</dt>
-          <dd>{customer.plan}</dd>
-        </div>
-        <div>
-          <dt>Region</dt>
-          <dd>{customer.region}</dd>
-        </div>
-        <div>
-          <dt>Signed up</dt>
-          <dd>{customer.signup_month}</dd>
-        </div>
-      </dl>
-      <h3 {...customerFocus(customer.id, "seats")}>Seats per month</h3>
-      <div className="spark">
-        {activity.map((a) => (
-          <div key={a.month} className="spark-col" title={`${a.month}: ${a.active ? `${a.seats} seats, ${a.events} events` : "inactive"}`}>
-            <div className={a.active ? "spark-bar" : "spark-bar inactive"} style={{ height: `${Math.max(2, (a.seats / max) * 100)}%` }} />
+    <>
+      <ConnectPanel sid={props.sid} state={props.state} />
+      <section className="card" {...customerFocus(customer.id)}>
+        <button className="link" onClick={props.onBack}>
+          ← Customers
+        </button>
+        <h2>
+          {customer.name} <span className="mono muted">{customer.id}</span>
+        </h2>
+        <dl className="facts">
+          <div {...customerFocus(customer.id, "plan")}>
+            <dt>Plan</dt>
+            <dd>{customer.plan}</dd>
           </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-export function Copy(props: { text: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <div className="copy">
-      <code>{props.text}</code>
-      <button
-        onClick={() => {
-          void navigator.clipboard.writeText(props.text);
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        }}
-      >
-        {done ? "Copied" : "Copy"}
-      </button>
-    </div>
-  );
-}
-
-/** Black modules on a white plate, so a phone camera can read it in either theme. */
-export function Qr(props: { text: string }) {
-  const code = useMemo(() => encode(props.text, { ecc: "M", border: 4 }), [props.text]);
-  const n = code.size;
-  let d = "";
-  for (let y = 0; y < n; y++) {
-    const row = code.data[y];
-    if (!row) continue;
-    for (let x = 0; x < n; x++) if (row[x]) d += `M${x} ${y}h1v1h-1z`;
-  }
-  return (
-    <svg className="qr" viewBox={`0 0 ${n} ${n}`} width="196" height="196" role="img" aria-label="QR code of the MCP URL" shapeRendering="crispEdges">
-      <rect width={n} height={n} fill="#fff" />
-      <path d={d} fill="#141a24" />
-    </svg>
+          <div>
+            <dt>Region</dt>
+            <dd>{customer.region}</dd>
+          </div>
+          <div>
+            <dt>Signed up</dt>
+            <dd>{customer.signup_month}</dd>
+          </div>
+        </dl>
+        <h3 {...customerFocus(customer.id, "seats")}>Seats per month</h3>
+        <div className="spark">
+          {activity.map((a) => (
+            <div key={a.month} className="spark-col" title={`${a.month}: ${a.active ? `${a.seats} seats, ${a.events} events` : "inactive"}`}>
+              <div className={a.active ? "spark-bar" : "spark-bar inactive"} style={{ height: `${Math.max(2, (a.seats / max) * 100)}%` }} />
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -205,60 +174,6 @@ export function DownloadCsv(props: { seed: number }) {
     <button type="button" onClick={download} className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament">
       Download mrr-by-customer.csv
     </button>
-  );
-}
-
-/** One agent: its mark, its label, the client that connected, and its MCP URL. */
-export function AgentCard(props: { sid: string; grant: GrantState; initials: string | undefined; command?: boolean }) {
-  const g = props.grant;
-  return (
-    <div className="grant">
-      <h3>
-        <span className="mark-inline">{props.initials}</span> {g.label}
-        {g.client_name ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
-      </h3>
-      <Copy text={mcpUrl(props.sid, g)} />
-      <div className="qr-row">
-        <Qr text={mcpUrl(props.sid, g)} />
-        <p className="hint">Scan with a phone, then paste the URL into the agent. Opening the link in the browser does not connect it.</p>
-      </div>
-      {props.command && (
-        <>
-          <p className="hint">Claude Code:</p>
-          <Copy text={`claude mcp add --transport http ${g.regions ? "pulse-restricted" : "pulse"} ${mcpUrl(props.sid, g)}`} />
-        </>
-      )}
-    </div>
-  );
-}
-
-export function AddAgentButtons(props: { api: Api; state: SandboxState; onChanged: () => void }) {
-  const hasRestricted = props.state.grants.some((g) => g.regions);
-  return (
-    <div className="flex flex-wrap gap-2">
-      <button
-        type="button"
-        className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
-        onClick={async () => {
-          await props.api.addAgent();
-          props.onChanged();
-        }}
-      >
-        Add another agent
-      </button>
-      {!hasRestricted && (
-        <button
-          type="button"
-          className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
-          onClick={async () => {
-            await props.api.addRestricted("latam");
-            props.onChanged();
-          }}
-        >
-          Add a restricted agent (LATAM only)
-        </button>
-      )}
-    </div>
   );
 }
 
