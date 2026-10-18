@@ -38,6 +38,8 @@ export interface CompatRow {
   /** Pins whose next call (next + next_args) the agent made. */
   next_reads: number;
   wait_calls: number;
+  /** wait_for_focus calls that started within 30 s after the grant's last call ended, when that call was not itself a wait: the agent waited after answering. */
+  waits_after_answer: number;
   median_pin_to_seen_ms: number | null;
   median_pin_to_next_ms: number | null;
 }
@@ -50,6 +52,28 @@ function median(values: number[]): number | null {
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+
+export const WAIT_AFTER_ANSWER_MS = 30_000;
+
+/**
+ * A tool_call is logged when the call ends, with its duration in ms. A wait
+ * counts when the last call to end before it started is not a wait and ended
+ * at most 30 s before: a wait right after a timed-out wait is a re-wait.
+ */
+export function waitsAfterAnswer(calls: LoggedEvent[]): number {
+  const spans = calls.map((c) => {
+    const end = Date.parse(c.at);
+    return { wait: c.tool === "wait_for_focus", start: end - (typeof c.ms === "number" ? c.ms : 0), end };
+  });
+  let count = 0;
+  for (const w of spans) {
+    if (!w.wait) continue;
+    let last: (typeof spans)[number] | null = null;
+    for (const c of spans) if (c !== w && c.end <= w.start && (!last || c.end > last.end)) last = c;
+    if (last && !last.wait && w.start - last.end <= WAIT_AFTER_ANSWER_MS) count++;
+  }
+  return count;
+}
 
 export function compatSummary(grants: Grant[], events: LoggedEvent[]): CompatRow[] {
   return grants.map((grant) => {
@@ -88,6 +112,7 @@ export function compatSummary(grants: Grant[], events: LoggedEvent[]): CompatRow
       read_after_envelope: seen.filter((e) => envelopesFor.has(str(e.pinned_at))).length,
       next_reads: nexts.length,
       wait_calls: calls.filter((c) => c.tool === "wait_for_focus").length,
+      waits_after_answer: waitsAfterAnswer(calls),
       median_pin_to_seen_ms: median(seen.map(since).filter((v): v is number => v !== null)),
       median_pin_to_next_ms: median(nexts.map(since).filter((v): v is number => v !== null)),
     };

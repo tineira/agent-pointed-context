@@ -218,6 +218,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; re
             <th>Read the pin with</th>
             <th>After an envelope</th>
             <th>Followed next</th>
+            <th title="wait_for_focus calls that started within 30 s after another tool call">Waited after answering</th>
             <th className="num">Pin → read</th>
           </tr>
         </thead>
@@ -239,6 +240,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; re
               </td>
               <td>{r.pins_read ? `${r.read_after_envelope} of ${r.pins_read}` : "–"}</td>
               <td>{r.pins ? `${r.next_reads} of ${r.pins}` : "–"}</td>
+              <td>{r.wait_calls ? `${r.waits_after_answer} of ${r.wait_calls} waits` : "–"}</td>
               <td className="num">{ms(r.median_pin_to_seen_ms)}</td>
             </tr>
           ))}
