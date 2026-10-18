@@ -13,6 +13,7 @@ test("one row per agent: connected, read the pin after the envelope, followed ne
   const events = [
     ev("initialize", "a", "2026-10-15T11:59:00.000Z", { client_name: "Grok", client_version: "1.0", protocol_version: "2025-06-18", user_agent: "grok/1" }),
     ev("tools_list", "a", "2026-10-15T11:59:01.000Z"),
+    ev("prompt_get", "a", "2026-10-15T11:59:02.000Z", { name: "guide" }),
     ev("pin", "a", P1, { pinned_at: P1 }),
     ev("tool_call", "a", "2026-10-15T12:00:05.000Z", { tool: "list_customers" }),
     ev("envelope_delivered", "a", "2026-10-15T12:00:05.000Z", { pinned_at: P1 }),
@@ -28,6 +29,7 @@ test("one row per agent: connected, read the pin after the envelope, followed ne
   const [a, b, c] = compatSummary([grant("a"), grant("b"), grant("c", ["latam"])], events);
   assert.equal(a!.client_name, "Grok");
   assert.equal(a!.connected && a!.listed_tools, true);
+  assert.equal(a!.read_guide, true);
   assert.deepEqual(a!.tools, ["get_current_view", "get_figure", "list_customers", "wait_for_focus"]);
   assert.equal(a!.pins, 2);
   assert.equal(a!.envelopes, 1);
@@ -41,6 +43,7 @@ test("one row per agent: connected, read the pin after the envelope, followed ne
 
   assert.equal(b!.client_name, "ChatGPT");
   assert.equal(b!.tool_calls, 0);
+  assert.equal(b!.read_guide, false, "connected, never loaded the guide");
   assert.equal(b!.median_pin_to_seen_ms, null);
   assert.equal(c!.connected, false);
   assert.equal(c!.restricted, true);

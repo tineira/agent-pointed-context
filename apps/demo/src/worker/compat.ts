@@ -3,6 +3,7 @@
  * agent, did it connect, did a pin reach it, how did it read the pin, and did
  * it follow the pin's next call. No content, only what the log already holds.
  */
+import { GUIDE_PROMPT } from "@apc/server";
 import type { Grant } from "./domain.ts";
 
 export interface LoggedEvent {
@@ -25,6 +26,8 @@ export interface CompatRow {
   connected: boolean;
   /** Asked for the tool list. */
   listed_tools: boolean;
+  /** Loaded the manual: prompts/get guide (the person invoked it in their client). */
+  read_guide: boolean;
   tool_calls: number;
   tools: string[];
   pins: number;
@@ -100,6 +103,7 @@ export function compatSummary(grants: Grant[], events: LoggedEvent[]): CompatRow
       user_agent: str(lastInit?.user_agent),
       connected: !!lastInit,
       listed_tools: of("tools_list").length > 0,
+      read_guide: of("prompt_get").some((e) => e.name === GUIDE_PROMPT),
       tool_calls: calls.length,
       tools: [...new Set(calls.map((c) => String(c.tool)))].sort(),
       pins: pins.length,
