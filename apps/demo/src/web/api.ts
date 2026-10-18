@@ -1,6 +1,7 @@
 import type { FocusRow, FocusTarget, PresenceEvent } from "@apc/protocol";
 import type { Region } from "../model/seed.ts";
 import type { CompatRow } from "../worker/compat.ts";
+import { HEARTBEAT_MS } from "../worker/page.ts";
 
 export type { CompatRow };
 
@@ -49,6 +50,7 @@ export function createApi(sid: string) {
     eventsUrl: `${base}/events.jsonl`,
     connect(onMessage: (message: ServerMessage) => void): () => void {
       let socket: WebSocket | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
       let closed = false;
       // Reconnect with backoff (2 s doubling to 60 s), so an expired sandbox is not hammered.
       let delay = 2000;
@@ -56,9 +58,17 @@ export function createApi(sid: string) {
         socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
         socket.onopen = () => {
           delay = 2000;
+          // The heartbeat: the sandbox counts this page as open only while its pings are answered.
+          const ws = socket;
+          ws?.send("ping");
+          heartbeat = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send("ping"), HEARTBEAT_MS);
         };
-        socket.onmessage = (event) => onMessage(JSON.parse(String(event.data)) as ServerMessage);
+        socket.onmessage = (event) => {
+          if (event.data === "pong") return;
+          onMessage(JSON.parse(String(event.data)) as ServerMessage);
+        };
         socket.onclose = () => {
+          clearInterval(heartbeat);
           if (closed) return;
           setTimeout(open, delay);
           delay = Math.min(60_000, delay * 2);
@@ -67,6 +77,7 @@ export function createApi(sid: string) {
       open();
       return () => {
         closed = true;
+        clearInterval(heartbeat);
         socket?.close();
       };
     },

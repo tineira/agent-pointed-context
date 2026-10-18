@@ -9,6 +9,7 @@ import type { FocusRow, FocusTarget } from "@apc/protocol";
 import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, type ToolResult } from "@apc/server";
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
+import { anyPageOpen } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -48,6 +49,8 @@ export class Sandbox extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    // The page's heartbeat is answered by the runtime without waking the object: it never reaches the log or the presence channel.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
 
@@ -136,9 +139,14 @@ export class Sandbox extends DurableObject<Env> {
     await this.alarm();
     return false;
   }
-  /** A page of the person's is open: at least one of its WebSockets is attached and open. */
+  /** A page of the person's is open: one of its WebSockets is open and answered a heartbeat lately (page.ts). */
   private pageOpen(): boolean {
-    return this.ctx.getWebSockets().some((ws) => ws.readyState === WebSocket.OPEN);
+    const sockets = this.ctx.getWebSockets().map((ws) => ({
+      open: ws.readyState === WebSocket.OPEN,
+      lastPongAt: this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? null,
+      acceptedAt: Number((ws.deserializeAttachment() as { accepted_at?: number } | null)?.accepted_at ?? 0),
+    }));
+    return anyPageOpen(sockets, Date.now());
   }
   private broadcast(message: Record<string, unknown>): void {
     const text = JSON.stringify(message);
@@ -276,6 +284,7 @@ export class Sandbox extends DurableObject<Env> {
       if (request.headers.get("upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
+      pair[1].serializeAttachment({ accepted_at: Date.now() });
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     const match = url.pathname.match(/^\/mcp\/[^/]+\/([0-9a-f]{32})$/);
