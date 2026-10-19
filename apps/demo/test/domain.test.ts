@@ -39,6 +39,19 @@ test("a restricted agent cannot be pointed outside its regions", () => {
   assert.deepEqual(checkPin({ kind: "figure", params: { key: "customer_bridge", month: "2026-03" }, part: "step:refunds" }, full, data), { error: "invalid_target" });
 });
 
+test("each kind keeps only its own params: a customer pin none, a figure pin the keys its spec reads", () => {
+  for (const params of [{ note: "SECRET-1234.57" }, { month: "2026-03" }, {}]) {
+    assert.deepEqual(checkPin({ kind: "customer", id: "cus_0001", params }, full, data), { error: "invalid_target" }, JSON.stringify(params));
+  }
+  assert.ok("target" in checkPin({ kind: "customer", id: inLatam.id, params: null }, full, data), "null params is the same as none");
+  assert.deepEqual(checkPin({ kind: "figure", params: { key: "active_customers", month: "2026-09", mrr: "1234.57" } }, full, data), { error: "invalid_target" });
+  assert.deepEqual(checkPin({ kind: "figure", params: { key: "active_customers", month: "2026-09", note: "SECRET-1234.57" } }, full, data), { error: "invalid_target" }, "a key that passes the token grammar is still not one the spec reads");
+  assert.deepEqual(checkPin({ kind: "figure", params: { key: "customer_bridge", month: "2026-03", plan: "team" } }, full, data), { error: "invalid_target" }, "plan is a key of active_customers, not of the bridge");
+  assert.ok("target" in checkPin({ kind: "customer", id: inLatam.id, part: "seats" }, full, data));
+  assert.ok("target" in checkPin({ kind: "figure", params: { key: "active_customers", month: "2026-03", plan: "team", region: "na" } }, full, data));
+  assert.ok("target" in checkPin({ kind: "figure", params: { key: "customer_bridge", month: "2026-03" }, part: "step:churned" }, full, data));
+});
+
 test("the focus names the tool and the exact arguments that read the pointed thing", () => {
   const step = resolveFocus(pin({ part: "step:churned", params: { key: "customer_bridge", month: "2026-03" } }), full, data, ORIGIN);
   assert.equal(step?.next, "get_figure");

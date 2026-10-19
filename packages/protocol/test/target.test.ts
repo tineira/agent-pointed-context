@@ -38,3 +38,10 @@ test("DOM attributes round-trip, and order of params does not change the canonic
   assert.equal(canonicalTarget(back), canonicalTarget({ ...target, params: { key: "customer_bridge", month: "2026-03" } }));
   assert.equal(parseFocusAttrs("figure:", null, "{not json"), null);
 });
+
+test("parseTarget checks the grammar only; per-kind allowlists are the host's job", () => {
+  // Regression guard: a customer pin carrying a token-shaped secret passes the protocol. The host (checkPin in
+  // apps/demo/src/worker/domain.ts) must refuse it; do not remove that check on the strength of this parser.
+  assert.deepEqual(parseTarget({ kind: "customer", id: "cus_0001", params: { note: "SECRET-1234.57" } })?.params, { note: "SECRET-1234.57" });
+  assert.deepEqual(parseTarget({ kind: "figure", params: { key: "active_customers", month: "2026-09", note: "x" } })?.params, { key: "active_customers", month: "2026-09", note: "x" });
+});

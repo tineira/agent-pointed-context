@@ -89,11 +89,13 @@ export function checkPin(raw: unknown, grant: Grant, data: Dataset): { target: F
   const target = raw && typeof raw === "object" ? parseTarget(raw as Record<string, unknown>) : null;
   if (!target || !(KINDS as readonly string[]).includes(target.kind)) return { error: "invalid_target" };
   if (target.kind === "customer") {
-    if (!target.id || (target.part && !CUSTOMER_PARTS.includes(target.part))) return { error: "invalid_target" };
+    // Per-kind allowlist: a row is named by its id alone. parseTarget passes any token params; a customer pin keeps none.
+    if (!target.id || target.params !== null || (target.part && !CUSTOMER_PARTS.includes(target.part))) return { error: "invalid_target" };
     if (!data.customers.some((c) => c.id === target.id)) return { error: "not_found" };
     if (!customerVisible(data, grant, target.id)) return { error: "out_of_grant" };
     return { target };
   }
+  // A figure keeps only the keys its spec reads: parse refuses any other key (only() in figures.ts).
   const { key, ...rest } = target.params ?? {};
   const spec = typeof key === "string" ? figureSpec(key) : null;
   const args = spec?.parse(rest);
