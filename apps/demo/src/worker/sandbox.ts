@@ -13,7 +13,7 @@ import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 /** wait_for_focus ceiling on this host (TIN-95 measurement in DESIGN.md). WAIT_CEILING_S in .dev.vars overrides it for a local probe. */
 export const WAIT_CEILING_S = 50;
 
