@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "lib": ["es2023"], "types": ["node"] },
-  "include": ["test", "src/model", "src/user-side", "src/worker/domain.ts", "src/worker/compat.ts", "src/worker/page.ts", "src/worker/guide.ts"]
+  "include": ["test", "src/model", "src/user-side", "src/worker/domain.ts", "src/worker/compat.ts", "src/worker/page.ts", "src/worker/guide.ts", "src/web/presence.ts"]
 }

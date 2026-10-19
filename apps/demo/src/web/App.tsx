@@ -7,6 +7,7 @@ import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
 import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
+import { presenceEffects } from "./presence.ts";
 
 type Screen = "howto" | "overview" | "customers" | "agents";
 type Route = { screen: Screen } | { screen: "customer"; id: string };
@@ -124,8 +125,9 @@ function Sandbox({ sid }: { sid: string }) {
         setActivity((n) => n + 1);
         if (message.type === "activity") return;
         if (message.type === "presence") {
-          setPulse((p) => ({ ...p, [message.event.grant_id]: Date.now() }));
-          if (stateRef.current?.settings.show_activity) flashTargets(message.event, initialsRef.current.get(message.event.grant_id) ?? "AG");
+          const effects = presenceEffects(stateRef.current?.settings);
+          if (effects.pulse) setPulse((p) => ({ ...p, [message.event.grant_id]: Date.now() }));
+          if (effects.flash) flashTargets(message.event, initialsRef.current.get(message.event.grant_id) ?? "AG");
         } else if (message.type === "pin") {
           setState((s) => (s ? { ...s, grants: s.grants.map((g) => (g.id === message.grant_id ? { ...g, pin: message.pin } : g)) } : s));
         } else {
