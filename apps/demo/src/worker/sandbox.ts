@@ -9,7 +9,7 @@ import type { FocusRow, FocusTarget } from "@apc/protocol";
 import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, type ToolResult } from "@apc/server";
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
-import { anyPageOpen } from "./page.ts";
+import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -147,6 +147,10 @@ export class Sandbox extends DurableObject<Env> {
       acceptedAt: Number((ws.deserializeAttachment() as { accepted_at?: number } | null)?.accepted_at ?? 0),
     }));
     return anyPageOpen(sockets, Date.now());
+  }
+  /** pageOpen as the agents may learn it: null while the person does not share their view (page.ts). */
+  private attendance(): boolean | null {
+    return attendance(this.meta("share_view") !== "0", () => this.pageOpen());
   }
   private broadcast(message: Record<string, unknown>): void {
     const text = JSON.stringify(message);
@@ -368,7 +372,7 @@ export class Sandbox extends DurableObject<Env> {
         this.log("seen", grant.id, { pinned_at: row.pinned_at, seen_at: seenAt, via: call.tool });
         this.broadcast({ type: "pin", grant_id: grant.id, pin: this.focusRow(grant.id) });
       },
-      pageOpen: async () => this.pageOpen(),
+      pageOpen: async () => this.attendance(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
@@ -387,7 +391,7 @@ export class Sandbox extends DurableObject<Env> {
   /**
    * Wrap every tool the server registers: log what came in (for the canary
    * check), attach the attention envelope while the pin is unread and the
-   * loop hint while a page is open, measure bytes and latency, and announce
+   * loop hint while a page is open and the view is shared, measure bytes and latency, and announce
    * the call on the presence channel.
    */
   private instrument(server: McpServer, grant: Grant, data: Dataset, origin: string, call: { tool: string }): void {
@@ -411,9 +415,8 @@ export class Sandbox extends DurableObject<Env> {
           envelope = envelopeBytes(attention);
           this.log("envelope_delivered", grant.id, { tool, pinned_at: row.pinned_at, bytes: envelope });
         }
-        // The loop hint, while a page is open. A wait that returned no focus carries its own note and ends the loop.
-        const loopEnds = tool === "wait_for_focus" && result.structuredContent?.focus == null;
-        const hinted = !loopEnds && this.pageOpen();
+        // The loop hint, while a page is open and the person shares their view. A wait that returned no focus carries its own note and ends the loop.
+        const hinted = loopHinted(tool, result.structuredContent?.focus != null, this.attendance());
         result = attachThen(result, hinted);
         if (row && focus && tool === focus.next && stable(args) === stable(focus.next_args)) {
           const already = this.sql.exec("select 1 from events where type = 'next_read' and grant_id = ? and data like ?", grant.id, `%"pinned_at":"${row.pinned_at}"%`).toArray().length;

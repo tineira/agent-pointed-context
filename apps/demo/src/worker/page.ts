@@ -27,3 +27,19 @@ export function socketAlive(socket: PageSocket, now: number): boolean {
 export function anyPageOpen(sockets: PageSocket[], now: number): boolean {
   return sockets.some((socket) => socketAlive(socket, now));
 }
+
+/**
+ * Attendance as an agent may learn it: whether a page is open, or null while
+ * the person does not share their view. With sharing off they asked not to be
+ * observed, so no grant learns that a page is open or when it closed (no
+ * then, no page_open); pointing still works.
+ */
+export function attendance(shareView: boolean, pageOpen: () => boolean): boolean | null {
+  return shareView ? pageOpen() : null;
+}
+
+/** Whether a result carries the loop hint: a page is known open, and it is not a wait that returned no focus (that one ends the loop). */
+export function loopHinted(tool: string, focusReturned: boolean, attending: boolean | null): boolean {
+  const loopEnds = tool === "wait_for_focus" && !focusReturned;
+  return !loopEnds && attending === true;
+}
