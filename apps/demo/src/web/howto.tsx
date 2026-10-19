@@ -371,7 +371,7 @@ function AskTopic(_: Ctx) {
           },
           {
             title: "Already talking? Just point",
-            body: <span>You need neither of the above in a conversation. Point, then ask about “this”: the pin also travels on your agent's next tool call, with a note that you pointed. After it answers, it waits for your next pin by itself while this page is open.</span>,
+            body: <span>You need neither of the above in a conversation. Point, then ask about “this”: the pin also travels on your agent's next tool call, with a note that you pointed. After it answers, it waits for your next pin by itself while this page is open and you share your view.</span>,
             now: { label: "Any tool result carries", content: <Snippet>{'"attention": {\n  "focus": { … },\n  "note": "The person pinned\n   you to something…" }'}</Snippet> },
           },
         ]}

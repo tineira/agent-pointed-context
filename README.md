@@ -133,7 +133,7 @@ Per sandbox, until it is deleted 6 hours after its last use: its seed, its agent
 
 ## Status
 
-Cut 1 is live. Open work is tracked in [issues](https://github.com/tineira/agent-pointed-context/issues): the plan and seat screens, the canary check over the event log, reusing the MCP server per agent, the client compatibility matrix across agents, per-client connection guides, and the evaluation harness (cut 2).
+Cut 1 is live; the canary check over the event log is `node scripts/canary.mjs <events.jsonl> <mrr-by-customer.csv>`. Open work is tracked in [issues](https://github.com/tineira/agent-pointed-context/issues): the plan and seat screens, reusing the MCP server per agent, the client compatibility matrix across agents, per-client connection guides, and the evaluation harness (cut 2).
 
 Security issues: please use GitHub's private vulnerability reporting (Security tab), not a public issue.
 
