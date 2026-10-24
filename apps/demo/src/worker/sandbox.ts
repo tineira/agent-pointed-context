@@ -13,6 +13,7 @@ import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type ClientConflict, type Grant, type StoredView } from "./domain.ts";
 import { pickClientIcon } from "./client-icon.ts";
 import { cleanName } from "./names.ts";
+import { tourStep, type TourStep } from "./tour.ts";
 import { sameProduct } from "../model/products.ts";
 import { sessionPoint } from "./sessions.ts";
 
@@ -240,8 +241,39 @@ export class Sandbox extends DurableObject<Env> {
       seed: Number(this.meta("seed")),
       settings: { share_view: this.meta("share_view") !== "0", show_activity: this.meta("show_activity") !== "0" },
       grants: this.grants().map((g) => ({ ...g, pin: this.focusRow(g.id) })),
+      tour: this.tour(),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
     };
+  }
+
+  /** The guided first run (tour.ts): it follows the first agent that connected. */
+  private tour(): { step: TourStep; grant_id: string | null } {
+    const grantId = this.meta("tour_grant") ?? this.grants().find((g) => g.client_name)?.id ?? null;
+    const reads = grantId
+      ? new Set(
+          this.sql
+            .exec<{ data: string }>("select data from events where type = 'seen' and grant_id = ?", grantId)
+            .toArray()
+            .map((e) => (JSON.parse(e.data) as { pinned_at?: string }).pinned_at),
+        ).size
+      : 0;
+    const step = tourStep({
+      skipped: this.meta("tour_skip") === "1",
+      done: this.meta("tour_done") === "1",
+      acked: this.meta("tour_ack") === "1",
+      grantId,
+      hasPin: !!grantId && !!this.focusRow(grantId),
+      reads,
+    });
+    return { step, grant_id: grantId };
+  }
+
+  async tourAction(action: unknown): Promise<{ ok: boolean }> {
+    const key = action === "ack" ? "tour_ack" : action === "skip" ? "tour_skip" : action === "done" ? "tour_done" : null;
+    if (!key) return { ok: false };
+    this.setMeta(key, "1");
+    this.broadcast({ type: "grants" });
+    return { ok: true };
   }
 
   async reportView(raw: unknown): Promise<{ ok: boolean }> {
@@ -400,6 +432,7 @@ export class Sandbox extends DurableObject<Env> {
             });
             await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
+              if (!this.meta("tour_grant")) this.setMeta("tour_grant", grant.id);
               if (!grant.client_name || sameProduct(grant.client_name, name)) {
                 this.sql.exec("update grants set client_name = ?, client_icon = ?, client_title = ? where id = ?", name, icon, cleanName(m.params?.clientInfo?.title), grant.id);
               } else {

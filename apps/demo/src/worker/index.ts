@@ -123,6 +123,10 @@ app.post("/api/s/:sid/grants/:id/conflict", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
   return c.json(await rpc(c.env, c.var.sid, (s) => s.resolveConflict(c.req.param("id"), body.action)));
 });
+app.post("/api/s/:sid/tour", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
+  return c.json(await rpc(c.env, c.var.sid, (s) => s.tourAction(body.action)));
+});
 app.post("/api/s/:sid/grants/agent", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant())));
 app.get("/api/s/:sid/compat.json", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.compat())));
 app.get("/api/s/:sid/events.jsonl", async (c) =>
