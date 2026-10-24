@@ -8,10 +8,10 @@ const BOT_PATH =
  * An agent's icon: the curated logo for its client, else the raster icon it sent, else a bot
  * colored from its name. motion animates it (styles.css, .agent-icon-*); reduced motion stops it.
  */
-export function AgentIcon(props: { clientName: string | null; clientIcon?: string | null; seed: string; motion?: AgentMotion; size?: number; brandId?: string }) {
+export function AgentIcon(props: { clientName: string | null; clientUa?: string | null; clientIcon?: string | null; seed: string; motion?: AgentMotion; size?: number; brandId?: string }) {
   const { clientName, clientIcon, seed, motion = "idle", size = 20 } = props;
   // brandId draws a brand's logo with no client behind it (the How-to's logo row).
-  const brand = props.brandId ? (BRANDS.find((b) => b.id === props.brandId) ?? null) : brandFor(clientName);
+  const brand = props.brandId ? (BRANDS.find((b) => b.id === props.brandId) ?? null) : brandFor(clientName, props.clientUa);
   const cls = `agent-icon agent-icon-${motion}`;
   const label = brand?.name ?? clientName ?? "Agent";
   const logo = brand?.logo;

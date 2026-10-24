@@ -11,6 +11,7 @@ export interface GrantState {
   label: string;
   client_name: string | null;
   client_icon: string | null;
+  client_ua: string | null;
   client_title: string | null;
   agent_name: string | null;
   owner_name: string | null;

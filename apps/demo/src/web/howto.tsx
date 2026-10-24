@@ -187,7 +187,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged }: Ctx) {
     content: (
       <div className="flex items-center gap-2">
         <span className="mark mark-logo" title={mine}>
-          <AgentIcon clientName={grant.client_name} clientIcon={grant.client_icon} seed={grant.id} motion={connected ? "idle" : "off"} />
+          <AgentIcon clientName={grant.client_name} clientUa={grant.client_ua} clientIcon={grant.client_icon} seed={grant.id} motion={connected ? "idle" : "off"} />
         </span>
         <span className="text-left text-xs">{connected ? `Connected as ${grant.client_name}` : "Waiting for your agent"}</span>
       </div>

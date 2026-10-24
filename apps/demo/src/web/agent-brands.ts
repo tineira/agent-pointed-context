@@ -3,8 +3,8 @@
  * A curated logo first; then the raster icon the client sent in clientInfo.icons; then a bot
  * glyph colored from the name.
  */
-import { PRODUCTS, type ProductId } from "../model/products.ts";
-import { ANTIGRAVITY_PNG, DUET_PARTS, GROK_BOTS, PATHS } from "./agent-logos.ts";
+import { PRODUCTS, productOf, type ProductId } from "../model/products.ts";
+import { ANTIGRAVITY_PNG, DUET_PARTS, GEMINI_PNG, GROK_BOTS, PATHS } from "./agent-logos.ts";
 
 export interface Logo {
   viewBox: string;
@@ -29,7 +29,7 @@ const LOGOS: Record<ProductId, Brand["logo"]> = {
   claude: mark(PATHS.claude, "0 0 24 24", "#D97757"),
   openai: mark(PATHS.openai, "180 180 356 356"),
   antigravity: { image: ANTIGRAVITY_PNG },
-  gemini: mark(PATHS.gemini, "0 0 24 24", "#8E75B2"),
+  gemini: { image: GEMINI_PNG },
   cursor: mark(PATHS.cursor, "0 0 24 24"),
   kimi: mark(PATHS.kimi, "0 0 24 24"),
   zai: mark(PATHS.zai, "0 0 24 24"),
@@ -38,9 +38,9 @@ const LOGOS: Record<ProductId, Brand["logo"]> = {
 /** Each product (model/products.ts, which says how clients are matched) with its logo. */
 export const BRANDS: Brand[] = PRODUCTS.map((p) => ({ ...p, logo: LOGOS[p.id] }));
 
-export function brandFor(clientName: string | null | undefined): Brand | null {
-  if (!clientName) return null;
-  return BRANDS.find((b) => b.match.test(clientName)) ?? null;
+export function brandFor(clientName: string | null | undefined, userAgent?: string | null): Brand | null {
+  const product = productOf(clientName, userAgent);
+  return product ? (BRANDS.find((b) => b.id === product.id) ?? null) : null;
 }
 
 function hash(text: string): number {
@@ -75,6 +75,7 @@ export interface Nameable {
   id: string;
   label: string;
   client_name: string | null;
+  client_ua?: string | null;
   client_title?: string | null;
   agent_name?: string | null;
   owner_name?: string | null;
@@ -94,7 +95,7 @@ export function displayNames(grants: readonly Nameable[]): Map<string, string> {
   for (const g of grants) {
     let name = g.owner_name || g.agent_name || g.client_title || null;
     if (!name && g.client_name) {
-      const base = brandFor(g.client_name)?.name ?? g.client_name;
+      const base = brandFor(g.client_name, g.client_ua)?.name ?? g.client_name;
       const n = (seen.get(base) ?? 0) + 1;
       seen.set(base, n);
       name = n === 1 ? base : `${base} ${n}`;

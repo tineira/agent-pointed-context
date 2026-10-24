@@ -14,7 +14,7 @@ import { checkPin, resolveFocus, sanitizeView, trimView, type ClientConflict, ty
 import { pickClientIcon } from "./client-icon.ts";
 import { cleanName } from "./names.ts";
 import { tourStep, type TourStep } from "./tour.ts";
-import { sameProduct } from "../model/products.ts";
+import { productOf, sameProduct } from "../model/products.ts";
 import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -80,7 +80,7 @@ export class Sandbox extends DurableObject<Env> {
         id integer primary key autoincrement, at text not null, type text not null, grant_id text, data text not null);
     `);
     // Columns added after the table: client_icon (TIN-350), the names (TIN-356). A sandbox made before lacks them.
-    for (const column of ["client_icon", "client_title", "agent_name", "owner_name", "conflict"]) {
+    for (const column of ["client_icon", "client_title", "agent_name", "owner_name", "conflict", "client_ua"]) {
       try {
         this.sql.exec(`alter table grants add column ${column} text`);
       } catch {
@@ -112,6 +112,7 @@ export class Sandbox extends DurableObject<Env> {
         label: r.label!,
         client_name: r.client_name ?? null,
         client_icon: r.client_icon ?? null,
+        client_ua: r.client_ua ?? null,
         client_title: r.client_title ?? null,
         agent_name: r.agent_name ?? null,
         owner_name: r.owner_name ?? null,
@@ -329,7 +330,7 @@ export class Sandbox extends DurableObject<Env> {
     const g = this.grants().find((x) => x.id === grantId);
     if (!g?.conflict || (action !== "split" && action !== "adopt")) return { ok: false };
     if (action === "adopt") {
-      this.sql.exec("update grants set client_name = ?, client_icon = null, client_title = null, agent_name = null, conflict = null where id = ?", g.conflict.client_name, grantId);
+      this.sql.exec("update grants set client_name = ?, client_ua = ?, client_icon = null, client_title = null, agent_name = null, conflict = null where id = ?", g.conflict.client_name, g.conflict.user_agent, grantId);
       this.log("conflict_adopted", grantId, { client_name: g.conflict.client_name });
       this.broadcast({ type: "grants" });
       return { ok: true };
@@ -433,8 +434,15 @@ export class Sandbox extends DurableObject<Env> {
             await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
               if (!this.meta("tour_grant")) this.setMeta("tour_grant", grant.id);
-              if (!grant.client_name || sameProduct(grant.client_name, name)) {
-                this.sql.exec("update grants set client_name = ?, client_icon = ?, client_title = ? where id = ?", name, icon, cleanName(m.params?.clientInfo?.title), grant.id);
+              // A grant from before TIN-364 may hold a generic name with no user agent (Gemini's "mcp") and a
+              // warning about its own product ("Gemini"): that product, now known, takes the grant back.
+              const sameAsWarned = !!grant.conflict && sameProduct(grant.conflict.client_name, grant.conflict.user_agent, name, userAgent) && productOf(name, userAgent) !== null && productOf(grant.client_name ?? "", grant.client_ua) === null;
+              if (!grant.client_name || sameAsWarned || sameProduct(grant.client_name, grant.client_ua, name, userAgent)) {
+                this.sql.exec("update grants set client_name = ?, client_icon = ?, client_title = ?, client_ua = ? where id = ?", name, icon, cleanName(m.params?.clientInfo?.title), userAgent, grant.id);
+                // A warning raised by this same product (before its user agent was known) no longer applies.
+                if (grant.conflict && sameProduct(grant.conflict.client_name, grant.conflict.user_agent, name, userAgent)) {
+                  this.sql.exec("update grants set conflict = null where id = ?", grant.id);
+                }
               } else {
                 // One URL, one agent (TIN-358): a second product does not take the grant over. The page warns the person.
                 const conflict: ClientConflict = { client_name: name, client_version: typeof version === "string" ? version.slice(0, 40) : null, user_agent: userAgent, at: new Date().toISOString() };
