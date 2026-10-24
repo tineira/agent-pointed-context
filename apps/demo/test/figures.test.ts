@@ -80,6 +80,9 @@ test("every figure the page marks is registered, and every registered figure is 
 test("bridge parts are the five steps, and a part names its slice of the breakdown", () => {
   const spec = FIGURES.customer_bridge;
   assert.ok(spec.partOk("step:churned"));
+  assert.ok(FIGURES.active_customers.partOk("series"), "the whole active customers chart (TIN-357)");
+  assert.equal(FIGURES.active_customers.partOk("step:new"), false);
+  assert.match(FIGURES.active_customers.partNote("series") ?? "", /whole chart/);
   assert.equal(spec.partOk("step:refunds"), false);
   assert.deepEqual(spec.nextParams({ month: "2026-03" }, "step:new"), { month: "2026-03", step: "new" });
   const slice = customerBridge(data, { month: "2026-03", step: "new" }, FULL_SCOPE);

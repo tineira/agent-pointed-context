@@ -145,9 +145,13 @@ const activeSpec: FigureSpec<ActiveArgs> = {
     return { month: params.month, ...(params.plan ? { plan: params.plan as Plan } : {}), ...(params.region ? { region: params.region as Region } : {}) };
   },
   compute: activeCustomers,
-  partOk: (part) => part === null,
+  // "series": the person pointed at the whole chart, not one month (TIN-357).
+  partOk: (part) => part === null || part === "series",
   nextParams: (args) => ({ ...args }),
-  partNote: () => "values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.",
+  partNote: (part) =>
+    part === "series"
+      ? "The person pointed at the whole chart, not one month: series holds every month's active customers (the trend). values.active and breakdown are the selected month."
+      : "values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.",
   path: (args) => `/overview?month=${args.month}${args.plan ? `&plan=${args.plan}` : ""}${args.region ? `&region=${args.region}` : ""}`,
 };
 

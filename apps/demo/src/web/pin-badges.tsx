@@ -40,8 +40,8 @@ function place(grants: GrantState[]): Placed[] {
     if (!g.pin) continue;
     const el = elements[keys.indexOf(canonicalTarget(g.pin))];
     if (!el) continue;
-    // A chart column's hit area is taller than its bar: sit on the bar.
-    const r = (el.querySelector(".bar") ?? el).getBoundingClientRect();
+    // A chart column (an SVG group) has a hit area taller than its bar: sit on the bar. A card that holds a chart is not a column.
+    const r = ((el instanceof SVGElement ? el.querySelector(".bar") : null) ?? el).getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
     // Two agents on one element sit side by side.
     const n = stacked.get(el) ?? 0;
@@ -49,7 +49,7 @@ function place(grants: GrantState[]): Placed[] {
     // A bar or a cell: astride its right edge, just below its top, clear of the value printed above it.
     // A row or a card: just inside its top right corner.
     const narrow = r.width < 140;
-    out.push({ grantId: g.id, left: (narrow ? r.right : r.right - 22) - n * 32, top: narrow ? r.top + 16 : r.top });
+    out.push({ grantId: g.id, left: (narrow ? r.right : r.right - 24) - n * 32, top: r.top + (narrow ? 16 : Math.min(22, r.height / 2)) });
   }
   return out;
 }
