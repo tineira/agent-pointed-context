@@ -250,7 +250,7 @@ function Sandbox({ sid }: { sid: string }) {
                   title={`${g.label} [${initials.get(g.id)}]${g.client_name ? ` (${g.client_name})` : " (not connected yet)"}. Drag onto anything to point this agent.`}
                   aria-label={`${g.label} ${initials.get(g.id)}`}
                 >
-                  <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} motion={motion} />
+                  <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={motion} />
                 </button>
                 {g.pin && (
                   <span className={g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at ? "pin seen" : "pin"} title={g.pin.seen_at ? "Your agent read the pin" : "Waiting for your agent's next call"}>

@@ -43,3 +43,12 @@ test("only a small raster data URI is kept from clientInfo.icons", () => {
   assert.equal(pickClientIcon("nope"), null);
   assert.equal(pickClientIcon(undefined), null);
 });
+
+test("a Grok bot gets one character, fixed per agent", async () => {
+  const { GROK_BOTS } = await import("../src/web/agent-logos.ts");
+  const { pickImage } = await import("../src/web/agent-brands.ts");
+  assert.equal(GROK_BOTS.length, 9);
+  assert.equal(pickImage(GROK_BOTS, "g_1234"), pickImage(GROK_BOTS, "g_1234"));
+  const seen = new Set(Array.from({ length: 40 }, (_, i) => pickImage(GROK_BOTS, `g_${i}`).name));
+  assert.ok(seen.size > 4, "different agents get different characters");
+});

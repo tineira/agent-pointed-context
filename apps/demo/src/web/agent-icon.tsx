@@ -1,4 +1,4 @@
-import { brandFor, colorFor, type AgentMotion } from "./agent-brands.ts";
+import { brandFor, colorFor, pickImage, type AgentMotion } from "./agent-brands.ts";
 
 /** A small robot, for a client with no curated logo and no icon of its own. */
 const BOT_PATH =
@@ -8,8 +8,8 @@ const BOT_PATH =
  * An agent's icon: the curated logo for its client, else the raster icon it sent, else a bot
  * colored from its name. motion animates it (styles.css, .agent-icon-*); reduced motion stops it.
  */
-export function AgentIcon(props: { clientName: string | null; clientIcon?: string | null; motion?: AgentMotion; size?: number }) {
-  const { clientName, clientIcon, motion = "idle", size = 20 } = props;
+export function AgentIcon(props: { clientName: string | null; clientIcon?: string | null; seed: string; motion?: AgentMotion; size?: number }) {
+  const { clientName, clientIcon, seed, motion = "idle", size = 20 } = props;
   const brand = brandFor(clientName);
   const cls = `agent-icon agent-icon-${motion}`;
   const label = brand?.name ?? clientName ?? "Agent";
@@ -19,6 +19,10 @@ export function AgentIcon(props: { clientName: string | null; clientIcon?: strin
         <path d={brand.logo.path} fill={brand.logo.color ?? "currentColor"} />
       </svg>
     );
+  }
+  if (brand && "images" in brand.logo) {
+    const image = pickImage(brand.logo.images, seed);
+    return <img className={cls} src={image.src} width={size} height={size} alt={label} />;
   }
   if (brand && "monogram" in brand.logo) {
     return (

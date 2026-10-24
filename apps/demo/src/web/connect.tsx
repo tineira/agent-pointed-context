@@ -76,7 +76,7 @@ export function AgentCard(props: { sid: string; grant: GrantState; initials: str
     <div className={props.compact ? "grant grant-compact" : "grant"}>
       <h3>
         <span className="mark-inline mark-logo" title={props.initials}>
-          <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} motion={g.client_name ? "idle" : "off"} size={16} />
+          <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={g.client_name ? "idle" : "off"} size={16} />
         </span>{" "}
         {g.label}
         {g.client_name ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}

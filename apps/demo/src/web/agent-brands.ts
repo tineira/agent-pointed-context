@@ -3,7 +3,7 @@
  * A curated logo first; then the raster icon the client sent in clientInfo.icons; then a bot
  * glyph colored from the name. Brands without an official logo in the repo yet show a monogram.
  */
-import { PATHS } from "./agent-logos.ts";
+import { GROK_BOTS, PATHS } from "./agent-logos.ts";
 
 export interface Logo {
   path: string;
@@ -16,8 +16,8 @@ export interface Brand {
   id: string;
   name: string;
   match: RegExp;
-  /** The official mark, or a monogram until one is added. */
-  logo: Logo | { monogram: string; color: string | null };
+  /** The official mark, a set of official images (one per agent, pickImage), or a monogram until one is added. */
+  logo: Logo | { images: ReadonlyArray<{ name: string; src: string }> } | { monogram: string; color: string | null };
 }
 
 const mono = (path: string, viewBox = "0 0 24 24"): Logo => ({ path, viewBox, color: null });
@@ -29,8 +29,8 @@ const mono = (path: string, viewBox = "0 0 24 24"): Logo => ({ path, viewBox, co
  * name falls back to the bot until it is added here.
  */
 export const BRANDS: Brand[] = [
-  { id: "grok-bot", name: "Grok bot", match: /grok-validator/i, logo: { monogram: "GB", color: null } },
-  { id: "grok", name: "Grok", match: /grok|xai|^connectors-manager$/i, logo: { monogram: "G", color: null } },
+  { id: "grok-bot", name: "Grok bot", match: /grok-validator/i, logo: { images: GROK_BOTS } },
+  { id: "grok", name: "Grok", match: /grok|xai|^connectors-manager$/i, logo: mono(PATHS.grok, "0 0 1024 1024") },
   { id: "claude", name: "Claude", match: /claude|anthropic/i, logo: { path: PATHS.claude, viewBox: "0 0 24 24", color: "#D97757" } },
   { id: "openai", name: "ChatGPT", match: /openai|chatgpt|codex/i, logo: mono(PATHS.openai, "180 180 356 356") },
   { id: "antigravity", name: "Antigravity", match: /antigravity|^agy\b/i, logo: { monogram: "A", color: null } },
@@ -46,11 +46,20 @@ export function brandFor(clientName: string | null | undefined): Brand | null {
   return BRANDS.find((b) => b.match.test(clientName)) ?? null;
 }
 
+function hash(text: string): number {
+  let h = 0;
+  for (const ch of text) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
+  return h;
+}
+
 /** A stable hue per client name, for the bot of an unknown client. */
 export function colorFor(name: string): string {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.codePointAt(0)!) >>> 0;
-  return `hsl(${h % 360} 65% 50%)`;
+  return `hsl(${hash(name) % 360} 65% 50%)`;
+}
+
+/** One image of a set, fixed per agent (its grant id), so two Grok bots on one page look different. */
+export function pickImage<T>(images: ReadonlyArray<T>, seed: string): T {
+  return images[hash(seed) % images.length]!;
 }
 
 export type AgentMotion = "off" | "idle" | "waiting" | "busy" | "seen";
