@@ -122,7 +122,7 @@ export function AgentCard(props: {
       <div className="grant-head">
         <h3>
           <span className="mark-inline mark-logo" title={props.initials}>
-            <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={connected ? "idle" : "off"} size={16} />
+            <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} seed={g.id} motion={connected ? "idle" : "off"} size={16} />
           </span>{" "}
           {editing !== null ? (
             <form
@@ -164,14 +164,14 @@ export function AgentCard(props: {
       {conflict && props.onConflict && (
         <div className="grant-conflict" role="alert">
           <span>
-            <strong>{productName(conflict.client_name)}</strong> is using {props.name}'s URL. One URL is one agent: the pin, the name and the access are per URL. Give it its own?
+            <strong>{productName(conflict.client_name, conflict.user_agent)}</strong> is using {props.name}'s URL. One URL is one agent: the pin, the name and the access are per URL. Give it its own?
           </span>
           <span className="grant-conflict-actions">
             <button
               type="button"
               onClick={async () => {
                 const fresh = await props.onConflict!("split");
-                if (fresh) setHandoff({ client: productName(conflict.client_name), grant: fresh });
+                if (fresh) setHandoff({ client: productName(conflict.client_name, conflict.user_agent), grant: fresh });
               }}
             >
               Give it its own URL

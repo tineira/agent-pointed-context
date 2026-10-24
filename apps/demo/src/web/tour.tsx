@@ -35,7 +35,7 @@ function Skip({ api, onChanged }: { api: Api; onChanged: () => void }) {
 function Mark({ grant }: { grant: GrantState }) {
   return (
     <span className="mark mark-logo tour-mark">
-      <AgentIcon clientName={grant.client_name} clientIcon={grant.client_icon} seed={grant.id} />
+      <AgentIcon clientName={grant.client_name} clientUa={grant.client_ua} clientIcon={grant.client_icon} seed={grant.id} />
     </span>
   );
 }

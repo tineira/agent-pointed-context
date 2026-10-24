@@ -279,10 +279,10 @@ function Sandbox({ sid }: { sid: string }) {
                   title={`${names.get(g.id)}${g.client_name ? "" : " (not connected yet)"}. Drag onto anything to point this agent.`}
                   aria-label={names.get(g.id)}
                 >
-                  <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={motion} />
+                  <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} seed={g.id} motion={motion} />
                 </button>
                 {activeConflict(g) && (
-                  <button type="button" className="mark-alert" onClick={() => nav("agents")} title={`${productName(activeConflict(g)!.client_name)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.`} aria-label={`Another agent is using ${names.get(g.id)}'s URL`}>
+                  <button type="button" className="mark-alert" onClick={() => nav("agents")} title={`${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.`} aria-label={`Another agent is using ${names.get(g.id)}'s URL`}>
                     !
                   </button>
                 )}

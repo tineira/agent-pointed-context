@@ -80,12 +80,24 @@ test("agent names: the person's, then the agent's, then the client title, then t
 
 test("one URL, one product: grok.com's two names are one product, the Grok bot and Cursor are not (TIN-358)", async () => {
   const { sameProduct, productName } = await import("../src/model/products.ts");
-  assert.ok(sameProduct("grok-validator", "connectors-manager"));
-  assert.ok(sameProduct("claude-ai", "claude-code"));
-  assert.equal(sameProduct("connectors-manager", "Cursor"), false);
-  assert.equal(sameProduct("Cursor", "cursor-vscode"), false);
-  assert.ok(sameProduct("mcp-inspector", "mcp-inspector"));
-  assert.equal(sameProduct("mcp-inspector", "other-client"), false);
+  assert.ok(sameProduct("grok-validator", "grok-connectors-manager/0.1.0", "connectors-manager", "grok-connectors-manager/0.1.0"));
+  assert.ok(sameProduct("claude-ai", null, "claude-code", "Claude-User"));
+  assert.equal(sameProduct("connectors-manager", null, "Cursor", "Cursor/1.0.0"), false);
+  assert.equal(sameProduct("Cursor", "Cursor/1.0.0", "cursor-vscode", "Cursor/3.27.6 (win32 x64)"), false);
+  assert.ok(sameProduct("mcp-inspector", null, "mcp-inspector", null));
+  assert.equal(sameProduct("mcp-inspector", null, "other-client", null), false);
   assert.equal(productName("Cursor"), "Grok bot");
   assert.equal(productName("mcp-inspector"), "mcp-inspector");
+});
+
+test("Gemini is known by its user agent when it names itself mcp (TIN-364)", async () => {
+  const { productOf, sameProduct } = await import("../src/model/products.ts");
+  const { brandFor, displayNames } = await import("../src/web/agent-brands.ts");
+  assert.equal(productOf("mcp", "Google")?.id, "gemini");
+  assert.equal(productOf("Gemini", "Google")?.id, "gemini");
+  assert.equal(productOf("mcp", "node"), null, "a client named mcp with another user agent stays unknown");
+  assert.ok(sameProduct("mcp", "Google", "Gemini", "Google"), "no shared-URL warning between Gemini's two names");
+  assert.equal(brandFor("mcp", "Google")?.id, "gemini");
+  assert.deepEqual([...displayNames([{ id: "g", label: "Your agent", client_name: "mcp", client_ua: "Google", regions: null }]).values()], ["Gemini"]);
+  assert.equal(productOf("claude-code", "Google")?.id, "claude", "a name match wins over the user agent");
 });
