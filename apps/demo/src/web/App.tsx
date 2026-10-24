@@ -185,6 +185,9 @@ function Sandbox({ sid }: { sid: string }) {
           return typeof region !== "string" || grant.regions.includes(region as Region);
         },
         onPin: async (grantId, target) => {
+          // A badge dropped back on its own target (TIN-354) changes nothing: the pin keeps its read state.
+          const current = stateRef.current?.grants.find((g) => g.id === grantId)?.pin;
+          if (current && canonicalTarget(current) === canonicalTarget(target)) return;
           const result = await api.pin(grantId, target);
           setNotice(result.ok ? `Pinned ${initialsRef.current.get(grantId)}. Now ask your agent about "this".` : `Not pinned: ${result.error}`);
           setTimeout(() => setNotice(null), 4000);
