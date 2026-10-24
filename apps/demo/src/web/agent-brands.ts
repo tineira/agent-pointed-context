@@ -25,9 +25,9 @@ const mark = (d: string, viewBox: string, fill: string | null = null): Logo => (
  * Order matters: the first match wins (the Grok bot before Cursor, Claude Duet before Claude).
  * Names seen in Analytics Engine (TIN-347), 2026-10-24: grok.com sends grok-validator to check the
  * URL, then connectors-manager for every call (user agent grok-connectors-manager); the Grok bot
- * sends exactly "Cursor" 1.0.0 (user agent Cursor/1.0.0). Cursor's own editor is matched on its
- * usual name, cursor-vscode. The other patterns are the names those clients are known to send, or
- * the product name; an unmatched name falls back to the bot until it is added here.
+ * sends exactly "Cursor" 1.0.0 (user agent Cursor/1.0.0); Cursor's editor sends cursor-vscode (user
+ * agent Cursor/3.27.6 (win32 x64)). The other patterns are the names those clients are known to
+ * send, or the product name; an unmatched name falls back to the bot until it is added here.
  */
 export const BRANDS: Brand[] = [
   { id: "grok-bot", name: "Grok bot", match: /^Cursor$/, logo: { images: GROK_BOTS } },
