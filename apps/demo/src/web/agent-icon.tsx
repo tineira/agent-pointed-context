@@ -13,23 +13,19 @@ export function AgentIcon(props: { clientName: string | null; clientIcon?: strin
   const brand = brandFor(clientName);
   const cls = `agent-icon agent-icon-${motion}`;
   const label = brand?.name ?? clientName ?? "Agent";
-  if (brand && "path" in brand.logo) {
+  const logo = brand?.logo;
+  if (logo && "parts" in logo) {
     return (
-      <svg className={cls} width={size} height={size} viewBox={brand.logo.viewBox} role="img" aria-label={label}>
-        <path d={brand.logo.path} fill={brand.logo.color ?? "currentColor"} />
+      <svg className={cls} width={size} height={size} viewBox={logo.viewBox} role="img" aria-label={label}>
+        {logo.parts.map((p, i) => (
+          <path key={i} d={p.d} fill={p.fill ?? "currentColor"} fillRule={p.evenodd ? "evenodd" : undefined} clipRule={p.evenodd ? "evenodd" : undefined} />
+        ))}
       </svg>
     );
   }
-  if (brand && "images" in brand.logo) {
-    const image = pickImage(brand.logo.images, seed);
-    return <img className={cls} src={image.src} width={size} height={size} alt={label} />;
-  }
-  if (brand && "monogram" in brand.logo) {
-    return (
-      <span className={`${cls} agent-icon-mono`} style={{ width: size, height: size, fontSize: size * (brand.logo.monogram.length > 1 ? 0.42 : 0.6), color: brand.logo.color ?? undefined }} role="img" aria-label={label}>
-        {brand.logo.monogram}
-      </span>
-    );
+  if (logo) {
+    const src = "image" in logo ? logo.image : pickImage(logo.images, seed).src;
+    return <img className={cls} src={src} width={size} height={size} alt={label} />;
   }
   if (clientIcon) return <img className={cls} src={clientIcon} width={size} height={size} alt={label} />;
   return (

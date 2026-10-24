@@ -36,7 +36,6 @@ select { font: inherit; color: inherit; background: var(--surface); border: 1px 
 
 /* An agent's icon moves with what the agent does (TIN-350). */
 .agent-icon { display: block; flex: none; pointer-events: none; }
-.agent-icon-mono { display: grid; place-items: center; font-family: var(--font-mono); font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
 .agent-icon-off { filter: grayscale(1); opacity: 0.4; }
 .agent-icon-waiting { animation: agent-float 3s ease-in-out infinite; }
 .agent-icon-busy { animation: agent-pulse 0.6s ease-in-out infinite; }

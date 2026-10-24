@@ -3,10 +3,13 @@ import { test } from "node:test";
 import { brandFor, colorFor, motionFor } from "../src/web/agent-brands.ts";
 import { pickClientIcon } from "../src/worker/client-icon.ts";
 
-test("client names map to their brand; the Grok bot is not Grok", () => {
+test("client names map to their brand", () => {
   const id = (name: string | null) => brandFor(name)?.id ?? null;
   assert.equal(id("grok-validator"), "grok-bot");
-  assert.equal(id("connectors-manager"), "grok");
+  assert.equal(id("connectors-manager"), "grok-bot", "Grok's connector stays the bot after validating");
+  assert.equal(id("grok-cli"), "grok");
+  assert.equal(id("claude-duet"), "claude-duet");
+  assert.equal(id("dots"), "openai");
   assert.equal(id("claude-ai"), "claude");
   assert.equal(id("claude-code"), "claude");
   assert.equal(id("openai-mcp"), "openai");
