@@ -13,6 +13,7 @@ import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
 import { PinBadges, isSeen, pinLabel } from "./pin-badges.tsx";
 import { presenceEffects } from "./presence.ts";
+import { Tour } from "./tour.tsx";
 
 type Screen = "howto" | "overview" | "customers" | "agents";
 type Route = { screen: Screen } | { screen: "customer"; id: string };
@@ -157,6 +158,8 @@ function Sandbox({ sid }: { sid: string }) {
             setTimeout(() => tick((n) => n + 1), 1300);
           }
           setState((s) => (s ? { ...s, grants: s.grants.map((g) => (g.id === message.grant_id ? { ...g, pin: message.pin } : g)) } : s));
+          // The guided first run advances on pins and reads (its step comes with the state).
+          void refresh();
         } else {
           void refresh();
         }
@@ -316,6 +319,7 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
+      <Tour api={api} state={state} names={names} screen={route.screen} onOverview={() => navigate({ screen: "overview" }, filters)} onChanged={() => void refresh()} />
       <PinBadges grants={state.grants} motionOf={motionOf} onUnpin={(id) => void api.unpin(id)} onPlaced={setOnScreen} />
     </div>
   );

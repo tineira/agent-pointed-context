@@ -52,6 +52,10 @@ function LogoRow() {
   );
 }
 
+/** Shared with the guided first run (tour.tsx), so both say the same thing. */
+export const MRR_PROMPT = "How much MRR is this, and which customer has the best MRR per seat?";
+export const GIVE_IT = "Attach it to your conversation with your agent, or save it where your agent reads files. Do not upload it to Pulse: there is nowhere to, on purpose.";
+
 // ---- small pieces ----
 
 function Chevron({ open }: { open: boolean }) {
@@ -341,7 +345,7 @@ function AskTopic(_: Ctx) {
 
 function ExamplesTopic(ctx: Ctx) {
   const [open, setOpen] = useState(-1);
-  const giveIt = <span>Attach it to your conversation with your agent, or save it where your agent reads files. Do not upload it to Pulse: there is nowhere to, on purpose.</span>;
+  const giveIt = <span>{GIVE_IT}</span>;
   const more: Array<{ title: string; steps: ReactNode[] }> = [
     {
       title: "Why did these customers leave?",
@@ -425,7 +429,7 @@ function ExamplesTopic(ctx: Ctx) {
                 title: "Ask with both",
                 body: (
                   <>
-                    <Prompt text="How much MRR is this, and which customer has the best MRR per seat?" />
+                    <Prompt text={MRR_PROMPT} />
                     <span>Your agent calls get_figure (the customer ids and seats in that bar), reads your file, and matches them on customer_id.</span>
                   </>
                 ),

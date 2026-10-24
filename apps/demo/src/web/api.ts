@@ -21,10 +21,13 @@ export interface GrantState {
   pin: FocusRow | null;
 }
 
+export type TourStep = "off" | "connect" | "connected" | "point" | "pinned" | "read_once" | "read_twice";
+
 export interface SandboxState {
   seed: number;
   settings: { share_view: boolean; show_activity: boolean };
   grants: GrantState[];
+  tour: { step: TourStep; grant_id: string | null };
   expires_at: string;
 }
 
@@ -53,6 +56,7 @@ export function createApi(sid: string) {
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
+    tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
