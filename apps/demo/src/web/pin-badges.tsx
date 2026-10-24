@@ -1,6 +1,6 @@
 /**
  * A pinned agent's icon sits on what it was pinned to, the way the landing shows it: a dashed,
- * breathing ring while the agent has not read the pin, a solid ring and a check once it has.
+ * breathing ring while the agent has not read the pin, a check once it has.
  * The badges float above the page (fixed, under the sticky header) and follow their targets on
  * scroll, resize and re-render. They never take the pointer, except their unpin button, so a mark
  * can still be dropped on a pinned element.
@@ -46,9 +46,10 @@ function place(grants: GrantState[]): Placed[] {
     // Two agents on one element sit side by side.
     const n = stacked.get(el) ?? 0;
     stacked.set(el, n + 1);
-    // A bar or a cell: centered on its top edge. A row or a card: on its top right corner.
+    // A bar or a cell: astride its right edge, just below its top, clear of the value printed above it.
+    // A row or a card: just inside its top right corner.
     const narrow = r.width < 140;
-    out.push({ grantId: g.id, left: (narrow ? r.left + r.width / 2 : r.right - 22) - n * 32, top: r.top });
+    out.push({ grantId: g.id, left: (narrow ? r.right : r.right - 22) - n * 32, top: narrow ? r.top + 16 : r.top });
   }
   return out;
 }
