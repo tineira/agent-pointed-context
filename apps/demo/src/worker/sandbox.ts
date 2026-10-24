@@ -11,6 +11,7 @@ import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
+import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
 const SERVER_VERSION = "0.2.0";
@@ -26,6 +27,10 @@ export interface Env {
   LOADTEST_KEY?: string;
   /** Local probes only (scripts/wait-ceiling.mjs): a higher wait_for_focus ceiling than WAIT_CEILING_S. */
   WAIT_CEILING_S?: string;
+  /** Analytics Engine dataset of distinct agent sessions (sessions.ts). Written only when ANALYTICS_SALT is set too. */
+  MCP_SESSIONS?: AnalyticsEngineDataset;
+  /** Secret (wrangler secret put ANALYTICS_SALT): the HMAC key for session keys and IP hashes. */
+  ANALYTICS_SALT?: string;
 }
 
 function randomHex(bytes: number): string {
@@ -116,6 +121,27 @@ export class Sandbox extends DurableObject<Env> {
     if (this.meta("share_view") === "0") return null;
     const r = this.sql.exec<{ data: string }>("select data from view_state where id = 1").toArray()[0];
     return r ? (JSON.parse(r.data) as StoredView) : null;
+  }
+  /** One Analytics Engine point per initialize (TIN-347). A failure here never fails the call. */
+  private async countSession(request: Request, sid: string, grant: Grant, name: unknown, version: unknown, protocol: unknown, userAgent: string): Promise<void> {
+    const { MCP_SESSIONS, ANALYTICS_SALT } = this.env;
+    if (!MCP_SESSIONS || !ANALYTICS_SALT) return;
+    try {
+      MCP_SESSIONS.writeDataPoint(
+        await sessionPoint(ANALYTICS_SALT, {
+          sid,
+          grantId: grant.id,
+          label: grant.label,
+          clientName: typeof name === "string" ? name.slice(0, 100) : null,
+          clientVersion: typeof version === "string" ? version.slice(0, 40) : null,
+          protocolVersion: typeof protocol === "string" ? protocol.slice(0, 20) : null,
+          userAgent,
+          ip: request.headers.get("cf-connecting-ip"),
+        }),
+      );
+    } catch {
+      // analytics only
+    }
   }
   private log(type: string, grantId: string | null, data: Record<string, unknown>): void {
     this.sql.exec("insert into events (at, type, grant_id, data) values (?, ?, ?, ?)", new Date().toISOString(), type, grantId, JSON.stringify(data));
@@ -291,8 +317,8 @@ export class Sandbox extends DurableObject<Env> {
       pair[1].serializeAttachment({ accepted_at: Date.now() });
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
-    const match = url.pathname.match(/^\/mcp\/[^/]+\/([0-9a-f]{32})$/);
-    if (match) return this.mcp(request, match[1]!, url.origin);
+    const match = url.pathname.match(/^\/mcp\/([^/]+)\/([0-9a-f]{32})$/);
+    if (match) return this.mcp(request, match[1]!, match[2]!, url.origin);
     return new Response("not found", { status: 404 });
   }
 
@@ -300,7 +326,7 @@ export class Sandbox extends DurableObject<Env> {
     // The page only listens.
   }
 
-  private async mcp(request: Request, secret: string, origin: string): Promise<Response> {
+  private async mcp(request: Request, sid: string, secret: string, origin: string): Promise<Response> {
     // Stateless: no server-to-client stream (GET) and no session to end (DELETE). 405 is what the spec allows.
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "sandbox_expired" }, { status: 404 });
@@ -324,6 +350,7 @@ export class Sandbox extends DurableObject<Env> {
               protocol_version: typeof protocol === "string" ? protocol.slice(0, 20) : null,
               user_agent: userAgent,
             });
+            await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
               this.sql.exec("update grants set client_name = ? where id = ?", name, grant.id);
               this.broadcast({ type: "grants" });
