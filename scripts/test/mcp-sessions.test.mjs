@@ -36,3 +36,7 @@ test("a daily total counts a session once even when it reported two client names
   assert.deepEqual(dailyTotals(rows), [{ day: "2026-10-24", sessions: 2 }]);
   assert.equal(countSessions(rows).reduce((a, c) => a + c.sessions, 0), 3);
 });
+
+test("a session weighs its smallest sample interval", () => {
+  assert.match(sessionsSql(1), /min\(_sample_interval\) AS weight/);
+});

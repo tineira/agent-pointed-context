@@ -1,13 +1,15 @@
 // Distinct MCP agent sessions from the apc_mcp_sessions Analytics Engine dataset (TIN-347).
-// The SQL returns one row per (day, client, session); the count is done here, each session weighted
-// by its sample interval, so it does not rely on COUNT(DISTINCT) over sampled data.
+// The SQL returns one row per (day, client, session); the count is done here, so it does not rely on
+// COUNT(DISTINCT) over sampled data. A session weighs its smallest sample interval: Analytics Engine
+// can sample some of a session's points even at low volume (seen at 2 on 2026-10-24 with one agent),
+// and one kept point at interval 1 means the session was seen whole, not that a second one was missed.
 
 export const DATASET = "apc_mcp_sessions";
 
 export function sessionsSql(days) {
   if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error("days must be an integer from 1 to 90");
   return [
-    "SELECT toStartOfInterval(timestamp, INTERVAL '1' DAY) AS day, blob2 AS client_name, index1 AS session, max(_sample_interval) AS weight",
+    "SELECT toStartOfInterval(timestamp, INTERVAL '1' DAY) AS day, blob2 AS client_name, index1 AS session, min(_sample_interval) AS weight",
     `FROM ${DATASET}`,
     `WHERE timestamp > NOW() - INTERVAL '${days}' DAY AND blob1 = 'connected'`,
     "GROUP BY day, client_name, session",
