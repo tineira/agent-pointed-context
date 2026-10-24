@@ -1,9 +1,9 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, ConnectPanel, serverName, SKILL_COMMAND } from "./connect.tsx";
+import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { customerFocus, figureFocus } from "./focus.ts";
 
@@ -273,12 +273,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           agents? Give each one its own URL, so you can see which one answered.
         </p>
         {state.grants.map((g) => (
-          <Fragment key={g.id}>
-            <AgentCard sid={sid} grant={g} initials={props.initials.get(g.id)} command />
-            <p className="hint">
-              Its manual, if you want it to have one: <code>/mcp__{serverName(g)}__guide</code> in Claude Code, the + menu in Claude Desktop, or the pulse-agent skill (<code>{SKILL_COMMAND}</code>).
-            </p>
-          </Fragment>
+          <AgentCard key={g.id} sid={sid} grant={g} initials={props.initials.get(g.id)} manual />
         ))}
         <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>

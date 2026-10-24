@@ -87,7 +87,13 @@ tbody tr:hover { background: var(--bg); }
 .spark-bar.inactive { background: var(--line); }
 
 .grant { margin: 12px 0 16px; }
-.grant h3 { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+.grant h3 { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0; }
+.grant-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-bottom: 6px; }
+.grant-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.grant-pin { color: var(--accent); }
+.grant-pin.seen { color: var(--up); }
+.grant .grant-toggle { font-size: 12px; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.grant-body { display: flex; flex-direction: column; gap: 8px; }
 /* In the how-to's steps: a boxed card, spaced by the step's own gap. */
 .grant-compact { margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
 .qr-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }

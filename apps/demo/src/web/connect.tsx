@@ -4,7 +4,7 @@
  * Agents page, the how-to and the data pages, so no page module imports another for these.
  */
 import { encode } from "uqr";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type GrantState, type SandboxState } from "./api.ts";
 import { AppLink } from "./ui.tsx";
@@ -59,7 +59,11 @@ export function QrRow(props: { text: string; hint?: string }) {
   );
 }
 
-export const claudeCommand = (name: string, url: string) => `claude mcp add --transport http ${name} ${url}`;
+/** What a person pastes to their own agent when they don't know how to add an MCP server there (TIN-360). */
+export function askYourAgentPrompt(url: string): string {
+  return `I want to connect you to a remote MCP server. URL: ${url}. It uses Streamable HTTP and needs no OAuth: the access is in the URL. Tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
+}
+
 /** The agent's manual as a skill for Claude Code and other CLIs (skills/pulse-agent/SKILL.md in the repo). */
 export const SKILL_COMMAND = "npx skills add https://github.com/tineira/agent-pointed-context --skill pulse-agent";
 /** The MCP server name an agent card's Claude Code command uses. */
@@ -68,26 +72,61 @@ export const serverName = (grant: { regions: unknown[] | null }) => (grant.regio
 /** The agent most people connect first: the first unrestricted one. */
 export const defaultGrant = (state: SandboxState): GrantState => state.grants.find((g) => !g.regions) ?? state.grants[0]!;
 
-/** One agent: its mark, its label, the client that connected, and its MCP URL. */
-export function AgentCard(props: { sid: string; grant: GrantState; initials: string | undefined; command?: boolean; compact?: boolean }) {
+function ago(iso: string | null, now = Date.now()): string | null {
+  const t = Date.parse(iso ?? "");
+  if (!t) return null;
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return "active just now";
+  if (s < 3600) return `active ${Math.round(s / 60)} min ago`;
+  return `active ${Math.round(s / 3600)} h ago`;
+}
+
+/**
+ * One agent: its mark, its label, the client that connected, and its MCP URL. A connected agent's
+ * card is compact: its URL, QR and manual sit behind "Show connection" (TIN-359), since the URL is
+ * its credential and is rarely needed once it is in the agent. An agent not connected yet shows them.
+ */
+export function AgentCard(props: { sid: string; grant: GrantState; initials: string | undefined; compact?: boolean; manual?: boolean }) {
   const g = props.grant;
   const url = mcpUrl(props.sid, g);
+  const connected = !!g.client_name;
+  const [open, setOpen] = useState(!connected);
+  // An agent that connects while the page is open folds its card.
+  useEffect(() => {
+    if (connected) setOpen(false);
+  }, [connected]);
+  const seen = g.pin && g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at;
+  const active = ago(g.last_active_at);
   return (
     <div className={props.compact ? "grant grant-compact" : "grant"}>
-      <h3>
-        <span className="mark-inline mark-logo" title={props.initials}>
-          <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={g.client_name ? "idle" : "off"} size={16} />
-        </span>{" "}
-        {g.label}
-        {g.client_name ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
-      </h3>
-      <CopyField text={url} />
-      <QrRow text={url} />
-      {props.command && (
-        <>
-          <p className="hint">Claude Code:</p>
-          <CopyField text={claudeCommand(serverName(g), url)} />
-        </>
+      <div className="grant-head">
+        <h3>
+          <span className="mark-inline mark-logo" title={props.initials}>
+            <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={connected ? "idle" : "off"} size={16} />
+          </span>{" "}
+          {g.label}
+          {connected ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
+        </h3>
+        {connected && (
+          <span className="grant-meta">
+            {active && <span>{active}</span>}
+            {g.pin && <span className={seen ? "grant-pin seen" : "grant-pin"}>{seen ? "read your pin" : "pin not read yet"}</span>}
+            <button type="button" className="link grant-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+              {open ? "Hide connection" : "Show connection"}
+            </button>
+          </span>
+        )}
+      </div>
+      {open && (
+        <div className="grant-body">
+          <CopyField text={url} />
+          <QrRow text={url} />
+          {props.manual && (
+            <p className="hint">
+              Its manual, if you want it to have one: the server's prompt named guide (<code>/mcp__{serverName(g)}__guide</code> in Claude Code, the + menu in Claude Desktop), or the pulse-agent skill (<code>{SKILL_COMMAND}</code>).
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -167,8 +206,8 @@ export function ConnectPanel(props: { sid: string; state: SandboxState }) {
       <div className="connect-body">
         <div className="connect-fields">
           <CopyField text={url} />
-          <p className="hint">Claude Code, in your terminal:</p>
-          <CopyField text={claudeCommand("pulse", url)} />
+          <p className="hint">Don't know how to connect an MCP server? Ask your agent:</p>
+          <CopyField text={askYourAgentPrompt(url)} label="Copy prompt" />
           <p className="hint">
             <AppLink href="/how-to">Step by step for your agent, in the How-to →</AppLink>
           </p>
