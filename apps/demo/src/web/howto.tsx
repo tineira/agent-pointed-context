@@ -1,26 +1,19 @@
 /**
  * The how-to, presented like hue.tineira.com/how-to (hue-switch-console app/how-to/how-to-guide.tsx):
- * pick your agent (cards), then what to do (tabs), then numbered steps on a line, each with what
- * your screen or your agent shows at that point. The visitor's own URL and file are in it.
+ * what to do (tabs), then numbered steps on a line, each with what your screen or your agent shows
+ * at that point. One connect flow for every agent (TIN-360). The visitor's own URL and file are in it.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { BRANDS } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, claudeCommand, CopyField, defaultGrant, QrRow, SKILL_COMMAND } from "./connect.tsx";
+import { AddAgentButtons, AgentCard, CopyField, defaultGrant, QrRow } from "./connect.tsx";
 import { CompatTable, DownloadCsv } from "./pages.tsx";
 import { FileCard, JoinMini } from "./landing/join-visuals.tsx";
 import { AppLink, GROUP_LABEL } from "./ui.tsx";
 
-const AGENTS = ["claude-code", "claude-ai", "other"] as const;
-type AgentKind = (typeof AGENTS)[number];
 const TOPICS = ["connect", "point", "ask", "examples"] as const;
 type Topic = (typeof TOPICS)[number];
-
-const AGENT_INFO: Record<AgentKind, { name: string; blurb: string; marks: string[] }> = {
-  "claude-code": { name: "Claude Code", blurb: "In your terminal · one command", marks: ["CC"] },
-  "claude-ai": { name: "claude.ai or Desktop", blurb: "Custom connector · paste a URL", marks: ["CL"] },
-  other: { name: "Another agent", blurb: "ChatGPT, Grok, Cursor, Codex… · remote MCP URL", marks: ["GP", "GR", "CU"] },
-};
 
 const TOPIC_INFO: Record<Topic, { label: string; hint: string }> = {
   connect: { label: "Connect", hint: "Add your MCP URL" },
@@ -29,23 +22,39 @@ const TOPIC_INFO: Record<Topic, { label: string; hint: string }> = {
   examples: { label: "Bring what you know", hint: "The MRR example, and more" },
 };
 
-const SELECTED = "border-filament shadow-[0_0_0_1px_var(--filament)]";
 
-function readQuery(): { agent: AgentKind | null; topic: Topic | null } {
-  const q = new URLSearchParams(location.search);
-  const agent = q.get("agent");
-  const topic = q.get("topic");
-  return {
-    agent: (AGENTS as readonly string[]).includes(agent ?? "") ? (agent as AgentKind) : null,
-    topic: (TOPICS as readonly string[]).includes(topic ?? "") ? (topic as Topic) : null,
-  };
+function readQuery(): Topic | null {
+  const topic = new URLSearchParams(location.search).get("topic");
+  return (TOPICS as readonly string[]).includes(topic ?? "") ? (topic as Topic) : null;
 }
 
-function hrefFor(agent: AgentKind | null, topic: Topic | null): string {
-  const q = new URLSearchParams();
-  if (agent) q.set("agent", agent);
-  if (topic) q.set("topic", topic);
-  return `/how-to${q.size ? `?${q}` : ""}`;
+function hrefFor(topic: Topic | null): string {
+  return topic ? `/how-to?topic=${topic}` : "/how-to";
+}
+
+/** The agents we have a logo for, then "+ others": decoration that says any MCP agent works, not a menu. */
+const LOGO_ROW = ["claude", "claude-duet", "openai", "grok", "grok-bot", "gemini", "antigravity", "cursor", "kimi", "zai"];
+
+function LogoRow() {
+  return (
+    <div className="flex flex-wrap items-center gap-2" aria-label="Agents with a logo here; any MCP agent works">
+      {LOGO_ROW.map((id) => {
+        const brand = BRANDS.find((b) => b.id === id);
+        if (!brand) return null;
+        return (
+          <span key={id} className="mark mark-logo" style={{ cursor: "default" }} title={brand.name}>
+            <AgentIcon clientName={null} brandId={id} seed="how-to" />
+          </span>
+        );
+      })}
+      <span className="inline-flex h-7 items-center rounded-md border border-line px-2 text-xs text-muted">+ others</span>
+    </div>
+  );
+}
+
+/** What a person pastes to their own agent when they don't know how to add an MCP server there. */
+export function askYourAgentPrompt(url: string): string {
+  return `I want to connect you to a remote MCP server. URL: ${url}. It uses Streamable HTTP and needs no OAuth: the access is in the URL. Tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
 }
 
 // ---- small pieces ----
@@ -166,10 +175,9 @@ interface Ctx {
   initials: Map<string, string>;
   activity: number;
   onChanged: () => void;
-  agent: AgentKind;
 }
 
-function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
+function ConnectTopic({ api, sid, state, initials, onChanged }: Ctx) {
   const grant = defaultGrant(state);
   const url = mcpUrl(sid, grant);
   const others = state.grants.filter((g) => g.id !== grant.id);
@@ -186,89 +194,41 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
       </div>
     ),
   };
-  const first: StepDef =
-    agent === "claude-code"
-      ? {
-          title: "Add Pulse to Claude Code",
-          body: (
-            <>
-              <span>Run this in your terminal, in the folder you will work from. It adds Pulse as a remote MCP server.</span>
-              <CopyField text={claudeCommand("pulse", url)} />
-              <QrRow text={url} hint="Claude Code on another machine: scan, then paste the URL into the command." />
-            </>
-          ),
-        }
-      : {
-          title: "Copy your MCP URL",
-          body: (
-            <>
-              <span>This URL is your agent's access to your sandbox. No login and no API key: the secret in the URL is the access.</span>
-              <CopyField text={url} />
-              <QrRow text={url} />
-            </>
-          ),
-          note: "Keep it to yourself. Anyone with it can read this sandbox's synthetic data, but only this browser can point.",
-        };
-  const second: StepDef =
-    agent === "claude-code"
-      ? {
-          title: "Start Claude Code and check it",
-          body: (
-            <>
-              <span>
-                Start <code className="font-mono text-foreground">claude</code> in any folder and run <code className="font-mono text-foreground">/mcp</code>. Pulse should be listed as connected, with five tools and one prompt (guide).
-              </span>
-            </>
-          ),
-          now: markPanel,
-        }
-      : agent === "claude-ai"
-        ? {
-            title: "Add a custom connector",
-            body: (
-              <span>
-                In claude.ai or Claude Desktop, open <span className="font-medium text-foreground">Settings → Connectors → Add custom connector</span>, name it Pulse and paste the URL. Leave the OAuth fields empty.
-              </span>
-            ),
-            note: "Pulse also offers a prompt named guide: the manual for your agent, loaded only when you pick it. In Claude Desktop it is in the + menu, under Pulse.",
-            now: markPanel,
-          }
-        : {
-            title: "Add it as a remote MCP server",
-            body: (
-              <>
-                <span>Wherever your agent accepts a remote MCP server by URL (Streamable HTTP), paste it. Leave any OAuth or API key fields empty. In a chat, make sure the Pulse tools are turned on.</span>
-                <span>The server also offers a prompt named guide, the manual for your agent. If your agent lists MCP prompts, pick it once per session.</span>
-              </>
-            ),
-            note: "Exact menus differ per agent and change often; a guide per agent is coming.",
-            now: markPanel,
-          };
   return (
-    <Section id="connect" title={`Connect ${AGENT_INFO[agent].name}`} lead="About two minutes, once per agent. The sandbox, its URL and its log last 6 hours after you last use them.">
+    <Section id="connect" title="Connect your agent" lead="About two minutes, once per agent. The sandbox, its URL and its log last 6 hours after you last use them.">
       <Chips items={["An agent that speaks MCP", "This page open in this browser"]} />
       <Steps
         steps={[
-          first,
-          second,
-          ...(agent === "claude-code"
-            ? [
-                {
-                  title: "Optional: install the Pulse skill",
-                  body: (
-                    <>
-                      <span>The skill is the manual for your agent: how you point it, when it waits for your next pin, and what stays with you. Claude Code loads it in any session with Pulse connected.</span>
-                      <CopyField text={SKILL_COMMAND} />
-                    </>
-                  ),
-                  note: (
-                    <>
-                      Or, for one session only, type <code className="font-mono">/mcp__pulse__guide</code> in Claude Code: the server's prompt with the same text.
-                    </>
-                  ),
-                },
-              ]
-            : []),
+          {
+            title: "Add this URL to your agent",
+            body: (
+              <>
+                <span>Copy it and add it to your agent as a remote MCP server (Streamable HTTP). No login: the access is in the URL. Leave any OAuth or API key fields empty.</span>
+                <CopyField text={url} />
+                <QrRow text={url} />
+              </>
+            ),
+            note: "Keep it to yourself. Anyone with it can read this sandbox's synthetic data, but only this browser can point.",
+          },
+          {
+            title: "Don't know how to connect an MCP server? Ask your agent.",
+            body: (
+              <>
+                <span>Paste this to your agent. It already has your URL in it.</span>
+                <Prompt text={askYourAgentPrompt(url)} />
+              </>
+            ),
+            note: "The server also offers a prompt named guide, the manual for your agent. If your agent lists MCP prompts, pick it once per session.",
+          },
+          {
+            title: "Check it",
+            body: (
+              <span>
+                Once it's connected, ask it: <em>what am I looking at?</em>
+              </span>
+            ),
+            now: markPanel,
+          },
           {
             title: "One URL per agent",
             body: (
@@ -276,14 +236,14 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
                 <span>Trying several agents? Give each its own URL, so each gets its own mark and you can tell which one answered. A new agent's URL and QR show up here; all URLs are on the Agents page.</span>
                 <AddAgentButtons api={api} state={state} onChanged={onChanged} />
                 {others.map((g) => (
-                  <AgentCard key={g.id} sid={sid} grant={g} initials={initials.get(g.id)} command={agent === "claude-code"} compact />
+                  <AgentCard key={g.id} sid={sid} grant={g} initials={initials.get(g.id)} compact />
                 ))}
               </>
             ),
             where: { label: "Agents", href: "/agents" },
           },
         ]}
-        done={{ title: "Your mark shows your agent's initials.", text: <>Once your agent connects, its initials replace AG in the top bar, and the mark lights up each time it uses a tool.</> }}
+        done={{ title: "Your agent's logo shows in the top bar.", text: <>Once your agent connects, its logo replaces the grey mark, and it moves each time your agent uses a tool.</> }}
       />
     </Section>
   );
@@ -386,14 +346,7 @@ function AskTopic(_: Ctx) {
 
 function ExamplesTopic(ctx: Ctx) {
   const [open, setOpen] = useState(-1);
-  const giveIt =
-    ctx.agent === "claude-code" ? (
-      <span>
-        Save it in the folder where you run <code className="font-mono text-foreground">claude</code>, and tell your agent it is there. Do not upload it to Pulse: there is nowhere to, on purpose.
-      </span>
-    ) : (
-      <span>Attach it to your conversation with your agent. Do not upload it to Pulse: there is nowhere to, on purpose.</span>
-    );
+  const giveIt = <span>Attach it to your conversation with your agent, or save it where your agent reads files. Do not upload it to Pulse: there is nowhere to, on purpose.</span>;
   const more: Array<{ title: string; steps: ReactNode[] }> = [
     {
       title: "Why did these customers leave?",
@@ -414,7 +367,7 @@ function ExamplesTopic(ctx: Ctx) {
       steps: [
         <>
           In{" "}
-          <AppLink href={hrefFor(ctx.agent, "connect")} className="text-filament underline underline-offset-2">
+          <AppLink href={hrefFor("connect")} className="text-filament underline underline-offset-2">
             Connect
           </AppLink>
           , step 3 (or on{" "}
@@ -543,99 +496,63 @@ function ExamplesTopic(ctx: Ctx) {
 // ---- the guide ----
 
 export function HowTo(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; activity: number; onChanged: () => void }) {
-  const [{ agent, topic }, setView] = useState(readQuery);
+  const [topic, setTopic] = useState(readQuery);
   useEffect(() => {
-    const onPop = () => setView(readQuery());
+    const onPop = () => setTopic(readQuery());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  const go = (next: { agent: AgentKind | null; topic: Topic | null }) => {
-    history.pushState(null, "", hrefFor(next.agent, next.topic));
-    setView(next);
+  const go = (next: Topic) => {
+    history.pushState(null, "", hrefFor(next));
+    setTopic(next);
   };
-  const shownTopic: Topic | null = agent ? (topic ?? "connect") : topic && topic !== "connect" ? topic : null;
-  const compact = agent !== null || shownTopic !== null;
-  const ctx: Ctx | null = shownTopic ? { ...props, agent: agent ?? "other" } : null;
+  const shownTopic: Topic = topic ?? "connect";
+  const ctx: Ctx = props;
   const nextOf: Partial<Record<Topic, Topic>> = { connect: "point", point: "ask", ask: "examples" };
-  const next = shownTopic ? nextOf[shownTopic] : undefined;
+  const next = nextOf[shownTopic];
 
   return (
     <div className="flex w-full flex-col gap-5">
-      <section className="flex flex-col gap-2">
+      <section className="flex flex-col gap-3">
+        <LogoRow />
         <h1 className="text-2xl font-semibold tracking-tight">How-to</h1>
-        <p className="text-sm text-muted">Connect your own agent, point it at things, and ask about them. Pick your agent to start.</p>
+        <p className="text-sm text-muted">Connect your own agent, point it at things, and ask about them. The steps are the same for any agent that speaks MCP.</p>
       </section>
 
-      <div className="grid grid-cols-1 gap-2.5 min-[600px]:grid-cols-3" role="radiogroup" aria-label="Which agent">
-        {AGENTS.map((id) => {
-          const info = AGENT_INFO[id];
-          const selected = id === agent;
+      <div className="grid grid-cols-2 gap-2 min-[600px]:grid-cols-4" role="radiogroup" aria-label="What you want to do">
+        {TOPICS.map((id) => {
+          const on = id === shownTopic;
           return (
             <button
               key={id}
               type="button"
               role="radio"
-              aria-checked={selected}
-              onClick={() => id !== agent && go({ agent: id, topic: shownTopic })}
-              className={`flex min-w-0 cursor-pointer touch-manipulation overflow-hidden rounded-xl border bg-cream text-left ${compact ? "flex-row items-center" : "flex-col"} ${selected ? SELECTED : "border-line hover:border-muted"}`}
+              aria-checked={on}
+              onClick={() => go(id)}
+              className={`flex min-w-0 cursor-pointer touch-manipulation flex-col gap-0.5 rounded-[10px] border px-3 py-2.5 text-left ${on ? "border-filament bg-filament-soft" : "border-line hover:bg-cream"}`}
             >
-              <span className={`bp-grid relative flex shrink-0 items-center justify-center gap-1.5 bg-background ${compact ? "w-16 self-stretch border-r border-line sm:w-[92px]" : "aspect-[16/10] w-full border-b border-line"}`}>
-                {info.marks.map((m, i) => (
-                  <span key={m} className={`grid place-items-center rounded-[5px] font-mono font-semibold ${compact ? "h-6 w-6 text-[9px]" : "h-11 w-11 text-[13px]"} ${i === 0 ? "bg-foreground text-cream" : "border border-foreground bg-cream text-foreground"} ${compact && i > 0 ? "hidden" : ""}`}>
-                    {m}
-                  </span>
-                ))}
-              </span>
-              <span className={`flex min-w-0 flex-col gap-0.5 ${compact ? "px-3 py-2" : "px-3.5 pb-3.5 pt-3"}`}>
-                <span className={`font-semibold ${compact ? "text-sm" : "text-[15px]"}`}>{info.name}</span>
-                <span className={`text-xs text-muted ${compact ? "hidden sm:block" : ""}`}>{info.blurb}</span>
-              </span>
+              <span className={`text-[13.5px] font-semibold ${on ? "text-filament" : ""}`}>{TOPIC_INFO[id].label}</span>
+              <span className="text-[11.5px] leading-snug text-muted">{TOPIC_INFO[id].hint}</span>
             </button>
           );
         })}
       </div>
 
-      {agent || shownTopic ? (
-        <div className="grid grid-cols-2 gap-2 min-[600px]:grid-cols-4" role="radiogroup" aria-label="What you want to do">
-          {TOPICS.map((id) => {
-            const on = id === shownTopic;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => go({ agent, topic: id })}
-                disabled={!agent && id === "connect"}
-                className={`flex min-w-0 cursor-pointer touch-manipulation flex-col gap-0.5 rounded-[10px] border px-3 py-2.5 text-left disabled:cursor-default disabled:opacity-40 ${on ? "border-filament bg-filament-soft" : "border-line hover:bg-cream"}`}
-              >
-                <span className={`text-[13.5px] font-semibold ${on ? "text-filament" : ""}`}>{TOPIC_INFO[id].label}</span>
-                <span className="text-[11.5px] leading-snug text-muted">{TOPIC_INFO[id].hint}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <p className="py-2 text-center text-sm text-muted">Pick your agent: the connect steps differ, the rest is the same.</p>
-      )}
-
-      {ctx && shownTopic ? (
-        <div key={`${agent}-${shownTopic}`} className="flex flex-col gap-8 border-t border-line pt-6">
-          {shownTopic === "connect" ? <ConnectTopic {...ctx} /> : shownTopic === "point" ? <PointTopic {...ctx} /> : shownTopic === "ask" ? <AskTopic {...ctx} /> : <ExamplesTopic {...ctx} />}
-          {next ? (
-            <button
-              type="button"
-              onClick={() => {
-                go({ agent, topic: next });
-                window.scrollTo({ top: 0 });
-              }}
-              className="cursor-pointer self-start text-sm font-medium text-filament underline underline-offset-2"
-            >
-              Next: {TOPIC_INFO[next].label} →
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <div key={shownTopic} className="flex flex-col gap-8 border-t border-line pt-6">
+        {shownTopic === "connect" ? <ConnectTopic {...ctx} /> : shownTopic === "point" ? <PointTopic {...ctx} /> : shownTopic === "ask" ? <AskTopic {...ctx} /> : <ExamplesTopic {...ctx} />}
+        {next ? (
+          <button
+            type="button"
+            onClick={() => {
+              go(next);
+              window.scrollTo({ top: 0 });
+            }}
+            className="cursor-pointer self-start text-sm font-medium text-filament underline underline-offset-2"
+          >
+            Next: {TOPIC_INFO[next].label} →
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
