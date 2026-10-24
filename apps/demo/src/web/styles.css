@@ -94,6 +94,13 @@ tbody tr:hover { background: var(--bg); }
 .grant-pin.seen { color: var(--up); }
 .grant button.grant-toggle { font-size: 12px; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .grant-body { display: flex; flex-direction: column; gap: 8px; }
+/* Another product on this agent's URL (TIN-358). */
+.grant-conflict { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); font-size: 13px; }
+.grant-handoff { border-color: var(--accent); background: var(--accent-soft); }
+.grant-handoff .grant-toggle { align-self: flex-start; }
+.grant-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mark-alert { position: absolute; top: -5px; left: 19px; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); color: #fff; font: 700 10px/14px var(--font-mono); text-align: center; padding: 0; border: none; cursor: pointer; }
+.mark-wrap { position: relative; }
 .grant-rename { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .grant-rename input { font: inherit; font-weight: 500; color: inherit; background: var(--background); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; width: 16rem; max-width: 100%; }
 .grant button.grant-rename-open { margin-left: 8px; font-weight: 400; }

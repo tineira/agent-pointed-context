@@ -77,3 +77,15 @@ test("agent names: the person's, then the agent's, then the client title, then t
   assert.equal(cleanName("   "), null);
   assert.equal(cleanName(42), null);
 });
+
+test("one URL, one product: grok.com's two names are one product, the Grok bot and Cursor are not (TIN-358)", async () => {
+  const { sameProduct, productName } = await import("../src/model/products.ts");
+  assert.ok(sameProduct("grok-validator", "connectors-manager"));
+  assert.ok(sameProduct("claude-ai", "claude-code"));
+  assert.equal(sameProduct("connectors-manager", "Cursor"), false);
+  assert.equal(sameProduct("Cursor", "cursor-vscode"), false);
+  assert.ok(sameProduct("mcp-inspector", "mcp-inspector"));
+  assert.equal(sameProduct("mcp-inspector", "other-client"), false);
+  assert.equal(productName("Cursor"), "Grok bot");
+  assert.equal(productName("mcp-inspector"), "mcp-inspector");
+});

@@ -275,10 +275,23 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           agents? Give each one its own URL, so you can see which one answered.
         </p>
         {state.grants.map((g) => (
-          <AgentCard key={g.id} sid={sid} grant={g} name={names.get(g.id) ?? g.label} initials={props.initials.get(g.id)} manual onRename={async (name) => {
-            await api.rename(g.id, name);
-            props.onChanged();
-          }} />
+          <AgentCard
+            key={g.id}
+            sid={sid}
+            grant={g}
+            name={names.get(g.id) ?? g.label}
+            initials={props.initials.get(g.id)}
+            manual
+            onRename={async (name) => {
+              await api.rename(g.id, name);
+              props.onChanged();
+            }}
+            onConflict={async (action) => {
+              const result = await api.resolveConflict(g.id, action);
+              props.onChanged();
+              return result.grant;
+            }}
+          />
         ))}
         <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>
