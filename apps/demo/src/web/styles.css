@@ -32,6 +32,10 @@ select { font: inherit; color: inherit; background: var(--surface); border: 1px 
 .mark-inline { display: inline-block; width: 22px; height: 22px; border-radius: 3px; background: var(--mark); color: var(--mark-ink); font: 600 10px/22px var(--font-mono); text-align: center; vertical-align: 2px; }
 .mark-logo { display: grid; place-items: center; background: var(--surface); color: var(--foreground); border: 1px solid var(--line); }
 .mark-logo.mark-restricted { background: var(--surface); outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A logo keeps its colors when the agent goes quiet: the fade made them unreadable. Motion shows activity instead. */
+.mark-logo.mark-idle, .mark-logo.mark-gone { opacity: 1; }
+/* On the dark theme the chip is a step lighter, so black marks (the Grok bot's black character) still show. */
+html[data-theme="slate"] .mark-logo { background: #263040; border-color: #33404f; }
 .mark-inline.mark-logo, .agent-inline { display: inline-grid; place-items: center; vertical-align: -6px; }
 
 /* An agent's icon moves with what the agent does (TIN-350). */
