@@ -5,8 +5,9 @@ import { pickClientIcon } from "../src/worker/client-icon.ts";
 
 test("client names map to their brand", () => {
   const id = (name: string | null) => brandFor(name)?.id ?? null;
-  assert.equal(id("grok-validator"), "grok-bot");
-  assert.equal(id("connectors-manager"), "grok-bot", "Grok's connector stays the bot after validating");
+  assert.equal(id("grok-validator"), "grok", "grok.com validates the URL");
+  assert.equal(id("connectors-manager"), "grok", "then grok.com makes every call");
+  assert.equal(id("Cursor"), "grok-bot", "the Grok bot sends exactly Cursor 1.0.0");
   assert.equal(id("grok-cli"), "grok");
   assert.equal(id("claude-duet"), "claude-duet");
   assert.equal(id("dots"), "openai");

@@ -22,15 +22,16 @@ export interface Brand {
 const mark = (d: string, viewBox: string, fill: string | null = null): Logo => ({ viewBox, parts: [{ d, fill }] });
 
 /**
- * Order matters: the first match wins (Claude Duet before Claude).
- * Names seen so far (Analytics Engine, TIN-347): Grok's connector sends grok-validator to check the
- * URL, then connectors-manager for every call, so both are the Grok bot; the Grok mark is for any
- * other Grok client. The other patterns are the names those clients are known to send, or the
- * product name; an unmatched name falls back to the bot until it is added here.
+ * Order matters: the first match wins (the Grok bot before Cursor, Claude Duet before Claude).
+ * Names seen in Analytics Engine (TIN-347), 2026-10-24: grok.com sends grok-validator to check the
+ * URL, then connectors-manager for every call (user agent grok-connectors-manager); the Grok bot
+ * sends exactly "Cursor" 1.0.0 (user agent Cursor/1.0.0). Cursor's own editor is matched on its
+ * usual name, cursor-vscode. The other patterns are the names those clients are known to send, or
+ * the product name; an unmatched name falls back to the bot until it is added here.
  */
 export const BRANDS: Brand[] = [
-  { id: "grok-bot", name: "Grok bot", match: /grok-validator|^connectors-manager$/i, logo: { images: GROK_BOTS } },
-  { id: "grok", name: "Grok", match: /grok|xai/i, logo: mark(PATHS.grok, "0 0 1024 1024") },
+  { id: "grok-bot", name: "Grok bot", match: /^Cursor$/, logo: { images: GROK_BOTS } },
+  { id: "grok", name: "Grok", match: /grok|xai|^connectors-manager$/i, logo: mark(PATHS.grok, "0 0 1024 1024") },
   { id: "claude-duet", name: "Claude Duet", match: /duet/i, logo: { viewBox: "138 138 1024 1024", parts: DUET_PARTS } },
   { id: "claude", name: "Claude", match: /claude|anthropic/i, logo: mark(PATHS.claude, "0 0 24 24", "#D97757") },
   // dots has no mark of its own here yet: it shows OpenAI's.
