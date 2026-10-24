@@ -83,3 +83,15 @@ test("keys only on the read side too, and a hidden customer is the same not_foun
   assert.deepEqual(customerAnswer(data, latam, inNa.id, ORIGIN), customerAnswer(data, latam, "cus_9999", ORIGIN));
   assert.ok(listCustomers(data, latam, {}).rows.every((r) => r.region === "latam"));
 });
+
+test("a whole-chart pin (part series) is accepted and tells the agent it is the trend (TIN-357)", () => {
+  const target = { kind: "figure", id: null, part: "series", params: { key: "active_customers", month: "2026-03" } };
+  assert.ok("target" in checkPin(target, full, data));
+  assert.deepEqual(checkPin({ ...target, part: "trend" }, full, data), { error: "invalid_target" });
+  const focus = resolveFocus(pin({ part: "series", params: { key: "active_customers", month: "2026-03" } }), full, data, ORIGIN);
+  assert.equal(focus?.next, "get_figure");
+  assert.deepEqual(focus?.next_args, { key: "active_customers", params: { month: "2026-03" } });
+  assert.match(focus?.part_note ?? "", /whole chart/);
+  const bridge = { kind: "figure", id: null, part: null, params: { key: "customer_bridge", month: "2026-03" } };
+  assert.ok("target" in checkPin(bridge, full, data), "the whole bridge is its card");
+});

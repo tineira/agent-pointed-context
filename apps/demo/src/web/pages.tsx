@@ -5,7 +5,7 @@ import { AgentIcon } from "./agent-icon.tsx";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel, serverName, SKILL_COMMAND } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
-import { customerFocus } from "./focus.ts";
+import { customerFocus, figureFocus } from "./focus.ts";
 
 export interface Filters {
   month: string;
@@ -55,14 +55,14 @@ export function Overview(props: { sid: string; state: SandboxState; data: Datase
     <>
       <ConnectPanel sid={props.sid} state={props.state} />
       <FilterBar filters={filters} onChange={props.onFilters} />
-      <section className="card">
+      <section className="card" {...figureFocus("active_customers", { month: filters.month, plan: filters.plan, region: filters.region }, "series")}>
         <h2>Active customers per month</h2>
-        <p className="hint">Drag your agent's mark onto a bar and ask about it.</p>
+        <p className="hint">Drag your agent's mark onto a bar, or onto the chart for the whole trend, and ask about it.</p>
         <ActiveCustomersChart data={data} month={filters.month} {...(filters.plan ? { plan: filters.plan } : {})} {...(filters.region ? { region: filters.region } : {})} onMonth={(month) => props.onFilters({ ...filters, month })} />
       </section>
-      <section className="card">
+      <section className="card" {...figureFocus("customer_bridge", { month: filters.month, region: filters.region })}>
         <h2>Customer bridge, {filters.month}</h2>
-        <p className="hint">From last month's active customers to this month's. Every step is pointable.</p>
+        <p className="hint">From last month's active customers to this month's. Every step is pointable, and so is the whole bridge.</p>
         <CustomerBridge data={data} month={filters.month} {...(filters.region ? { region: filters.region } : {})} />
       </section>
     </>

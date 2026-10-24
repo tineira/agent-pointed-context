@@ -45,7 +45,7 @@ export function ActiveCustomersChart(props: { data: Dataset; month: string; plan
   );
 }
 
-/** From last month's active customers to this month's: five pointable steps. */
+/** From last month's active customers to this month's: five pointable steps. The whole bridge is its card (pages.tsx). */
 export function CustomerBridge(props: { data: Dataset; month: string; region?: Region }) {
   const { data, month, region } = props;
   const { values } = customerBridge(data, { month, ...(region ? { region } : {}) }, FULL_SCOPE);
@@ -60,8 +60,7 @@ export function CustomerBridge(props: { data: Dataset; month: string; region?: R
   const labels: Record<string, string> = { start: "Start", new: "New", reactivated: "Reactivated", churned: "Churned", end: "End" };
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="chart" role="img" aria-label="Customer bridge">
-      <g {...figureFocus("customer_bridge", { month, region })}>
-        <rect x={0} y={0} width={w} height={h} className="hit" />
+      <g>
         {BRIDGE_STEPS.map((step, i) => {
           const n = values[step]!;
           let from = 0;
