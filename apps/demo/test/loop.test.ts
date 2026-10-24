@@ -93,3 +93,8 @@ test("sharing on, no page open: page_open: false at once (unchanged)", async () 
   assert.equal(wait.result.structuredContent.page_open, false);
   assert.equal(wait.then_bytes, 0);
 });
+
+test("set_agent_name carries no loop hint: naming itself answers nothing (TIN-356)", () => {
+  assert.equal(loopHinted("set_agent_name", false, true), false);
+  assert.equal(loopHinted("get_figure", false, true), true);
+});

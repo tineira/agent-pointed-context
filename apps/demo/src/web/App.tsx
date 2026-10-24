@@ -2,7 +2,7 @@ import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protoco
 import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, markState } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
-import { motionFor, type AgentMotion } from "./agent-brands.ts";
+import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { HowTo } from "./howto.tsx";
@@ -123,6 +123,10 @@ function Sandbox({ sid }: { sid: string }) {
     }
     return map;
   }, [state]);
+  // The name each agent shows (TIN-356): the person's, the agent's own, its client's.
+  const names = useMemo(() => displayNames(state?.grants ?? []), [state]);
+  const namesRef = useRef(names);
+  namesRef.current = names;
   const initialsRef = useRef(initials);
   initialsRef.current = initials;
 
@@ -189,7 +193,7 @@ function Sandbox({ sid }: { sid: string }) {
           const current = stateRef.current?.grants.find((g) => g.id === grantId)?.pin;
           if (current && canonicalTarget(current) === canonicalTarget(target)) return;
           const result = await api.pin(grantId, target);
-          setNotice(result.ok ? `Pinned ${initialsRef.current.get(grantId)}. Now ask your agent about "this".` : `Not pinned: ${result.error}`);
+          setNotice(result.ok ? `Pinned ${namesRef.current.get(grantId) ?? "your agent"}. Now ask it about "this".` : `Not pinned: ${result.error}`);
           setTimeout(() => setNotice(null), 4000);
         },
       }),
@@ -267,8 +271,8 @@ function Sandbox({ sid }: { sid: string }) {
                   data-apc-mark
                   data-grant={g.id}
                   className={`mark mark-logo mark-${status}${pulsing ? " mark-pulse" : ""}${g.regions ? " mark-restricted" : ""}`}
-                  title={`${g.label} [${initials.get(g.id)}]${g.client_name ? ` (${g.client_name})` : " (not connected yet)"}. Drag onto anything to point this agent.`}
-                  aria-label={`${g.label} ${initials.get(g.id)}`}
+                  title={`${names.get(g.id)}${g.client_name ? "" : " (not connected yet)"}. Drag onto anything to point this agent.`}
+                  aria-label={names.get(g.id)}
                 >
                   <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={motion} />
                 </button>
@@ -279,7 +283,7 @@ function Sandbox({ sid }: { sid: string }) {
                       className={`pin-dot-go${isSeen(g.pin) ? " seen" : ""}${onScreen.has(g.id) ? "" : " away"}`}
                       onClick={() => !onScreen.has(g.id) && openPin(g.pin!)}
                       title={`Pinned to ${pinLabel(g.pin)}: ${isSeen(g.pin) ? "your agent read it" : "waiting for your agent's next call"}${onScreen.has(g.id) ? "" : ". Click to open it."}`}
-                      aria-label={`${g.label} pinned to ${pinLabel(g.pin)}${isSeen(g.pin) ? ", read" : ", not read yet"}`}
+                      aria-label={`${names.get(g.id)} pinned to ${pinLabel(g.pin)}${isSeen(g.pin) ? ", read" : ", not read yet"}`}
                     />
                     <button className="unpin" onClick={() => void api.unpin(g.id)} aria-label="Remove pin">
                       ×

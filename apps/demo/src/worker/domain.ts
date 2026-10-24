@@ -14,6 +14,10 @@ export interface Grant {
   client_name: string | null;
   /** The raster data URI from clientInfo.icons, when the client sent one (client-icon.ts). */
   client_icon?: string | null;
+  /** Names (names.ts): from initialize, from set_agent_name, from the person. */
+  client_title?: string | null;
+  agent_name?: string | null;
+  owner_name?: string | null;
   /** null: every region. */
   regions: Region[] | null;
   created_at: string;

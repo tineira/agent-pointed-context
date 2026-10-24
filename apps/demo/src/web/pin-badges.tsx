@@ -8,7 +8,7 @@
 import { canonicalTarget, parseFocusAttrs, type FocusRow } from "@apc/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentMotion } from "./agent-brands.ts";
+import { displayNames, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import type { GrantState } from "./api.ts";
 
@@ -112,6 +112,7 @@ export function PinBadges(props: {
       mutated.disconnect();
     };
   }, []);
+  const names = displayNames(props.grants);
   const ids = placed.map((p) => p.grantId).join(",");
   useEffect(() => onPlacedRef.current(new Set(ids ? ids.split(",") : [])), [ids]);
 
@@ -126,7 +127,7 @@ export function PinBadges(props: {
             key={g.id}
             className={`pin-badge ${seen ? "pin-badge-seen" : "pin-badge-waiting"}${dragging === g.id ? " pin-badge-dragging" : ""}`}
             style={{ left: p.left, top: p.top }}
-            title={`${g.label}${g.client_name ? ` (${g.client_name})` : ""}: ${seen ? "read this pin" : "has not read this pin yet"}. Drag to point it at something else.`}
+            title={`${names.get(g.id)}: ${seen ? "read this pin" : "has not read this pin yet"}. Drag to point it at something else.`}
           >
             <span className="pin-badge-mark" data-apc-mark data-grant={g.id} onPointerDown={(e) => e.button === 0 && setDragging(g.id)}>
               <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={props.motionOf(g.id)} size={18} />
@@ -136,7 +137,7 @@ export function PinBadges(props: {
                 ✓
               </span>
             )}
-            <button type="button" className="pin-badge-unpin" onClick={() => props.onUnpin(g.id)} aria-label={`Remove ${g.label}'s pin`}>
+            <button type="button" className="pin-badge-unpin" onClick={() => props.onUnpin(g.id)} aria-label={`Remove ${names.get(g.id)}'s pin`}>
               ×
             </button>
           </div>

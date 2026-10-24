@@ -86,8 +86,9 @@ function ago(iso: string | null, now = Date.now()): string | null {
  * card is compact: its URL, QR and manual sit behind "Show connection" (TIN-359), since the URL is
  * its credential and is rarely needed once it is in the agent. An agent not connected yet shows them.
  */
-export function AgentCard(props: { sid: string; grant: GrantState; initials: string | undefined; compact?: boolean; manual?: boolean }) {
+export function AgentCard(props: { sid: string; grant: GrantState; name: string; initials: string | undefined; compact?: boolean; manual?: boolean; onRename?: (name: string) => Promise<void> }) {
   const g = props.grant;
+  const [editing, setEditing] = useState<string | null>(null);
   const url = mcpUrl(props.sid, g);
   const connected = !!g.client_name;
   const [open, setOpen] = useState(!connected);
@@ -104,7 +105,31 @@ export function AgentCard(props: { sid: string; grant: GrantState; initials: str
           <span className="mark-inline mark-logo" title={props.initials}>
             <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={connected ? "idle" : "off"} size={16} />
           </span>{" "}
-          {g.label}
+          {editing !== null ? (
+            <form
+              className="grant-rename"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await props.onRename?.(editing);
+                setEditing(null);
+              }}
+            >
+              <input value={editing} maxLength={40} autoFocus aria-label="Agent name" placeholder="Empty: back to its own name" onChange={(e) => setEditing(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setEditing(null)} />
+              <button type="submit">Save</button>
+              <button type="button" className="link" onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <>
+              {props.name}
+              {props.onRename && (
+                <button type="button" className="link grant-toggle grant-rename-open" onClick={() => setEditing(g.owner_name ?? props.name)}>
+                  Rename
+                </button>
+              )}
+            </>
+          )}
           {connected ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
         </h3>
         {connected && (

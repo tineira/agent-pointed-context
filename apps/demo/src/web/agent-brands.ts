@@ -74,3 +74,41 @@ export function motionFor(a: { connected: boolean; waiting: boolean; busy: boole
   if (a.busy) return "busy";
   return "idle";
 }
+
+/** What a grant needs for its displayed name. */
+export interface Nameable {
+  id: string;
+  label: string;
+  client_name: string | null;
+  client_title?: string | null;
+  agent_name?: string | null;
+  owner_name?: string | null;
+  regions: readonly string[] | null;
+}
+
+/**
+ * The name the page shows for an agent (TIN-356). The person's name wins, then the name the agent
+ * gave itself (set_agent_name), then the client's title from initialize, then the client's product
+ * (the brand that picks its logo, or its own client name), numbered when two agents share it
+ * ("Claude", "Claude 2"). Before it connects, an agent keeps its label ("Your agent", "Agent 2").
+ * A restricted agent keeps saying so, whatever its name.
+ */
+export function displayNames(grants: readonly Nameable[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const seen = new Map<string, number>();
+  for (const g of grants) {
+    let name = g.owner_name || g.agent_name || g.client_title || null;
+    if (!name && g.client_name) {
+      const base = brandFor(g.client_name)?.name ?? g.client_name;
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      name = n === 1 ? base : `${base} ${n}`;
+    }
+    if (!name) {
+      out.set(g.id, g.label);
+      continue;
+    }
+    out.set(g.id, g.regions ? `${name} (${g.regions.map((r) => r.toUpperCase()).join(", ")} only)` : name);
+  }
+  return out;
+}

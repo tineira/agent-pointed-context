@@ -11,6 +11,9 @@ export interface GrantState {
   label: string;
   client_name: string | null;
   client_icon: string | null;
+  client_title: string | null;
+  agent_name: string | null;
+  owner_name: string | null;
   regions: Region[] | null;
   created_at: string;
   last_active_at: string | null;
@@ -48,6 +51,7 @@ export function createApi(sid: string) {
     unpin: (grantId: string) => post("/unpin", { grant_id: grantId }),
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
+    rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
     connect(onMessage: (message: ServerMessage) => void): () => void {
