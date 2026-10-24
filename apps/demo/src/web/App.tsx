@@ -2,13 +2,14 @@ import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protoco
 import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, markState } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
-import { motionFor } from "./agent-brands.ts";
+import { motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
 import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
+import { PinBadges, isSeen, pinLabel } from "./pin-badges.tsx";
 import { presenceEffects } from "./presence.ts";
 
 type Screen = "howto" | "overview" | "customers" | "agents";
@@ -81,6 +82,8 @@ function Sandbox({ sid }: { sid: string }) {
   // When each agent started a wait_for_focus that has not ended, and when it last read a pin: what its icon does.
   const [waitingSince, setWaitingSince] = useState<Record<string, number>>({});
   const [seenAt, setSeenAt] = useState<Record<string, number>>({});
+  // The agents whose pin has a badge on this screen (pin-badges.tsx).
+  const [onScreen, setOnScreen] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<string | null>(null);
   // Bumped by every message from the sandbox: what the compatibility matrix reloads on.
   const [activity, setActivity] = useState(0);
@@ -204,6 +207,28 @@ function Sandbox({ sid }: { sid: string }) {
   });
 
   if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  const motionOf = (grantId: string): AgentMotion => {
+    const g = state.grants.find((x) => x.id === grantId);
+    const since = waitingSince[grantId];
+    return motionFor({
+      connected: !!g?.client_name,
+      // A wait ends within a minute (WAIT_CEILING_S); a lost end message does not leave the icon floating.
+      waiting: since !== undefined && Date.now() - since < 70_000,
+      busy: !!pulse[grantId] && Date.now() - pulse[grantId]! < 1500,
+      seenAt: seenAt[grantId],
+      now: Date.now(),
+    });
+  };
+  /** The screen that shows a pin: a customer's page, or the overview with the figure's filters. */
+  const openPin = (pin: NonNullable<SandboxState["grants"][number]["pin"]>) => {
+    if (pin.kind === "customer" && pin.id) return navigate({ screen: "customer", id: pin.id }, filters);
+    const p = pin.params ?? {};
+    const pick = <T extends string>(v: unknown, all: readonly T[]) => (typeof v === "string" && (all as readonly string[]).includes(v) ? (v as T) : undefined);
+    const month = pick(p.month, MONTHS) ?? filters.month;
+    const plan = pick(p.plan, PLANS);
+    const region = pick(p.region, REGIONS);
+    navigate({ screen: "overview" }, { month, ...(plan ? { plan } : {}), ...(region ? { region } : {}) });
+  };
   const nav = (screen: Screen) => navigate({ screen }, filters);
 
   const tab = (screen: Screen, label: string, on: boolean) => (
@@ -232,15 +257,7 @@ function Sandbox({ sid }: { sid: string }) {
             const last = Math.max(Date.parse(g.last_active_at ?? "") || 0, pulse[g.id] ?? 0);
             const status = markState(last ? new Date(last).toISOString() : null);
             const pulsing = pulse[g.id] && Date.now() - pulse[g.id]! < 1500;
-            const since = waitingSince[g.id];
-            const motion = motionFor({
-              connected: !!g.client_name,
-              // A wait ends within a minute (WAIT_CEILING_S); a lost end message does not leave the icon floating.
-              waiting: since !== undefined && Date.now() - since < 70_000,
-              busy: !!pulsing,
-              seenAt: seenAt[g.id],
-              now: Date.now(),
-            });
+            const motion = motionOf(g.id);
             return (
               <div key={g.id} className="mark-wrap">
                 <button
@@ -253,8 +270,14 @@ function Sandbox({ sid }: { sid: string }) {
                   <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={motion} />
                 </button>
                 {g.pin && (
-                  <span className={g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at ? "pin seen" : "pin"} title={g.pin.seen_at ? "Your agent read the pin" : "Waiting for your agent's next call"}>
-                    {g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at ? "seen" : "pinned"}
+                  <span className="pin-dot">
+                    <button
+                      type="button"
+                      className={`pin-dot-go${isSeen(g.pin) ? " seen" : ""}${onScreen.has(g.id) ? "" : " away"}`}
+                      onClick={() => !onScreen.has(g.id) && openPin(g.pin!)}
+                      title={`Pinned to ${pinLabel(g.pin)}: ${isSeen(g.pin) ? "your agent read it" : "waiting for your agent's next call"}${onScreen.has(g.id) ? "" : ". Click to open it."}`}
+                      aria-label={`${g.label} pinned to ${pinLabel(g.pin)}${isSeen(g.pin) ? ", read" : ", not read yet"}`}
+                    />
                     <button className="unpin" onClick={() => void api.unpin(g.id)} aria-label="Remove pin">
                       ×
                     </button>
@@ -279,6 +302,7 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
+      <PinBadges grants={state.grants} motionOf={motionOf} onUnpin={(id) => void api.unpin(id)} onPlaced={setOnScreen} />
     </div>
   );
 }
