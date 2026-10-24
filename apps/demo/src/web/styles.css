@@ -51,8 +51,6 @@ html[data-theme="slate"] .mark-logo { background: #263040; border-color: #33404f
   .agent-icon-waiting, .agent-icon-busy, .agent-icon-seen { animation: none; }
 }
 .apc-ghost { cursor: grabbing; box-shadow: 0 4px 12px rgb(0 0 0 / 0.25); }
-.pin { font-size: 12px; color: var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 1px 4px 1px 8px; display: inline-flex; align-items: center; gap: 2px; }
-.pin.seen { color: var(--up); }
 .unpin { border: none; background: none; padding: 0 4px; font-size: 14px; line-height: 1; color: inherit; }
 
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
@@ -114,6 +112,24 @@ tbody tr:hover { background: var(--bg); }
 [data-apc-pinned] { position: relative; }
 tr[data-apc-pinned], td[data-apc-pinned], div[data-apc-pinned], h3[data-apc-pinned] { box-shadow: inset 0 0 0 2px var(--accent); }
 svg [data-apc-pinned] .bar { stroke: var(--accent); stroke-width: 3; }
+/* A pinned agent's badge on its target (pin-badges.tsx): dashed and breathing until the agent reads the pin, then solid with a check. */
+.pin-badge { position: fixed; z-index: 5; transform: translate(-50%, -50%); pointer-events: none; }
+.pin-badge-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: var(--surface); color: var(--foreground); box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); outline-offset: 2px; }
+html[data-theme="slate"] .pin-badge-mark { background: #263040; }
+.pin-badge-waiting .pin-badge-mark { outline: 2px dashed var(--accent); animation: pin-breathe 1.8s ease-in-out infinite; }
+.pin-badge-seen .pin-badge-mark { outline: 2px solid var(--up); }
+.pin-badge-check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: var(--up); color: #fff; font: 700 10px/15px var(--font-mono); text-align: center; }
+.pin-badge-unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 12px; line-height: 13px; cursor: pointer; pointer-events: auto; opacity: 0.85; }
+.pin-badge-unpin:hover { color: var(--foreground); opacity: 1; }
+@keyframes pin-breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }
+/* The top bar: a dot by the mark says pending (accent) or read (green); it opens the pinned screen when the target is elsewhere. */
+.pin-dot { display: inline-flex; align-items: center; gap: 2px; }
+.pin-dot-go { width: 10px; height: 10px; padding: 0; border-radius: 50%; border: none; background: var(--accent); cursor: default; }
+.pin-dot-go.seen { background: var(--up); }
+.pin-dot-go.away { cursor: pointer; box-shadow: 0 0 0 3px var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) {
+  .pin-badge-waiting .pin-badge-mark { animation: none; }
+}
 /* Presence: an agent read (dotted) or changed (solid) this element. */
 [data-apc-presence="read"] { outline: 2px dotted var(--accent); outline-offset: 1px; }
 [data-apc-presence="write"] { outline: 2px solid var(--accent); outline-offset: 1px; }
