@@ -7,7 +7,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { BRANDS } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, CopyField, defaultGrant, QrRow } from "./connect.tsx";
+import { AddAgentButtons, AgentCard, askYourAgentPrompt, CopyField, defaultGrant, QrRow } from "./connect.tsx";
 import { CompatTable, DownloadCsv } from "./pages.tsx";
 import { FileCard, JoinMini } from "./landing/join-visuals.tsx";
 import { AppLink, GROUP_LABEL } from "./ui.tsx";
@@ -50,11 +50,6 @@ function LogoRow() {
       <span className="inline-flex h-7 items-center rounded-md border border-line px-2 text-xs text-muted">+ others</span>
     </div>
   );
-}
-
-/** What a person pastes to their own agent when they don't know how to add an MCP server there. */
-export function askYourAgentPrompt(url: string): string {
-  return `I want to connect you to a remote MCP server. URL: ${url}. It uses Streamable HTTP and needs no OAuth: the access is in the URL. Tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
 }
 
 // ---- small pieces ----
