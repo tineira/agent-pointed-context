@@ -11,6 +11,7 @@ import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
+import { pickClientIcon } from "./client-icon.ts";
 import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -75,6 +76,12 @@ export class Sandbox extends DurableObject<Env> {
       create table if not exists events (
         id integer primary key autoincrement, at text not null, type text not null, grant_id text, data text not null);
     `);
+    // Added for TIN-350; a sandbox made before it lacks the column.
+    try {
+      this.sql.exec("alter table grants add column client_icon text");
+    } catch {
+      // already there
+    }
   }
 
   // ---- storage helpers ----
@@ -99,6 +106,7 @@ export class Sandbox extends DurableObject<Env> {
         secret: r.secret!,
         label: r.label!,
         client_name: r.client_name ?? null,
+        client_icon: r.client_icon ?? null,
         regions: r.regions ? (JSON.parse(r.regions) as Region[]) : null,
         created_at: r.created_at!,
         last_active_at: r.last_active_at ?? null,
@@ -339,20 +347,24 @@ export class Sandbox extends DurableObject<Env> {
         const body = (await request.clone().json()) as unknown;
         const messages = Array.isArray(body) ? body : [body];
         const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
-        for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown } } } | null>) {
+        for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown; icons?: unknown } } } | null>) {
           if (m?.method === "initialize") {
             const name = m.params?.clientInfo?.name;
             const version = m.params?.clientInfo?.version;
             const protocol = m.params?.protocolVersion;
+            const icons = m.params?.clientInfo?.icons;
+            const icon = pickClientIcon(icons);
             this.log("initialize", grant.id, {
               client_name: typeof name === "string" ? name.slice(0, 100) : null,
               client_version: typeof version === "string" ? version.slice(0, 40) : null,
               protocol_version: typeof protocol === "string" ? protocol.slice(0, 20) : null,
               user_agent: userAgent,
+              icons: Array.isArray(icons) ? icons.length : 0,
+              icon_kept: icon !== null,
             });
             await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
-              this.sql.exec("update grants set client_name = ? where id = ?", name, grant.id);
+              this.sql.exec("update grants set client_name = ?, client_icon = ? where id = ?", name, icon, grant.id);
               this.broadcast({ type: "grants" });
             }
           } else if (m?.method === "tools/list") {
@@ -429,9 +441,17 @@ export class Sandbox extends DurableObject<Env> {
         const tool = String(name);
         call.tool = tool;
         this.log("inbound", grant.id, { tool, args });
+        // The page animates an agent's icon while it waits (TIN-350): only the start and the end, no content.
+        const waiting = tool === "wait_for_focus";
+        if (waiting) this.broadcast({ type: "waiting", grant_id: grant.id, on: true });
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grant.id);
 
-        let result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
+        let result: ToolResult;
+        try {
+          result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
+        } finally {
+          if (waiting) this.broadcast({ type: "waiting", grant_id: grant.id, on: false });
+        }
 
         const row = this.focusRow(grant.id);
         const focus = resolveFocus(row, grant, data, origin);

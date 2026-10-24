@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
+import { AgentIcon } from "./agent-icon.tsx";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel, serverName, SKILL_COMMAND } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
@@ -185,7 +186,7 @@ const yes = (ok: boolean) => (ok ? "yes" : "–");
  * sandbox announces activity on the page's WebSocket (refreshKey), at most once a second, and
  * when the tab comes back into view.
  */
-export function CompatTable(props: { api: Api; initials: Map<string, string>; refreshKey: unknown }) {
+export function CompatTable(props: { api: Api; initials: Map<string, string>; grants: SandboxState["grants"]; refreshKey: unknown }) {
   const [rows, setRows] = useState<CompatRow[] | null>(null);
   useEffect(() => {
     let live = true;
@@ -229,7 +230,16 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; re
               <td>
                 <span className="mark-inline">{props.initials.get(r.grant_id)}</span> {r.label}
               </td>
-              <td title={r.user_agent ?? ""}>{r.client_name ? `${r.client_name}${r.client_version ? ` ${r.client_version}` : ""}` : "–"}</td>
+              <td title={r.user_agent ?? ""}>
+                {r.client_name ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <AgentIcon clientName={r.client_name} clientIcon={props.grants.find((g) => g.id === r.grant_id)?.client_icon} size={16} />
+                    {`${r.client_name}${r.client_version ? ` ${r.client_version}` : ""}`}
+                  </span>
+                ) : (
+                  "–"
+                )}
+              </td>
               <td>{yes(r.connected)}</td>
               <td>{yes(r.read_guide)}</td>
               <td className="num">{r.tool_calls}</td>
@@ -276,7 +286,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       <section className="card">
         <h2>What your agents did</h2>
         <p className="hint">From this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>
-        <CompatTable api={api} initials={props.initials} refreshKey={props.activity} />
+        <CompatTable api={api} initials={props.initials} grants={props.state.grants} refreshKey={props.activity} />
       </section>
       <section className="card">
         <h2>Switches and log</h2>

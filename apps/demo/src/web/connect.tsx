@@ -5,6 +5,7 @@
  */
 import { encode } from "uqr";
 import { useMemo, useState } from "react";
+import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type GrantState, type SandboxState } from "./api.ts";
 import { AppLink } from "./ui.tsx";
 
@@ -74,7 +75,10 @@ export function AgentCard(props: { sid: string; grant: GrantState; initials: str
   return (
     <div className={props.compact ? "grant grant-compact" : "grant"}>
       <h3>
-        <span className="mark-inline">{props.initials}</span> {g.label}
+        <span className="mark-inline mark-logo" title={props.initials}>
+          <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} motion={g.client_name ? "idle" : "off"} size={16} />
+        </span>{" "}
+        {g.label}
         {g.client_name ? <span className="muted"> · connected as {g.client_name}</span> : <span className="muted"> · not connected yet</span>}
       </h3>
       <CopyField text={url} />

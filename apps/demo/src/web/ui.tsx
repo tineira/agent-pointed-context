@@ -131,6 +131,10 @@ export function SiteFooter() {
           Payload spec
         </a>
         <span className="ml-auto">Synthetic data. Pulse is fictional.</span>
+        <span className="basis-full">
+          Claude, ChatGPT, Grok, Gemini, Antigravity, Cursor, Kimi, Z.ai, dots and other names and logos are trademarks of their respective owners, shown only to identify the
+          connected agent. Pulse is not affiliated with any of them.
+        </span>
       </div>
     </footer>
   );

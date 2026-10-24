@@ -10,6 +10,7 @@ export interface GrantState {
   secret: string;
   label: string;
   client_name: string | null;
+  client_icon: string | null;
   regions: Region[] | null;
   created_at: string;
   last_active_at: string | null;
@@ -27,6 +28,7 @@ export type ServerMessage =
   | { type: "presence"; event: PresenceEvent }
   | { type: "pin"; grant_id: string; pin: FocusRow | null }
   | { type: "grants" }
+  | { type: "waiting"; grant_id: string; on: boolean }
   | { type: "activity" };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {

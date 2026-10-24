@@ -30,6 +30,23 @@ select { font: inherit; color: inherit; background: var(--surface); border: 1px 
 .mark-restricted { background: var(--accent); }
 .mark-pulse { box-shadow: 0 0 0 4px var(--accent-soft); }
 .mark-inline { display: inline-block; width: 22px; height: 22px; border-radius: 3px; background: var(--mark); color: var(--mark-ink); font: 600 10px/22px var(--font-mono); text-align: center; vertical-align: 2px; }
+.mark-logo { display: grid; place-items: center; background: var(--surface); color: var(--foreground); border: 1px solid var(--line); }
+.mark-logo.mark-restricted { background: var(--surface); outline: 2px solid var(--accent); outline-offset: 1px; }
+.mark-inline.mark-logo, .agent-inline { display: inline-grid; place-items: center; vertical-align: -6px; }
+
+/* An agent's icon moves with what the agent does (TIN-350). */
+.agent-icon { display: block; flex: none; pointer-events: none; }
+.agent-icon-mono { display: grid; place-items: center; font-family: var(--font-mono); font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+.agent-icon-off { filter: grayscale(1); opacity: 0.4; }
+.agent-icon-waiting { animation: agent-float 3s ease-in-out infinite; }
+.agent-icon-busy { animation: agent-pulse 0.6s ease-in-out infinite; }
+.agent-icon-seen { animation: agent-bounce 0.9s ease-out 1; }
+@keyframes agent-float { 0%, 100% { transform: translateY(1.5px); } 50% { transform: translateY(-2.5px); } }
+@keyframes agent-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+@keyframes agent-bounce { 0% { transform: translateY(0); } 25% { transform: translateY(-6px); } 50% { transform: translateY(0); } 70% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .agent-icon-waiting, .agent-icon-busy, .agent-icon-seen { animation: none; }
+}
 .apc-ghost { cursor: grabbing; box-shadow: 0 4px 12px rgb(0 0 0 / 0.25); }
 .pin { font-size: 12px; color: var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 1px 4px 1px 8px; display: inline-flex; align-items: center; gap: 2px; }
 .pin.seen { color: var(--up); }

@@ -4,6 +4,7 @@
  * your screen or your agent shows at that point. The visitor's own URL and file are in it.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, claudeCommand, CopyField, defaultGrant, QrRow, SKILL_COMMAND } from "./connect.tsx";
 import { CompatTable, DownloadCsv } from "./pages.tsx";
@@ -178,7 +179,9 @@ function ConnectTopic({ api, sid, state, initials, onChanged, agent }: Ctx) {
     label: "Top bar shows now",
     content: (
       <div className="flex items-center gap-2">
-        <Mark text={mine} dim={!connected} />
+        <span className="mark mark-logo" title={mine}>
+          <AgentIcon clientName={grant.client_name} clientIcon={grant.client_icon} motion={connected ? "idle" : "off"} />
+        </span>
         <span className="text-left text-xs">{connected ? `Connected as ${grant.client_name}` : "Waiting for your agent"}</span>
       </div>
     ),
@@ -530,7 +533,7 @@ function ExamplesTopic(ctx: Ctx) {
 
       <Section id="results" title="What your agents did" lead="Live from this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.">
         <div className="overflow-hidden rounded-xl border border-line bg-cream p-2">
-          <CompatTable api={ctx.api} initials={ctx.initials} refreshKey={ctx.activity} />
+          <CompatTable api={ctx.api} initials={ctx.initials} grants={ctx.state.grants} refreshKey={ctx.activity} />
         </div>
       </Section>
     </>
