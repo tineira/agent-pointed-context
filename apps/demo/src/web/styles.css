@@ -92,8 +92,11 @@ tbody tr:hover { background: var(--bg); }
 .grant-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .grant-pin { color: var(--accent); }
 .grant-pin.seen { color: var(--up); }
-.grant .grant-toggle { font-size: 12px; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.grant button.grant-toggle { font-size: 12px; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .grant-body { display: flex; flex-direction: column; gap: 8px; }
+.grant-rename { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.grant-rename input { font: inherit; font-weight: 500; color: inherit; background: var(--background); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; width: 16rem; max-width: 100%; }
+.grant button.grant-rename-open { margin-left: 8px; font-weight: 400; }
 /* In the how-to's steps: a boxed card, spaced by the step's own gap. */
 .grant-compact { margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
 .qr-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }

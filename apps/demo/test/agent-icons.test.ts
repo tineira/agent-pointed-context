@@ -56,3 +56,24 @@ test("a Grok bot gets one character, fixed per agent", async () => {
   const seen = new Set(Array.from({ length: 40 }, (_, i) => pickImage(GROK_BOTS, `g_${i}`).name));
   assert.ok(seen.size > 4, "different agents get different characters");
 });
+
+test("agent names: the person's, then the agent's, then the client title, then the product, numbered (TIN-356)", async () => {
+  const { displayNames } = await import("../src/web/agent-brands.ts");
+  const { cleanName } = await import("../src/worker/names.ts");
+  const g = (id: string, over: Record<string, unknown> = {}) => ({ id, label: `Agent ${id}`, client_name: null, regions: null, ...over });
+  const names = displayNames([
+    g("1", { client_name: "claude-ai" }),
+    g("2", { client_name: "claude-code" }),
+    g("3", { client_name: "Cursor", agent_name: "Ani" }),
+    g("4", { client_name: "Cursor", agent_name: "Ani", owner_name: "Ani (work)" }),
+    g("5", { client_name: "mcp-inspector", client_title: "MCP Inspector" }),
+    g("6"),
+    g("7", { client_name: "cursor-vscode", regions: ["latam"] }),
+  ]);
+  assert.deepEqual([...names.values()], ["Claude", "Claude 2", "Ani", "Ani (work)", "MCP Inspector", "Agent 6", "Cursor (LATAM only)"]);
+  assert.equal(cleanName("  Ani\n\u0007 the​ bot  "), "Ani the bot");
+  assert.equal(cleanName("x".repeat(200))?.length, 40);
+  assert.equal(cleanName("<b>Ani</b>"), "<b>Ani</b>", "kept as text; the page never renders it as HTML");
+  assert.equal(cleanName("   "), null);
+  assert.equal(cleanName(42), null);
+});

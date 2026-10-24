@@ -4,7 +4,7 @@
  * at that point. One connect flow for every agent (TIN-360). The visitor's own URL and file are in it.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { BRANDS } from "./agent-brands.ts";
+import { BRANDS, displayNames } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, askYourAgentPrompt, CopyField, defaultGrant, QrRow } from "./connect.tsx";
@@ -231,7 +231,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged }: Ctx) {
                 <span>Trying several agents? Give each its own URL, so each gets its own mark and you can tell which one answered. A new agent's URL and QR show up here; all URLs are on the Agents page.</span>
                 <AddAgentButtons api={api} state={state} onChanged={onChanged} />
                 {others.map((g) => (
-                  <AgentCard key={g.id} sid={sid} grant={g} initials={initials.get(g.id)} compact />
+                  <AgentCard key={g.id} sid={sid} grant={g} name={displayNames(state.grants).get(g.id) ?? g.label} initials={initials.get(g.id)} compact />
                 ))}
               </>
             ),

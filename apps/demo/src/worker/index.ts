@@ -115,6 +115,10 @@ app.post("/api/s/:sid/grants/restricted", async (c) => {
   const region = (REGIONS as readonly string[]).includes(body.region ?? "") ? (body.region as Region) : "latam";
   return c.json(await rpc(c.env, c.var.sid, (s) => s.addRestrictedGrant(region)));
 });
+app.post("/api/s/:sid/grants/:id/name", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
+  return c.json(await rpc(c.env, c.var.sid, (s) => s.renameGrant(c.req.param("id"), body.name ?? null)));
+});
 app.post("/api/s/:sid/grants/agent", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant())));
 app.get("/api/s/:sid/compat.json", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.compat())));
 app.get("/api/s/:sid/events.jsonl", async (c) =>

@@ -41,5 +41,7 @@ export function attendance(shareView: boolean, pageOpen: () => boolean): boolean
 /** Whether a result carries the loop hint: a page is known open, and it is not a wait that returned no focus (that one ends the loop). */
 export function loopHinted(tool: string, focusReturned: boolean, attending: boolean | null): boolean {
   const loopEnds = tool === "wait_for_focus" && !focusReturned;
+  // Naming itself is not an answer to the person (TIN-356): nothing to wait after.
+  if (tool === "set_agent_name") return false;
   return !loopEnds && attending === true;
 }

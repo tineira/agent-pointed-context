@@ -6,12 +6,13 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow, FocusTarget } from "@apc/protocol";
-import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, toolError, toolResult, type ToolResult } from "@apc/server";
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
 import { pickClientIcon } from "./client-icon.ts";
+import { cleanName } from "./names.ts";
 import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -76,11 +77,13 @@ export class Sandbox extends DurableObject<Env> {
       create table if not exists events (
         id integer primary key autoincrement, at text not null, type text not null, grant_id text, data text not null);
     `);
-    // Added for TIN-350; a sandbox made before it lacks the column.
-    try {
-      this.sql.exec("alter table grants add column client_icon text");
-    } catch {
-      // already there
+    // Columns added after the table: client_icon (TIN-350), the names (TIN-356). A sandbox made before lacks them.
+    for (const column of ["client_icon", "client_title", "agent_name", "owner_name"]) {
+      try {
+        this.sql.exec(`alter table grants add column ${column} text`);
+      } catch {
+        // already there
+      }
     }
   }
 
@@ -107,6 +110,9 @@ export class Sandbox extends DurableObject<Env> {
         label: r.label!,
         client_name: r.client_name ?? null,
         client_icon: r.client_icon ?? null,
+        client_title: r.client_title ?? null,
+        agent_name: r.agent_name ?? null,
+        owner_name: r.owner_name ?? null,
         regions: r.regions ? (JSON.parse(r.regions) as Region[]) : null,
         created_at: r.created_at!,
         last_active_at: r.last_active_at ?? null,
@@ -272,6 +278,14 @@ export class Sandbox extends DurableObject<Env> {
     this.broadcast({ type: "pin", grant_id: grantId, pin: null });
   }
 
+  /** The person's own name for an agent (TIN-356); empty clears it, back to the agent's or the default. */
+  async renameGrant(grantId: string, raw: unknown): Promise<{ ok: boolean }> {
+    if (!this.grants().some((g) => g.id === grantId)) return { ok: false };
+    this.sql.exec("update grants set owner_name = ? where id = ?", cleanName(raw), grantId);
+    this.broadcast({ type: "grants" });
+    return { ok: true };
+  }
+
   /** Another agent with full access: one URL and one mark per client, so each client's behaviour is measured apart. */
   async addAgentGrant(): Promise<Grant> {
     const id = `g_${randomHex(4)}`;
@@ -347,7 +361,7 @@ export class Sandbox extends DurableObject<Env> {
         const body = (await request.clone().json()) as unknown;
         const messages = Array.isArray(body) ? body : [body];
         const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
-        for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown; icons?: unknown } } } | null>) {
+        for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown; icons?: unknown; title?: unknown } } } | null>) {
           if (m?.method === "initialize") {
             const name = m.params?.clientInfo?.name;
             const version = m.params?.clientInfo?.version;
@@ -364,7 +378,7 @@ export class Sandbox extends DurableObject<Env> {
             });
             await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
-              this.sql.exec("update grants set client_name = ?, client_icon = ? where id = ?", name, icon, grant.id);
+              this.sql.exec("update grants set client_name = ?, client_icon = ?, client_title = ? where id = ?", name, icon, cleanName(m.params?.clientInfo?.title), grant.id);
               this.broadcast({ type: "grants" });
             }
           } else if (m?.method === "tools/list") {
@@ -392,7 +406,7 @@ export class Sandbox extends DurableObject<Env> {
     const server = new McpServer(
       { name: "pulse-apc-demo", version: SERVER_VERSION },
       {
-        instructions: `${APC_INSTRUCTIONS} Pulse is product analytics for a SaaS: customers (external ids cus_NNNN, the same ids the person's billing uses), plans, regions, seats and monthly activity. It holds no revenue data.`,
+        instructions: `${APC_INSTRUCTIONS} If you have a name of your own (one your person gave you), call set_agent_name once when you start, so the page shows it on your mark. Pulse is product analytics for a SaaS: customers (external ids cus_NNNN, the same ids the person's billing uses), plans, regions, seats and monthly activity. It holds no revenue data.`,
         jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
       },
     );
@@ -416,6 +430,25 @@ export class Sandbox extends DurableObject<Env> {
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
     registerPulseTools(server, data, grant, origin);
+    // The agent introduces itself (TIN-356). The person's own name for it stays on top.
+    const { z } = await import("zod");
+    server.registerTool(
+      "set_agent_name",
+      {
+        title: "Tell Pulse your name",
+        description: "If you have a name of your own, call this once when you start: the page shows it on your mark instead of your client's name. Plain text, at most 40 characters. A name the person set for you stays on top.",
+        inputSchema: { name: z.string() },
+      },
+      async ({ name }) => {
+        const clean = cleanName(name);
+        if (!clean) return toolError("invalid_name", "Give a name of 1 to 40 visible characters.");
+        this.sql.exec("update grants set agent_name = ? where id = ?", clean, grant.id);
+        this.log("agent_named", grant.id, { name: clean });
+        this.broadcast({ type: "grants" });
+        const owner = this.grants().find((g) => g.id === grant.id)?.owner_name;
+        return toolResult(owner ? { name: clean, shown: owner, note: "The person named you; their name stays on the page." } : { name: clean, shown: clean });
+      },
+    );
     // The manual, for the person to load on purpose (a slash command or a menu item in their client).
     registerApcPrompts(server, PULSE_GUIDE);
 

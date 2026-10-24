@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
+import { displayNames } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
@@ -228,7 +229,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; gr
           {rows.map((r) => (
             <tr key={r.grant_id}>
               <td>
-                <span className="mark-inline">{props.initials.get(r.grant_id)}</span> {r.label}
+                <span className="mark-inline">{props.initials.get(r.grant_id)}</span> {displayNames(props.grants).get(r.grant_id) ?? r.label}
               </td>
               <td title={r.user_agent ?? ""}>
                 {r.client_name ? (
@@ -264,6 +265,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; gr
 
 export function Agents(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; activity: number; onChanged: () => void }) {
   const { api, sid, state } = props;
+  const names = displayNames(state.grants);
   return (
     <>
       <section className="card">
@@ -273,7 +275,10 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           agents? Give each one its own URL, so you can see which one answered.
         </p>
         {state.grants.map((g) => (
-          <AgentCard key={g.id} sid={sid} grant={g} initials={props.initials.get(g.id)} manual />
+          <AgentCard key={g.id} sid={sid} grant={g} name={names.get(g.id) ?? g.label} initials={props.initials.get(g.id)} manual onRename={async (name) => {
+            await api.rename(g.id, name);
+            props.onChanged();
+          }} />
         ))}
         <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>
