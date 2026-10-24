@@ -12,6 +12,8 @@ export interface Grant {
   secret: string;
   label: string;
   client_name: string | null;
+  /** The raster data URI from clientInfo.icons, when the client sent one (client-icon.ts). */
+  client_icon?: string | null;
   /** null: every region. */
   regions: Region[] | null;
   created_at: string;

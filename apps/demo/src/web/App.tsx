@@ -2,6 +2,8 @@ import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protoco
 import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, markState } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
+import { motionFor } from "./agent-brands.ts";
+import { AgentIcon } from "./agent-icon.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
@@ -76,6 +78,9 @@ function Sandbox({ sid }: { sid: string }) {
   const [data, setData] = useState<Dataset | null>(null);
   const [{ route, filters }, setNav] = useState(readRoute);
   const [pulse, setPulse] = useState<Record<string, number>>({});
+  // When each agent started a wait_for_focus that has not ended, and when it last read a pin: what its icon does.
+  const [waitingSince, setWaitingSince] = useState<Record<string, number>>({});
+  const [seenAt, setSeenAt] = useState<Record<string, number>>({});
   const [notice, setNotice] = useState<string | null>(null);
   // Bumped by every message from the sandbox: what the compatibility matrix reloads on.
   const [activity, setActivity] = useState(0);
@@ -126,9 +131,22 @@ function Sandbox({ sid }: { sid: string }) {
         if (message.type === "activity") return;
         if (message.type === "presence") {
           const effects = presenceEffects(stateRef.current?.settings);
-          if (effects.pulse) setPulse((p) => ({ ...p, [message.event.grant_id]: Date.now() }));
+          if (effects.pulse) {
+            setPulse((p) => ({ ...p, [message.event.grant_id]: Date.now() }));
+            setTimeout(() => tick((n) => n + 1), 1600);
+          }
           if (effects.flash) flashTargets(message.event, initialsRef.current.get(message.event.grant_id) ?? "AG");
+        } else if (message.type === "waiting") {
+          setWaitingSince((w) => {
+            const { [message.grant_id]: _, ...rest } = w;
+            return message.on ? { ...rest, [message.grant_id]: Date.now() } : rest;
+          });
         } else if (message.type === "pin") {
+          const pin = message.pin;
+          if (pin?.seen_at && pin.seen_at >= pin.pinned_at) {
+            setSeenAt((s) => ({ ...s, [message.grant_id]: Date.now() }));
+            setTimeout(() => tick((n) => n + 1), 1300);
+          }
           setState((s) => (s ? { ...s, grants: s.grants.map((g) => (g.id === message.grant_id ? { ...g, pin: message.pin } : g)) } : s));
         } else {
           void refresh();
@@ -214,15 +232,25 @@ function Sandbox({ sid }: { sid: string }) {
             const last = Math.max(Date.parse(g.last_active_at ?? "") || 0, pulse[g.id] ?? 0);
             const status = markState(last ? new Date(last).toISOString() : null);
             const pulsing = pulse[g.id] && Date.now() - pulse[g.id]! < 1500;
+            const since = waitingSince[g.id];
+            const motion = motionFor({
+              connected: !!g.client_name,
+              // A wait ends within a minute (WAIT_CEILING_S); a lost end message does not leave the icon floating.
+              waiting: since !== undefined && Date.now() - since < 70_000,
+              busy: !!pulsing,
+              seenAt: seenAt[g.id],
+              now: Date.now(),
+            });
             return (
               <div key={g.id} className="mark-wrap">
                 <button
                   data-apc-mark
                   data-grant={g.id}
-                  className={`mark mark-${status}${pulsing ? " mark-pulse" : ""}${g.regions ? " mark-restricted" : ""}`}
-                  title={`${g.label}${g.client_name ? ` (${g.client_name})` : " (not connected yet)"}. Drag onto anything to point this agent.`}
+                  className={`mark mark-logo mark-${status}${pulsing ? " mark-pulse" : ""}${g.regions ? " mark-restricted" : ""}`}
+                  title={`${g.label} [${initials.get(g.id)}]${g.client_name ? ` (${g.client_name})` : " (not connected yet)"}. Drag onto anything to point this agent.`}
+                  aria-label={`${g.label} ${initials.get(g.id)}`}
                 >
-                  {initials.get(g.id)}
+                  <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={motion} />
                 </button>
                 {g.pin && (
                   <span className={g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at ? "pin seen" : "pin"} title={g.pin.seen_at ? "Your agent read the pin" : "Waiting for your agent's next call"}>
