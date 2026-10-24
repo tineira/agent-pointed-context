@@ -10,9 +10,10 @@ import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBy
 import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
-import { checkPin, resolveFocus, sanitizeView, trimView, type Grant, type StoredView } from "./domain.ts";
+import { checkPin, resolveFocus, sanitizeView, trimView, type ClientConflict, type Grant, type StoredView } from "./domain.ts";
 import { pickClientIcon } from "./client-icon.ts";
 import { cleanName } from "./names.ts";
+import { sameProduct } from "../model/products.ts";
 import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
@@ -78,7 +79,7 @@ export class Sandbox extends DurableObject<Env> {
         id integer primary key autoincrement, at text not null, type text not null, grant_id text, data text not null);
     `);
     // Columns added after the table: client_icon (TIN-350), the names (TIN-356). A sandbox made before lacks them.
-    for (const column of ["client_icon", "client_title", "agent_name", "owner_name"]) {
+    for (const column of ["client_icon", "client_title", "agent_name", "owner_name", "conflict"]) {
       try {
         this.sql.exec(`alter table grants add column ${column} text`);
       } catch {
@@ -113,6 +114,7 @@ export class Sandbox extends DurableObject<Env> {
         client_title: r.client_title ?? null,
         agent_name: r.agent_name ?? null,
         owner_name: r.owner_name ?? null,
+        conflict: r.conflict ? (JSON.parse(r.conflict) as ClientConflict) : null,
         regions: r.regions ? (JSON.parse(r.regions) as Region[]) : null,
         created_at: r.created_at!,
         last_active_at: r.last_active_at ?? null,
@@ -286,6 +288,26 @@ export class Sandbox extends DurableObject<Env> {
     return { ok: true };
   }
 
+  /**
+   * The person's answer to a shared URL (TIN-358). split: a new agent and URL for the newcomer, the
+   * old URL stays with the first product. adopt: the newcomer is this agent now; the name it gave
+   * itself and its client's title and icon go, the person's name for it stays.
+   */
+  async resolveConflict(grantId: string, action: unknown): Promise<{ ok: boolean; grant?: Grant }> {
+    const g = this.grants().find((x) => x.id === grantId);
+    if (!g?.conflict || (action !== "split" && action !== "adopt")) return { ok: false };
+    if (action === "adopt") {
+      this.sql.exec("update grants set client_name = ?, client_icon = null, client_title = null, agent_name = null, conflict = null where id = ?", g.conflict.client_name, grantId);
+      this.log("conflict_adopted", grantId, { client_name: g.conflict.client_name });
+      this.broadcast({ type: "grants" });
+      return { ok: true };
+    }
+    this.sql.exec("update grants set conflict = null where id = ?", grantId);
+    const fresh = await this.addAgentGrant();
+    this.log("conflict_split", grantId, { client_name: g.conflict.client_name, new_grant: fresh.id });
+    return { ok: true, grant: fresh };
+  }
+
   /** Another agent with full access: one URL and one mark per client, so each client's behaviour is measured apart. */
   async addAgentGrant(): Promise<Grant> {
     const id = `g_${randomHex(4)}`;
@@ -378,7 +400,14 @@ export class Sandbox extends DurableObject<Env> {
             });
             await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
-              this.sql.exec("update grants set client_name = ?, client_icon = ?, client_title = ? where id = ?", name, icon, cleanName(m.params?.clientInfo?.title), grant.id);
+              if (!grant.client_name || sameProduct(grant.client_name, name)) {
+                this.sql.exec("update grants set client_name = ?, client_icon = ?, client_title = ? where id = ?", name, icon, cleanName(m.params?.clientInfo?.title), grant.id);
+              } else {
+                // One URL, one agent (TIN-358): a second product does not take the grant over. The page warns the person.
+                const conflict: ClientConflict = { client_name: name, client_version: typeof version === "string" ? version.slice(0, 40) : null, user_agent: userAgent, at: new Date().toISOString() };
+                this.sql.exec("update grants set conflict = ? where id = ?", JSON.stringify(conflict), grant.id);
+                this.log("client_conflict", grant.id, { owner_client: grant.client_name, ...conflict });
+              }
               this.broadcast({ type: "grants" });
             }
           } else if (m?.method === "tools/list") {

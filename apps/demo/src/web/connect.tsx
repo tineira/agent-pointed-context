@@ -6,6 +6,7 @@
 import { encode } from "uqr";
 import { useEffect, useMemo, useState } from "react";
 import { AgentIcon } from "./agent-icon.tsx";
+import { productName } from "../model/products.ts";
 import { mcpUrl, type Api, type GrantState, type SandboxState } from "./api.ts";
 import { AppLink } from "./ui.tsx";
 
@@ -72,6 +73,12 @@ export const serverName = (grant: { regions: unknown[] | null }) => (grant.regio
 /** The agent most people connect first: the first unrestricted one. */
 export const defaultGrant = (state: SandboxState): GrantState => state.grants.find((g) => !g.regions) ?? state.grants[0]!;
 
+/** A second product on this agent's URL, while it still uses it (TIN-358): the warning clears an hour after its last call. */
+export function activeConflict(g: GrantState, now = Date.now()): GrantState["conflict"] {
+  const at = Date.parse(g.conflict?.at ?? "");
+  return g.conflict && at && now - at < 60 * 60_000 ? g.conflict : null;
+}
+
 function ago(iso: string | null, now = Date.now()): string | null {
   const t = Date.parse(iso ?? "");
   if (!t) return null;
@@ -86,9 +93,21 @@ function ago(iso: string | null, now = Date.now()): string | null {
  * card is compact: its URL, QR and manual sit behind "Show connection" (TIN-359), since the URL is
  * its credential and is rarely needed once it is in the agent. An agent not connected yet shows them.
  */
-export function AgentCard(props: { sid: string; grant: GrantState; name: string; initials: string | undefined; compact?: boolean; manual?: boolean; onRename?: (name: string) => Promise<void> }) {
+export function AgentCard(props: {
+  sid: string;
+  grant: GrantState;
+  name: string;
+  initials: string | undefined;
+  compact?: boolean;
+  manual?: boolean;
+  onRename?: (name: string) => Promise<void>;
+  onConflict?: (action: "split" | "adopt") => Promise<GrantState | undefined>;
+}) {
   const g = props.grant;
   const [editing, setEditing] = useState<string | null>(null);
+  // After "Give it its own URL": the new agent's URL, shown right here for the client that needs it.
+  const [handoff, setHandoff] = useState<{ client: string; grant: GrantState } | null>(null);
+  const conflict = activeConflict(g);
   const url = mcpUrl(props.sid, g);
   const connected = !!g.client_name;
   const [open, setOpen] = useState(!connected);
@@ -142,6 +161,39 @@ export function AgentCard(props: { sid: string; grant: GrantState; name: string;
           </span>
         )}
       </div>
+      {conflict && props.onConflict && (
+        <div className="grant-conflict" role="alert">
+          <span>
+            <strong>{productName(conflict.client_name)}</strong> is using {props.name}'s URL. One URL is one agent: the pin, the name and the access are per URL. Give it its own?
+          </span>
+          <span className="grant-conflict-actions">
+            <button
+              type="button"
+              onClick={async () => {
+                const fresh = await props.onConflict!("split");
+                if (fresh) setHandoff({ client: productName(conflict.client_name), grant: fresh });
+              }}
+            >
+              Give it its own URL
+            </button>
+            <button type="button" onClick={() => void props.onConflict!("adopt")}>
+              It's the same agent now
+            </button>
+          </span>
+        </div>
+      )}
+      {handoff && (
+        <div className="grant-conflict grant-handoff">
+          <span>
+            Put this new URL in <strong>{handoff.client}</strong>, in place of the old one. It shows up as its own agent once it connects.
+          </span>
+          <CopyField text={mcpUrl(props.sid, handoff.grant)} />
+          <QrRow text={mcpUrl(props.sid, handoff.grant)} />
+          <button type="button" className="link grant-toggle" onClick={() => setHandoff(null)}>
+            Done
+          </button>
+        </div>
+      )}
       {open && (
         <div className="grant-body">
           <CopyField text={url} />

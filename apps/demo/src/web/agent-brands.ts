@@ -3,6 +3,7 @@
  * A curated logo first; then the raster icon the client sent in clientInfo.icons; then a bot
  * glyph colored from the name.
  */
+import { PRODUCTS, type ProductId } from "../model/products.ts";
 import { ANTIGRAVITY_PNG, DUET_PARTS, GROK_BOTS, PATHS } from "./agent-logos.ts";
 
 export interface Logo {
@@ -21,27 +22,21 @@ export interface Brand {
 
 const mark = (d: string, viewBox: string, fill: string | null = null): Logo => ({ viewBox, parts: [{ d, fill }] });
 
-/**
- * Order matters: the first match wins (the Grok bot before Cursor, Claude Duet before Claude).
- * Names seen in Analytics Engine (TIN-347), 2026-10-24: grok.com sends grok-validator to check the
- * URL, then connectors-manager for every call (user agent grok-connectors-manager); the Grok bot
- * sends exactly "Cursor" 1.0.0 (user agent Cursor/1.0.0); Cursor's editor sends cursor-vscode (user
- * agent Cursor/3.27.6 (win32 x64)). The other patterns are the names those clients are known to
- * send, or the product name; an unmatched name falls back to the bot until it is added here.
- */
-export const BRANDS: Brand[] = [
-  { id: "grok-bot", name: "Grok bot", match: /^Cursor$/, logo: { images: GROK_BOTS } },
-  { id: "grok", name: "Grok", match: /grok|xai|^connectors-manager$/i, logo: mark(PATHS.grok, "0 0 1024 1024") },
-  { id: "claude-duet", name: "Claude Duet", match: /duet/i, logo: { viewBox: "138 138 1024 1024", parts: DUET_PARTS } },
-  { id: "claude", name: "Claude", match: /claude|anthropic/i, logo: mark(PATHS.claude, "0 0 24 24", "#D97757") },
-  // dots has no mark of its own here yet: it shows OpenAI's.
-  { id: "openai", name: "ChatGPT", match: /openai|chatgpt|codex|^dots\b/i, logo: mark(PATHS.openai, "180 180 356 356") },
-  { id: "antigravity", name: "Antigravity", match: /antigravity|^agy\b/i, logo: { image: ANTIGRAVITY_PNG } },
-  { id: "gemini", name: "Gemini", match: /gemini/i, logo: mark(PATHS.gemini, "0 0 24 24", "#8E75B2") },
-  { id: "cursor", name: "Cursor", match: /cursor/i, logo: mark(PATHS.cursor, "0 0 24 24") },
-  { id: "kimi", name: "Kimi", match: /kimi|moonshot/i, logo: mark(PATHS.kimi, "0 0 24 24") },
-  { id: "zai", name: "Z.ai", match: /z\.ai|zhipu|\bglm\b/i, logo: mark(PATHS.zai, "0 0 24 24") },
-];
+const LOGOS: Record<ProductId, Brand["logo"]> = {
+  "grok-bot": { images: GROK_BOTS },
+  grok: mark(PATHS.grok, "0 0 1024 1024"),
+  "claude-duet": { viewBox: "138 138 1024 1024", parts: DUET_PARTS },
+  claude: mark(PATHS.claude, "0 0 24 24", "#D97757"),
+  openai: mark(PATHS.openai, "180 180 356 356"),
+  antigravity: { image: ANTIGRAVITY_PNG },
+  gemini: mark(PATHS.gemini, "0 0 24 24", "#8E75B2"),
+  cursor: mark(PATHS.cursor, "0 0 24 24"),
+  kimi: mark(PATHS.kimi, "0 0 24 24"),
+  zai: mark(PATHS.zai, "0 0 24 24"),
+};
+
+/** Each product (model/products.ts, which says how clients are matched) with its logo. */
+export const BRANDS: Brand[] = PRODUCTS.map((p) => ({ ...p, logo: LOGOS[p.id] }));
 
 export function brandFor(clientName: string | null | undefined): Brand | null {
   if (!clientName) return null;

@@ -5,6 +5,8 @@ import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
+import { activeConflict } from "./connect.tsx";
+import { productName } from "../model/products.ts";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
 import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
@@ -276,6 +278,11 @@ function Sandbox({ sid }: { sid: string }) {
                 >
                   <AgentIcon clientName={g.client_name} clientIcon={g.client_icon} seed={g.id} motion={motion} />
                 </button>
+                {activeConflict(g) && (
+                  <button type="button" className="mark-alert" onClick={() => nav("agents")} title={`${productName(activeConflict(g)!.client_name)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.`} aria-label={`Another agent is using ${names.get(g.id)}'s URL`}>
+                    !
+                  </button>
+                )}
                 {g.pin && (
                   <span className="pin-dot">
                     <button

@@ -7,6 +7,14 @@ import { parseParams, parseTarget, type FocusPayload, type FocusParams, type Foc
 import { FIGURE_KEYS, figureSpec, type Scope } from "../model/figures.ts";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 
+/** Who else used a grant's URL, and when it last did. */
+export interface ClientConflict {
+  client_name: string;
+  client_version: string | null;
+  user_agent: string;
+  at: string;
+}
+
 export interface Grant {
   id: string;
   secret: string;
@@ -18,6 +26,8 @@ export interface Grant {
   client_title?: string | null;
   agent_name?: string | null;
   owner_name?: string | null;
+  /** A second product that used this grant's URL (TIN-358): the URL stays with the first. */
+  conflict?: ClientConflict | null;
   /** null: every region. */
   regions: Region[] | null;
   created_at: string;

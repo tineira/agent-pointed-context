@@ -14,6 +14,7 @@ export interface GrantState {
   client_title: string | null;
   agent_name: string | null;
   owner_name: string | null;
+  conflict: { client_name: string; client_version: string | null; user_agent: string; at: string } | null;
   regions: Region[] | null;
   created_at: string;
   last_active_at: string | null;
@@ -51,6 +52,7 @@ export function createApi(sid: string) {
     unpin: (grantId: string) => post("/unpin", { grant_id: grantId }),
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
+    resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
