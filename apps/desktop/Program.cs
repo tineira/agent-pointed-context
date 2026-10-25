@@ -20,7 +20,8 @@ public sealed class App : Application
     public override void Initialize()
     {
         Styles.Add(new FluentTheme());
-        RequestedThemeVariant = ThemeVariant.Default;
+        // Its colors are drawn for a light page; a dark Windows would otherwise give grey text on dark cards.
+        RequestedThemeVariant = ThemeVariant.Light;
     }
 
     public override void OnFrameworkInitializationCompleted()

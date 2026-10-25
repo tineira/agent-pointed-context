@@ -205,6 +205,8 @@ public sealed class MainWindow : Window
         }
         var customersCard = Card("Customers", $"Active in {month}, most seats first. Each row is pointable.", rows);
 
+        // The month picker outlives each drawing: take it off the last one before placing it again.
+        (months.Parent as Panel)?.Children.Remove(months);
         var left = new StackPanel { Spacing = 16, Children = { new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { new TextBlock { Text = "Month", VerticalAlignment = VerticalAlignment.Center, Foreground = Muted }, months } }, bridgeCard, activeCard } };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("5*,4*") };
         grid.Children.Add(left);
