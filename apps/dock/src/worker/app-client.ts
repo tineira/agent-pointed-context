@@ -20,7 +20,14 @@ export interface AppTool {
 
 const PROTOCOL = "2025-06-18";
 
-export class AppCallError extends Error {}
+export class AppCallError extends Error {
+  /** The app's HTTP status, when it answered with an error. */
+  readonly status: number | undefined;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 async function rpc(mcpUrl: string, method: string, params: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
   const response = await fetch(mcpUrl, {
@@ -29,7 +36,7 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok) throw new AppCallError(`${method}: HTTP ${response.status}`);
+  if (!response.ok) throw new AppCallError(`${method}: HTTP ${response.status}`, response.status);
   const type = response.headers.get("content-type") ?? "";
   type Reply = { result?: unknown; error?: { message?: string } } | null;
   let message: Reply = null;

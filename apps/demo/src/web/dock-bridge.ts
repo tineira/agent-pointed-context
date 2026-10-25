@@ -49,9 +49,9 @@ export function useDockBridge(enabled: boolean, agents: DockAgent[] | null): voi
 }
 
 /**
- * Open the dock as a small window of its own, or bring it back if it is open: the dock with its hub
- * (TIN-382) from Pulse's v2 deploy, the bridge dock (TIN-370) from apc.tineira.com with ?apc=v2.
+ * Open the bridge dock (TIN-370) as a small window of its own, or bring it back if it is open: from
+ * apc.tineira.com with ?apc=v2. Pulse's v2 deploy has no Dock button: the person comes from the dock (TIN-402).
  */
-export function openDock(hub: boolean): void {
-  window.open(`${DOCK_ORIGIN}${hub ? "/" : "/bridge"}`, "apc-dock", `popup,width=${hub ? 360 : 320},height=600`);
+export function openDock(): void {
+  window.open(`${DOCK_ORIGIN}/bridge`, "apc-dock", "popup,width=320,height=600");
 }

@@ -10,6 +10,7 @@ import { activeConflict } from "./connect.tsx";
 import { openDock, useDockBridge } from "./dock-bridge.ts";
 import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
+import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
 import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
@@ -381,12 +382,13 @@ function Sandbox({ sid }: { sid: string }) {
             })}
             </div>
           )}
-          {v2 && (
+          {/* The v1 dock prototype (TIN-370). On the v2 deploy the person comes from the dock (TIN-402). */}
+          {v2 && !hubMode && (
             <button
               type="button"
-              onClick={() => openDock(hubMode)}
+              onClick={() => openDock()}
               className="cursor-pointer rounded-md border border-line px-2.5 py-1 text-sm text-muted hover:text-foreground"
-              title={hubMode ? "APC v2: open your agent dock, and drag an agent from it onto Pulse" : "APC v2: open a dock window with your agents, and drag them back onto Pulse from there"}
+              title="APC v2: open a dock window with your agents, and drag them back onto Pulse from there"
             >
               Dock
             </button>
@@ -403,7 +405,7 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "overview" && <Overview sid={sid} state={state} data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}
         {route.screen === "customers" && <Customers sid={sid} state={state} data={data} filters={filters} onFilters={(f) => navigate(route, f)} onOpen={(id) => navigate({ screen: "customer", id }, filters)} />}
         {route.screen === "customer" && <CustomerDetail sid={sid} state={state} data={data} id={route.id} onBack={() => navigate({ screen: "customers" }, filters)} />}
-        {route.screen === "howto" && <HowTo api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
+        {route.screen === "howto" && (hubMode ? <DockHowTo state={state} /> : <HowTo api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />)}
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
       <Tour api={api} state={state} names={names} screen={route.screen} onOverview={() => navigate({ screen: "overview" }, filters)} onChanged={() => void refresh()} />
