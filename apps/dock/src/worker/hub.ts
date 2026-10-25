@@ -14,7 +14,7 @@ import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NO
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
-import { callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
+import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
 import { appAllowed, appIdFor, combineAttendance, detachKeys, focusLabel, HIDDEN_TOOLS, hubFocus, type AppRef, type HubFocus } from "./logic.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -336,7 +336,7 @@ export class Hub extends DurableObject<Env> {
       const tools = (await listAppTools(p.mcp_url)).filter((t) => !HIDDEN_TOOLS.has(t.name));
       this.sql.exec("update pairings set tools = ?, error = null where id = ?", JSON.stringify(tools), p.id);
     } catch (error) {
-      this.sql.exec("update pairings set error = ? where id = ?", String(error).slice(0, 200), p.id);
+      this.failed(p, error);
     }
     this.broadcast();
   }
@@ -413,6 +413,14 @@ export class Hub extends DurableObject<Env> {
   }
 
   private failed(p: Pairing, error: unknown): void {
+    // 404 on the grant's own MCP URL: the app took the access back (the person removed the agent
+    // there, TIN-402, or its data expired). The pairing goes; a new drop there pairs again.
+    if (error instanceof AppCallError && error.status === 404) {
+      this.sql.exec("delete from pairings where id = ?", p.id);
+      this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+      this.broadcast();
+      return;
+    }
     this.sql.exec("update pairings set error = ? where id = ?", String(error).slice(0, 200), p.id);
   }
 

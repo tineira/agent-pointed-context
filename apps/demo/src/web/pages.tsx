@@ -7,6 +7,7 @@ import { AgentIcon } from "./agent-icon.tsx";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
+import { DockAgents, DockHint } from "./dock-only.tsx";
 import { customerFocus, figureFocus } from "./focus.ts";
 
 export interface Filters {
@@ -55,7 +56,7 @@ export function Overview(props: { sid: string; state: SandboxState; data: Datase
   const { data, filters } = props;
   return (
     <>
-      <ConnectPanel sid={props.sid} state={props.state} />
+      {props.state.v2 ? <DockHint state={props.state} /> : <ConnectPanel sid={props.sid} state={props.state} />}
       <FilterBar filters={filters} onChange={props.onFilters} />
       <section className="card" {...figureFocus("active_customers", { month: filters.month, plan: filters.plan, region: filters.region }, "series")}>
         <h2>Active customers per month</h2>
@@ -82,7 +83,7 @@ export function Customers(props: { sid: string; state: SandboxState; data: Datas
   }, [data, filters]);
   return (
     <>
-      <ConnectPanel sid={props.sid} state={props.state} />
+      {props.state.v2 ? <DockHint state={props.state} /> : <ConnectPanel sid={props.sid} state={props.state} />}
       <FilterBar filters={filters} onChange={props.onFilters} />
       <section className="card">
         <h2>
@@ -128,7 +129,7 @@ export function CustomerDetail(props: { sid: string; state: SandboxState; data: 
   const max = Math.max(1, ...activity.map((a) => a.seats));
   return (
     <>
-      <ConnectPanel sid={props.sid} state={props.state} />
+      {props.state.v2 ? <DockHint state={props.state} /> : <ConnectPanel sid={props.sid} state={props.state} />}
       <section className="card" {...customerFocus(customer.id)}>
         <button className="link" onClick={props.onBack}>
           ← Customers
@@ -275,6 +276,9 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
   const names = displayNames(state.grants);
   return (
     <>
+      {state.v2 ? (
+        <DockAgents api={api} state={state} onChanged={props.onChanged} />
+      ) : (
       <section className="card">
         <h2>Your agents</h2>
         <p>
@@ -303,6 +307,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
         <AddAgentButtons api={api} state={state} onChanged={props.onChanged} />
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>
       </section>
+      )}
       <section className="card">
         <h2>What your agents did</h2>
         <p className="hint">From this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>

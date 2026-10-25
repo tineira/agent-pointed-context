@@ -243,7 +243,8 @@ export class Sandbox extends DurableObject<Env> {
     this.setMeta("created_at", new Date().toISOString());
     this.setMeta("share_view", "1");
     this.setMeta("show_activity", "1");
-    this.sql.exec("insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, null, ?)", `g_${randomHex(4)}`, randomHex(16), "Your agent", new Date().toISOString());
+    // On Pulse's v2 deploy agents come only from a dock (TIN-402): no agent of its own to connect.
+    if (this.env.APC_V2 !== "1") this.sql.exec("insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, null, ?)", `g_${randomHex(4)}`, randomHex(16), "Your agent", new Date().toISOString());
     await this.touch();
     return { owner };
   }
@@ -281,6 +282,8 @@ export class Sandbox extends DurableObject<Env> {
       tour: this.tour(),
       // APC v2 (TIN-382): on Pulse's v2 deploy, which dock agents are which grants.
       v2: this.env.APC_V2 === "1",
+      // The docks Pulse pairs with, by host, for the page to name (TIN-402).
+      hubs: this.env.APC_V2 === "1" ? (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean).map((h) => new URL(h).host) : [],
       hub_links: this.sql.exec<{ hub: string; agent: string; grant_id: string }>("select hub, agent, grant_id from hub_links").toArray(),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
     };
@@ -374,6 +377,8 @@ export class Sandbox extends DurableObject<Env> {
       this.broadcast({ type: "grants" });
       return { ok: true };
     }
+    // A new URL is a direct agent, and on Pulse's v2 deploy agents come only from a dock (TIN-402).
+    if (this.env.APC_V2 === "1") return { ok: false };
     this.sql.exec("update grants set conflict = null where id = ?", grantId);
     const fresh = await this.addAgentGrant();
     this.log("conflict_split", grantId, { client_name: g.conflict.client_name, new_grant: fresh.id });
@@ -461,12 +466,22 @@ export class Sandbox extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** A dock's grant goes with its pins and its link: given back by the hub, or no longer paired there. */
-  private async dropHubGrant(grantId: string): Promise<void> {
+  /**
+   * The person takes a dock agent's access away from Pulse's side (TIN-402, v2 deploy only). Its MCP
+   * URL then answers 404, and the dock forgets the pairing at its next call; a new drop asks again.
+   */
+  async removeDockGrant(grantId: string): Promise<{ ok: boolean }> {
+    if (this.env.APC_V2 !== "1" || !this.grants().some((g) => g.id === grantId)) return { ok: false };
+    await this.dropHubGrant(grantId, "owner_removed");
+    return { ok: true };
+  }
+
+  /** A dock's grant goes with its pins and its link: given back by the hub, no longer paired there, or removed by the person. */
+  private async dropHubGrant(grantId: string, event = "hub_revoked"): Promise<void> {
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("delete from hub_links where grant_id = ?", grantId);
     this.sql.exec("delete from grants where id = ?", grantId);
-    this.log("hub_revoked", grantId, {});
+    this.log(event, grantId, {});
     this.broadcast({ type: "grants" });
   }
 

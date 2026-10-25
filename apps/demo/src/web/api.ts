@@ -32,6 +32,8 @@ export interface SandboxState {
   /** Pulse's APC v2 deploy (TIN-382), and which dock agents are which grants. */
   v2?: boolean;
   hub_links?: Array<{ hub: string; agent: string; grant_id: string }>;
+  /** On Pulse's v2 deploy, the docks it pairs with, by host (TIN-402). */
+  hubs?: string[];
   expires_at: string;
 }
 
@@ -59,6 +61,7 @@ export function createApi(sid: string) {
     unpin: (grantId: string) => post("/unpin", { grant_id: grantId }),
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
+    removeAgent: (grantId: string) => post<{ ok: boolean }>(`/grants/${grantId}/remove`, {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
     hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget }) => post<{ ok: boolean; error?: string; grant_id?: string; status?: string }>("/hub/pair", body),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
