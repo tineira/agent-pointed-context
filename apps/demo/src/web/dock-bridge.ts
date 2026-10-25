@@ -7,6 +7,8 @@
 import { useEffect, useRef } from "react";
 import { dockOriginAllowed, type DockAgent, type DockMessage } from "./dock-protocol.ts";
 
+/** Signals, the second APC v2 app (TIN-384), opened from Pulse's v2 deploy with the sandbox's seed. */
+export const SIGNALS_ORIGIN = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "http://localhost:5201" : "https://signals.v2.apc.tineira.com";
 export const DOCK_ORIGIN = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "http://localhost:5200" : "https://v2.apc.tineira.com";
 
 /**

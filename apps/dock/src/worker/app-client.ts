@@ -15,6 +15,7 @@ export interface AppTool {
   title?: string;
   description?: string;
   inputSchema?: unknown;
+  annotations?: unknown;
 }
 
 const PROTOCOL = "2025-06-18";

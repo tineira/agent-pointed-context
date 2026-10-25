@@ -15,7 +15,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
   // The apps a hub may pair with (comma-separated origins); under vite dev, localhost too.
-  "vars": { "APP_ORIGINS": "https://pulse.v2.apc.tineira.com" },
+  "vars": { "APP_ORIGINS": "https://pulse.v2.apc.tineira.com,https://signals.v2.apc.tineira.com" },
   "routes": [{ "pattern": "v2.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
   "observability": { "enabled": true }
