@@ -158,18 +158,31 @@ public sealed class MainWindow : Window
         if (data is null || state is null || month == "") return;
         targets.Clear();
         var bridge = Figures.Bridge(data, month);
-        var max = Math.Max(1, bridge.Values.Max());
+        // A waterfall, as on the page (charts.tsx): New and Reactivated rise from where Start ends, Churned
+        // falls from there, Start and End stand on the floor.
+        const double plot = 150;
+        var max = Math.Max(1, Math.Max(bridge["start"] + bridge["new"] + bridge["reactivated"], bridge["end"]));
+        var level = 0;
         var steps = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*,*,*"), Height = 200, Margin = new Thickness(0, 8, 0, 0) };
         for (var i = 0; i < Figures.BridgeSteps.Length; i++)
         {
             var step = Figures.BridgeSteps[i];
             var n = bridge[step];
+            var (from, to) = step switch { "new" or "reactivated" => (level, level + n), "churned" => (level - n, level), _ => (0, n) };
+            level = step switch { "start" or "end" => n, "churned" => level - n, _ => level + n };
             var color = step switch { "new" or "reactivated" => Ok, "churned" => new SolidColorBrush(Color.Parse("#c0392b")), _ => Accent };
             var column = new DockPanel { Margin = new Thickness(6, 0) };
             var label = new TextBlock { Text = $"{Capital(step)}\n{(step is "churned" ? "−" : step is "new" or "reactivated" ? "+" : "")}{n}", TextAlignment = TextAlignment.Center, FontWeight = FontWeight.SemiBold };
             DockPanel.SetDock(label, Dock.Bottom);
             column.Children.Add(label);
-            column.Children.Add(new Border { Background = color, CornerRadius = new CornerRadius(4), Height = 8 + 140.0 * n / max, VerticalAlignment = VerticalAlignment.Bottom });
+            column.Children.Add(new Border
+            {
+                Background = color,
+                CornerRadius = new CornerRadius(3),
+                Height = Math.Max(2, plot * (to - from) / max),
+                Margin = new Thickness(0, 0, 0, plot * from / max),
+                VerticalAlignment = VerticalAlignment.Bottom,
+            });
             var t = Target.Figure("customer_bridge", month, $"step:{step}");
             steps.Children.Add(Pointable(column, t, padding: 2).Also(c => Grid.SetColumn(c, i)));
         }
