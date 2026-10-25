@@ -3,7 +3,7 @@
   "short_name": "Agent dock",
   "description": "Your agents, ready to drag onto any app that speaks Agent Pointed Context.",
   "id": "/",
-  "start_url": "/",
+  "start_url": "/dock",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f3f5f8",

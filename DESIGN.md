@@ -278,7 +278,7 @@ What it cannot do: get the hub's URL or any grant, see another app's view or foc
 
 ### 12.6 Where the dock lives
 
-- **Web window** (or PWA) at v2.apc.tineira.com, hub in a Durable Object per dock. No install; needs apps that accept native drops (TIN-369); cannot float on top (Document Picture-in-Picture might; dragging out of it must be verified).
+- **Web window** (or PWA) at v2.apc.tineira.com/dock (since TIN-420; / is the APC v2 landing, and the Worker sends a visitor whose cookie holds a dock on to /dock with the query kept), hub in a Durable Object per dock. No install; needs apps that accept native drops (TIN-369); cannot float on top (Document Picture-in-Picture might; dragging out of it must be verified).
 - **Browser extension** (side panel). A content script can add drop handling to any page; native messaging reaches a local hub. Whether a drag can start in the side panel and land in a tab must be verified. Costs an install, store review, one build per browser.
 - **Desktop app** (Tauri or Electron). A natural home for a local hub, the heaviest to build. OS drags into browsers may keep only `text/plain` and `text/uri-list` (to verify).
 
