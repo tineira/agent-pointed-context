@@ -113,3 +113,7 @@ button, select { font: inherit; color: inherit; }
   .mobile-actions button { font-weight: 700; background: var(--fg); color: var(--bg); border-color: var(--fg); }
   .creative-headline { font-size: 22px; }
 }
+
+/* The standard agent bar (TIN-394), themed by Signals' tokens. */
+apc-agents.agent-bar { --apc-chip: var(--panel); --apc-line: var(--line); --apc-ink: var(--fg); --apc-accent: var(--accent); --apc-ok: var(--ok); }
+.bar-row { display: flex; justify-content: flex-end; min-height: 36px; }

@@ -54,6 +54,8 @@ interface Grant {
 export class Feed extends DurableObject<Env> {
   private sql: SqlStorage;
   private cached: { seed: number; posts: Post[] } | null = null;
+  /** Grants with a wait_for_focus in flight, for the agent bar's floating mark (memory only). */
+  private waiting = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -167,7 +169,7 @@ export class Feed extends DurableObject<Env> {
   async state() {
     return {
       seed: Number(this.meta("seed")),
-      grants: this.grants().map((g) => ({ id: g.id, hub: g.hub, agent: g.agent, name: g.client_title ?? "Agent via dock", icon: g.client_icon, connected: !!g.client_title, pin: this.focusRow(g.id) })),
+      grants: this.grants().map((g) => ({ id: g.id, hub: g.hub, agent: g.agent, name: g.client_title ?? "Agent via dock", icon: g.client_icon, connected: !!g.client_title, waiting: this.waiting.has(g.id), pin: this.focusRow(g.id) })),
     };
   }
 
@@ -346,7 +348,20 @@ export class Feed extends DurableObject<Env> {
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>
       register(name, config, async (args: Record<string, unknown>, extra: unknown) => {
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grantId);
-        let result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
+        const waits = name === "wait_for_focus";
+        if (waits) {
+          this.waiting.add(grantId);
+          this.broadcast();
+        }
+        let result: ToolResult;
+        try {
+          result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
+        } finally {
+          if (waits) {
+            this.waiting.delete(grantId);
+            this.broadcast();
+          }
+        }
         const row = this.focusRow(grantId);
         const focus = focusPayload(row, posts, origin);
         if (isUnread(row) && focus) result = attachAttention(result, attentionFor(focus));
