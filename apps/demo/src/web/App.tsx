@@ -7,7 +7,7 @@ import { AgentIcon } from "./agent-icon.tsx";
 import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
-import { openDock, SIGNALS_ORIGIN, useDockBridge } from "./dock-bridge.ts";
+import { openDock, useDockBridge } from "./dock-bridge.ts";
 import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { HowTo } from "./howto.tsx";
@@ -380,17 +380,6 @@ function Sandbox({ sid }: { sid: string }) {
               );
             })}
             </div>
-          )}
-          {hubMode && (
-            <a
-              href={`${SIGNALS_ORIGIN}/?seed=${state.seed}`}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-md border border-line px-2.5 py-1 text-sm text-muted hover:text-foreground"
-              title="APC v2: Signals, the market around this sandbox (competitor offers and our ads), built from the same seed"
-            >
-              Signals
-            </a>
           )}
           {v2 && (
             <button

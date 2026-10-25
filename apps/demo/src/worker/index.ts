@@ -57,12 +57,18 @@ const tooMany = (c: { json: (body: unknown, status: 429, headers: Record<string,
 
 /** Resume the visitor's sandbox, or open a new one. */
 app.post("/api/session", async (c) => {
+  // On Pulse's v2 deploy, the world a dock opened it on (TIN-393). Ignored on apc.tineira.com.
+  const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
+  const seed = c.env.APC_V2 === "1" && typeof body.seed === "number" && Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 32 ? body.seed : undefined;
   const current = session(getCookie(c, COOKIE));
-  if (current && (await rpc(c.env, current.sid, (s) => s.isOwner(current.owner)))) return c.json({ sid: current.sid, created: false });
+  if (current && (await rpc(c.env, current.sid, (s) => s.isOwner(current.owner)))) {
+    if (seed !== undefined) await rpc(c.env, current.sid, (s) => s.useSeed(seed));
+    return c.json({ sid: current.sid, created: false });
+  }
   const loadTest = !!c.env.LOADTEST_KEY && c.req.header("x-apc-loadtest") === c.env.LOADTEST_KEY;
   if (!loadTest && !(await allowed(c.env.NEW_SANDBOX, `ip:${c.req.header("cf-connecting-ip") ?? "unknown"}`))) return tooMany(c);
   const sid = randomHex(16);
-  const { owner } = await rpc(c.env, sid, (s) => s.init());
+  const { owner } = await rpc(c.env, sid, (s) => s.init(seed));
   setCookie(c, COOKIE, `${sid}.${owner}`, {
     path: "/",
     httpOnly: true,

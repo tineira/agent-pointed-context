@@ -233,18 +233,33 @@ export class Sandbox extends DurableObject<Env> {
 
   // ---- owner RPC (the worker checked the owner secret first) ----
 
-  async init(): Promise<{ owner: string }> {
+  /** seed: on Pulse's v2 deploy, the world a dock opened it on (TIN-393); otherwise a new one. */
+  async init(seed?: number): Promise<{ owner: string }> {
     const existing = this.meta("owner");
     if (existing) return { owner: existing };
     const owner = randomHex(16);
     this.setMeta("owner", owner);
-    this.setMeta("seed", String(crypto.getRandomValues(new Uint32Array(1))[0]));
+    this.setMeta("seed", String(seed ?? crypto.getRandomValues(new Uint32Array(1))[0]));
     this.setMeta("created_at", new Date().toISOString());
     this.setMeta("share_view", "1");
     this.setMeta("show_activity", "1");
     this.sql.exec("insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, null, ?)", `g_${randomHex(4)}`, randomHex(16), "Your agent", new Date().toISOString());
     await this.touch();
     return { owner };
+  }
+
+  /**
+   * Follow the world a dock opened Pulse on (TIN-393, v2 deploy only): a new seed is new data, so the
+   * pins and the stored view go; the agents and their dock pairings stay.
+   */
+  async useSeed(seed: number): Promise<void> {
+    if (this.env.APC_V2 !== "1" || Number(this.meta("seed")) === seed) return;
+    this.setMeta("seed", String(seed));
+    this.cached = null;
+    this.sql.exec("delete from agent_focus");
+    this.sql.exec("delete from view_state");
+    this.log("reseeded", null, {});
+    this.broadcast({ type: "grants" });
   }
 
   async isOwner(secret: string): Promise<boolean> {

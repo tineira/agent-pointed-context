@@ -1,5 +1,5 @@
 /**
- * One visitor's Signals (TIN-384): a Durable Object holding the seed of their Pulse sandbox (the
+ * One visitor's Signals (TIN-384): a Durable Object holding the seed of their demo world, from the dock (the
  * posts are rebuilt from it), the grants it gave agent docks, the view, the pins and the page's
  * WebSocket. Agents never connect directly: a dock's hub pairs, after the person says yes here and
  * in the dock, and reads with the grant Signals made for it.
@@ -157,7 +157,7 @@ export class Feed extends DurableObject<Env> {
     return true;
   }
 
-  /** Follow the Pulse sandbox the person came from: a new seed is a new market, so the pins go. */
+  /** Follow the world the dock opened Signals on: a new seed is a new market, so the pins go. */
   async useSeed(seed: number): Promise<void> {
     if (Number(this.meta("seed")) === seed) return;
     this.setMeta("seed", String(seed));

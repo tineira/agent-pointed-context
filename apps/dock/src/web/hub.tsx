@@ -32,6 +32,7 @@ interface DockAgent {
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 interface DockState {
+  seed: number;
   expires_at: string;
   agents: DockAgent[];
 }
@@ -278,7 +279,7 @@ export function HubDock() {
       </ul>
       <nav className="launch" aria-label="Apps">
         {APPS.map((app) => (
-          <a key={app.name} className="launch-app" href={app.url} target="_blank" rel="noreferrer">
+          <a key={app.name} className="launch-app" href={`${app.url}?seed=${state.seed}`} target="_blank" rel="noreferrer" title={`Open ${app.name} on this dock's world`}>
             <span className="launch-icon" aria-hidden="true">
               {app.glyph}
             </span>
@@ -297,7 +298,10 @@ export function HubDock() {
   );
 }
 
-/** The apps the dock opens, each as its own page: the dock is the launcher, the apps know nothing of each other. */
+/**
+ * The apps the dock opens, each as its own page, all on the dock's seed (TIN-393): the same world in
+ * every app, while the apps know nothing of each other. The agent does the joining.
+ */
 const APPS = [
   {
     name: "Pulse",
