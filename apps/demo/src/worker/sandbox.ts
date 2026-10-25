@@ -230,6 +230,13 @@ export class Sandbox extends DurableObject<Env> {
     }
   }
 
+  /** Start over (TIN-411, v2 deploy only): delete everything, as when the sandbox expires. */
+  async reset(): Promise<boolean> {
+    if (this.env.APC_V2 !== "1") return false;
+    await this.alarm();
+    return true;
+  }
+
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "sandbox expired");
     await this.ctx.storage.deleteAll();

@@ -8,6 +8,7 @@ import type { Api, CompatRow, SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { DockHint } from "./dock-only.tsx";
+import { StartOver } from "./start-over.tsx";
 import { customerFocus, figureFocus } from "./focus.ts";
 
 export interface Filters {
@@ -342,6 +343,15 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           Every tool call, pin and envelope is logged in this sandbox: <a href={api.eventsUrl}>events.jsonl</a>. The sandbox and its log are deleted {new Date(state.expires_at).toLocaleString()} unless you keep using it.
         </p>
       </section>
+      {state.v2 && (
+        <section className="card">
+          <h2>Start over</h2>
+          <p className="hint">Delete this Pulse's demo data and start from zero (TIN-411). Your dock and Signals keep theirs until you start over there too.</p>
+          <div>
+            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents your dock paired here, and their pins", "your view and these settings", "this sandbox's event log"]} reset={() => api.reset()} />
+          </div>
+        </section>
+      )}
     </>
   );
 }

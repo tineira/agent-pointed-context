@@ -34,3 +34,8 @@ export const SCAN_HINT = "Scan with a phone, then paste the URL into the agent. 
 export function askYourAgentPrompt(url: string, name = "Pulse"): string {
   return `Please connect this remote MCP server, named "${name}". URL: ${url}. It uses Streamable HTTP and needs no OAuth or API key: the access is in the URL. If you can add it yourself, do it now and tell me when it's connected. If you can't, tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
 }
+
+/** The other way round (TIN-411): what a person pastes to their agent to drop the server again. */
+export function askToDisconnectPrompt(name: string, host: string): string {
+  return `Please remove the remote MCP server named "${name}" (its URL starts with https://${host}/mcp/) from your connectors. If you can remove it yourself, do it now and tell me when it's gone. If you can't, tell me the exact steps to remove it in the app I'm using you in right now.`;
+}

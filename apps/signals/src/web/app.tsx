@@ -10,6 +10,7 @@ import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
+import { StartOver } from "../../../demo/src/web/start-over.tsx";
 
 interface GrantState {
   id: string;
@@ -257,6 +258,9 @@ function Feed({ sid }: { sid: string }) {
             </ul>
           </section>
           <section className="panel muted small">Drag an agent from the dock onto a post, or onto its offer, targeting, code or text. Your agent reads it with this feed's own tools.</section>
+          <section className="panel muted small">
+            <StartOver site="Signals" wipes={["the agents your dock paired here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
+          </section>
         </>
       }
     >

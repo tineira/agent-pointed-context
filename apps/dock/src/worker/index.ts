@@ -4,7 +4,7 @@
  * The page is static assets: the hub dock at /, the TIN-370 bridge dock at /bridge.
  */
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { DOCK_TTL_MS, type Env, type Hub } from "./hub.ts";
 
 export { Hub } from "./hub.ts";
@@ -45,6 +45,12 @@ app.use("/api/d/:did/*", async (c, next) => {
 const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.did);
 app.get("/api/d/:did/state", async (c) => c.json(await stub(c).state(new URL(c.req.url).origin)));
 app.post("/api/d/:did/agents", async (c) => c.json(await stub(c).addAgent()));
+/** Start over (TIN-411): the dock gives its grants back and forgets everything, and its cookie goes. */
+app.post("/api/d/:did/reset", async (c) => {
+  await stub(c).reset();
+  deleteCookie(c, COOKIE, { path: "/" });
+  return c.json({ ok: true });
+});
 app.post("/api/d/:did/world", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
   const result = await stub(c).setWorld(body.seed);
