@@ -52,9 +52,31 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
   return message.result;
 }
 
-/** Introduce the hub to the app: the app shows the agent as "<name> via dock". */
-export async function initializeApp(mcpUrl: string, title: string): Promise<void> {
-  await rpc(mcpUrl, "initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "apc-hub", title, version: "0.1.0" } }, 10_000);
+/**
+ * Introduce the hub to the app with the agent's mark (TIN-388): the app shows the agent as
+ * "<name> via dock" with its icon, a small PNG, in clientInfo.icons as MCP defines it.
+ */
+export async function initializeApp(mcpUrl: string, title: string, icon: string | null): Promise<void> {
+  const icons = icon ? [{ src: icon, mimeType: "image/png", sizes: ["64x64"] }] : undefined;
+  await rpc(mcpUrl, "initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "apc-hub", title, version: "0.1.0", ...(icons ? { icons } : {}) } }, 10_000);
+}
+
+/**
+ * Give a grant back (TIN-388): whoever holds a grant may return it, and the app deletes it, its pins
+ * and its dock link. The MCP URL is the proof. An app that does not know the endpoint answers 404.
+ */
+export async function revokeGrant(mcpUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${new URL(mcpUrl).origin}/apc/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mcp_url: mcpUrl }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function listAppTools(mcpUrl: string): Promise<AppTool[]> {

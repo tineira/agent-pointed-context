@@ -49,6 +49,11 @@ app.post("/api/d/:did/agents/:aid/ticket", async (c) => {
   const t = await stub(c).ticket(c.req.param("aid"));
   return t ? c.json(t) : c.json({ error: "unknown_agent" }, 404);
 });
+app.post("/api/d/:did/agents/:aid/badge", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { badge?: unknown };
+  const result = await stub(c).setBadge(c.req.param("aid"), body.badge);
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/d/:did/agents/:aid/clear", async (c) => {
   await stub(c).clearFocus(c.req.param("aid"));
   return c.json({ ok: true });

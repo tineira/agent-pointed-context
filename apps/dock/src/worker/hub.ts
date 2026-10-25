@@ -14,7 +14,7 @@ import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NO
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
-import { callAppTool, initializeApp, listAppTools, structured, type AppTool, type AppToolResult } from "./app-client.ts";
+import { callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
 import { appAllowed, appIdFor, combineAttendance, detachKeys, focusLabel, HIDDEN_TOOLS, hubFocus, type AppRef, type HubFocus } from "./logic.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -50,6 +50,8 @@ interface Agent {
   prefixed_calls: number | null;
   relay_calls: number | null;
   waits: number | null;
+  /** The agent's mark for the apps: a 64 px PNG the dock page drew from its logo (TIN-388). */
+  badge: string | null;
 }
 
 interface Pairing {
@@ -110,7 +112,7 @@ export class Hub extends DurableObject<Env> {
         pairing_id text not null, app text not null, focus text not null, seen_at text);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["pairings", "approved_at text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["pairings", "approved_at text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -252,6 +254,7 @@ export class Hub extends DurableObject<Env> {
           client_name: a.client_name,
           client_ua: a.client_ua,
           client_icon: a.client_icon,
+          badge: a.badge,
           mcp_url: `${origin}/mcp/${did}/${a.secret}`,
           last_active_at: a.last_active_at,
           waiting: this.waiting.has(a.id),
@@ -295,9 +298,25 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from pairings where id = ?", p.id);
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);
       this.broadcast();
+      // And the app gets its grant back, so a later drop there asks the person again (TIN-388).
+      await revokeGrant(p.mcp_url);
       return { ok: true };
     }
     return { ok: false, error: "invalid_action" };
+  }
+
+  /**
+   * The agent's mark (TIN-388): the dock page draws the agent's logo as a small PNG; the hub keeps
+   * it and introduces itself again to every paired app, so their pins show it.
+   */
+  async setBadge(agentId: string, badge: unknown): Promise<{ ok: boolean }> {
+    const a = this.agent(agentId);
+    if (!a || !isBadge(badge)) return { ok: false };
+    if (a.badge === badge) return { ok: true };
+    this.sql.exec("update agents set badge = ? where id = ?", badge, agentId);
+    await Promise.all(this.pairings(agentId, "paired").map((p) => this.introduce(p)));
+    this.broadcast();
+    return { ok: true };
   }
 
   async clearFocus(agentId: string): Promise<void> {
@@ -309,7 +328,7 @@ export class Hub extends DurableObject<Env> {
   private async introduce(p: Pairing): Promise<void> {
     const agent = this.agent(p.agent_id);
     try {
-      await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`);
+      await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null);
       const tools = (await listAppTools(p.mcp_url)).filter((t) => !HIDDEN_TOOLS.has(t.name));
       this.sql.exec("update pairings set tools = ?, error = null where id = ?", JSON.stringify(tools), p.id);
     } catch (error) {
@@ -325,7 +344,7 @@ export class Hub extends DurableObject<Env> {
    * on its page, and it sends the grant it made (its MCP URL). The pairing waits for the person's
    * yes in the dock.
    */
-  async pair(body: unknown): Promise<{ ok: boolean; error?: string; pairing_id?: string; status?: string }> {
+  async pair(body: unknown): Promise<{ ok: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name: string; icon: string | null } }> {
     if (!(await this.alive())) return { ok: false, error: "dock_expired" };
     const b = body as { ticket?: unknown; agent?: unknown; app?: { name?: unknown; origin?: unknown }; mcp_url?: unknown } | null;
     if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
@@ -343,7 +362,9 @@ export class Hub extends DurableObject<Env> {
       id, t.agent_id, appIdFor(name, taken), name, origin, b.mcp_url, new Date().toISOString(),
     );
     this.broadcast();
-    return { ok: true, pairing_id: id, status: "pending" };
+    // The agent's mark, so the app's first pin already shows who it is.
+    const agent = this.agent(t.agent_id)!;
+    return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
   }
 
   // ---- watching the apps ----
@@ -608,6 +629,8 @@ export class Hub extends DurableObject<Env> {
 }
 
 const prefixed = (app: string, tool: string) => `${app}__${tool}`;
+/** A badge is a PNG data URI of at most 16 KB, as an app keeps from clientInfo.icons. */
+const isBadge = (v: unknown): v is string => typeof v === "string" && v.length <= 16_384 && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(v);
 const host = (origin: string) => {
   try {
     return new URL(origin).host;

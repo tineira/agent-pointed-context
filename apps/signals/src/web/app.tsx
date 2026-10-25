@@ -15,6 +15,7 @@ interface GrantState {
   hub: string;
   agent: string;
   name: string;
+  icon: string | null;
   connected: boolean;
   pin: FocusRow | null;
 }
@@ -320,6 +321,10 @@ function Feed({ sid }: { sid: string }) {
   );
 }
 
+/**
+ * Agents pinned here, drawn by their mark (TIN-388): the agent's icon, a dashed ring until it reads
+ * the pin and a check once it has, as in Pulse. The name is the tooltip, not the label.
+ */
 function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void }) {
   if (!props.grants.length) return null;
   return (
@@ -328,8 +333,12 @@ function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void 
         const seen = !!g.pin?.seen_at && g.pin.seen_at >= g.pin.pinned_at;
         return (
           <span key={g.id} className={`pin ${seen ? "seen" : "waiting"}`} title={`${g.name}: ${seen ? "read this pin" : "has not read this pin yet"}`}>
-            {g.name}
-            {seen ? " ✓" : ""}
+            {g.icon ? <img src={g.icon} width={22} height={22} alt={g.name} /> : <span className="pin-fallback" aria-label={g.name}>{g.name.slice(0, 1)}</span>}
+            {seen && (
+              <span className="pin-check" aria-hidden="true">
+                ✓
+              </span>
+            )}
             <button type="button" aria-label={`Remove ${g.name}'s pin`} onClick={() => props.onUnpin(g.id)}>
               ×
             </button>
