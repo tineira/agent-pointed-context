@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
+import { AgentBar } from "./agent-bar.tsx";
 
 interface GrantState {
   id: string;
@@ -17,6 +18,7 @@ interface GrantState {
   name: string;
   icon: string | null;
   connected: boolean;
+  waiting: boolean;
   pin: FocusRow | null;
 }
 interface FeedState {
@@ -161,10 +163,28 @@ function Feed({ sid }: { sid: string }) {
   const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
   const advertisers = [...new Set(posts.map((p) => p.author))].map((a) => ({ author: a, n: posts.filter((p) => p.author === a).length }));
   const unpin = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
+  // The standard agent bar (TIN-394): the agents paired here, their state, and where each points.
+  const onScreen = (postId: string) => shown.some((p) => p.id === postId);
+  const barAgents = state.grants.map((g) => ({
+    id: g.id,
+    name: g.name,
+    icon: g.icon,
+    state: (!g.connected ? "off" : g.waiting ? "waiting" : "idle") as "off" | "waiting" | "idle",
+    pin: g.pin?.id ? { label: `${g.pin.id}${g.pin.part ? ` ${g.pin.part}` : ""}`, seen: !!g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at, here: onScreen(g.pin.id) } : null,
+  }));
+  const openPin = (id: string) => {
+    const postId = state.grants.find((g) => g.id === id)?.pin?.id;
+    if (!postId) return;
+    setKind("");
+    setMonth("");
+    setTimeout(() => document.querySelector(`[data-focus="post:${postId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+  };
+  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpin} />;
   return (
     <Shell
       mobile={
         <div className="mobile-actions">
+          {bar}
           <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
             <option value="">All months</option>
             {MONTHS.map((m) => (
@@ -213,6 +233,7 @@ function Feed({ sid }: { sid: string }) {
       }
       side={
         <>
+          <div className="bar-row">{bar}</div>
           <section className="panel">
             <h2>Filter by month</h2>
             <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">

@@ -183,3 +183,7 @@ table.compat td, table.compat th { font-size: 13px; }
 .tour-arrow marker path { fill: var(--accent); stroke: none; animation: none; }
 @keyframes tour-dash { to { stroke-dashoffset: -26; } }
 @media (prefers-reduced-motion: reduce) { .tour-arrow path { animation: none; } }
+
+/* The standard agent bar (TIN-394), on Pulse's v2 deploy: themed by Pulse's tokens. */
+apc-agents.agent-bar { margin-left: auto; --apc-chip: var(--surface); --apc-line: var(--line); --apc-ink: var(--foreground); --apc-accent: var(--accent); --apc-accent-soft: var(--accent-soft); --apc-ok: var(--up); --apc-warn: var(--warn); }
+html[data-theme="slate"] apc-agents.agent-bar { --apc-chip: #263040; --apc-line: #33404f; }

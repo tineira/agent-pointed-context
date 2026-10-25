@@ -27,3 +27,12 @@ test("a drag from a hub names the hub and a pairing ticket (TIN-382)", () => {
   assert.deepEqual(odd("https://v2.apc.tineira.com", "short"), { v: 1, agent: "ag_1" }, "no usable ticket, no pairing");
   assert.deepEqual(odd("http://localhost:5200"), { v: 1, agent: "ag_1", hub: "http://localhost:5200", ticket: "0123456789abcdef0" });
 });
+
+test("the agent bar's words: the mark, and the pin's dot (TIN-394)", async () => {
+  const { agentLabels } = await import("../src/agents-bar.ts");
+  const a = { id: "g_1", name: "Claude", state: "idle" as const };
+  assert.equal(agentLabels(a).dot, null);
+  assert.match(agentLabels({ ...a, state: "off" }).mark, /not connected yet/);
+  assert.equal(agentLabels({ ...a, pin: { label: "active_customers 2026-03", seen: true, here: true } }).dot, "Pinned to active_customers 2026-03: your agent read it");
+  assert.match(agentLabels({ ...a, pin: { label: "cus_0042", seen: false, here: false } }).dot!, /waiting for your agent's next call\. Click to open it\.$/);
+});

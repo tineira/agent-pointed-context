@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
+import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
 import { openDock, SIGNALS_ORIGIN, useDockBridge } from "./dock-bridge.ts";
@@ -281,6 +282,19 @@ function Sandbox({ sid }: { sid: string }) {
   );
 
   if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  // The standard agent bar's agents (TIN-394), on Pulse's v2 deploy.
+  const barAgents: PulseBarAgent[] = state.grants.map((g) => ({
+    id: g.id,
+    name: names.get(g.id) ?? g.label,
+    client_name: g.client_name,
+    client_ua: g.client_ua,
+    client_icon: g.client_icon,
+    icon: g.client_icon,
+    state: motionOf(g.id),
+    pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin), here: onScreen.has(g.id) } : null,
+    warning: activeConflict(g) ? `${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.` : null,
+    restricted: !!g.regions,
+  }));
   /** The screen that shows a pin: a customer's page, or the overview with the figure's filters. */
   const openPin = (pin: NonNullable<SandboxState["grants"][number]["pin"]>) => {
     if (pin.kind === "customer" && pin.id) return navigate({ screen: "customer", id: pin.id }, filters);
@@ -314,46 +328,59 @@ function Sandbox({ sid }: { sid: string }) {
             {tab("customers", "Customers", route.screen === "customers" || route.screen === "customer")}
             {tab("agents", "Agents", route.screen === "agents")}
           </nav>
-          <div className="marks">
-          {state.grants.map((g) => {
-            const last = Math.max(Date.parse(g.last_active_at ?? "") || 0, pulse[g.id] ?? 0);
-            const status = markState(last ? new Date(last).toISOString() : null);
-            const pulsing = pulse[g.id] && Date.now() - pulse[g.id]! < 1500;
-            const motion = motionOf(g.id);
-            return (
-              <div key={g.id} className="mark-wrap">
-                <button
-                  data-apc-mark
-                  data-grant={g.id}
-                  className={`mark mark-logo mark-${status}${pulsing ? " mark-pulse" : ""}${g.regions ? " mark-restricted" : ""}`}
-                  title={`${names.get(g.id)}${g.client_name ? "" : " (not connected yet)"}. Drag onto anything to point this agent.`}
-                  aria-label={names.get(g.id)}
-                >
-                  <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} motion={motion} />
-                </button>
-                {activeConflict(g) && (
-                  <button type="button" className="mark-alert" onClick={() => nav("agents")} title={`${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.`} aria-label={`Another agent is using ${names.get(g.id)}'s URL`}>
-                    !
+          {hubMode ? (
+            // APC v2 (TIN-394): the standard agent bar. apc.tineira.com keeps its own marks below.
+            <AgentBar
+              agents={barAgents}
+              onOpen={(id) => {
+                const pin = state.grants.find((g) => g.id === id)?.pin;
+                if (pin) openPin(pin);
+              }}
+              onUnpin={(id) => void api.unpin(id)}
+              onWarning={() => nav("agents")}
+            />
+          ) : (
+            <div className="marks">
+            {state.grants.map((g) => {
+              const last = Math.max(Date.parse(g.last_active_at ?? "") || 0, pulse[g.id] ?? 0);
+              const status = markState(last ? new Date(last).toISOString() : null);
+              const pulsing = pulse[g.id] && Date.now() - pulse[g.id]! < 1500;
+              const motion = motionOf(g.id);
+              return (
+                <div key={g.id} className="mark-wrap">
+                  <button
+                    data-apc-mark
+                    data-grant={g.id}
+                    className={`mark mark-logo mark-${status}${pulsing ? " mark-pulse" : ""}${g.regions ? " mark-restricted" : ""}`}
+                    title={`${names.get(g.id)}${g.client_name ? "" : " (not connected yet)"}. Drag onto anything to point this agent.`}
+                    aria-label={names.get(g.id)}
+                  >
+                    <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} motion={motion} />
                   </button>
-                )}
-                {g.pin && (
-                  <span className="pin-dot">
-                    <button
-                      type="button"
-                      className={`pin-dot-go${isSeen(g.pin) ? " seen" : ""}${onScreen.has(g.id) ? "" : " away"}`}
-                      onClick={() => !onScreen.has(g.id) && openPin(g.pin!)}
-                      title={`Pinned to ${pinLabel(g.pin)}: ${isSeen(g.pin) ? "your agent read it" : "waiting for your agent's next call"}${onScreen.has(g.id) ? "" : ". Click to open it."}`}
-                      aria-label={`${names.get(g.id)} pinned to ${pinLabel(g.pin)}${isSeen(g.pin) ? ", read" : ", not read yet"}`}
-                    />
-                    <button className="unpin" onClick={() => void api.unpin(g.id)} aria-label="Remove pin">
-                      ×
+                  {activeConflict(g) && (
+                    <button type="button" className="mark-alert" onClick={() => nav("agents")} title={`${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.`} aria-label={`Another agent is using ${names.get(g.id)}'s URL`}>
+                      !
                     </button>
-                  </span>
-                )}
-              </div>
-            );
-          })}
-          </div>
+                  )}
+                  {g.pin && (
+                    <span className="pin-dot">
+                      <button
+                        type="button"
+                        className={`pin-dot-go${isSeen(g.pin) ? " seen" : ""}${onScreen.has(g.id) ? "" : " away"}`}
+                        onClick={() => !onScreen.has(g.id) && openPin(g.pin!)}
+                        title={`Pinned to ${pinLabel(g.pin)}: ${isSeen(g.pin) ? "your agent read it" : "waiting for your agent's next call"}${onScreen.has(g.id) ? "" : ". Click to open it."}`}
+                        aria-label={`${names.get(g.id)} pinned to ${pinLabel(g.pin)}${isSeen(g.pin) ? ", read" : ", not read yet"}`}
+                      />
+                      <button className="unpin" onClick={() => void api.unpin(g.id)} aria-label="Remove pin">
+                        ×
+                      </button>
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            </div>
+          )}
           {hubMode && (
             <a
               href={`${SIGNALS_ORIGIN}/?seed=${state.seed}`}
