@@ -6,6 +6,7 @@ import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
+import { openDock, useDockBridge } from "./dock-bridge.ts";
 import { productName } from "../model/products.ts";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
@@ -103,6 +104,8 @@ function Sandbox({ sid }: { sid: string }) {
   const [, tick] = useState(0);
   const stateRef = useRef<SandboxState | null>(null);
   stateRef.current = state;
+  // APC v2 features (TIN-369, TIN-370), off unless the tab was opened with ?apc=v2.
+  const v2 = useMemo(v2Enabled, []);
 
   const refresh = useCallback(() => api.state().then(setState), [api]);
   useEffect(() => {
@@ -197,7 +200,7 @@ function Sandbox({ sid }: { sid: string }) {
     () =>
       enablePinning({
         // APC v2 (TIN-369): drops of an agent dragged from a dock in another window, only with ?apc=v2.
-        acceptNativeDrops: v2Enabled(),
+        acceptNativeDrops: v2,
         resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
         canTarget: (grantId, target: FocusTarget) => {
           const grant = stateRef.current?.grants.find((g) => g.id === grantId);
@@ -231,9 +234,8 @@ function Sandbox({ sid }: { sid: string }) {
     }
   });
 
-  if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   const motionOf = (grantId: string): AgentMotion => {
-    const g = state.grants.find((x) => x.id === grantId);
+    const g = state?.grants.find((x) => x.id === grantId);
     const since = waitingSince[grantId];
     return motionFor({
       connected: !!g?.client_name,
@@ -244,6 +246,21 @@ function Sandbox({ sid }: { sid: string }) {
       now: Date.now(),
     });
   };
+  // APC v2 (TIN-370): a dock window opened from here shows these agents and drags them back.
+  useDockBridge(
+    v2,
+    state?.grants.map((g) => ({
+      handle: g.id,
+      name: names.get(g.id) ?? g.label,
+      client_name: g.client_name,
+      client_ua: g.client_ua,
+      client_icon: g.client_icon,
+      motion: motionOf(g.id),
+      pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin) } : null,
+    })) ?? null,
+  );
+
+  if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   /** The screen that shows a pin: a customer's page, or the overview with the figure's filters. */
   const openPin = (pin: NonNullable<SandboxState["grants"][number]["pin"]>) => {
     if (pin.kind === "customer" && pin.id) return navigate({ screen: "customer", id: pin.id }, filters);
@@ -317,6 +334,11 @@ function Sandbox({ sid }: { sid: string }) {
             );
           })}
           </div>
+          {v2 && (
+            <button type="button" onClick={openDock} className="cursor-pointer rounded-md border border-line px-2.5 py-1 text-sm text-muted hover:text-foreground" title="APC v2: open a dock window with your agents, and drag them back onto Pulse from there">
+              Dock
+            </button>
+          )}
           <ThemeToggle />
         </div>
       </header>
