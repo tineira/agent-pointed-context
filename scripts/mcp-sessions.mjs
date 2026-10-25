@@ -1,7 +1,7 @@
 // Distinct MCP agent sessions per day and client, from Workers Analytics Engine (TIN-347). Run by hand.
 // usage: CF_ACCOUNT_ID=... CF_ANALYTICS_TOKEN=... node scripts/mcp-sessions.mjs [days=30] [--json]
 // The token needs Account > Account Analytics > Read. A session is one agent grant of one sandbox
-// (apps/demo/src/worker/sessions.ts); days are UTC.
+// (apps/demo/src/worker/sessions.ts), or one agent of one APC v2 dock, shown as [dock] (TIN-416); days are UTC.
 import { countSessions, dailyTotals, sessionsSql } from "./lib/mcp-sessions.mjs";
 
 const args = process.argv.slice(2);
@@ -32,7 +32,7 @@ if (json) {
 } else {
   for (const t of totals) {
     console.log(`${t.day}  ${String(t.sessions).padStart(5)}  total`);
-    for (const c of byClient.filter((c) => c.day === t.day)) console.log(`            ${String(c.sessions).padStart(5)}  ${c.client_name}`);
+    for (const c of byClient.filter((c) => c.day === t.day)) console.log(`            ${String(c.sessions).padStart(5)}  ${c.client_name}${c.source === "dock" ? "  [dock]" : ""}`);
   }
   if (!totals.length) console.log(`no sessions in the last ${days} days`);
 }

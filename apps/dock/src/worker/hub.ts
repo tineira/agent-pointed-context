@@ -14,6 +14,7 @@ import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NO
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
+import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
 import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
 import { appAllowed, appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 
@@ -29,6 +30,10 @@ export interface Env {
   ASSETS: Fetcher;
   /** Comma-separated origins of the apps a hub may pair with. */
   APP_ORIGINS?: string;
+  /** Analytics Engine dataset of agent sessions, shared with Pulse v1 (TIN-416). Written only when ANALYTICS_SALT is set too. */
+  MCP_SESSIONS?: AnalyticsEngineDataset;
+  /** Secret (wrangler secret put ANALYTICS_SALT): the HMAC key for session keys and IP hashes. */
+  ANALYTICS_SALT?: string;
 }
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
@@ -548,6 +553,30 @@ export class Hub extends DurableObject<Env> {
     // The dock only listens.
   }
 
+  /** One Analytics Engine point per initialize, as Pulse v1 writes, marked "dock" (TIN-416). A failure here never fails the call. */
+  private async countSession(request: Request, agent: Agent, name: string, version: string | null, protocol: unknown, userAgent: string): Promise<void> {
+    const { MCP_SESSIONS, ANALYTICS_SALT } = this.env;
+    const did = this.meta("did");
+    if (!MCP_SESSIONS || !ANALYTICS_SALT || !did) return;
+    try {
+      MCP_SESSIONS.writeDataPoint(
+        await sessionPoint(ANALYTICS_SALT, {
+          sid: did,
+          grantId: agent.id,
+          label: agent.label,
+          clientName: name,
+          clientVersion: version,
+          protocolVersion: typeof protocol === "string" ? protocol.slice(0, 20) : null,
+          userAgent,
+          ip: request.headers.get("cf-connecting-ip"),
+          source: "dock",
+        }),
+      );
+    } catch {
+      // analytics only
+    }
+  }
+
   private async mcp(request: Request, secret: string): Promise<Response> {
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "dock_expired" }, { status: 404 });
@@ -557,17 +586,19 @@ export class Hub extends DurableObject<Env> {
 
     try {
       const body = (await request.clone().json()) as unknown;
-      for (const m of (Array.isArray(body) ? body : [body]) as Array<{ method?: string; params?: { clientInfo?: { name?: unknown; title?: unknown; version?: unknown; icons?: unknown } } } | null>) {
+      for (const m of (Array.isArray(body) ? body : [body]) as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; title?: unknown; version?: unknown; icons?: unknown } } } | null>) {
         if (m?.method !== "initialize") continue;
         const info = m.params?.clientInfo;
         if (typeof info?.name !== "string" || info.name.length > 100) continue;
         const title = typeof info.title === "string" ? info.title.replace(/[\p{C}]/gu, "").trim().slice(0, 40) || null : null;
         const version = typeof info.version === "string" ? info.version.replace(/[\p{C}]/gu, "").trim().slice(0, 40) || null : null;
+        const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
         this.sql.exec(
           "update agents set client_name = ?, client_ua = ?, client_title = ?, client_icon = ?, client_version = ? where id = ?",
-          info.name, (request.headers.get("user-agent") ?? "").slice(0, 120), title, pickClientIcon(info.icons), version, agent.id,
+          info.name, userAgent, title, pickClientIcon(info.icons), version, agent.id,
         );
         this.broadcast();
+        await this.countSession(request, agent, info.name, version, m.params?.protocolVersion, userAgent);
       }
     } catch {
       // not JSON: the transport answers the error
