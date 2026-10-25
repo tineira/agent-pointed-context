@@ -23,12 +23,35 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-  # Every push to main that passes the checks goes live at apc.tineira.com.
+  # Which app a push to main touches: v2 lives in apps/dock (TIN-376), v1 is everything else.
+  changes:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      v1: ${{ steps.diff.outputs.v1 }}
+      v2: ${{ steps.diff.outputs.v2 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "v1=true" >> "$GITHUB_OUTPUT"; echo "v2=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          echo "$files"
+          echo "v1=$(echo "$files" | grep -qv '^apps/dock/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v2=$(echo "$files" | grep -q '^apps/dock/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  # Every push to main that passes the checks and touches v1 goes live at apc.tineira.com.
   # Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID.
   deploy:
     name: Deploy apc.tineira.com
-    needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, changes]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.v1 == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -50,5 +73,33 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/demo
+          packageManager: pnpm
+          command: deploy
+
+  # APC v2 (apps/dock): its own Worker, apc-v2, at v2.apc.tineira.com. Deploys only when apps/dock changes.
+  deploy-v2:
+    name: Deploy v2.apc.tineira.com
+    needs: [check, changes]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.v2 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: deploy-v2
+      cancel-in-progress: false
+    environment:
+      name: v2
+      url: https://v2.apc.tineira.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/dock
           packageManager: pnpm
           command: deploy

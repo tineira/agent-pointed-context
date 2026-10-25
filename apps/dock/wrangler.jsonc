@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // APC v2 (TIN-376): its own Worker and domain, so v1 (apps/demo, apc.tineira.com) is never touched.
+  // For now static assets only; Durable Objects and an Analytics Engine dataset of its own come when v2 needs them.
+  "name": "apc-v2",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public", "not_found_handling": "single-page-application" },
+  "routes": [{ "pattern": "v2.apc.tineira.com", "custom_domain": true }],
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}
