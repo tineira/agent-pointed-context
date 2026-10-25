@@ -341,7 +341,12 @@ export function HubDock() {
         <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
           Add an agent
         </button>
-        <Float agents={state.agents} dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })} />
+        <Float
+          agents={state.agents}
+          requests={pending.map(({ agent, pairing }) => ({ id: pairing.id, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name }))}
+          decide={(id, action) => decide(id, action)}
+          dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })}
+        />
         <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWizard("world")}>
           Change world
         </button>
@@ -357,7 +362,20 @@ export function HubDock() {
  * Picture-in-Picture window can. It holds only the agents' logos, each draggable like in the dock.
  * Shown where the browser has the API (Chrome and Edge on desktop).
  */
-function Float(props: { agents: DockAgent[]; dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void } }) {
+interface FloatRequest {
+  id: string;
+  app: string;
+  host: string;
+  agent: string;
+}
+
+function Float(props: {
+  agents: DockAgent[];
+  /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
+  requests: FloatRequest[];
+  decide: (id: string, action: "approve" | "deny") => void;
+  dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
+}) {
   const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number }): Promise<Window> } }).documentPictureInPicture;
   const [win, setWin] = useState<Window | null>(null);
   const root = useRef<Root | null>(null);
@@ -367,6 +385,25 @@ function Float(props: { agents: DockAgent[]; dragProps: (a: DockAgent) => { star
     if (!win) return;
     root.current ??= createRoot(win.document.body);
     root.current.render(
+      props.requests.length > 0 ? (
+        <div className="float float-requests">
+          {props.requests.map((r) => (
+            <div key={r.id} className="float-request">
+              <p>
+                <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+              </p>
+              <div className="row">
+                <button type="button" className="primary" onClick={() => latest.current.decide(r.id, "approve")}>
+                  Allow
+                </button>
+                <button type="button" onClick={() => latest.current.decide(r.id, "deny")}>
+                  Deny
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="float">
         {props.agents.map((a) => {
           const d = latest.current.dragProps(a);
@@ -378,9 +415,21 @@ function Float(props: { agents: DockAgent[]; dragProps: (a: DockAgent) => { star
             </div>
           );
         })}
-      </div>,
+      </div>
+      ),
     );
-  }, [win, props.agents]);
+  }, [win, props.agents, props.requests]);
+  // Grow while a request waits, so it fits; a browser may refuse without a click, and the request
+  // then shows in place of the logos anyway.
+  const asking = props.requests.length > 0;
+  useEffect(() => {
+    if (!win) return;
+    try {
+      if (asking) win.resizeTo(Math.max(win.outerWidth, 300), Math.max(win.outerHeight, 190));
+    } catch {
+      // resize refused
+    }
+  }, [win, asking]);
   if (!pip) return null;
   return (
     <button

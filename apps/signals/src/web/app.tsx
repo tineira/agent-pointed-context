@@ -194,9 +194,6 @@ function Feed({ sid }: { sid: string }) {
               </option>
             ))}
           </select>
-          <button type="button" onClick={() => window.open(DOCK_URL, "apc-dock", "popup,width=360,height=600")}>
-            Dock
-          </button>
         </div>
       }
       nav={
@@ -210,11 +207,6 @@ function Feed({ sid }: { sid: string }) {
               </li>
             ))}
           </ul>
-          <div className="nav-actions">
-            <button type="button" className="primary" onClick={() => window.open(DOCK_URL, "apc-dock", "popup,width=360,height=600")} title="Open your agent dock, and drag an agent from it onto a post">
-              Open agent dock
-            </button>
-          </div>
         </>
       }
       top={

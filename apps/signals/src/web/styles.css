@@ -25,9 +25,6 @@ button, select { font: inherit; color: inherit; }
 .nav button { width: 100%; text-align: left; border: 0; background: none; padding: 12px; border-radius: 999px; font-size: 19px; cursor: pointer; }
 .nav button:hover { background: var(--hover); }
 .nav button.on { font-weight: 700; }
-.nav-actions { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; }
-.nav-actions .primary { border: 0; border-radius: 999px; padding: 13px 16px; background: var(--fg); color: var(--bg); font-weight: 700; font-size: 16px; cursor: pointer; }
-.nav-actions a { padding: 0 12px; font-size: 14px; }
 .disclaimer { margin-top: auto; font-size: 12px; color: var(--muted); padding: 0 12px; }
 
 .tabs { position: sticky; top: 0; z-index: 4; display: flex; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(12px); }
@@ -99,9 +96,7 @@ button, select { font: inherit; color: inherit; }
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 88px minmax(0, 600px) minmax(0, 1fr); }
   .left { width: 88px; justify-self: stretch; align-items: center; }
-  .brand span, .nav, .nav-actions a, .disclaimer { display: none; }
-  .nav-actions .primary { font-size: 0; width: 52px; height: 52px; padding: 0; }
-  .nav-actions .primary::before { content: "◎"; font-size: 22px; }
+  .brand span, .nav, .disclaimer { display: none; }
 }
 @media (max-width: 760px) {
   .layout { display: block; }
@@ -109,8 +104,9 @@ button, select { font: inherit; color: inherit; }
   .timeline { border: 0; }
   .mobile-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px 0 4px; }
   .mobile-actions { display: flex; gap: 8px; }
-  .mobile-actions select, .mobile-actions button { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--bg); font-size: 14px; }
-  .mobile-actions button { font-weight: 700; background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  /* Direct children only: the agent bar's own buttons (pin dot, ×) keep their style (TIN-414). */
+  .mobile-actions { align-items: center; }
+  .mobile-actions > select { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--bg); font-size: 14px; }
   .creative-headline { font-size: 22px; }
 }
 

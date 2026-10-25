@@ -109,3 +109,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .download:hover { border-color: var(--muted); }
 .small-note { font-size: 11px; }
 .setup-agent .chip[draggable="true"] { cursor: grab; }
+.float-requests { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; }
+.float-request { padding: 10px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.float-request p { color: var(--fg); margin: 0; }
