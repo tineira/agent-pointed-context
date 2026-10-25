@@ -447,6 +447,7 @@ function Float(props: {
             // a sheet from another origin: skipped
           }
         }
+        w.document.body.className = "float-body";
         w.addEventListener("pagehide", () => {
           root.current?.unmount();
           root.current = null;
