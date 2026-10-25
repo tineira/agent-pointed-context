@@ -7,7 +7,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow, FocusTarget } from "@apc/protocol";
 import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, toolError, toolResult, type ToolResult } from "@apc/server";
-import { generateDataset, type Dataset, type Region } from "../model/seed.ts";
+import { generateDataset, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type ClientConflict, type Grant, type StoredView } from "./domain.ts";
@@ -35,6 +35,10 @@ export interface Env {
   MCP_SESSIONS?: AnalyticsEngineDataset;
   /** Secret (wrangler secret put ANALYTICS_SALT): the HMAC key for session keys and IP hashes. */
   ANALYTICS_SALT?: string;
+  /** "1" on Pulse's APC v2 deploy (TIN-382): agents from a dock's hub can pair. Never set on apc.tineira.com. */
+  APC_V2?: string;
+  /** Comma-separated origins of the agent docks (hubs) Pulse may pair with, under APC_V2. */
+  HUB_ORIGINS?: string;
 }
 
 function randomHex(bytes: number): string {
@@ -78,6 +82,9 @@ export class Sandbox extends DurableObject<Env> {
         check (params is null or length(params) <= 1024));
       create table if not exists events (
         id integer primary key autoincrement, at text not null, type text not null, grant_id text, data text not null);
+      create table if not exists hub_links (
+        hub text not null, agent text not null, grant_id text not null references grants(id) on delete cascade,
+        pairing_id text, created_at text not null, primary key (hub, agent));
     `);
     // Columns added after the table: client_icon (TIN-350), the names (TIN-356). A sandbox made before lacks them.
     for (const column of ["client_icon", "client_title", "agent_name", "owner_name", "conflict", "client_ua"]) {
@@ -243,6 +250,9 @@ export class Sandbox extends DurableObject<Env> {
       settings: { share_view: this.meta("share_view") !== "0", show_activity: this.meta("show_activity") !== "0" },
       grants: this.grants().map((g) => ({ ...g, pin: this.focusRow(g.id) })),
       tour: this.tour(),
+      // APC v2 (TIN-382): on Pulse's v2 deploy, which dock agents are which grants.
+      v2: this.env.APC_V2 === "1",
+      hub_links: this.sql.exec<{ hub: string; agent: string; grant_id: string }>("select hub, agent, grant_id from hub_links").toArray(),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
     };
   }
@@ -360,6 +370,52 @@ export class Sandbox extends DurableObject<Env> {
     );
     this.broadcast({ type: "grants" });
     return this.grants().find((g) => g.id === id)!;
+  }
+
+  /**
+   * APC v2 (TIN-382, DESIGN.md 12.1): the person dropped an agent from a dock here and said yes.
+   * Pulse makes a grant for it (full, or one region), hands that grant's MCP URL to the dock's hub
+   * server to server with the drag's single-use ticket, and pins the agent where it was dropped. The
+   * hub reads Pulse only after the person says yes in the dock too. Only on the v2 deploy.
+   */
+  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string }> {
+    if (this.env.APC_V2 !== "1") return { ok: false, error: "not_available" };
+    const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; region?: unknown; target?: unknown } | null;
+    const hub = typeof b?.hub === "string" ? b.hub : "";
+    const allowed = (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+    const dev = !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
+    if (!allowed.includes(hub) && !(dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
+    if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
+    const linked = this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, b.agent).toArray()[0];
+    if (linked) return { ...(await this.pin(linked.grant_id, b.target)), grant_id: linked.grant_id, status: "paired" };
+    const region = (REGIONS as readonly string[]).includes(b.region as string) ? (b.region as Region) : null;
+    const id = `g_${randomHex(4)}`;
+    const secret = randomHex(16);
+    this.sql.exec(
+      "insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, ?, ?)",
+      id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, new Date().toISOString(),
+    );
+    let answer: { ok?: boolean; error?: string; pairing_id?: string } = {};
+    try {
+      const response = await fetch(`${hub}/apc/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticket: b.ticket, agent: b.agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      answer = (await response.json().catch(() => ({}))) as typeof answer;
+    } catch {
+      answer = { ok: false, error: "hub_unreachable" };
+    }
+    if (!answer.ok) {
+      this.sql.exec("delete from grants where id = ?", id);
+      return { ok: false, error: answer.error ?? "hub_refused" };
+    }
+    this.sql.exec("insert into hub_links (hub, agent, grant_id, pairing_id, created_at) values (?, ?, ?, ?, ?)", hub, b.agent, id, answer.pairing_id ?? null, new Date().toISOString());
+    this.log("hub_paired", id, { hub, agent: b.agent });
+    this.broadcast({ type: "grants" });
+    const pinned = await this.pin(id, b.target);
+    return { ok: pinned.ok, ...(pinned.error ? { error: pinned.error } : {}), grant_id: id, status: "pending" };
   }
 
   private allEvents(): LoggedEvent[] {

@@ -1,10 +1,21 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // APC v2 (TIN-376): its own Worker and domain, so v1 (apps/demo, apc.tineira.com) is never touched.
-  // Static assets for now (the dock page, built by Vite into dist); Durable Objects and an Analytics Engine dataset of its own come when v2 needs them.
+  // APC v2: its own Worker and domain, so v1 (apps/demo, apc.tineira.com) is never touched (TIN-376).
+  // The dock page (src/web, built by Vite) and the attention hub (src/worker): one Durable Object per dock (TIN-382).
   "name": "apc-v2",
+  "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" },
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  // The apps a hub may pair with (comma-separated origins); under vite dev, localhost too.
+  "vars": { "APP_ORIGINS": "https://pulse.v2.apc.tineira.com" },
   "routes": [{ "pattern": "v2.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
   "observability": { "enabled": true }

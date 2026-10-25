@@ -9,8 +9,8 @@
  */
 import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
 import { useEffect, useRef, useState } from "react";
-import { AgentIcon } from "../../demo/src/web/agent-icon.tsx";
-import { appOriginAllowed, parseAgents, type DockAgent } from "../../demo/src/web/dock-protocol.ts";
+import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
+import { appOriginAllowed, parseAgents, type DockAgent } from "../../../demo/src/web/dock-protocol.ts";
 
 type App = { name: string; origin: string };
 interface Drag {

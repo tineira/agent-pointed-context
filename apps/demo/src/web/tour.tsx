@@ -84,7 +84,8 @@ export function Tour(props: { api: Api; state: SandboxState; names: Map<string, 
     return () => clearInterval(id);
   }, [step]);
   const grant = state.grants.find((g) => g.id === grant_id);
-  if (step === "off" || step === "connect" || !grant) return null;
+  // The guide teaches v1 (drag the top-bar mark); Pulse's APC v2 deploy is driven from the dock (TIN-382).
+  if (step === "off" || step === "connect" || !grant || state.v2) return null;
   const name = props.names.get(grant.id) ?? "Your agent";
   const onOverview = props.screen === "overview";
 

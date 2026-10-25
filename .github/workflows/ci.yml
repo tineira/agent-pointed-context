@@ -24,7 +24,8 @@ jobs:
       - run: pnpm build
 
   # Which app a push to main touches: v2 lives in apps/dock (TIN-376), v1 is everything else.
-  # The dock also builds from Pulse's agent icons and its dock bridge (TIN-370), and from @apc/web.
+  # v2 also deploys Pulse a second time (apps/demo with CLOUDFLARE_ENV=v2, TIN-382), so a change to
+  # apps/demo or the packages deploys both.
   changes:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -45,7 +46,7 @@ jobs:
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
           echo "v1=$(echo "$files" | grep -qv '^apps/dock/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|packages/web/|apps/demo/src/web/(agent-|dock-)|apps/demo/src/model/products\.ts)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|apps/demo/|packages/)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches v1 goes live at apc.tineira.com.
   # Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID.
@@ -77,7 +78,8 @@ jobs:
           packageManager: pnpm
           command: deploy
 
-  # APC v2 (apps/dock): its own Worker, apc-v2, at v2.apc.tineira.com. Deploys only when apps/dock changes.
+  # APC v2: the dock and its hub (apps/dock, Worker apc-v2, v2.apc.tineira.com) and Pulse's v2 deploy
+  # (apps/demo with env v2, Worker apc-v2-pulse, pulse.v2.apc.tineira.com). Never apc.tineira.com.
   deploy-v2:
     name: Deploy v2.apc.tineira.com
     needs: [check, changes]
@@ -103,5 +105,15 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/dock
+          packageManager: pnpm
+          command: deploy
+      - run: pnpm --dir apps/demo build
+        env:
+          CLOUDFLARE_ENV: v2
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/demo
           packageManager: pnpm
           command: deploy
