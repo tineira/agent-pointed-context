@@ -243,7 +243,11 @@ export class Hub extends DurableObject<Env> {
 
   async state(origin: string) {
     const did = this.meta("did");
+    // The demo world's seed (TIN-393): the dock opens every app on it, so they show the same market and
+    // customers without knowing each other. A dock made before it gets one now.
+    if (!this.meta("seed")) this.setMeta("seed", String(crypto.getRandomValues(new Uint32Array(1))[0]));
     return {
+      seed: Number(this.meta("seed")),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
       agents: this.agents().map((a) => {
         const row = this.pointer(a.id);

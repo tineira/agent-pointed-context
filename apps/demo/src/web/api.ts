@@ -106,7 +106,10 @@ export type Api = ReturnType<typeof createApi>;
 export async function openSession(): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     try {
-      const { sid } = await call<{ sid: string }>("/api/session", { method: "POST", body: "{}" });
+      // A dock opens Pulse's v2 deploy with ?seed= (TIN-393); apc.tineira.com ignores it.
+      const seed = Number(new URLSearchParams(location.search).get("seed"));
+      const body = Number.isInteger(seed) && seed > 0 ? { seed } : {};
+      const { sid } = await call<{ sid: string }>("/api/session", { method: "POST", body: JSON.stringify(body) });
       return sid;
     } catch (error) {
       if (attempt >= 4) throw error;

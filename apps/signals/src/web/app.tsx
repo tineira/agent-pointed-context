@@ -1,5 +1,5 @@
 /**
- * Signals' page (TIN-384): the market feed of the visitor's Pulse sandbox. Every post, and each of
+ * Signals' page (TIN-384): the market feed of the visitor's demo world (the dock's seed, TIN-393). Every post, and each of
  * its parts (offer, audience, code, text), is a target. Agents arrive from the agent dock: the
  * first drop asks the person here, then in the dock; later drops pin at once.
  */
@@ -28,7 +28,6 @@ interface FeedState {
 type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget };
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/" : "https://v2.apc.tineira.com/";
-const PULSE_URL = import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.v2.apc.tineira.com/overview";
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
 const PLAN_NAME: Record<string, string> = { starter: "Starter", team: "Team", business: "Business" };
 const MONTH_NAME = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -54,7 +53,7 @@ export function App() {
     return (
       <Shell>
         <p className="muted">
-          Signals shows the market around one Pulse sandbox. Open it from <a href={PULSE_URL}>Pulse (APC v2)</a>, with the <b>Signals</b> link in its top bar.
+          Signals shows the market of one demo world. Open it from your <a href={DOCK_URL}>agent dock</a>, with its <b>Signals</b> button: the dock opens every app on the same world.
         </p>
       </Shell>
     );
@@ -76,7 +75,7 @@ function Shell(props: { children: React.ReactNode; nav?: React.ReactNode; side?:
           <span>Signals</span>
         </div>
         {props.nav}
-        <p className="disclaimer">A fictional market feed, generated for your Pulse sandbox. APC v2 demo.</p>
+        <p className="disclaimer">A fictional market feed, generated for your dock's demo world. APC v2 demo.</p>
       </nav>
       <main className="timeline">
         <div className="mobile-bar">
@@ -213,9 +212,6 @@ function Feed({ sid }: { sid: string }) {
             <button type="button" className="primary" onClick={() => window.open(DOCK_URL, "apc-dock", "popup,width=360,height=600")} title="Open your agent dock, and drag an agent from it onto a post">
               Open agent dock
             </button>
-            <a href={PULSE_URL} target="_blank" rel="noreferrer">
-              Back to Pulse
-            </a>
           </div>
         </>
       }
