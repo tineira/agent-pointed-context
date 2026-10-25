@@ -177,3 +177,125 @@ The p50 is mostly network (Chile to the edge to the sandbox): inside the Durable
 | Clients | any MCP client; cut 1 verified as a compatibility matrix over the author's clients | 2026-10-15 |
 | Pin params | per-kind allowlist in the host: a customer pin carries none, a figure pin only its spec's keys | 2026-10-19 |
 | Attendance | `then` and `page_open` follow the view-sharing switch; the mark's pulse follows the activity switch | 2026-10-19 |
+| v2 topology | attention hub: the agent connects once, to the dock's hub, which watches each paired app with v1 `wait_for_focus` and relays its tools as `<app>__<tool>` (or `call_app_tool`); one focus per agent, newest pin wins | 2026-10-25 |
+| v2 pairing | the drag carries a public handle and a single-use 60 s ticket, never a grant; the app hands its grant to the hub over a back channel after consent in the app and in the dock; MCP authorization (OAuth 2.1 + PKCE) replaces the secret URL later | 2026-10-25 |
+| v2 dock host | a web window at v2.apc.tineira.com with a Durable Object hub first (TIN-370), against a Pulse under apc-v2; a browser extension with a local hub next; package changes additive and opt-in, v1 stays on 0.2 | 2026-10-25 |
+
+## 12. APC v2: one agent across apps (TIN-371)
+
+**The idea.** A window on the desktop, the dock, holds the person's agents, already connected. The person drags one onto anything in any APC app, in any window, and it is Pulse again: the agent is pointed at that thing and reads it with its own access.
+
+**Two options.**
+
+| | (a) Dock as launcher | (b) Dock as attention hub |
+|---|---|---|
+| Agent connects to | every app, one MCP URL each | the hub, once |
+| Waits | one `wait_for_focus` per app | one, across all apps |
+| Data path | agent to app, direct | agent to hub to app (relayed) |
+| New on the wire | nothing | hub tools, an app reference on the focus |
+| Dock knows where an agent points | no | yes |
+
+**Choice: (b), the attention hub.** Three reasons.
+
+1. A drop cannot hand an agent a URL. MCP clients add servers by configuration; whether any lets a connection be added mid-conversation must be verified. So (a) is v1 with one paste per app, which we already have.
+2. A tool call blocks the agent's turn, so it holds one wait at a time. With N apps, a pin in another app reaches it only on its next call there.
+3. The dock must show and revoke where each agent is pointed (12.5). Only a dock in the path can.
+
+The cost of (b): app results pass through the hub, so a real hub runs where the person already trusts (their machine or their own account). The hosted prototype is fine because Pulse is synthetic. The hub stores no results and logs sizes and presence only.
+
+### 12.1 Pairing without secrets in the drag
+
+The drag carries a public handle and a short-lived ticket, never a grant:
+
+```ts
+// dataTransfer type "application/x-apc-agent" (APC_AGENT_TYPE), set on dragstart in the dock.
+// TIN-369 shipped { v: 1, agent }; hub and ticket join it with pairing (TIN-370), and the parser ignores keys it does not know.
+interface AgentDrag {
+  v: 1;
+  hub: string;      // the hub's origin, e.g. "https://v2.apc.tineira.com"
+  agent: string;    // public handle, "ag_7f3k…"; safe for any page to read
+  ticket: string;   // single use, 60 s, bound to this agent; opens a pairing request, nothing else
+}
+```
+
+A page sees only the types during `dragover` and the data on `drop`, enough to light up targets. Whether custom types survive a drag between browser windows, or from a native window, must be verified per browser and OS.
+
+On drop, the app looks up `(hub, agent)`:
+
+- **Paired:** it stores a v1 pin for the grant it gave that agent. Nothing else changes.
+- **Not paired:** the app asks for consent on its own page ("Let *agent* from *hub* read Pulse? Full or one region?"). On yes, it creates a grant (v1 `addAgentGrant` or `addRestrictedGrant`) and sends the grant to the hub over a back channel, server to server: `POST {hub}/apc/pair { ticket, app: { id, name, origin, icon }, mcp_url }`. The hub then asks in the dock: "*app at origin* wants to be read by *agent*. Allow?" The pairing counts only when both sides have said yes. The dock shows the origin of `mcp_url`, because that is where the tools come from.
+
+A local hub (extension, desktop app) cannot take that POST; the app's page would hand the grant to the extension, and how a page reaches an extension it does not know must be verified (`externally_connectable` takes a static list of sites). The long-term answer is MCP's own authorization, OAuth 2.1 with PKCE, with the hub as client and the ticket only starting the flow. v1 deferred OAuth (section 6); v2 brings it in.
+
+### 12.2 Focus from app to hub
+
+v2 reuses the v1 pin as it is. Each `(agent, app)` pair is one v1 grant held by the hub, so the app stores `FocusRow` per grant, resolves `FocusPayload` and trims it to that grant exactly as today. C5 holds per app.
+
+The hub learns about pins with v1's own tool. While the dock is open, the hub keeps one `wait_for_focus` running against each paired app, so the hub does the N waits and the agent does one. A wait that returns `page_open: false` comes back at once, so the hub backs off for that app (one retry every 15 s) instead of spinning. Once the dock closes, the hub stops watching.
+
+The app's `seen_at` now means "the hub received it"; the hub logs the agent's own `seen`.
+
+Later, an optional doorbell cuts latency and held requests: after a pin, the app's server sends `POST {hub}/apc/ring { app, agent }` with a token from pairing. It carries no target; the hub reads the focus as before.
+
+### 12.3 Tool names and the app on the focus
+
+The hub exposes its own `get_current_view` and `wait_for_focus`. It hides each app's two, and relays the app's other tools as `<app>__<tool>` (`pulse__get_figure`). The app id is `[a-z0-9]{1,16}` and unique per hub, chosen at pairing, with a suffix on collision. The total stays within 64 characters, because client name limits vary and must be verified.
+
+A new app changes the tool list: the hub sends `notifications/tools/list_changed` and sees whether the client lists again. Until then `call_app_tool({ app, tool, args })` always works.
+
+The focus says where it came from:
+
+```ts
+interface AppRef { id: string; name: string; origin: string }
+// FocusPayload gains (optional): app?: AppRef
+// next / next_args are rewritten by the hub:
+//   "pulse__get_figure", { … }                                          when the client has the prefixed tool
+//   "call_app_tool", { app: "pulse", tool: "get_figure", args: { … } }  otherwise
+```
+
+Relayed results arrive with the app's own `attention` and `then` keys, which point at tools the agent cannot see. The hub strips them and attaches its own. The hub's `get_current_view` returns the focus plus `views: Array<{ app: AppRef; view: ViewPayload | null }>`, newest first.
+
+### 12.4 Presence and attention: per hub
+
+An agent has one mark, so one focus: the newest pin across apps wins, as in v1. Older pins stay drawn in their apps; the hub no longer surfaces them.
+
+`attention` rides on every hub result while the hub's focus is unread. `then` is per hub: it is present when the dock is open and at least one paired app reports `page_open: true`. If every app reports `null` (none shares its view), `then` is absent and `page_open` is not reported, as in v1. The dock is the drag source, so with the dock closed nobody can point.
+
+Presence events keep `v: 1` and gain an optional `app`. The app's own presence works unchanged: the relayed call reaches it under that agent's grant.
+
+### 12.5 Security: a dropped agent points, it never grants
+
+What a hostile page can do with a dropped agent:
+
+- read the handle and an unexpired ticket, and ask to pair; the person sees the request in the dock and can say no;
+- once paired by the person, pin keys (checked by `parseTarget` and the app's allowlist) and offer tools whose descriptions and results may try injection, as any MCP server the person adds can; the hub never merges an app's `instructions` into its own;
+- pull the agent's attention; the hub rate-limits pins per app (v1's 300 a minute) and the dock shows each one.
+
+What it cannot do: get the hub's URL or any grant, see another app's view or focus, call its tools, or receive what the hub relays for it. The agent may still carry data from app A into arguments to app B: the C7 boundary (section 3), now between apps. Presence in the dock makes it visible, not impossible.
+
+**The dock shows**, per agent, where it points now (app, origin, `kind:id`, part), its paired apps with last activity, and pending pairings. **It revokes**: clear the pointer, or unpair an app. Unpairing is authoritative at the hub: it deletes the grant, stops relaying and drops the app's pins. Revoking the app's side needs an endpoint (OAuth revocation, later).
+
+### 12.6 Where the dock lives
+
+- **Web window** (or PWA) at v2.apc.tineira.com, hub in a Durable Object per dock. No install; needs apps that accept native drops (TIN-369); cannot float on top (Document Picture-in-Picture might; dragging out of it must be verified).
+- **Browser extension** (side panel). A content script can add drop handling to any page; native messaging reaches a local hub. Whether a drag can start in the side panel and land in a tab must be verified. Costs an install, store review, one build per browser.
+- **Desktop app** (Tauri or Electron). A natural home for a local hub, the heaviest to build. OS drags into browsers may keep only `text/plain` and `text/uri-list` (to verify).
+
+**Order:** web window first, extension second, desktop app only if the extension cannot start drags.
+
+### 12.7 Changes to the packages
+
+Everything below is **additive and opt-in**, so v1 stays on 0.2.
+
+- `@apc/protocol`: `AppRef`; optional `app` on `FocusPayload` and `PresenceEvent`; `appToolName(app, tool)`.
+- `@apc/server`: `registerHubTools(server, hubCtx)` next to `registerApcTools`; `APC_HUB_INSTRUCTIONS`; `combineAttendance(values: (boolean | null)[])` (true if any is true, null if all are null, else false); `detachKeys(result, ["attention", "then"])`.
+- `@apc/web`: **shipped in TIN-369**: `enablePinning({ acceptNativeDrops, resolveAgent })`, reusing `targetAt` and `canTarget`, with `APC_AGENT_TYPE`, `agentDragPayload` and `parseAgentDragPayload`. They move to `@apc/protocol` once the hub needs them too. Next: `startAgentDrag(element, drag)` for the dock.
+
+**Breaking, and avoided:** prefixing tool names inside apps, keying `FocusRow` by app, or requiring OAuth instead of the secret URL. Any of these would make it APC 0.3.
+
+### 12.8 Phases
+
+1. **TIN-369 (shipped 2026-10-25):** native drops in `@apc/web`, opt-in. Pulse turns them on only when opened with `?apc=v2`, so v1 is unchanged.
+2. **TIN-370:** the web-window dock and a hub Durable Object in `apps/dock`. One agent connects to the hub. The first drags can land on apc.tineira.com with `?apc=v2` (drops only, onto agents of that sandbox); pairing (`/apc/pair`) runs only on a Pulse under apc-v2, never on apc.tineira.com. Still to decide: import `apps/demo`'s worker, or deploy it a second time with a v2 flag. The hub watches with v1 `wait_for_focus`, and `next` uses `call_app_tool`.
+3. A second small APC app on its own origin, so pairing really crosses origins. Prefixed tools after `list_changed`, and the dock's revoke. New compatibility-matrix columns: `list_changed` honoured, and waits through the hub.
+4. The extension with a local hub, OAuth pairing and the ring doorbell.
