@@ -8,6 +8,37 @@ export interface PinningOptions {
   /** Refuse a target for one agent (for example outside a restricted grant). */
   canTarget?: (grantId: string, target: FocusTarget) => boolean;
   onPin: (grantId: string, target: FocusTarget, element: Element) => void;
+  /**
+   * APC v2, opt-in (TIN-369): also accept a native HTML5 drop of an agent dragged from another
+   * window (a dock), whose dataTransfer carries APC_AGENT_TYPE. Off by default: v1 apps do not turn it on.
+   */
+  acceptNativeDrops?: boolean;
+  /**
+   * The grant a dropped agent's public handle names in this app, or null when the app does not know
+   * it (the drop is then ignored). Defaults to the handle itself, taken as a grant id.
+   */
+  resolveAgent?: (handle: string) => string | null;
+}
+
+/** The drag type a dock puts on an agent: its payload is agentDragPayload(handle), never a secret. */
+export const APC_AGENT_TYPE = "application/x-apc-agent";
+
+/**
+ * What an agent's drag carries: a public handle and nothing else. Any page the agent is dropped on
+ * can read it, so it must never hold a grant secret or an MCP URL.
+ */
+export function agentDragPayload(handle: string): string {
+  return JSON.stringify({ v: 1, agent: handle });
+}
+
+/** The handle in a drag payload, or null when it is not one (another app's data, a wrong version, junk). */
+export function parseAgentDragPayload(text: string): string | null {
+  try {
+    const value = JSON.parse(text) as { v?: unknown; agent?: unknown } | null;
+    return value?.v === 1 && typeof value.agent === "string" && /^[\w.:-]{1,128}$/.test(value.agent) ? value.agent : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The innermost pointable element at a point, with its parsed target. */
@@ -75,6 +106,53 @@ export function enablePinning(options: PinningOptions): () => void {
   };
 
   const onUp = () => end(true);
+
+  // Native drops from another window (opt-in). During dragover only the types are readable, so the
+  // target lights up for any APC agent; who it is and whether it may point there is checked on drop.
+  let native: { current: { element: Element; target: FocusTarget } | null; depth: number } | null = null;
+  const isAgentDrag = (event: DragEvent) => !!event.dataTransfer && [...event.dataTransfer.types].includes(APC_AGENT_TYPE);
+  const nativeEnd = () => {
+    native?.current?.element.classList.remove("apc-target");
+    native = null;
+    document.body.classList.remove("apc-dragging");
+  };
+  const onDragEnter = (event: DragEvent) => {
+    if (!isAgentDrag(event)) return;
+    if (!native) {
+      native = { current: null, depth: 0 };
+      document.body.classList.add("apc-dragging");
+    }
+    native.depth++;
+  };
+  const onDragOver = (event: DragEvent) => {
+    if (!isAgentDrag(event) || !native) return;
+    const hit = targetAt(event.clientX, event.clientY);
+    if (hit?.element !== native.current?.element) {
+      native.current?.element.classList.remove("apc-target");
+      hit?.element.classList.add("apc-target");
+      native.current = hit;
+    }
+    if (hit) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "link";
+    }
+  };
+  const onDragLeave = (event: DragEvent) => {
+    if (!native || !isAgentDrag(event)) return;
+    if (--native.depth <= 0) nativeEnd();
+  };
+  const onDrop = (event: DragEvent) => {
+    if (!isAgentDrag(event)) return;
+    event.preventDefault();
+    const handle = parseAgentDragPayload(event.dataTransfer!.getData(APC_AGENT_TYPE));
+    const hit = targetAt(event.clientX, event.clientY);
+    nativeEnd();
+    if (!handle || !hit) return;
+    const grantId = options.resolveAgent ? options.resolveAgent(handle) : handle;
+    if (!grantId) return;
+    if (options.canTarget && !options.canTarget(grantId, hit.target)) return;
+    options.onPin(grantId, hit.target, hit.element);
+  };
   const onKey = (event: KeyboardEvent) => {
     if (event.key === "Escape") end(false);
   };
@@ -83,7 +161,18 @@ export function enablePinning(options: PinningOptions): () => void {
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
   window.addEventListener("keydown", onKey);
+  if (options.acceptNativeDrops) {
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+  }
   return () => {
+    nativeEnd();
+    window.removeEventListener("dragenter", onDragEnter);
+    window.removeEventListener("dragover", onDragOver);
+    window.removeEventListener("dragleave", onDragLeave);
+    window.removeEventListener("drop", onDrop);
     end(false);
     root.removeEventListener("pointerdown", onDown);
     window.removeEventListener("pointermove", onMove);
