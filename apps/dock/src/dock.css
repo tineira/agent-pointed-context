@@ -1,0 +1,36 @@
+:root { color-scheme: light dark; --bg: #f3f5f8; --fg: #141a24; --muted: #56627a; --line: #d6dce5; --card: #ffffff; --chip: #eef1f5; --accent: #b85209; --ok: #1f7a4d; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0b0e13; --fg: #e9edf3; --muted: #8a96a8; --line: #242c38; --card: #131820; --chip: #263040; --accent: #ff9f1c; --ok: #4cc38a; } }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100svh; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.kicker { font: 600 11px ui-monospace, monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+h1 { margin: 2px 0 0; font-size: 18px; }
+p { margin: 0; color: var(--muted); }
+a { color: var(--accent); }
+.status { font-size: 12px; color: var(--muted); }
+.status b { color: var(--fg); font-weight: 600; }
+.agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.agent { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); cursor: grab; user-select: none; }
+.agent:active { cursor: grabbing; }
+.agent.dragging { opacity: 0.5; }
+.chip { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border: 1px solid var(--line); border-radius: 10px; background: var(--chip); }
+.who { min-width: 0; }
+.name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.where { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.where .read { color: var(--ok); }
+.log { font: 12px ui-monospace, monospace; color: var(--muted); margin: 0; padding: 0; list-style: none; }
+.log .ok { color: var(--ok); }
+h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* An agent's icon moves with what the agent does, as in Pulse (apps/demo/src/web/styles.css). */
+.agent-icon { display: block; flex: none; pointer-events: none; }
+.agent-icon-off { filter: grayscale(1); opacity: 0.4; }
+.agent-icon-waiting { animation: agent-float 3s ease-in-out infinite; }
+.agent-icon-busy { animation: agent-pulse 0.6s ease-in-out infinite; }
+.agent-icon-seen { animation: agent-bounce 0.9s ease-out 1; }
+@keyframes agent-float { 0%, 100% { transform: translateY(1.5px); } 50% { transform: translateY(-2.5px); } }
+@keyframes agent-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+@keyframes agent-bounce { 0% { transform: translateY(0); } 25% { transform: translateY(-6px); } 50% { transform: translateY(0); } 70% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .agent-icon-waiting, .agent-icon-busy, .agent-icon-seen { animation: none; }
+}

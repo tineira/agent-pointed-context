@@ -137,7 +137,7 @@ Per sandbox, until it is deleted 6 hours after its last use: its seed, its agent
 
 Cut 1 is live; the canary check over the event log is `node scripts/canary.mjs <events.jsonl> <mrr-by-customer.csv>`. Open work is tracked in [issues](https://github.com/tineira/agent-pointed-context/issues): the plan and seat screens, reusing the MCP server per agent, the client compatibility matrix across agents, per-client connection guides, and the evaluation harness (cut 2).
 
-APC v2 (one agent across apps: a dock you drag your agent from onto any APC app) is developed in parallel in `apps/dock`, deployed on its own Worker at v2.apc.tineira.com, so apc.tineira.com is never touched; CI deploys each one only when its files change. What v2 needs from the `@apc/*` packages goes in as additive, opt-in options that v1 does not turn on; a breaking change would version APC (0.3 / 1.0) with v1 pinned to 0.2.
+APC v2 (one agent across apps: a dock you drag your agent from onto any APC app) is developed in parallel in `apps/dock`, deployed on its own Worker at v2.apc.tineira.com, so apc.tineira.com is never touched; CI deploys each one only when its files change. What v2 needs from the `@apc/*` packages goes in as additive, opt-in options that v1 does not turn on; a breaking change would version APC (0.3 / 1.0) with v1 pinned to 0.2. To try the dock prototype (TIN-370): open apc.tineira.com/overview?apc=v2, click **Dock**, and drag an agent from that window onto a bar in Pulse. Pulse and the dock talk over postMessage; the drag carries only the agent's public handle.
 
 Security issues: please use GitHub's private vulnerability reporting (Security tab), not a public issue.
 

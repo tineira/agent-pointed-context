@@ -24,6 +24,7 @@ jobs:
       - run: pnpm build
 
   # Which app a push to main touches: v2 lives in apps/dock (TIN-376), v1 is everything else.
+  # The dock also builds from Pulse's agent icons and its dock bridge (TIN-370), and from @apc/web.
   changes:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -44,7 +45,7 @@ jobs:
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
           echo "v1=$(echo "$files" | grep -qv '^apps/dock/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "v2=$(echo "$files" | grep -q '^apps/dock/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|packages/web/|apps/demo/src/web/(agent-|dock-)|apps/demo/src/model/products\.ts)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches v1 goes live at apc.tineira.com.
   # Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID.
@@ -96,6 +97,7 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir apps/dock build
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
