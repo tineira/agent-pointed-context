@@ -29,6 +29,16 @@ export interface Env {
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
+/** One call to a dock's hub, server to server. Any failure is an answer, never a throw. */
+async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?: boolean; error?: string; agent?: { name?: unknown; icon?: unknown } }> {
+  try {
+    const response = await fetch(`${hub}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
+    return (await response.json().catch(() => ({ ok: false, error: "hub_refused" }))) as Awaited<ReturnType<typeof hubCall>>;
+  } catch {
+    return { ok: false, error: "hub_unreachable" };
+  }
+}
+
 interface Grant {
   id: string;
   secret: string;
@@ -195,22 +205,20 @@ export class Feed extends DurableObject<Env> {
     if (!allowed.includes(hub) && !(dev() && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
     if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
     const linked = this.grants().find((g) => g.hub === hub && g.agent === b.agent);
-    if (linked) return { ...(await this.pin(linked.id, b.target)), grant_id: linked.id };
+    if (linked) {
+      // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
+      const check = await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent: b.agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
+      if (!check.ok) {
+        if (check.error === "not_paired") await this.revoke(linked.secret);
+        return { ok: false, error: check.error ?? "hub_refused" };
+      }
+      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent?.icon }]), linked.id);
+      return { ...(await this.pin(linked.id, b.target)), grant_id: linked.id };
+    }
     const id = `g_${randomHex(4)}`;
     const secret = randomHex(16);
     this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, ?, ?)", id, secret, hub, b.agent, new Date().toISOString());
-    let answer: { ok?: boolean; error?: string; agent?: { name?: unknown; icon?: unknown } } = {};
-    try {
-      const response = await fetch(`${hub}/apc/pair`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ticket: b.ticket, agent: b.agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      answer = (await response.json().catch(() => ({}))) as typeof answer;
-    } catch {
-      answer = { ok: false, error: "hub_unreachable" };
-    }
+    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent: b.agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };

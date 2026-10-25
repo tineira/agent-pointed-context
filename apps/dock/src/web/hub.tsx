@@ -51,8 +51,9 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
 }
 
 /**
- * Draw an agent's icon (an <svg> or an <img> from AgentIcon) on a white rounded square, 64 px, as
- * a PNG data URI: the agent's mark that apps show on its pins. Monochrome marks get a dark ink.
+ * Draw an agent's icon (an <svg> or an <img> from AgentIcon) as a 64 px PNG data URI: the agent's
+ * mark that apps show on its pins (TIN-388). Full size on a transparent background, no frame
+ * (TIN-389); a monochrome mark is inked mid grey, so it reads on light and dark pages.
  */
 async function badgeOf(icon: Element): Promise<string | null> {
   let src: string;
@@ -63,7 +64,7 @@ async function badgeOf(icon: Element): Promise<string | null> {
     clone.setAttribute("width", "64");
     clone.setAttribute("height", "64");
     clone.removeAttribute("class");
-    src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone).replaceAll("currentColor", "#0f1419"))}`;
+    src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone).replaceAll("currentColor", "#8b95a1"))}`;
   } else return null;
   try {
     const img = new Image();
@@ -71,12 +72,7 @@ async function badgeOf(icon: Element): Promise<string | null> {
     await img.decode();
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 64;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.roundRect(0, 0, 64, 64, 14);
-    ctx.fill();
-    ctx.drawImage(img, 10, 10, 44, 44);
+    canvas.getContext("2d")!.drawImage(img, 0, 0, 64, 64);
     const png = canvas.toDataURL("image/png");
     return png.length <= 16_384 ? png : null;
   } catch {

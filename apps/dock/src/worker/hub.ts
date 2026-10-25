@@ -367,6 +367,25 @@ export class Hub extends DurableObject<Env> {
     return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
   }
 
+  /**
+   * An app that already holds a grant for this agent asks, on a drop, whether the hub still pairs
+   * them (TIN-389): the drag's ticket proves the person is dragging this agent now, the MCP URL names
+   * the grant. Yes comes with the agent's mark; no tells the app to drop its grant and ask again.
+   */
+  async confirm(body: unknown): Promise<{ ok: boolean; error?: string; status?: string; agent?: { name: string; icon: string | null } }> {
+    if (!(await this.alive())) return { ok: false, error: "not_paired" };
+    const b = body as { ticket?: unknown; agent?: unknown; mcp_url?: unknown } | null;
+    if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
+    const t = this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray()[0];
+    if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
+    const p = this.pairings(t.agent_id).find((x) => x.mcp_url === b.mcp_url);
+    // Not paired: the ticket stays good, so the app can ask the person and pair with it right away.
+    if (!p) return { ok: false, error: "not_paired" };
+    this.sql.exec("delete from tickets where ticket = ?", b.ticket);
+    const agent = this.agent(t.agent_id)!;
+    return { ok: true, status: p.status, agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
+  }
+
   // ---- watching the apps ----
 
   /** Take the focus an app returned (get_current_view or wait_for_focus), if it is a pin the hub has not taken yet. */

@@ -136,8 +136,17 @@ function Feed({ sid }: { sid: string }) {
     () =>
       enablePinning({
         acceptNativeDrops: true,
-        resolveAgent: (handle) => stateRef.current?.grants.find((g) => g.agent === handle)?.id ?? null,
-        onUnknownAgent: (drag, target) => setPending({ drag, target }),
+        // Every drop goes through the server, which checks with the dock that a pairing still stands (TIN-389).
+        resolveAgent: () => null,
+        onUnknownAgent: async (drag, target) => {
+          const paired = stateRef.current?.grants.some((g) => g.hub === drag.hub && g.agent === drag.agent);
+          if (!paired) return setPending({ drag, target });
+          const r = await call<{ ok: boolean; error?: string; grant_id?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
+          if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
+          else if (r.error === "not_paired") setPending({ drag, target });
+          else say(`Not pinned: ${r.error}`);
+          refresh();
+        },
         onPin: async (grantId, target) => {
           const r = await call<{ ok: boolean; error?: string }>(`${base}/pin`, { grant_id: grantId, target });
           say(r.ok ? `Pinned ${stateRef.current?.grants.find((g) => g.id === grantId)?.name ?? "your agent"}. Ask it about "this".` : `Not pinned: ${r.error}`);
@@ -333,7 +342,13 @@ function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void 
         const seen = !!g.pin?.seen_at && g.pin.seen_at >= g.pin.pinned_at;
         return (
           <span key={g.id} className={`pin ${seen ? "seen" : "waiting"}`} title={`${g.name}: ${seen ? "read this pin" : "has not read this pin yet"}`}>
-            {g.icon ? <img src={g.icon} width={22} height={22} alt={g.name} /> : <span className="pin-fallback" aria-label={g.name}>{g.name.slice(0, 1)}</span>}
+            {g.icon ? (
+              <img src={g.icon} width={22} height={22} alt={g.name} />
+            ) : (
+              <svg className="pin-fallback" width="20" height="20" viewBox="0 0 24 24" role="img" aria-label={g.name}>
+                <path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z" />
+              </svg>
+            )}
             {seen && (
               <span className="pin-check" aria-hidden="true">
                 ✓
