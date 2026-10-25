@@ -36,7 +36,8 @@ function readRoute(): { route: Route; filters: Filters } {
   const customer = url.pathname.match(/^\/customers\/(cus_\d{4})$/);
   if (customer) return { route: { screen: "customer", id: customer[1]! }, filters };
   if (url.pathname.startsWith("/customers")) return { route: { screen: "customers" }, filters };
-  if (url.pathname.startsWith("/agents") || url.pathname.startsWith("/connect")) return { route: { screen: "agents" }, filters };
+  // ?start_over=1 (TIN-412): Start over lives on the Agents screen (Settings on the v2 deploy).
+  if (url.pathname.startsWith("/agents") || url.pathname.startsWith("/connect") || q.has("start_over")) return { route: { screen: "agents" }, filters };
   if (url.pathname.startsWith("/overview")) return { route: { screen: "overview" }, filters };
   return { route: { screen: "howto" }, filters };
 }

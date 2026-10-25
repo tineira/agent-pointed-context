@@ -52,6 +52,8 @@ public sealed class MainWindow : Window
         open.Click += async (_, _) => await OpenAsync();
         var dock = new Button { Content = "Open agent dock" };
         dock.Click += (_, _) => OpenUrl(DockUrl);
+        var startOver = new Button { Content = "Start over" };
+        startOver.Click += async (_, _) => await StartOverAsync();
         months.SelectionChanged += async (_, _) =>
         {
             if (months.SelectedItem is string m && m != month)
@@ -85,7 +87,7 @@ public sealed class MainWindow : Window
                             open,
                         },
                     }.Also(p => DockPanel.SetDock(p, Dock.Left)),
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { bar, dock } }.Also(p => DockPanel.SetDock(p, Dock.Right)),
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { bar, dock, startOver } }.Also(p => DockPanel.SetDock(p, Dock.Right)),
                 },
             },
         };
@@ -409,6 +411,73 @@ public sealed class MainWindow : Window
         string? scope = region.SelectedIndex switch { 1 => "latam", 2 => "na", 3 => "emea", _ => null };
         var r = await client.HubPairAsync(drag, target, scope);
         Say(r.Ok ? $"Paired with the dock at {host}. Allow it there too, then ask your agent about \"this\"." : r.Error == "ticket_expired" ? "The drag is too old (a pairing ticket lasts 60 seconds). Drag the agent from the dock again." : $"Not paired: {r.Error}");
+    }
+
+    /// <summary>
+    /// Start over (TIN-411), as on the web: this app's sandbox and session go, after a confirm that says
+    /// what goes, links the other sites' Start over, and gives the prompt that drops "APC" from the agent.
+    /// </summary>
+    async Task StartOverAsync()
+    {
+        const string disconnect = "Please remove the remote MCP server named \"APC\" (its URL starts with https://v2.apc.tineira.com/mcp/) from your connectors. If you can remove it yourself, do it now and tell me when it's gone. If you can't, tell me the exact steps to remove it in the app I'm using you in right now.";
+        var go = new Button { Content = "Delete and start over", Classes = { "accent" } };
+        var cancel = new Button { Content = "Cancel", IsCancel = true, IsDefault = true };
+        var copy = new Button { Content = "Copy", VerticalAlignment = VerticalAlignment.Top };
+        Button Link(string name, string url)
+        {
+            var b = new Button { Content = $"Start over in {name}" };
+            b.Click += (_, _) => OpenUrl($"{url}?start_over=1");
+            return b;
+        }
+        var dialog = new Window
+        {
+            Title = "Pulse",
+            Width = 480,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Spacing = 10,
+                Children =
+                {
+                    new TextBlock { Text = "Start over in Pulse for desktop?", FontSize = 17, FontWeight = FontWeight.Bold },
+                    new TextBlock { Text = "This deletes this app's Pulse sandbox: the agents your dock paired here and their pins, your view, and the event log. The app forgets its session.", TextWrapping = TextWrapping.Wrap },
+                    new TextBlock { Text = "To start from zero everywhere, do the same on the other sites (each opens in your browser and asks you there):", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold },
+                    new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl.TrimEnd('/') + "/"), Link("Pulse (web)", "https://pulse.v2.apc.tineira.com/agents"), Link("Signals", "https://signals.v2.apc.tineira.com/") } },
+                    new TextBlock { Text = "And remove the \"APC\" server from your agent. Paste this to your agent:", TextWrapping = TextWrapping.Wrap },
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            copy.Also(c => { DockPanel.SetDock(c, Dock.Right); c.Margin = new Thickness(8, 0, 0, 0); }),
+                            new TextBlock { Text = disconnect, TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas, monospace"), FontSize = 12, Foreground = Muted },
+                        },
+                    },
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, go } },
+                },
+            },
+        };
+        copy.Click += async (_, _) =>
+        {
+            if (dialog.Clipboard is { } clip) await clip.SetTextAsync(disconnect);
+            copy.Content = "Copied";
+        };
+        go.Click += (_, _) => dialog.Close(true);
+        cancel.Click += (_, _) => dialog.Close(false);
+        if (await dialog.ShowDialog<bool>(this) != true) return;
+        await Try(async () =>
+        {
+            await client.ResetAsync();
+            data = null;
+            state = null;
+            month = "";
+            body.Content = null;
+            bar.Children.Clear();
+            world.Text = "";
+            Say("Started over. Paste the Pulse link from your dock's \"Open Pulse\" step, then click Open world.");
+        });
     }
 
     // ---- helpers ----

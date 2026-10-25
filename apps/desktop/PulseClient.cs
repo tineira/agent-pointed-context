@@ -122,6 +122,21 @@ public sealed class PulseClient : IDisposable
         }, stop);
     }
 
+    /// <summary>Start over (TIN-411): the sandbox deletes everything, and this app forgets its session.</summary>
+    public async Task ResetAsync()
+    {
+        if (Sid is not null)
+        {
+            try { await http.PostAsJsonAsync($"{Base}/reset", new { }); }
+            catch (HttpRequestException) { }
+        }
+        socketStop?.Cancel();
+        foreach (Cookie c in cookies.GetCookies(Origin)) c.Expired = true;
+        try { File.Delete(cookieFile); }
+        catch (IOException) { }
+        Sid = null;
+    }
+
     public void Dispose()
     {
         socketStop?.Cancel();
