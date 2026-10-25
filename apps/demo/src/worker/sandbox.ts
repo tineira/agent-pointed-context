@@ -104,6 +104,12 @@ export class Sandbox extends DurableObject<Env> {
         // already there
       }
     }
+    // On Pulse's v2 deploy every agent comes from a dock (TIN-402): a grant with no dock link is a
+    // leftover from before (the old default agent), and goes with its pins (TIN-410).
+    if (this.env.APC_V2 === "1") {
+      this.sql.exec("delete from agent_focus where grant_id in (select id from grants where id not in (select grant_id from hub_links))");
+      this.sql.exec("delete from grants where id not in (select grant_id from hub_links)");
+    }
   }
 
   // ---- storage helpers ----
@@ -466,22 +472,12 @@ export class Sandbox extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /**
-   * The person takes a dock agent's access away from Pulse's side (TIN-402, v2 deploy only). Its MCP
-   * URL then answers 404, and the dock forgets the pairing at its next call; a new drop asks again.
-   */
-  async removeDockGrant(grantId: string): Promise<{ ok: boolean }> {
-    if (this.env.APC_V2 !== "1" || !this.grants().some((g) => g.id === grantId)) return { ok: false };
-    await this.dropHubGrant(grantId, "owner_removed");
-    return { ok: true };
-  }
-
-  /** A dock's grant goes with its pins and its link: given back by the hub, no longer paired there, or removed by the person. */
-  private async dropHubGrant(grantId: string, event = "hub_revoked"): Promise<void> {
+  /** A dock's grant goes with its pins and its link: given back by the hub, or no longer paired there. */
+  private async dropHubGrant(grantId: string): Promise<void> {
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("delete from hub_links where grant_id = ?", grantId);
     this.sql.exec("delete from grants where id = ?", grantId);
-    this.log(event, grantId, {});
+    this.log("hub_revoked", grantId, {});
     this.broadcast({ type: "grants" });
   }
 

@@ -7,7 +7,7 @@ import { AgentIcon } from "./agent-icon.tsx";
 import type { Api, CompatRow, SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
-import { DockAgents, DockHint } from "./dock-only.tsx";
+import { DockHint } from "./dock-only.tsx";
 import { customerFocus, figureFocus } from "./focus.ts";
 
 export interface Filters {
@@ -276,9 +276,8 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
   const names = displayNames(state.grants);
   return (
     <>
-      {state.v2 ? (
-        <DockAgents api={api} state={state} onChanged={props.onChanged} />
-      ) : (
+      {/* On the v2 deploy the dock manages the agents (TIN-410): this screen is Pulse's settings only. */}
+      {!state.v2 && (
       <section className="card">
         <h2>Your agents</h2>
         <p>
@@ -308,11 +307,13 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
         <p className="hint">A restricted agent shows that pointing grants no access: point it at a figure over all regions and it answers for LATAM only, and says so.</p>
       </section>
       )}
+      {!state.v2 && (
       <section className="card">
         <h2>What your agents did</h2>
         <p className="hint">From this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>
         <CompatTable api={api} initials={props.initials} grants={props.state.grants} refreshKey={props.activity} />
       </section>
+      )}
       <section className="card">
         <h2>Switches and log</h2>
         <label className="switch">

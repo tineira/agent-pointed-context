@@ -327,7 +327,7 @@ function Sandbox({ sid }: { sid: string }) {
             {tab("howto", "How-to", route.screen === "howto")}
             {tab("overview", "Overview", route.screen === "overview")}
             {tab("customers", "Customers", route.screen === "customers" || route.screen === "customer")}
-            {tab("agents", "Agents", route.screen === "agents")}
+            {tab("agents", hubMode ? "Settings" : "Agents", route.screen === "agents")}
           </nav>
           {hubMode ? (
             // APC v2 (TIN-394): the standard agent bar. apc.tineira.com keeps its own marks below.
