@@ -3,12 +3,14 @@
  * the agent's card, and the panel above the data pages while no agent is connected. Shared by the
  * Agents page, the how-to and the data pages, so no page module imports another for these.
  */
-import { encode } from "uqr";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AgentIcon } from "./agent-icon.tsx";
 import { productName } from "../model/products.ts";
 import { mcpUrl, type Api, type GrantState, type SandboxState } from "./api.ts";
+import { askYourAgentPrompt, Qr, SCAN_HINT } from "./qr.tsx";
 import { AppLink } from "./ui.tsx";
+
+export { askYourAgentPrompt, Qr, SCAN_HINT } from "./qr.tsx";
 
 export function CopyField(props: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
@@ -30,26 +32,6 @@ export function CopyField(props: { text: string; label?: string }) {
   );
 }
 
-/** Black modules on a white plate, so a phone camera can read it in either theme. */
-export function Qr(props: { text: string }) {
-  const code = useMemo(() => encode(props.text, { ecc: "M", border: 4 }), [props.text]);
-  const n = code.size;
-  let d = "";
-  for (let y = 0; y < n; y++) {
-    const row = code.data[y];
-    if (!row) continue;
-    for (let x = 0; x < n; x++) if (row[x]) d += `M${x} ${y}h1v1h-1z`;
-  }
-  return (
-    <svg className="qr" viewBox={`0 0 ${n} ${n}`} width="196" height="196" role="img" aria-label="QR code of the MCP URL" shapeRendering="crispEdges">
-      <rect width={n} height={n} fill="#fff" />
-      <path d={d} fill="#141a24" />
-    </svg>
-  );
-}
-
-export const SCAN_HINT = "Scan with a phone, then paste the URL into the agent. Opening the link in the browser does not connect it.";
-
 /** The QR with its hint beside it; the hint drops under the QR when the column is narrow. */
 export function QrRow(props: { text: string; hint?: string }) {
   return (
@@ -58,11 +40,6 @@ export function QrRow(props: { text: string; hint?: string }) {
       <p className="hint">{props.hint ?? SCAN_HINT}</p>
     </div>
   );
-}
-
-/** What a person pastes to their own agent when they don't know how to add an MCP server there (TIN-360). */
-export function askYourAgentPrompt(url: string): string {
-  return `I want to connect you to a remote MCP server. URL: ${url}. It uses Streamable HTTP and needs no OAuth: the access is in the URL. Tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
 }
 
 /** The agent's manual as a skill for Claude Code and other CLIs (skills/pulse-agent/SKILL.md in the repo). */

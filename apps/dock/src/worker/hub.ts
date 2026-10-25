@@ -241,6 +241,18 @@ export class Hub extends DurableObject<Env> {
     return { id: a.id };
   }
 
+  /**
+   * The person's world (TIN-403): the seed every app opens on, chosen or kept in the dock's first run
+   * or with Change world. Choosing it ends the first run.
+   */
+  async setWorld(seed: unknown): Promise<{ ok: boolean; error?: string }> {
+    if (typeof seed !== "number" || !Number.isInteger(seed) || seed < 0 || seed >= 2 ** 32) return { ok: false, error: "invalid_seed" };
+    this.setMeta("seed", String(seed));
+    this.setMeta("setup_done", new Date().toISOString());
+    this.broadcast();
+    return { ok: true };
+  }
+
   async state(origin: string) {
     const did = this.meta("did");
     // The demo world's seed (TIN-393): the dock opens every app on it, so they show the same market and
@@ -248,6 +260,8 @@ export class Hub extends DurableObject<Env> {
     if (!this.meta("seed")) this.setMeta("seed", String(crypto.getRandomValues(new Uint32Array(1))[0]));
     return {
       seed: Number(this.meta("seed")),
+      // The first run (TIN-403) is over once a world is chosen; a dock already paired with an app skips it.
+      setup_done: !!this.meta("setup_done") || this.sql.exec("select 1 from pairings limit 1").toArray().length > 0,
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
       agents: this.agents().map((a) => {
         const row = this.pointer(a.id);

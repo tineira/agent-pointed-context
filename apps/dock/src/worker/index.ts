@@ -45,6 +45,11 @@ app.use("/api/d/:did/*", async (c, next) => {
 const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.did);
 app.get("/api/d/:did/state", async (c) => c.json(await stub(c).state(new URL(c.req.url).origin)));
 app.post("/api/d/:did/agents", async (c) => c.json(await stub(c).addAgent()));
+app.post("/api/d/:did/world", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
+  const result = await stub(c).setWorld(body.seed);
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/d/:did/agents/:aid/ticket", async (c) => {
   const t = await stub(c).ticket(c.req.param("aid"));
   return t ? c.json(t) : c.json({ error: "unknown_agent" }, 404);

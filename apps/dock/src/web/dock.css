@@ -80,3 +80,28 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .float { display: flex; gap: 8px; justify-content: center; align-items: center; min-height: 100vh; padding: 8px; background: var(--bg); }
 .float-agent { cursor: grab; }
 .float-agent .chip { width: 72px; height: 72px; border-radius: 18px; }
+
+/* The first run and Change world (TIN-403). */
+.setup { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.setup p { font-size: 13px; }
+.setup-title { margin: 0; }
+.setup-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.setup-steps li { display: flex; align-items: center; gap: 8px; }
+.setup-steps li span { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 50%; font-size: 11px; font-weight: 600; }
+.setup-steps li.on { color: var(--fg); font-weight: 600; }
+.setup-steps li.on span { border-color: var(--accent); color: var(--accent); }
+.setup-steps li.done span { border-color: var(--ok); color: var(--ok); }
+.setup-agent { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.setup-agent .chip { width: 52px; height: 52px; border-radius: 14px; }
+.ok { color: var(--ok); }
+.copy-row { flex-wrap: nowrap; align-items: stretch; }
+.url-block { white-space: pre-wrap; }
+.qr-row { display: flex; gap: 10px; align-items: center; }
+.qr-row .qr { width: 132px; height: 132px; flex: none; border-radius: 8px; }
+.qr-row p { font-size: 12px; }
+.world { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.world input { flex: 1; min-width: 0; font: 15px ui-monospace, monospace; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--fg); }
+.world input[aria-invalid="true"] { border-color: #c0392b; }
+button:disabled { opacity: 0.5; cursor: default; }
+.nudge-note { font-size: 13px; color: var(--fg); }
+.launch-app.nudge { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }

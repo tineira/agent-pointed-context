@@ -10,6 +10,7 @@ import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
+import { APPS, appUrl, ConnectAgent, Install, Setup } from "./setup.tsx";
 
 interface AppRef {
   id: string;
@@ -33,6 +34,7 @@ interface DockAgent {
 }
 interface DockState {
   seed: number;
+  setup_done: boolean;
   expires_at: string;
   agents: DockAgent[];
 }
@@ -87,6 +89,9 @@ export function HubDock() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [shown, setShown] = useState<Set<string>>(new Set());
+  // Change world (TIN-403), and the apps a browser kept the world's click from opening.
+  const [changingWorld, setChangingWorld] = useState(false);
+  const [blocked, setBlocked] = useState<string[]>([]);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
 
   useEffect(() => {
@@ -189,24 +194,54 @@ export function HubDock() {
     void fetchTicket(agentId);
   }
 
+  const requests = pending.map(({ agent, pairing }) => (
+    <section key={pairing.id} className="request">
+      <p>
+        <b>{pairing.app.name}</b> at <b>{host(pairing.app.origin)}</b> wants to be read by <b>{agent.name}</b>. Its tools and data come from {pairing.app.origin}.
+      </p>
+      <div className="row">
+        <button type="button" className="primary" onClick={() => decide(pairing.id, "approve")}>
+          Allow
+        </button>
+        <button type="button" onClick={() => decide(pairing.id, "deny")}>
+          Deny
+        </button>
+      </div>
+    </section>
+    ));
+
+  // The first run, or Change world (TIN-403): the dock shows only that, and any pairing request.
+  if (!state.setup_done || changingWorld) {
+    return (
+      <main className="dock">
+        <Header />
+        {requests}
+        <Setup
+          agent={state.agents[0]}
+          seed={state.seed}
+          {...(state.setup_done ? { only: "world" as const } : {})}
+          onWorld={async (seed) => {
+            await call(`${base}/world`, { seed });
+            refresh();
+          }}
+          onDone={(held) => {
+            setBlocked(held);
+            setChangingWorld(false);
+          }}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="dock">
       <Header />
-      {pending.map(({ agent, pairing }) => (
-        <section key={pairing.id} className="request">
-          <p>
-            <b>{pairing.app.name}</b> at <b>{host(pairing.app.origin)}</b> wants to be read by <b>{agent.name}</b>. Its tools and data come from {pairing.app.origin}.
-          </p>
-          <div className="row">
-            <button type="button" className="primary" onClick={() => decide(pairing.id, "approve")}>
-              Allow
-            </button>
-            <button type="button" onClick={() => decide(pairing.id, "deny")}>
-              Deny
-            </button>
-          </div>
-        </section>
-      ))}
+      {requests}
+      {blocked.length > 0 && (
+        <p className="nudge-note">
+          Your browser held back {blocked.join(" and ")}: open {blocked.length > 1 ? "them" : "it"} below.
+        </p>
+      )}
       <ul className="tiles">
         {state.agents.map((a) => {
           const connected = !!a.client_name;
@@ -236,15 +271,7 @@ export function HubDock() {
               </div>
               <details className="tile-details" open={!connected || undefined}>
                 <summary>{connected ? "Details" : "Connect this agent"}</summary>
-                <div className="connect">
-                  <p>Add this URL to your agent as a remote MCP server. It is this agent's key: keep it to yourself.</p>
-                  <div className="row">
-                    <code className="url">{a.mcp_url}</code>
-                    <button type="button" onClick={() => void navigator.clipboard?.writeText(a.mcp_url)}>
-                      Copy
-                    </button>
-                  </div>
-                </div>
+                <ConnectAgent agent={a} />
                 {paired.length > 0 && (
                   <ul className="apps">
                     {paired.map((p) => (
@@ -279,7 +306,15 @@ export function HubDock() {
       </ul>
       <nav className="launch" aria-label="Apps">
         {APPS.map((app) => (
-          <a key={app.name} className="launch-app" href={`${app.url}?seed=${state.seed}`} target="_blank" rel="noreferrer" title={`Open ${app.name} on this dock's world`}>
+          <a
+            key={app.name}
+            className={`launch-app${blocked.includes(app.name) ? " nudge" : ""}`}
+            href={appUrl(app, state.seed)}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open ${app.name} on this dock's world`}
+            onClick={() => setBlocked((b) => b.filter((n) => n !== app.name))}
+          >
             <span className="launch-icon" aria-hidden="true">
               {app.glyph}
             </span>
@@ -292,39 +327,14 @@ export function HubDock() {
           Add an agent
         </button>
         <Float agents={state.agents} dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })} />
+        <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setChangingWorld(true)}>
+          Change world
+        </button>
         <Install />
       </div>
     </main>
   );
 }
-
-/**
- * The apps the dock opens, each as its own page, all on the dock's seed (TIN-393): the same world in
- * every app, while the apps know nothing of each other. The agent does the joining.
- */
-const APPS = [
-  {
-    name: "Pulse",
-    url: import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.v2.apc.tineira.com/overview",
-    glyph: (
-      <svg viewBox="0 0 32 32" width="22" height="22">
-        <rect x="4" y="8" width="20" height="20" rx="5" fill="none" stroke="currentColor" strokeWidth="3.5" />
-        <circle cx="24" cy="8" r="5.5" fill="currentColor" />
-      </svg>
-    ),
-  },
-  {
-    name: "Signals",
-    url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.v2.apc.tineira.com/",
-    glyph: (
-      <svg viewBox="0 0 28 28" width="22" height="22">
-        <circle cx="14" cy="14" r="11.5" fill="none" stroke="currentColor" strokeWidth="2.5" />
-        <circle cx="14" cy="14" r="5.5" fill="none" stroke="currentColor" strokeWidth="2.5" />
-        <circle cx="14" cy="14" r="2" fill="currentColor" />
-      </svg>
-    ),
-  },
-];
 
 /**
  * Float (TIN-392): an installed web app cannot stay on top of other windows; a Document
@@ -381,25 +391,6 @@ function Float(props: { agents: DockAgent[]; dragProps: (a: DockAgent) => { star
       }}
     >
       {win ? "Floating" : "Float"}
-    </button>
-  );
-}
-
-/** Install the dock as an app (Chrome and Edge offer it; elsewhere use the browser's menu). Hidden once installed. */
-function Install() {
-  const [prompt, setPrompt] = useState<(Event & { prompt(): Promise<void> }) | null>(null);
-  useEffect(() => {
-    const on = (e: Event) => {
-      e.preventDefault();
-      setPrompt(e as Event & { prompt(): Promise<void> });
-    };
-    window.addEventListener("beforeinstallprompt", on);
-    return () => window.removeEventListener("beforeinstallprompt", on);
-  }, []);
-  if (!prompt) return null;
-  return (
-    <button type="button" className="primary" onClick={() => void prompt.prompt().then(() => setPrompt(null))}>
-      Install
     </button>
   );
 }
