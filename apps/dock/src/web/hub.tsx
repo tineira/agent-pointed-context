@@ -89,9 +89,13 @@ export function HubDock() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [shown, setShown] = useState<Set<string>>(new Set());
-  // Change world (TIN-403), and the apps a browser kept the world's click from opening.
-  const [changingWorld, setChangingWorld] = useState(false);
-  const [blocked, setBlocked] = useState<string[]>([]);
+  // The first run or Change world (TIN-403, TIN-406). It stays open until the person is done, though
+  // the hub marks the first run over as soon as the world is chosen.
+  const [wizard, setWizard] = useState<"first" | "world" | null>(null);
+  const setupDone = state?.setup_done;
+  useEffect(() => {
+    if (setupDone === false) setWizard((w) => w ?? "first");
+  }, [setupDone]);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
 
   useEffect(() => {
@@ -211,7 +215,7 @@ export function HubDock() {
     ));
 
   // The first run, or Change world (TIN-403): the dock shows only that, and any pairing request.
-  if (!state.setup_done || changingWorld) {
+  if (wizard || !state.setup_done) {
     return (
       <main className="dock">
         <Header />
@@ -219,15 +223,12 @@ export function HubDock() {
         <Setup
           agent={state.agents[0]}
           seed={state.seed}
-          {...(state.setup_done ? { only: "world" as const } : {})}
+          {...(wizard === "world" ? { only: "world" as const } : {})}
           onWorld={async (seed) => {
             await call(`${base}/world`, { seed });
             refresh();
           }}
-          onDone={(held) => {
-            setBlocked(held);
-            setChangingWorld(false);
-          }}
+          onDone={() => setWizard(null)}
         />
       </main>
     );
@@ -237,11 +238,6 @@ export function HubDock() {
     <main className="dock">
       <Header />
       {requests}
-      {blocked.length > 0 && (
-        <p className="nudge-note">
-          Your browser held back {blocked.join(" and ")}: open {blocked.length > 1 ? "them" : "it"} below.
-        </p>
-      )}
       <ul className="tiles">
         {state.agents.map((a) => {
           const connected = !!a.client_name;
@@ -308,12 +304,11 @@ export function HubDock() {
         {APPS.map((app) => (
           <a
             key={app.name}
-            className={`launch-app${blocked.includes(app.name) ? " nudge" : ""}`}
+            className="launch-app"
             href={appUrl(app, state.seed)}
             target="_blank"
             rel="noreferrer"
             title={`Open ${app.name} on this dock's world`}
-            onClick={() => setBlocked((b) => b.filter((n) => n !== app.name))}
           >
             <span className="launch-icon" aria-hidden="true">
               {app.glyph}
@@ -327,7 +322,7 @@ export function HubDock() {
           Add an agent
         </button>
         <Float agents={state.agents} dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })} />
-        <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setChangingWorld(true)}>
+        <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWizard("world")}>
           Change world
         </button>
         <Install />

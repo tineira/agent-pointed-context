@@ -103,5 +103,8 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .world input { flex: 1; min-width: 0; font: 15px ui-monospace, monospace; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--fg); }
 .world input[aria-invalid="true"] { border-color: #c0392b; }
 button:disabled { opacity: 0.5; cursor: default; }
-.nudge-note { font-size: 13px; color: var(--fg); }
-.launch-app.nudge { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.choice { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.choice b { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.download { display: block; text-align: center; padding: 9px; border: 1px solid var(--line); border-radius: 12px; color: var(--fg); text-decoration: none; font-weight: 600; }
+.download:hover { border-color: var(--muted); }
+.small-note { font-size: 11px; }

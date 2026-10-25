@@ -1,7 +1,7 @@
 name: Desktop
 
 # Pulse for desktop (TIN-396): test it, and build the Windows app as one self-contained .exe, kept as
-# this run's artifact. It deploys nothing.
+# this run's artifact; on main, also published to the pulse-desktop prerelease (TIN-406).
 on:
   push:
     branches: [main]
@@ -34,3 +34,23 @@ jobs:
           name: PulseDesktop-win-x64
           path: publish/PulseDesktop.exe
           if-no-files-found: error
+
+  # The dock's first run offers the app as a download (TIN-406): each build of main replaces the .exe
+  # on one fixed prerelease, so its link never changes and releases/latest stays the APC release.
+  publish:
+    needs: windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PulseDesktop-win-x64
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view pulse-desktop -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create pulse-desktop -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" --title "Pulse for desktop (latest build)" --notes "Pulse for desktop, built from main."
+          gh release upload pulse-desktop PulseDesktop.exe -R "$GITHUB_REPOSITORY" --clobber
+          gh release edit pulse-desktop -R "$GITHUB_REPOSITORY" --notes "Pulse for desktop (Windows, self-contained), the app the agent dock offers in its first run. Built from main at ${GITHUB_SHA}. Unsigned: Windows SmartScreen asks once (More info, then Run anyway)."
