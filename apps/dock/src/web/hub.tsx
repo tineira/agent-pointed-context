@@ -148,7 +148,7 @@ export function HubDock() {
     if (!base || !state) return;
     for (const a of state.agents) {
       if (!a.client_name) continue;
-      const icon = document.querySelector(`[data-agent-chip="${a.id}"] > *`);
+      const icon = document.querySelector(`[data-badge-source="${a.id}"] > *`);
       if (!icon) continue;
       void badgeOf(icon).then((badge) => {
         if (!badge || badge === a.badge || drawn.current.get(a.id) === badge) return;
@@ -230,6 +230,7 @@ export function HubDock() {
     return (
       <main className="dock">
         <Header />
+        <BadgeSources agents={state.agents} />
         {requests}
         <Setup
           agent={state.agents[0]}
@@ -248,6 +249,7 @@ export function HubDock() {
   return (
     <main className="dock">
       <Header />
+      <BadgeSources agents={state.agents} />
       {requests}
       <ul className="tiles">
         {state.agents.map((a) => {
@@ -256,7 +258,7 @@ export function HubDock() {
           return (
             <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
               <div className="tile-drag" {...dragProps(a)}>
-                <span className="chip" data-agent-chip={a.id}>
+                <span className="chip">
                   <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!connected ? "off" : a.waiting ? "waiting" : "idle"} size={64} />
                 </span>
                 <span className="tile-name">{a.name}</span>
@@ -398,6 +400,24 @@ function Float(props: { agents: DockAgent[]; dragProps: (a: DockAgent) => { star
     >
       {win ? "Floating" : "Float"}
     </button>
+  );
+}
+
+/**
+ * Each connected agent's icon, hidden: what the dock draws the agent's mark from (TIN-388), whatever
+ * it shows. The first run shows no tiles, and an app paired during it needs the mark too (TIN-409).
+ */
+function BadgeSources(props: { agents: DockAgent[] }) {
+  return (
+    <div hidden aria-hidden="true">
+      {props.agents
+        .filter((a) => a.client_name)
+        .map((a) => (
+          <span key={a.id} data-badge-source={a.id}>
+            <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} size={64} />
+          </span>
+        ))}
+    </div>
   );
 }
 
