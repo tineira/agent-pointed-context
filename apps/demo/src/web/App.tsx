@@ -49,6 +49,16 @@ function writeRoute(route: Route, filters: Filters): void {
   if (next !== `${location.pathname}${location.search}`) history.pushState(null, "", next);
 }
 
+/** APC v2 features stay off in v1 unless the page was opened with ?apc=v2 (remembered for the tab). */
+function v2Enabled(): boolean {
+  try {
+    if (new URLSearchParams(location.search).get("apc") === "v2") sessionStorage.setItem("apc-v2", "1");
+    return sessionStorage.getItem("apc-v2") === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** The landing is public and opens no sandbox; every other page belongs to the visitor's sandbox. */
 export function App() {
   const [path, setPath] = useState(location.pathname);
@@ -186,6 +196,9 @@ function Sandbox({ sid }: { sid: string }) {
   useEffect(
     () =>
       enablePinning({
+        // APC v2 (TIN-369): drops of an agent dragged from a dock in another window, only with ?apc=v2.
+        acceptNativeDrops: v2Enabled(),
+        resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
         canTarget: (grantId, target: FocusTarget) => {
           const grant = stateRef.current?.grants.find((g) => g.id === grantId);
           if (!grant?.regions) return true;
