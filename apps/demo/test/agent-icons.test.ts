@@ -19,6 +19,10 @@ test("client names map to their brand", () => {
   assert.equal(id("antigravity"), "antigravity");
   assert.equal(id("cursor-vscode"), "cursor");
   assert.equal(id("Kimi"), "kimi");
+  assert.equal(id("zcode"), "zai", "Z.ai's ZCode (TIN-415)");
+  assert.equal(id("ZCode"), "zai");
+  assert.equal(id("z-code"), "zai");
+  assert.equal(id("claude-code"), "claude", "ZCode's match does not take Claude Code");
   assert.equal(id("mcp-inspector"), null);
   assert.equal(id(null), null);
 });
