@@ -48,13 +48,11 @@ test("only a small raster data URI is kept from clientInfo.icons", () => {
   assert.equal(pickClientIcon(undefined), null);
 });
 
-test("a Grok bot gets one character, fixed per agent", async () => {
-  const { GROK_BOTS } = await import("../src/web/agent-logos.ts");
-  const { pickImage } = await import("../src/web/agent-brands.ts");
-  assert.equal(GROK_BOTS.length, 9);
-  assert.equal(pickImage(GROK_BOTS, "g_1234"), pickImage(GROK_BOTS, "g_1234"));
-  const seen = new Set(Array.from({ length: 40 }, (_, i) => pickImage(GROK_BOTS, `g_${i}`).name));
-  assert.ok(seen.size > 4, "different agents get different characters");
+test("every Grok bot shows the same base logo (TIN-365)", async () => {
+  const { GROK_BOT_PNG } = await import("../src/web/agent-logos.ts");
+  const logo = brandFor("Cursor", "Cursor/1.0.0")?.logo;
+  assert.ok(logo && "image" in logo && logo.image === GROK_BOT_PNG);
+  assert.match(GROK_BOT_PNG, /^data:image\/png;base64,/);
 });
 
 test("agent names: the person's, then the agent's, then the client title, then the product, numbered (TIN-356)", async () => {

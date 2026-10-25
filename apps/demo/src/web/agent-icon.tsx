@@ -1,4 +1,4 @@
-import { BRANDS, brandFor, colorFor, pickImage, type AgentMotion } from "./agent-brands.ts";
+import { BRANDS, brandFor, colorFor, type AgentMotion } from "./agent-brands.ts";
 
 /** A small robot, for a client with no curated logo and no icon of its own. */
 const BOT_PATH =
@@ -8,8 +8,8 @@ const BOT_PATH =
  * An agent's icon: the curated logo for its client, else the raster icon it sent, else a bot
  * colored from its name. motion animates it (styles.css, .agent-icon-*); reduced motion stops it.
  */
-export function AgentIcon(props: { clientName: string | null; clientUa?: string | null; clientIcon?: string | null; seed: string; motion?: AgentMotion; size?: number; brandId?: string }) {
-  const { clientName, clientIcon, seed, motion = "idle", size = 20 } = props;
+export function AgentIcon(props: { clientName: string | null; clientUa?: string | null; clientIcon?: string | null; motion?: AgentMotion; size?: number; brandId?: string }) {
+  const { clientName, clientIcon, motion = "idle", size = 20 } = props;
   // brandId draws a brand's logo with no client behind it (the How-to's logo row).
   const brand = props.brandId ? (BRANDS.find((b) => b.id === props.brandId) ?? null) : brandFor(clientName, props.clientUa);
   const cls = `agent-icon agent-icon-${motion}`;
@@ -24,10 +24,7 @@ export function AgentIcon(props: { clientName: string | null; clientUa?: string 
       </svg>
     );
   }
-  if (logo) {
-    const src = "image" in logo ? logo.image : pickImage(logo.images, seed).src;
-    return <img className={cls} src={src} width={size} height={size} alt={label} />;
-  }
+  if (logo) return <img className={cls} src={logo.image} width={size} height={size} alt={label} />;
   if (clientIcon) return <img className={cls} src={clientIcon} width={size} height={size} alt={label} />;
   return (
     <svg className={cls} width={size} height={size} viewBox="0 0 24 24" role="img" aria-label={label}>

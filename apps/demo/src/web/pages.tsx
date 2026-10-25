@@ -234,7 +234,7 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; gr
               <td title={r.user_agent ?? ""}>
                 {r.client_name ? (
                   <span className="inline-flex items-center gap-1.5">
-                    <AgentIcon clientName={r.client_name} clientUa={r.user_agent} seed={r.grant_id} clientIcon={props.grants.find((g) => g.id === r.grant_id)?.client_icon} size={16} />
+                    <AgentIcon clientName={r.client_name} clientUa={r.user_agent} clientIcon={props.grants.find((g) => g.id === r.grant_id)?.client_icon} size={16} />
                     {`${r.client_name}${r.client_version ? ` ${r.client_version}` : ""}`}
                   </span>
                 ) : (

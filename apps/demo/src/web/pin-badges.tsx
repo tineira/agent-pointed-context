@@ -130,7 +130,7 @@ export function PinBadges(props: {
             title={`${names.get(g.id)}: ${seen ? "read this pin" : "has not read this pin yet"}. Drag to point it at something else.`}
           >
             <span className="pin-badge-mark" data-apc-mark data-grant={g.id} onPointerDown={(e) => e.button === 0 && setDragging(g.id)}>
-              <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} seed={g.id} motion={props.motionOf(g.id)} size={18} />
+              <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} motion={props.motionOf(g.id)} size={18} />
             </span>
             {seen && (
               <span className="pin-badge-check" aria-hidden="true">

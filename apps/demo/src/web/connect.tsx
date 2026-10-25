@@ -122,7 +122,7 @@ export function AgentCard(props: {
       <div className="grant-head">
         <h3>
           <span className="mark-inline mark-logo" title={props.initials}>
-            <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} seed={g.id} motion={connected ? "idle" : "off"} size={16} />
+            <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} motion={connected ? "idle" : "off"} size={16} />
           </span>{" "}
           {editing !== null ? (
             <form
