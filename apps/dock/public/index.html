@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APC v2 · agent dock</title>
+    <meta name="description" content="APC v2, in progress: one agent across apps. Drag your agent from a dock onto any app that speaks Agent Pointed Context." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <style>
+      :root { color-scheme: light dark; --bg: #f3f5f8; --fg: #141a24; --muted: #56627a; --line: #d6dce5; --card: #ffffff; --accent: #b85209; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0b0e13; --fg: #e9edf3; --muted: #8a96a8; --line: #242c38; --card: #131820; --accent: #ff9f1c; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100svh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { width: min(560px, 100%); padding: 28px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+      .kicker { font: 600 11px ui-monospace, monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+      h1 { margin: 6px 0 10px; font-size: 22px; }
+      p { margin: 0 0 12px; color: var(--muted); }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="kicker">APC v2 · in progress</div>
+      <h1>Agent dock</h1>
+      <p>One agent, many apps. A window with your agents, already connected, that you drag onto any app that speaks Agent Pointed Context, wherever your attention is.</p>
+      <p>Nothing to try here yet. The working demo is <a href="https://apc.tineira.com">apc.tineira.com</a>; the code is on <a href="https://github.com/tineira/agent-pointed-context">GitHub</a>.</p>
+    </main>
+  </body>
+</html>
