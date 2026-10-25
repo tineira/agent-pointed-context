@@ -10,53 +10,13 @@ import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
-import { askToDisconnectPrompt, askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
+import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
-import { APPS, appUrl, ConnectAgent, CopyRow, Install, Setup } from "./setup.tsx";
+import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
+import { APPS, appUrl, ConnectAgent, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
-
-interface AppRef {
-  id: string;
-  name: string;
-  origin: string;
-}
-interface DockAgent {
-  id: string;
-  label: string;
-  name: string;
-  client_name: string | null;
-  client_ua: string | null;
-  client_icon: string | null;
-  badge: string | null;
-  mcp_url: string;
-  last_active_at: string | null;
-  waiting: boolean;
-  focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
-  pairings: Array<{ id: string; app: AppRef; status: "pending" | "paired"; created_at: string; page_open: boolean | null; error: string | null }>;
-  compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
-}
-interface DockState {
-  seed: number;
-  setup_done: boolean;
-  expires_at: string;
-  agents: DockAgent[];
-}
-
-const host = (origin: string) => {
-  try {
-    return new URL(origin).host;
-  } catch {
-    return origin;
-  }
-};
-
-async function call<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok && response.status !== 400) throw new Error(`${path}: ${response.status}`);
-  return (await response.json()) as T;
-}
 
 /**
  * Draw an agent's icon (an <svg> or an <img> from AgentIcon) as a 64 px PNG data URI: the agent's
@@ -88,7 +48,28 @@ async function badgeOf(icon: Element): Promise<string | null> {
   }
 }
 
+/** An agent's page (TIN-419): /dock/agents/<id>. */
+const agentRoute = (path: string) => path.match(/^\/dock\/agents\/(ag_[0-9a-f]+)\/?$/)?.[1] ?? null;
+
 export function HubDock() {
+  // The dock's own address: the list at /dock, an agent's page at /dock/agents/<id>; Back works.
+  const [path, setPath] = useState(location.pathname);
+  useEffect(() => {
+    const on = () => setPath(location.pathname);
+    window.addEventListener("popstate", on);
+    return () => window.removeEventListener("popstate", on);
+  }, []);
+  // Whether this page pushed the agent's page, so ← Dock can be the browser's Back.
+  const pushed = useRef(false);
+  const go = useCallback((to: string, replace = false) => {
+    if (location.pathname !== to) {
+      if (replace) history.replaceState(null, "", to);
+      else history.pushState(null, "", to);
+    }
+    pushed.current = !replace && to !== "/dock";
+    setPath(to);
+    window.scrollTo(0, 0);
+  }, []);
   const [did, setDid] = useState<string | null>(null);
   const [state, setState] = useState<DockState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -253,6 +234,38 @@ export function HubDock() {
     );
   }
 
+  const pageOf = agentRoute(path);
+  if (pageOf) {
+    const agent = state.agents.find((a) => a.id === pageOf);
+    const back = () => (pushed.current ? history.back() : go("/dock", true));
+    if (!agent)
+      return (
+        <main className="dock">
+          <Header />
+          <p>This agent is no longer in your dock.</p>
+          <div className="row">
+            <button type="button" onClick={() => go("/dock", true)}>
+              ← Dock
+            </button>
+          </div>
+        </main>
+      );
+    return (
+      <>
+        <BadgeSources agents={state.agents} />
+        <AgentPage
+          agent={agent}
+          base={base}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, app: p.app }))}
+          decide={decide}
+          refresh={refresh}
+          back={back}
+          dragProps={dragProps(agent)}
+        />
+      </>
+    );
+  }
+
   return (
     <main className="dock">
       <Header />
@@ -286,38 +299,27 @@ export function HubDock() {
                   )}
                 </span>
               </div>
-              <details className="tile-details" open={!connected || undefined}>
-                <summary>{connected ? "Details" : "Connect this agent"}</summary>
-                <ConnectAgent agent={a} />
-                {paired.length > 0 && (
-                  <ul className="apps">
-                    {paired.map((p) => (
-                      <li key={p.id}>
-                        <span>
-                          {p.app.name} <span className="muted">· {host(p.app.origin)}</span>
-                          {p.error && <span className="warn"> · not answering</span>}
-                        </span>
-                        <button type="button" onClick={() => decide(p.id, "unpair")}>
-                          Unpair
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {connected && paired.length > 0 && (
-                  <p className="compat" title="What this agent's client does with the dock, for the compatibility matrix (TIN-384)">
-                    Tools re-listed after pairing: {a.compat.listed_after_pairing ? "yes" : "not yet"} · prefixed calls {a.compat.prefixed_calls} · call_app_tool {a.compat.relay_calls} · waits {a.compat.waits}
-                  </p>
-                )}
-                {a.focus && (
-                  <div className="row small">
-                    <button type="button" onClick={() => void call(`${base}/agents/${a.id}/clear`, {}).then(refresh)}>
-                      Clear pointer
-                    </button>
-                  </div>
-                )}
-                <RemoveAgent agent={a} apps={paired.map((p) => p.app.name)} remove={() => call(`${base}/agents/${a.id}/remove`, {}).then(refresh)} />
-              </details>
+              {connected ? (
+                <a
+                  className="tile-more"
+                  href={`/dock/agents/${a.id}`}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                    e.preventDefault();
+                    go(`/dock/agents/${a.id}`);
+                  }}
+                >
+                  Details{paired.length ? ` · ${paired.length} app${paired.length === 1 ? "" : "s"}` : ""}
+                  {a.calls ? ` · ${a.calls} call${a.calls === 1 ? "" : "s"}` : ""} →
+                </a>
+              ) : (
+                // Not connected yet: how to connect it stays under its tile, as in the first run.
+                <details className="tile-details" open>
+                  <summary>Connect this agent</summary>
+                  <ConnectAgent agent={a} />
+                  <RemoveAgent agent={a} apps={[]} remove={() => call(`${base}/agents/${a.id}/remove`, {}).then(refresh)} />
+                </details>
+              )}
             </li>
           );
         })}
@@ -460,52 +462,6 @@ function Float(props: {
     >
       {win ? "Floating" : "Float"}
     </button>
-  );
-}
-
-/**
- * Remove an agent (TIN-418), behind a confirm that says what goes. A connected agent keeps the dock's
- * server in its own settings, so the confirm gives the prompt that asks it to drop "APC".
- */
-function RemoveAgent(props: { agent: DockAgent; apps: string[]; remove: () => Promise<unknown> }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [busy, setBusy] = useState(false);
-  const connected = !!props.agent.client_name;
-  return (
-    <div className="row small">
-      <button type="button" className="danger-link" onClick={() => dialog.current?.showModal()}>
-        Remove this agent
-      </button>
-      <dialog ref={dialog} className="confirm" onClick={(e) => e.target === dialog.current && !busy && dialog.current?.close()}>
-        <h2>Remove {props.agent.name}?</h2>
-        <p>
-          Its MCP URL stops working{props.apps.length ? `, and ${props.apps.join(" and ")} lose${props.apps.length === 1 ? "s" : ""} it` : ""}. You can add a new agent any time.
-        </p>
-        {connected && (
-          <>
-            <p>Then remove the "APC" server from your agent. Paste this to it:</p>
-            <CopyRow text={askToDisconnectPrompt("APC", location.host)} label="Copy prompt" block />
-          </>
-        )}
-        <div className="row">
-          <button type="button" disabled={busy} onClick={() => dialog.current?.close()}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="danger"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              await props.remove().catch(() => undefined);
-              dialog.current?.close();
-            }}
-          >
-            {busy ? "Removing…" : "Remove"}
-          </button>
-        </div>
-      </dialog>
-    </div>
   );
 }
 
