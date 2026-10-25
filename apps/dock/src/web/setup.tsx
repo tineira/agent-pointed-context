@@ -194,10 +194,11 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
             <span className="chip">
               <AgentIcon clientName={agent.client_name} clientUa={agent.client_ua} clientIcon={agent.client_icon} motion={!connected ? "off" : agent.waiting ? "waiting" : "idle"} size={40} />
             </span>
-            <span>{connected ? <span className="ok">Connected as {agent.client_name} ✓</span> : "Waiting for your agent…"}</span>
+            <span>{connected ? <span className="ok">{agent.name} is connected ✓</span> : "Waiting for your agent…"}</span>
           </div>
         )}
-        {agent && <ConnectAgent agent={agent} />}
+        {/* Once the agent connects, the instructions have done their job: the tile keeps them. */}
+        {agent && !connected && <ConnectAgent agent={agent} />}
         <div className="row">
           <button type="button" onClick={() => setStep(0)}>
             Back
