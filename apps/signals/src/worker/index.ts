@@ -3,7 +3,7 @@
  * and each grant's MCP URL (the secret in it is the grant). The page is static assets.
  */
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { FEED_TTL_MS, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";
@@ -58,6 +58,12 @@ app.use("/api/s/:sid/*", async (c, next) => {
 
 const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.sid);
 app.get("/api/s/:sid/state", async (c) => c.json(await stub(c).state()));
+/** Start over (TIN-411): this feed's data and cookie go. */
+app.post("/api/s/:sid/reset", async (c) => {
+  await stub(c).reset();
+  deleteCookie(c, COOKIE, { path: "/" });
+  return c.json({ ok: true });
+});
 app.post("/api/s/:sid/view", async (c) => c.json(await stub(c).reportView(await c.req.json().catch(() => null))));
 app.post("/api/s/:sid/pin", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { grant_id?: unknown; target?: unknown };

@@ -132,6 +132,11 @@ export class Feed extends DurableObject<Env> {
     await this.alarm();
     return false;
   }
+  /** Start over (TIN-411): delete everything, as when the feed expires. A dock reading it gets 404 and drops it. */
+  async reset(): Promise<void> {
+    await this.alarm();
+  }
+
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "expired");
     await this.ctx.storage.deleteAll();

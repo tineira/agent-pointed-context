@@ -11,7 +11,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
+import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { APPS, appUrl, ConnectAgent, Install, Setup } from "./setup.tsx";
+
+/** What the dock's Start over deletes (TIN-411). */
+const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
 
 interface AppRef {
   id: string;
@@ -242,6 +246,9 @@ export function HubDock() {
           }}
           onDone={() => setWizard(null)}
         />
+        <div className="row small footer">
+          <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
+        </div>
       </main>
     );
   }
@@ -339,6 +346,7 @@ export function HubDock() {
           Change world
         </button>
         <Install />
+        <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
       </div>
     </main>
   );

@@ -5,7 +5,7 @@
  * served as static assets.
  */
 import { Hono } from "hono";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { SANDBOX_TTL_MS, type Env } from "./sandbox.ts";
 
@@ -95,6 +95,12 @@ app.get("/api/s/:sid/state", async (c) => c.json(await rpc(c.env, c.var.sid, (s)
  * The sandbox's data, for a client that is not this page (TIN-396: Pulse for desktop). The page
  * rebuilds it from the seed with the same function; a native client would have to port it. v2 only.
  */
+/** Start over (TIN-411, Pulse's v2 deploy only): this sandbox's data and cookie go. */
+app.post("/api/s/:sid/reset", async (c) => {
+  if (!(await rpc(c.env, c.var.sid, (s) => s.reset()))) return c.json({ error: "not_found" }, 404);
+  deleteCookie(c, COOKIE, { path: "/" });
+  return c.json({ ok: true });
+});
 app.get("/api/s/:sid/dataset", async (c) => {
   if (c.env.APC_V2 !== "1") return c.json({ error: "not_found" }, 404);
   return c.json(await rpc(c.env, c.var.sid, (s) => s.dataset()));

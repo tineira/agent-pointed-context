@@ -198,6 +198,15 @@ export class Hub extends DurableObject<Env> {
     await this.alarm();
     return false;
   }
+  /**
+   * Start over (TIN-411): give every grant back, so each paired app drops it (TIN-388), then delete
+   * everything, as when the dock expires.
+   */
+  async reset(): Promise<void> {
+    await Promise.allSettled(this.pairings().map((p) => revokeGrant(p.mcp_url)));
+    await this.alarm();
+  }
+
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "dock expired");
     await this.ctx.storage.deleteAll();
