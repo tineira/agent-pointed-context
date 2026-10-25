@@ -269,6 +269,10 @@ export class Sandbox extends DurableObject<Env> {
     return true;
   }
 
+  async dataset(): Promise<Dataset> {
+    return this.data();
+  }
+
   async state() {
     return {
       seed: Number(this.meta("seed")),

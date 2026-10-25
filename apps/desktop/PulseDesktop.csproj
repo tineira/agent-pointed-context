@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Pulse for desktop (TIN-396): a native app that takes the agent dropped from the dock. Avalonia, so the
+       same code builds for Windows now and macOS and Linux next (TIN-398, TIN-399). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>PulseDesktop</AssemblyName>
+    <RootNamespace>PulseDesktop</RootNamespace>
+    <Version>0.1.0</Version>
+    <ApplicationIcon>pulse.ico</ApplicationIcon>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.20" />
+  </ItemGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="pulse.ico" />
+  </ItemGroup>
+</Project>
