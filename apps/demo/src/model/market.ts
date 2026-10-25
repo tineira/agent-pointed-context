@@ -10,7 +10,8 @@
  */
 import { MONTHS, PLANS, prng, REGIONS, type Dataset, type Plan, type Region } from "./seed.ts";
 
-export const COMPETITORS = ["Tallybird", "Northbeam Metrics", "Usagely"] as const;
+// Fictional names, none of them a real analytics company (TIN-386).
+export const COMPETITORS = ["Tallyfin", "Northloop", "Usagewise"] as const;
 export const CHANNELS = ["search", "social", "newsletter", "podcast"] as const;
 export type Channel = (typeof CHANNELS)[number];
 

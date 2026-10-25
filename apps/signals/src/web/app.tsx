@@ -8,6 +8,7 @@ import { createViewReporter, enablePinning, type AgentDrag } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
+import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 
 interface GrantState {
   id: string;
@@ -25,7 +26,10 @@ type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: Focu
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/" : "https://v2.apc.tineira.com/";
 const PULSE_URL = import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.v2.apc.tineira.com/overview";
-const REGION_NAME: Record<string, string> = { latam: "LATAM", na: "North America", emea: "Europe" };
+const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
+const PLAN_NAME: Record<string, string> = { starter: "Starter", team: "Team", business: "Business" };
+const MONTH_NAME = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const monthLabel = (m: string) => `${MONTH_NAME[Number(m.slice(5)) - 1]} ${m.slice(0, 4)}`;
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -56,16 +60,30 @@ export function App() {
   return <Feed sid={sid} />;
 }
 
-function Shell(props: { children: React.ReactNode; right?: React.ReactNode }) {
+function Shell(props: { children: React.ReactNode; nav?: React.ReactNode; side?: React.ReactNode; top?: React.ReactNode; mobile?: React.ReactNode }) {
   return (
-    <div className="page">
-      <header>
+    <div className="layout">
+      <nav className="left">
         <div className="brand">
-          <span className="logo" aria-hidden="true">◎</span> Signals <span className="kicker">APC v2 · market feed</span>
+          <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+            <circle cx="14" cy="14" r="12" fill="none" stroke="currentColor" strokeWidth="2.5" />
+            <circle cx="14" cy="14" r="6" fill="none" stroke="currentColor" strokeWidth="2.5" />
+            <circle cx="14" cy="14" r="2" fill="currentColor" />
+          </svg>
+          <span>Signals</span>
         </div>
-        {props.right}
-      </header>
-      <main>{props.children}</main>
+        {props.nav}
+        <p className="disclaimer">A fictional market feed, generated for your Pulse sandbox. APC v2 demo.</p>
+      </nav>
+      <main className="timeline">
+        <div className="mobile-bar">
+          <span className="brand">Signals</span>
+          {props.mobile}
+        </div>
+        {props.top}
+        {props.children}
+      </main>
+      <aside className="right">{props.side}</aside>
     </div>
   );
 }
@@ -130,69 +148,162 @@ function Feed({ sid }: { sid: string }) {
   if (!state) return <Shell><p className="muted">Loading…</p></Shell>;
   const pinsOn = (postId: string, part: string | null) => state.grants.filter((g) => g.pin?.id === postId && (g.pin.part ?? null) === part);
 
+  const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
+  const advertisers = [...new Set(posts.map((p) => p.author))].map((a) => ({ author: a, n: posts.filter((p) => p.author === a).length }));
+  const unpin = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
   return (
     <Shell
-      right={
-        <div className="actions">
-          <a href={PULSE_URL} target="_blank" rel="noreferrer">
-            Pulse
-          </a>
-          <button type="button" onClick={() => window.open(DOCK_URL, "apc-dock", "popup,width=360,height=600")} title="Open your agent dock, and drag an agent from it onto a post">
+      mobile={
+        <div className="mobile-actions">
+          <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
+            <option value="">All months</option>
+            {MONTHS.map((m) => (
+              <option key={m} value={m}>
+                {monthLabel(m)}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={() => window.open(DOCK_URL, "apc-dock", "popup,width=360,height=600")}>
             Dock
           </button>
         </div>
       }
+      nav={
+        <>
+          <ul className="nav">
+            {tabs.map(([k, label]) => (
+              <li key={k}>
+                <button type="button" className={kind === k ? "on" : ""} onClick={() => setKind(k)}>
+                  {label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="nav-actions">
+            <button type="button" className="primary" onClick={() => window.open(DOCK_URL, "apc-dock", "popup,width=360,height=600")} title="Open your agent dock, and drag an agent from it onto a post">
+              Open agent dock
+            </button>
+            <a href={PULSE_URL} target="_blank" rel="noreferrer">
+              Back to Pulse
+            </a>
+          </div>
+        </>
+      }
+      top={
+        <>
+          <div className="tabs" role="tablist">
+            {tabs.map(([k, label]) => (
+              <button key={k} type="button" role="tab" aria-selected={kind === k} className={kind === k ? "on" : ""} onClick={() => setKind(k)}>
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+          {notice && <div className="notice">{notice}</div>}
+        </>
+      }
+      side={
+        <>
+          <section className="panel">
+            <h2>Filter by month</h2>
+            <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
+              <option value="">All months</option>
+              {MONTHS.map((m) => (
+                <option key={m} value={m}>
+                  {monthLabel(m)}
+                </option>
+              ))}
+            </select>
+          </section>
+          <section className="panel">
+            <h2>Who's advertising</h2>
+            <ul className="advertisers">
+              {advertisers.map((a) => (
+                <li key={a.author}>
+                  <Avatar author={a.author} size={36} />
+                  <span>
+                    <b>{a.author}</b>
+                    <span className="muted">@{brandOf(a.author).handle}</span>
+                  </span>
+                  <span className="muted">{a.n} ads</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <section className="panel muted small">Drag an agent from the dock onto a post, or onto its offer, targeting, code or text. Your agent reads it with this feed's own tools.</section>
+        </>
+      }
     >
-      {notice && <div className="notice">{notice}</div>}
-      <div className="filters">
-        {(["", "competitor_offer", "our_ad"] as const).map((k) => (
-          <button key={k} type="button" className={kind === k ? "on" : ""} onClick={() => setKind(k)}>
-            {k === "" ? "All" : k === "competitor_offer" ? "Competitors" : "Our ads"}
-          </button>
-        ))}
-        <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
-          <option value="">All months</option>
-          {MONTHS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      </div>
-      <p className="muted small">The market around your Pulse sandbox. Drag an agent from the dock onto a post, or onto its offer, audience or code.</p>
-      <ul className="feed">
-        {[...shown].reverse().map((p) => (
-          <li key={p.id} className={`post ${p.kind}`} {...focusAttrs({ kind: "post", id: p.id })}>
-            <Pins grants={pinsOn(p.id, null)} onUnpin={(id) => void call(`${base}/unpin`, { grant_id: id }).then(refresh)} />
-            <div className="post-head">
-              <b>{p.author}</b>
-              <span className="muted">
-                {p.kind === "competitor_offer" ? `competitor · ${p.month} to ${p.ends_month}` : `our ad · ${p.channel} · ${p.month}`}
-              </span>
-            </div>
-            <p className="post-text" {...focusAttrs({ kind: "post", id: p.id, part: "text" })}>
-              {p.text}
-              <Pins grants={pinsOn(p.id, "text")} onUnpin={(id) => void call(`${base}/unpin`, { grant_id: id }).then(refresh)} />
-            </p>
-            <div className="chips">
-              <span className="chip" {...focusAttrs({ kind: "post", id: p.id, part: "offer" })}>
-                {p.offer}
-                <Pins grants={pinsOn(p.id, "offer")} onUnpin={(id) => void call(`${base}/unpin`, { grant_id: id }).then(refresh)} />
-              </span>
-              <span className="chip" {...focusAttrs({ kind: "post", id: p.id, part: "audience" })}>
-                {p.kind === "competitor_offer" ? `${REGION_NAME[p.audience.region]} · ${p.audience.plan}` : p.audience.region ? REGION_NAME[p.audience.region] : "everyone"}
-                <Pins grants={pinsOn(p.id, "audience")} onUnpin={(id) => void call(`${base}/unpin`, { grant_id: id }).then(refresh)} />
-              </span>
-              {p.kind === "our_ad" && (
-                <span className="chip code" {...focusAttrs({ kind: "post", id: p.id, part: "code" })}>
-                  {p.code}
-                  <Pins grants={pinsOn(p.id, "code")} onUnpin={(id) => void call(`${base}/unpin`, { grant_id: id }).then(refresh)} />
+      {shown.length === 0 && <p className="empty muted">No posts in {monthLabel(month)}.</p>}
+      {[...shown].reverse().map((p) => {
+        const b = brandOf(p.author);
+        const st = stats(p, state.seed);
+        const parts = p.kind === "our_ad" ? p.text.split(p.code) : [p.text];
+        return (
+          <article key={p.id} className={`post ${p.kind}`} {...focusAttrs({ kind: "post", id: p.id })}>
+            <Avatar author={p.author} />
+            <div className="post-body">
+              <div className="post-head">
+                <b>{p.author}</b>
+                <Verified />
+                <span className="muted">
+                  @{b.handle} · {MONTH_NAME[Number(p.month.slice(5)) - 1]} {st.day}
                 </span>
-              )}
+                <Pins grants={pinsOn(p.id, null)} onUnpin={unpin} />
+              </div>
+              <p className="post-text" {...focusAttrs({ kind: "post", id: p.id, part: "text" })}>
+                {parts[0]}
+                {p.kind === "our_ad" && (
+                  <span className="code" {...focusAttrs({ kind: "post", id: p.id, part: "code" })}>
+                    {p.code}
+                    <Pins grants={pinsOn(p.id, "code")} onUnpin={unpin} />
+                  </span>
+                )}
+                {parts[1]}
+                <Pins grants={pinsOn(p.id, "text")} onUnpin={unpin} />
+              </p>
+              <a className="creative" href={`https://${b.domain}`} onClick={(e) => e.preventDefault()} {...focusAttrs({ kind: "post", id: p.id, part: "offer" })}>
+                <div className="creative-art" style={{ background: `linear-gradient(135deg, ${b.color}, ${b.color}cc 55%, #0b0e13)` }}>
+                  <span className="creative-kicker">{p.kind === "competitor_offer" ? `Switch to ${p.author}` : "Pulse"}</span>
+                  <span className="creative-headline">{p.offer}</span>
+                  <span className="creative-cta">{b.cta}</span>
+                  <Pins grants={pinsOn(p.id, "offer")} onUnpin={unpin} />
+                </div>
+                <div className="creative-meta">
+                  <span className="muted">{b.domain}</span>
+                  <span>{p.kind === "competitor_offer" ? `${p.author}: ${p.offer}` : `Pulse: ${p.offer}`}</span>
+                </div>
+              </a>
+              <div className="targeting" {...focusAttrs({ kind: "post", id: p.id, part: "audience" })}>
+                <span className="promoted">Promoted</span>
+                {p.kind === "competitor_offer" ? (
+                  <span>
+                    Targeting {PLAN_NAME[p.audience.plan]} teams in {REGION_NAME[p.audience.region]} · runs {monthLabel(p.month)} to {monthLabel(p.ends_month)}
+                  </span>
+                ) : (
+                  <span>
+                    Targeting {p.audience.region ? `teams in ${REGION_NAME[p.audience.region]}` : "everyone"} · {p.channel} · {monthLabel(p.month)}
+                  </span>
+                )}
+                <Pins grants={pinsOn(p.id, "audience")} onUnpin={unpin} />
+              </div>
+              <div className="engagement" aria-label="Engagement">
+                <span title="Replies">
+                  <Icon name="reply" /> {compact(st.replies)}
+                </span>
+                <span title="Reposts">
+                  <Icon name="repost" /> {compact(st.reposts)}
+                </span>
+                <span title="Likes">
+                  <Icon name="like" /> {compact(st.likes)}
+                </span>
+                <span title="Views">
+                  <Icon name="views" /> {compact(st.views)}
+                </span>
+              </div>
             </div>
-          </li>
-        ))}
-      </ul>
+          </article>
+        );
+      })}
       {pending && (
         <Consent
           pending={pending}
