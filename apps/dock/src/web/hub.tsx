@@ -8,6 +8,7 @@
  */
 import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 
 interface AppRef {
@@ -35,7 +36,6 @@ interface DockState {
   agents: DockAgent[];
 }
 
-const PULSE_URL = import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.v2.apc.tineira.com/overview";
 const host = (origin: string) => {
   try {
     return new URL(origin).host;
@@ -166,9 +166,30 @@ export function HubDock() {
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
   const decide = (pid: string, action: "approve" | "deny" | "unpair") => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
+  const dragProps = (a: DockAgent) => ({
+    draggable: true,
+    title: `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)`,
+    onDragStart: (e: React.DragEvent<HTMLElement>) => startDrag(e.nativeEvent, a.id),
+    onDragEnd: () => endDrag(a.id),
+  });
+  function startDrag(e: DragEvent, agentId: string) {
+    const t = tickets.current.get(agentId);
+    const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
+    e.dataTransfer?.setData(APC_AGENT_TYPE, agentDragPayload(agentId, fresh));
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "link";
+    const chip = (e.currentTarget as HTMLElement | null)?.querySelector(".chip");
+    if (chip && e.dataTransfer) e.dataTransfer.setDragImage(chip, 32, 32);
+    setDragging(agentId);
+  }
+  function endDrag(agentId: string) {
+    setDragging(null);
+    // A ticket is single use: the app may have spent it.
+    tickets.current.delete(agentId);
+    void fetchTicket(agentId);
+  }
 
   return (
-    <main>
+    <main className="dock">
       <Header />
       {pending.map(({ agent, pairing }) => (
         <section key={pairing.id} className="request">
@@ -185,53 +206,35 @@ export function HubDock() {
           </div>
         </section>
       ))}
-      <ul className="agents">
+      <ul className="tiles">
         {state.agents.map((a) => {
           const connected = !!a.client_name;
           const paired = a.pairings.filter((p) => p.status === "paired");
           return (
-            <li key={a.id} className="agent-block">
-              <div
-                className={`agent${dragging === a.id ? " dragging" : ""}`}
-                draggable
-                title={`Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)`}
-                onDragStart={(e) => {
-                  const t = tickets.current.get(a.id);
-                  const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
-                  e.dataTransfer.setData(APC_AGENT_TYPE, agentDragPayload(a.id, fresh));
-                  e.dataTransfer.effectAllowed = "link";
-                  const chip = e.currentTarget.querySelector(".chip");
-                  if (chip) e.dataTransfer.setDragImage(chip, 20, 20);
-                  setDragging(a.id);
-                }}
-                onDragEnd={() => {
-                  setDragging(null);
-                  // A ticket is single use: the app may have spent it.
-                  tickets.current.delete(a.id);
-                  void fetchTicket(a.id);
-                }}
-              >
+            <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
+              <div className="tile-drag" {...dragProps(a)}>
                 <span className="chip" data-agent-chip={a.id}>
-                  <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!connected ? "off" : a.waiting ? "waiting" : "idle"} size={24} />
+                  <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!connected ? "off" : a.waiting ? "waiting" : "idle"} size={64} />
                 </span>
-                <span className="who">
-                  <div className="name">{a.name}</div>
-                  <div className="where">
-                    {a.focus ? (
-                      <>
-                        → {a.focus.app.name}: {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
-                      </>
-                    ) : !connected ? (
-                      "not connected yet"
-                    ) : paired.length ? (
-                      "not pointed at anything"
-                    ) : (
-                      "drag it onto an app to pair"
-                    )}
-                  </div>
+                <span className="tile-name">{a.name}</span>
+                <span className="tile-where">
+                  {a.focus ? (
+                    <>
+                      → {a.focus.app.name}: {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
+                    </>
+                  ) : !connected ? (
+                    "not connected yet"
+                  ) : a.waiting ? (
+                    "waiting for you to point"
+                  ) : paired.length ? (
+                    "not pointed at anything"
+                  ) : (
+                    "drag me onto an app to pair"
+                  )}
                 </span>
               </div>
-              {(!connected || shown.has(a.id)) && (
+              <details className="tile-details" open={!connected || undefined}>
+                <summary>{connected ? "Details" : "Connect this agent"}</summary>
                 <div className="connect">
                   <p>Add this URL to your agent as a remote MCP server. It is this agent's key: keep it to yourself.</p>
                   <div className="row">
@@ -241,60 +244,167 @@ export function HubDock() {
                     </button>
                   </div>
                 </div>
-              )}
-              {paired.length > 0 && (
-                <ul className="apps">
-                  {paired.map((p) => (
-                    <li key={p.id}>
-                      <span>
-                        {p.app.name} <span className="muted">· {host(p.app.origin)}</span>
-                        {p.error && <span className="warn"> · not answering</span>}
-                      </span>
-                      <button type="button" onClick={() => decide(p.id, "unpair")}>
-                        Unpair
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {connected && paired.length > 0 && (
-                <p className="compat" title="What this agent's client does with the dock, for the compatibility matrix (TIN-384)">
-                  Tools re-listed after pairing: {a.compat.listed_after_pairing ? "yes" : "not yet"} · prefixed calls {a.compat.prefixed_calls} · call_app_tool {a.compat.relay_calls} · waits {a.compat.waits}
-                </p>
-              )}
-              <div className="row small">
+                {paired.length > 0 && (
+                  <ul className="apps">
+                    {paired.map((p) => (
+                      <li key={p.id}>
+                        <span>
+                          {p.app.name} <span className="muted">· {host(p.app.origin)}</span>
+                          {p.error && <span className="warn"> · not answering</span>}
+                        </span>
+                        <button type="button" onClick={() => decide(p.id, "unpair")}>
+                          Unpair
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {connected && paired.length > 0 && (
+                  <p className="compat" title="What this agent's client does with the dock, for the compatibility matrix (TIN-384)">
+                    Tools re-listed after pairing: {a.compat.listed_after_pairing ? "yes" : "not yet"} · prefixed calls {a.compat.prefixed_calls} · call_app_tool {a.compat.relay_calls} · waits {a.compat.waits}
+                  </p>
+                )}
                 {a.focus && (
-                  <button type="button" onClick={() => void call(`${base}/agents/${a.id}/clear`, {}).then(refresh)}>
-                    Clear pointer
-                  </button>
+                  <div className="row small">
+                    <button type="button" onClick={() => void call(`${base}/agents/${a.id}/clear`, {}).then(refresh)}>
+                      Clear pointer
+                    </button>
+                  </div>
                 )}
-                {connected && (
-                  <button type="button" onClick={() => setShown((s) => new Set(s.has(a.id) ? [...s].filter((x) => x !== a.id) : [...s, a.id]))}>
-                    {shown.has(a.id) ? "Hide connection" : "Show connection"}
-                  </button>
-                )}
-              </div>
+              </details>
             </li>
           );
         })}
       </ul>
-      <div className="row">
+      <nav className="launch" aria-label="Apps">
+        {APPS.map((app) => (
+          <a key={app.name} className="launch-app" href={app.url} target="_blank" rel="noreferrer">
+            <span className="launch-icon" aria-hidden="true">
+              {app.glyph}
+            </span>
+            {app.name}
+          </a>
+        ))}
+      </nav>
+      <div className="row small footer">
         <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
           Add an agent
         </button>
+        <Float agents={state.agents} dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })} />
+        <Install />
       </div>
-      <p className="status">
-        Drag an agent onto a bar, a row or a card in <a href={PULSE_URL} target="_blank" rel="noreferrer">Pulse (APC v2)</a>. The first time, Pulse asks you, then this dock does. Your agent connects only here.
-      </p>
     </main>
+  );
+}
+
+/** The apps the dock opens, each as its own page: the dock is the launcher, the apps know nothing of each other. */
+const APPS = [
+  {
+    name: "Pulse",
+    url: import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.v2.apc.tineira.com/overview",
+    glyph: (
+      <svg viewBox="0 0 32 32" width="22" height="22">
+        <rect x="4" y="8" width="20" height="20" rx="5" fill="none" stroke="currentColor" strokeWidth="3.5" />
+        <circle cx="24" cy="8" r="5.5" fill="currentColor" />
+      </svg>
+    ),
+  },
+  {
+    name: "Signals",
+    url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.v2.apc.tineira.com/",
+    glyph: (
+      <svg viewBox="0 0 28 28" width="22" height="22">
+        <circle cx="14" cy="14" r="11.5" fill="none" stroke="currentColor" strokeWidth="2.5" />
+        <circle cx="14" cy="14" r="5.5" fill="none" stroke="currentColor" strokeWidth="2.5" />
+        <circle cx="14" cy="14" r="2" fill="currentColor" />
+      </svg>
+    ),
+  },
+];
+
+/**
+ * Float (TIN-392): an installed web app cannot stay on top of other windows; a Document
+ * Picture-in-Picture window can. It holds only the agents' logos, each draggable like in the dock.
+ * Shown where the browser has the API (Chrome and Edge on desktop).
+ */
+function Float(props: { agents: DockAgent[]; dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void } }) {
+  const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number }): Promise<Window> } }).documentPictureInPicture;
+  const [win, setWin] = useState<Window | null>(null);
+  const root = useRef<Root | null>(null);
+  const latest = useRef(props);
+  latest.current = props;
+  useEffect(() => {
+    if (!win) return;
+    root.current ??= createRoot(win.document.body);
+    root.current.render(
+      <div className="float">
+        {props.agents.map((a) => {
+          const d = latest.current.dragProps(a);
+          return (
+            <div key={a.id} className="float-agent" draggable title={`Drag ${a.name} onto an app`} onDragStart={(e) => d.startDrag(e.nativeEvent)} onDragEnd={d.endDrag}>
+              <span className="chip">
+                <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!a.client_name ? "off" : a.waiting ? "waiting" : "idle"} size={48} />
+              </span>
+            </div>
+          );
+        })}
+      </div>,
+    );
+  }, [win, props.agents]);
+  if (!pip) return null;
+  return (
+    <button
+      type="button"
+      title="Keep your agents on top of every window, ready to drag"
+      onClick={async () => {
+        if (win) return win.focus();
+        const w = await pip.requestWindow({ width: 96 * Math.max(1, Math.min(3, props.agents.length)), height: 110 });
+        for (const sheet of [...document.styleSheets]) {
+          try {
+            const style = w.document.createElement("style");
+            style.textContent = [...sheet.cssRules].map((r) => r.cssText).join("\n");
+            w.document.head.append(style);
+          } catch {
+            // a sheet from another origin: skipped
+          }
+        }
+        w.addEventListener("pagehide", () => {
+          root.current?.unmount();
+          root.current = null;
+          setWin(null);
+        });
+        setWin(w);
+      }}
+    >
+      {win ? "Floating" : "Float"}
+    </button>
+  );
+}
+
+/** Install the dock as an app (Chrome and Edge offer it; elsewhere use the browser's menu). Hidden once installed. */
+function Install() {
+  const [prompt, setPrompt] = useState<(Event & { prompt(): Promise<void> }) | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => {
+      e.preventDefault();
+      setPrompt(e as Event & { prompt(): Promise<void> });
+    };
+    window.addEventListener("beforeinstallprompt", on);
+    return () => window.removeEventListener("beforeinstallprompt", on);
+  }, []);
+  if (!prompt) return null;
+  return (
+    <button type="button" className="primary" onClick={() => void prompt.prompt().then(() => setPrompt(null))}>
+      Install
+    </button>
   );
 }
 
 function Header() {
   return (
-    <div>
-      <div className="kicker">APC v2 · prototype</div>
+    <header className="dock-head">
       <h1>Agent dock</h1>
-    </div>
+      <span className="kicker">APC v2</span>
+    </header>
   );
 }
