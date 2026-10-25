@@ -10,9 +10,9 @@ import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
-import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
+import { askToDisconnectPrompt, askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
-import { APPS, appUrl, ConnectAgent, Install, Setup } from "./setup.tsx";
+import { APPS, appUrl, ConnectAgent, CopyRow, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -258,6 +258,7 @@ export function HubDock() {
       <Header />
       <BadgeSources agents={state.agents} />
       {requests}
+      {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>Add an agent</b> below, then connect it.</p>}
       <ul className="tiles">
         {state.agents.map((a) => {
           const connected = !!a.client_name;
@@ -315,6 +316,7 @@ export function HubDock() {
                     </button>
                   </div>
                 )}
+                <RemoveAgent agent={a} apps={paired.map((p) => p.app.name)} remove={() => call(`${base}/agents/${a.id}/remove`, {}).then(refresh)} />
               </details>
             </li>
           );
@@ -458,6 +460,52 @@ function Float(props: {
     >
       {win ? "Floating" : "Float"}
     </button>
+  );
+}
+
+/**
+ * Remove an agent (TIN-418), behind a confirm that says what goes. A connected agent keeps the dock's
+ * server in its own settings, so the confirm gives the prompt that asks it to drop "APC".
+ */
+function RemoveAgent(props: { agent: DockAgent; apps: string[]; remove: () => Promise<unknown> }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState(false);
+  const connected = !!props.agent.client_name;
+  return (
+    <div className="row small">
+      <button type="button" className="danger-link" onClick={() => dialog.current?.showModal()}>
+        Remove this agent
+      </button>
+      <dialog ref={dialog} className="confirm" onClick={(e) => e.target === dialog.current && !busy && dialog.current?.close()}>
+        <h2>Remove {props.agent.name}?</h2>
+        <p>
+          Its MCP URL stops working{props.apps.length ? `, and ${props.apps.join(" and ")} lose${props.apps.length === 1 ? "s" : ""} it` : ""}. You can add a new agent any time.
+        </p>
+        {connected && (
+          <>
+            <p>Then remove the "APC" server from your agent. Paste this to it:</p>
+            <CopyRow text={askToDisconnectPrompt("APC", location.host)} label="Copy prompt" block />
+          </>
+        )}
+        <div className="row">
+          <button type="button" disabled={busy} onClick={() => dialog.current?.close()}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              await props.remove().catch(() => undefined);
+              dialog.current?.close();
+            }}
+          >
+            {busy ? "Removing…" : "Remove"}
+          </button>
+        </div>
+      </dialog>
+    </div>
   );
 }
 
