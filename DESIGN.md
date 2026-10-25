@@ -180,6 +180,7 @@ The p50 is mostly network (Chile to the edge to the sandbox): inside the Durable
 | v2 topology | attention hub: the agent connects once, to the dock's hub, which watches each paired app with v1 `wait_for_focus` and relays its tools as `<app>__<tool>` (or `call_app_tool`); one focus per agent, newest pin wins | 2026-10-25 |
 | v2 pairing | the drag carries a public handle and a single-use 60 s ticket, never a grant; the app hands its grant to the hub over a back channel after consent in the app and in the dock; MCP authorization (OAuth 2.1 + PKCE) replaces the secret URL later | 2026-10-25 |
 | v2 dock host | a web window at v2.apc.tineira.com with a Durable Object hub first (TIN-370), against a Pulse under apc-v2; a browser extension with a local hub next; package changes additive and opt-in, v1 stays on 0.2 | 2026-10-25 |
+| v2 prototype (TIN-370) | Pulse for the dock is `apps/demo` deployed again inside apc-v2 with a v2 flag; the hub exposes only `call_app_tool`; newest pin wins; pairing needs consent in the app and in the dock | 2026-10-25 |
 
 ## 12. APC v2: one agent across apps (TIN-371)
 
@@ -296,6 +297,6 @@ Everything below is **additive and opt-in**, so v1 stays on 0.2.
 ### 12.8 Phases
 
 1. **TIN-369 (shipped 2026-10-25):** native drops in `@apc/web`, opt-in. Pulse turns them on only when opened with `?apc=v2`, so v1 is unchanged.
-2. **TIN-370:** the web-window dock and a hub Durable Object in `apps/dock`. One agent connects to the hub. The first drags can land on apc.tineira.com with `?apc=v2` (drops only, onto agents of that sandbox); pairing (`/apc/pair`) runs only on a Pulse under apc-v2, never on apc.tineira.com. Still to decide: import `apps/demo`'s worker, or deploy it a second time with a v2 flag. The hub watches with v1 `wait_for_focus`, and `next` uses `call_app_tool`.
+2. **TIN-370:** the web-window dock and a hub Durable Object in `apps/dock`. One agent connects to the hub. The first drags can land on apc.tineira.com with `?apc=v2` (drops only, onto agents of that sandbox); pairing (`/apc/pair`) runs only on a Pulse under apc-v2, never on apc.tineira.com. That Pulse is `apps/demo` deployed a second time inside apc-v2 with a v2 flag (drops and `/apc/pair` on), not imported into `apps/dock`, so v2 does not depend on v1's internals. The hub watches with v1 `wait_for_focus`; it exposes only `call_app_tool` (prefixed tools wait for phase 3), and `next` uses it. Newest pin wins, and a pairing needs both yeses, as above.
 3. A second small APC app on its own origin, so pairing really crosses origins. Prefixed tools after `list_changed`, and the dock's revoke. New compatibility-matrix columns: `list_changed` honoured, and waits through the hub.
 4. The extension with a local hub, OAuth pairing and the ring doorbell.
