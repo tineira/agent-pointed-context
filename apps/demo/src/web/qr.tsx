@@ -26,7 +26,11 @@ export function Qr(props: { text: string }) {
 
 export const SCAN_HINT = "Scan with a phone, then paste the URL into the agent. Opening the link in the browser does not connect it.";
 
-/** What a person pastes to their own agent when they don't know how to add an MCP server there (TIN-360). */
-export function askYourAgentPrompt(url: string): string {
-  return `I want to connect you to a remote MCP server. URL: ${url}. It uses Streamable HTTP and needs no OAuth: the access is in the URL. Tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
+/**
+ * What a person pastes to their own agent to connect it (TIN-360). Many agents can add a server
+ * themselves when asked in the chat (the Grok bot, Claude Code…), so it asks for that first, under a
+ * name the person will recognise, and for the steps only if the agent cannot (TIN-408).
+ */
+export function askYourAgentPrompt(url: string, name = "Pulse"): string {
+  return `Please connect this remote MCP server, named "${name}". URL: ${url}. It uses Streamable HTTP and needs no OAuth or API key: the access is in the URL. If you can add it yourself, do it now and tell me when it's connected. If you can't, tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
 }

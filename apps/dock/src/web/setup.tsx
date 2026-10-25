@@ -77,7 +77,7 @@ export function ConnectAgent(props: { agent: SetupAgent }) {
       <p>Add this URL to your agent as a remote MCP server (Streamable HTTP). No login: the access is in the URL, so keep it to yourself. Leave any OAuth or API key fields empty.</p>
       <CopyRow text={agent.mcp_url} />
       <p>Don't know how to connect an MCP server? Paste this to your agent:</p>
-      <CopyRow text={askYourAgentPrompt(agent.mcp_url)} label="Copy prompt" block />
+      <CopyRow text={askYourAgentPrompt(agent.mcp_url, "APC")} label="Copy prompt" block />
       <div className="qr-row">
         <Qr text={agent.mcp_url} />
         <p>{SCAN_HINT}</p>
@@ -249,10 +249,19 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
       <>
         {agent && (
           <div className="setup-agent">
-            <span className="chip">
+            <span
+              className="chip"
+              draggable={!connected}
+              title={connected ? undefined : "Drag me into your agent's chat"}
+              onDragStart={(e) => {
+                // TIN-408: before it connects, the agent drags as its connect prompt.
+                e.dataTransfer.setData("text/plain", askYourAgentPrompt(agent.mcp_url, "APC"));
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+            >
               <AgentIcon clientName={agent.client_name} clientUa={agent.client_ua} clientIcon={agent.client_icon} motion={!connected ? "off" : agent.waiting ? "waiting" : "idle"} size={40} />
             </span>
-            <span>{connected ? <span className="ok">{agent.name} is connected ✓</span> : "Waiting for your agent…"}</span>
+            <span>{connected ? <span className="ok">{agent.name} is connected ✓</span> : <>Waiting for your agent… <span className="muted">The quickest way: drag this plug into your agent's chat and send.</span></>}</span>
           </div>
         )}
         {/* Once the agent connects, the instructions have done their job: the tile keeps them. */}

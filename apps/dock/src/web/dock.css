@@ -108,3 +108,4 @@ button:disabled { opacity: 0.5; cursor: default; }
 .download { display: block; text-align: center; padding: 9px; border: 1px solid var(--line); border-radius: 12px; color: var(--fg); text-decoration: none; font-weight: 600; }
 .download:hover { border-color: var(--muted); }
 .small-note { font-size: 11px; }
+.setup-agent .chip[draggable="true"] { cursor: grab; }
