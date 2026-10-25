@@ -1,0 +1,36 @@
+name: Desktop
+
+# Pulse for desktop (TIN-396): test it, and build the Windows app as one self-contained .exe, kept as
+# this run's artifact. It deploys nothing.
+on:
+  push:
+    branches: [main]
+    paths: ["apps/desktop/**", "apps/desktop-tests/**", ".github/workflows/desktop.yml"]
+  pull_request:
+    paths: ["apps/desktop/**", "apps/desktop-tests/**", ".github/workflows/desktop.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AVALONIA_TELEMETRY_OPTOUT: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test apps/desktop-tests
+      - run: dotnet publish apps/desktop -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PulseDesktop-win-x64
+          path: publish/PulseDesktop.exe
+          if-no-files-found: error

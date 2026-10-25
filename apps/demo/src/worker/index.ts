@@ -91,6 +91,14 @@ app.use("/api/s/:sid/*", async (c, next) => {
 });
 
 app.get("/api/s/:sid/state", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.state())));
+/**
+ * The sandbox's data, for a client that is not this page (TIN-396: Pulse for desktop). The page
+ * rebuilds it from the seed with the same function; a native client would have to port it. v2 only.
+ */
+app.get("/api/s/:sid/dataset", async (c) => {
+  if (c.env.APC_V2 !== "1") return c.json({ error: "not_found" }, 404);
+  return c.json(await rpc(c.env, c.var.sid, (s) => s.dataset()));
+});
 app.post("/api/s/:sid/view", async (c) => {
   const view = await c.req.json().catch(() => null);
   return c.json(await rpc(c.env, c.var.sid, (s) => s.reportView(view)));
