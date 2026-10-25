@@ -29,6 +29,9 @@ export interface SandboxState {
   settings: { share_view: boolean; show_activity: boolean };
   grants: GrantState[];
   tour: { step: TourStep; grant_id: string | null };
+  /** Pulse's APC v2 deploy (TIN-382), and which dock agents are which grants. */
+  v2?: boolean;
+  hub_links?: Array<{ hub: string; agent: string; grant_id: string }>;
   expires_at: string;
 }
 
@@ -57,6 +60,7 @@ export function createApi(sid: string) {
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
+    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget }) => post<{ ok: boolean; error?: string; grant_id?: string; status?: string }>("/hub/pair", body),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),

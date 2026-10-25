@@ -7,6 +7,7 @@ import { AgentIcon } from "./agent-icon.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
 import { openDock, useDockBridge } from "./dock-bridge.ts";
+import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { HowTo } from "./howto.tsx";
 import { Landing } from "./landing/landing.tsx";
@@ -104,8 +105,12 @@ function Sandbox({ sid }: { sid: string }) {
   const [, tick] = useState(0);
   const stateRef = useRef<SandboxState | null>(null);
   stateRef.current = state;
-  // APC v2 features (TIN-369, TIN-370), off unless the tab was opened with ?apc=v2.
-  const v2 = useMemo(v2Enabled, []);
+  // APC v2 features (TIN-369, TIN-370), off unless the tab was opened with ?apc=v2. Pulse's v2 deploy
+  // (TIN-382) has them on, and pairs with a dock's hub instead of feeding the bridge dock.
+  const flagged = useMemo(v2Enabled, []);
+  const hubMode = !!state?.v2;
+  const v2 = flagged || hubMode;
+  const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
 
   const refresh = useCallback(() => api.state().then(setState), [api]);
   useEffect(() => {
@@ -201,7 +206,11 @@ function Sandbox({ sid }: { sid: string }) {
       enablePinning({
         // APC v2 (TIN-369): drops of an agent dragged from a dock in another window, only with ?apc=v2.
         acceptNativeDrops: v2,
-        resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
+        // A grant id (the bridge dock), or a dock agent paired with one of this sandbox's grants (the hub dock).
+        resolveAgent: (handle) =>
+          stateRef.current?.grants.some((g) => g.id === handle) ? handle : (stateRef.current?.hub_links?.find((l) => l.agent === handle)?.grant_id ?? null),
+        // An agent from a dock not paired yet: ask the person (hub-consent.tsx).
+        onUnknownAgent: hubMode ? (drag, target) => setPendingDrop({ drag, target, at: Date.now() }) : undefined,
         canTarget: (grantId, target: FocusTarget) => {
           const grant = stateRef.current?.grants.find((g) => g.id === grantId);
           if (!grant?.regions) return true;
@@ -218,7 +227,7 @@ function Sandbox({ sid }: { sid: string }) {
           setTimeout(() => setNotice(null), 4000);
         },
       }),
-    [api, regionOf],
+    [api, regionOf, v2, hubMode],
   );
 
   // Show each pin on its target when the target is on this page.
@@ -248,7 +257,7 @@ function Sandbox({ sid }: { sid: string }) {
   };
   // APC v2 (TIN-370): a dock window opened from here shows these agents and drags them back.
   useDockBridge(
-    v2,
+    v2 && !hubMode,
     state?.grants.map((g) => ({
       handle: g.id,
       name: names.get(g.id) ?? g.label,
@@ -335,7 +344,12 @@ function Sandbox({ sid }: { sid: string }) {
           })}
           </div>
           {v2 && (
-            <button type="button" onClick={openDock} className="cursor-pointer rounded-md border border-line px-2.5 py-1 text-sm text-muted hover:text-foreground" title="APC v2: open a dock window with your agents, and drag them back onto Pulse from there">
+            <button
+              type="button"
+              onClick={() => openDock(hubMode)}
+              className="cursor-pointer rounded-md border border-line px-2.5 py-1 text-sm text-muted hover:text-foreground"
+              title={hubMode ? "APC v2: open your agent dock, and drag an agent from it onto Pulse" : "APC v2: open a dock window with your agents, and drag them back onto Pulse from there"}
+            >
               Dock
             </button>
           )}
@@ -355,6 +369,20 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
       <Tour api={api} state={state} names={names} screen={route.screen} onOverview={() => navigate({ screen: "overview" }, filters)} onChanged={() => void refresh()} />
+      {pendingDrop && (
+        <HubConsent
+          api={api}
+          drop={pendingDrop}
+          onDone={(message) => {
+            setPendingDrop(null);
+            if (message) {
+              setNotice(message);
+              setTimeout(() => setNotice(null), 8000);
+            }
+            void refresh();
+          }}
+        />
+      )}
       <PinBadges grants={state.grants} motionOf={motionOf} onUnpin={(id) => void api.unpin(id)} onPlaced={setOnScreen} />
     </div>
   );

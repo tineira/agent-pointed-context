@@ -7,7 +7,7 @@
 import { useEffect, useRef } from "react";
 import { dockOriginAllowed, type DockAgent, type DockMessage } from "./dock-protocol.ts";
 
-export const DOCK_URL = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "http://localhost:5200/" : "https://v2.apc.tineira.com/";
+export const DOCK_ORIGIN = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "http://localhost:5200" : "https://v2.apc.tineira.com";
 
 /**
  * Pulse's side: every dock that says hello gets the agents, then each change. A dock says hello
@@ -48,7 +48,10 @@ export function useDockBridge(enabled: boolean, agents: DockAgent[] | null): voi
   }, [enabled, key]);
 }
 
-/** Open the dock as a small window of its own, or bring it back if it is open. */
-export function openDock(): void {
-  window.open(DOCK_URL, "apc-dock", "popup,width=320,height=560");
+/**
+ * Open the dock as a small window of its own, or bring it back if it is open: the dock with its hub
+ * (TIN-382) from Pulse's v2 deploy, the bridge dock (TIN-370) from apc.tineira.com with ?apc=v2.
+ */
+export function openDock(hub: boolean): void {
+  window.open(`${DOCK_ORIGIN}${hub ? "/" : "/bridge"}`, "apc-dock", `popup,width=${hub ? 360 : 320},height=600`);
 }

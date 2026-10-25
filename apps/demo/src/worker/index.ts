@@ -127,6 +127,12 @@ app.post("/api/s/:sid/tour", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
   return c.json(await rpc(c.env, c.var.sid, (s) => s.tourAction(body.action)));
 });
+/** APC v2 (TIN-382): pair an agent dropped from a dock; the sandbox refuses it outside Pulse's v2 deploy. */
+app.post("/api/s/:sid/hub/pair", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const result = await rpc(c.env, c.var.sid, (s) => s.pairHub(c.var.sid, new URL(c.req.url).origin, body), 1);
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/s/:sid/grants/agent", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant())));
 app.get("/api/s/:sid/compat.json", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.compat())));
 app.get("/api/s/:sid/events.jsonl", async (c) =>

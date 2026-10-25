@@ -34,3 +34,20 @@ h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-tra
 @media (prefers-reduced-motion: reduce) {
   .agent-icon-waiting, .agent-icon-busy, .agent-icon-seen { animation: none; }
 }
+
+/* The hub dock (TIN-382). */
+button { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--fg); cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.small button { font-size: 12px; padding: 2px 8px; }
+.request { padding: 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); display: flex; flex-direction: column; gap: 8px; }
+.request p { color: var(--fg); }
+.agent-block { display: flex; flex-direction: column; gap: 6px; }
+.connect { font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.url { font: 11px ui-monospace, monospace; word-break: break-all; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); flex: 1; min-width: 0; }
+.apps { list-style: none; margin: 0; padding: 0 0 0 52px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.apps li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.apps button { font-size: 11px; padding: 1px 6px; }
+.muted { color: var(--muted); }
+.warn { color: #c0392b; }
