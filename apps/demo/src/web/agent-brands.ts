@@ -4,7 +4,7 @@
  * glyph colored from the name.
  */
 import { PRODUCTS, productOf, type ProductId } from "../model/products.ts";
-import { ANTIGRAVITY_PNG, DUET_PARTS, GEMINI_PNG, GROK_BOTS, PATHS } from "./agent-logos.ts";
+import { ANTIGRAVITY_PNG, DUET_PARTS, GEMINI_PNG, GROK_BOT_PNG, PATHS } from "./agent-logos.ts";
 
 export interface Logo {
   viewBox: string;
@@ -16,14 +16,14 @@ export interface Brand {
   id: string;
   name: string;
   match: RegExp;
-  /** A vector mark, one raster image, or a set of images of which each agent gets one (pickImage). */
-  logo: Logo | { image: string } | { images: ReadonlyArray<{ name: string; src: string }> };
+  /** A vector mark, or one raster image. */
+  logo: Logo | { image: string };
 }
 
 const mark = (d: string, viewBox: string, fill: string | null = null): Logo => ({ viewBox, parts: [{ d, fill }] });
 
 const LOGOS: Record<ProductId, Brand["logo"]> = {
-  "grok-bot": { images: GROK_BOTS },
+  "grok-bot": { image: GROK_BOT_PNG },
   grok: mark(PATHS.grok, "0 0 1024 1024"),
   "claude-duet": { viewBox: "138 138 1024 1024", parts: DUET_PARTS },
   claude: mark(PATHS.claude, "0 0 24 24", "#D97757"),
@@ -54,10 +54,6 @@ export function colorFor(name: string): string {
   return `hsl(${hash(name) % 360} 65% 50%)`;
 }
 
-/** One image of a set, fixed per agent (its grant id), so two Grok bots on one page look different. */
-export function pickImage<T>(images: ReadonlyArray<T>, seed: string): T {
-  return images[hash(seed) % images.length]!;
-}
 
 export type AgentMotion = "off" | "idle" | "waiting" | "busy" | "seen";
 
