@@ -27,6 +27,7 @@ interface DockAgent {
   waiting: boolean;
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
   pairings: Array<{ id: string; app: AppRef; status: "pending" | "paired"; created_at: string; page_open: boolean | null; error: string | null }>;
+  compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 interface DockState {
   expires_at: string;
@@ -207,6 +208,11 @@ export function HubDock() {
                     </li>
                   ))}
                 </ul>
+              )}
+              {connected && paired.length > 0 && (
+                <p className="compat" title="What this agent's client does with the dock, for the compatibility matrix (TIN-384)">
+                  Tools re-listed after pairing: {a.compat.listed_after_pairing ? "yes" : "not yet"} · prefixed calls {a.compat.prefixed_calls} · call_app_tool {a.compat.relay_calls} · waits {a.compat.waits}
+                </p>
               )}
               <div className="row small">
                 {a.focus && (

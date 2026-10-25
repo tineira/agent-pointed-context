@@ -6,9 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "cd apps/demo && node node_modules/vite/bin/vite.js",
-    "build": "cd apps/demo && node node_modules/vite/bin/vite.js build && cd ../dock && node node_modules/vite/bin/vite.js build",
-    "typecheck": "tsc -p packages/protocol && tsc -p packages/server && tsc -p packages/web && tsc -p apps/demo/tsconfig.web.json && tsc -p apps/demo/tsconfig.worker.json && tsc -p apps/demo/tsconfig.test.json && tsc -p apps/dock/tsconfig.web.json && tsc -p apps/dock/tsconfig.worker.json && tsc -p apps/dock/tsconfig.test.json",
-    "test": "node --test \"packages/*/test/*.test.ts\" \"apps/demo/test/*.test.ts\" \"apps/dock/test/*.test.ts\" \"scripts/test/*.test.mjs\""
+    "build": "cd apps/demo && node node_modules/vite/bin/vite.js build && cd ../dock && node node_modules/vite/bin/vite.js build && cd ../signals && node node_modules/vite/bin/vite.js build",
+    "typecheck": "tsc -p packages/protocol && tsc -p packages/server && tsc -p packages/web && tsc -p apps/demo/tsconfig.web.json && tsc -p apps/demo/tsconfig.worker.json && tsc -p apps/demo/tsconfig.test.json && tsc -p apps/dock/tsconfig.web.json && tsc -p apps/dock/tsconfig.worker.json && tsc -p apps/dock/tsconfig.test.json && tsc -p apps/signals/tsconfig.web.json && tsc -p apps/signals/tsconfig.worker.json && tsc -p apps/signals/tsconfig.test.json",
+    "test": "node --test \"packages/*/test/*.test.ts\" \"apps/demo/test/*.test.ts\" \"apps/dock/test/*.test.ts\" \"apps/signals/test/*.test.ts\" \"scripts/test/*.test.mjs\""
   },
   "devDependencies": {
     "typescript": "7.0.2",

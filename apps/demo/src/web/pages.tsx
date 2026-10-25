@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
+import { buildMarket } from "../model/market.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
 import { displayNames } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
@@ -148,6 +149,12 @@ export function CustomerDetail(props: { sid: string; state: SandboxState; data: 
             <dt>Signed up</dt>
             <dd>{customer.signup_month}</dd>
           </div>
+          {props.state.v2 && (
+            <div>
+              <dt>Signup code</dt>
+              <dd className="mono">{buildMarket(props.data).signupCodes.get(customer.id) ?? "none"}</dd>
+            </div>
+          )}
         </dl>
         <h3 {...customerFocus(customer.id, "seats")}>Seats per month</h3>
         <div className="spark">

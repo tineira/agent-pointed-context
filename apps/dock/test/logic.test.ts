@@ -19,6 +19,9 @@ test("the hub's focus reads through call_app_tool and says which app", () => {
   assert.deepEqual(f.next_args, { app: "pulse", tool: "get_figure", args: focus.next_args });
   assert.deepEqual(f.app, app);
   assert.equal(focusLabel(f), "active_customers 2026-03");
+  const p = hubFocus(focus, app, true);
+  assert.equal(p.next, "pulse__get_figure", "the prefixed tool once the client listed it (TIN-384)");
+  assert.deepEqual(p.next_args, focus.next_args, "with the app's own arguments");
   assert.equal(focusLabel({ kind: "customer", id: "cus_0042", part: "seats", params: null }), "cus_0042 seats");
 });
 

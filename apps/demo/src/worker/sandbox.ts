@@ -555,7 +555,7 @@ export class Sandbox extends DurableObject<Env> {
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
-    registerPulseTools(server, data, grant, origin);
+    registerPulseTools(server, data, grant, origin, this.env.APC_V2 === "1" ? (await import("../model/market.ts")).buildMarket(data).signupCodes : undefined);
     // The agent introduces itself (TIN-356). The person's own name for it stays on top.
     const { z } = await import("zod");
     server.registerTool(

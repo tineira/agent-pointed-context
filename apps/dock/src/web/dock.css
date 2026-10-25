@@ -51,3 +51,4 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .apps button { font-size: 11px; padding: 1px 6px; }
 .muted { color: var(--muted); }
 .warn { color: #c0392b; }
+.compat { margin: 0; padding-left: 52px; font: 11px ui-monospace, monospace; color: var(--muted); }

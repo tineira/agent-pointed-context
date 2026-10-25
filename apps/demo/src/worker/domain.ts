@@ -187,9 +187,11 @@ export function figureAnswer(data: Dataset, grant: Grant, key: string, rawParams
   };
 }
 
-export function customerAnswer(data: Dataset, grant: Grant, id: string, origin: string) {
+/** codes: customers' signup codes on Pulse's v2 deploy (model/market.ts, TIN-384); absent elsewhere. */
+export function customerAnswer(data: Dataset, grant: Grant, id: string, origin: string, codes?: Map<string, string>) {
   if (!customerVisible(data, grant, id)) return { error: "not_found", message: "no such customer" } as const;
-  const customer = data.customers.find((c) => c.id === id)!;
+  const found = data.customers.find((c) => c.id === id)!;
+  const customer = codes ? { ...found, signup_code: codes.get(id) ?? null } : found;
   const activity = data.activity.filter((a) => a.customer_id === id).map(({ customer_id: _, ...rest }) => rest);
   return { customer, activity, app_url: `${origin}/customers/${id}` };
 }
@@ -197,7 +199,8 @@ export function customerAnswer(data: Dataset, grant: Grant, id: string, origin: 
 export function listCustomers(
   data: Dataset,
   grant: Grant,
-  filter: { month?: string; plan?: string; region?: string; active?: boolean; limit?: number; offset?: number },
+  filter: { month?: string; plan?: string; region?: string; active?: boolean; signup_code?: string; limit?: number; offset?: number },
+  codes?: Map<string, string>,
 ) {
   const scope = scopeOf(grant);
   const month = filter.month && MONTHS.includes(filter.month) ? filter.month : MONTHS[MONTHS.length - 1]!;
@@ -206,7 +209,8 @@ export function listCustomers(
     .filter((c) => scope.regions.includes(c.region))
     .filter((c) => !filter.plan || c.plan === filter.plan)
     .filter((c) => !filter.region || c.region === filter.region)
-    .map((c) => ({ ...c, month, active: seats.get(c.id)?.active ?? false, seats: seats.get(c.id)?.seats ?? 0 }))
+    .filter((c) => !codes || !filter.signup_code || codes.get(c.id) === filter.signup_code)
+    .map((c) => ({ ...c, ...(codes ? { signup_code: codes.get(c.id) ?? null } : {}), month, active: seats.get(c.id)?.active ?? false, seats: seats.get(c.id)?.seats ?? 0 }))
     .filter((c) => filter.active === undefined || c.active === filter.active);
   const offset = Math.max(0, filter.offset ?? 0);
   const limit = Math.min(200, Math.max(1, filter.limit ?? 50));

@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Signals (TIN-384): the second APC v2 app, a market feed, on its own origin. One Durable Object per
+  // visitor, seeded from their Pulse sandbox. Agents reach it only through a dock's hub.
+  "name": "apc-v2-signals",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp/*", "/.well-known/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "FEED", "class_name": "Feed" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Feed"] }],
+  "ratelimits": [
+    { "name": "NEW_FEED", "namespace_id": "1005", "simple": { "limit": 10, "period": 60 } },
+    { "name": "FEED_CALLS", "namespace_id": "1006", "simple": { "limit": 300, "period": 60 } }
+  ],
+  // The agent docks (hubs) Signals may pair with; under vite dev, localhost too.
+  "vars": { "HUB_ORIGINS": "https://v2.apc.tineira.com" },
+  "routes": [{ "pattern": "signals.v2.apc.tineira.com", "custom_domain": true }],
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}

@@ -27,8 +27,12 @@ export function appIdFor(name: string, taken: ReadonlySet<string>): string {
   for (let n = 2; ; n++) if (!taken.has(`${base}${n}`)) return `${base}${n}`;
 }
 
-/** The app's focus, its next call rewritten to go through the hub. */
-export function hubFocus(focus: FocusPayload, app: AppRef): HubFocus {
+/**
+ * The app's focus, its next call rewritten to go through the hub: the prefixed tool (<app>__<tool>,
+ * same arguments) when the agent's client has it in its list, else call_app_tool, which always works.
+ */
+export function hubFocus(focus: FocusPayload, app: AppRef, prefixed = false): HubFocus {
+  if (prefixed) return { ...focus, app, next: `${app.id}__${focus.next}` };
   return { ...focus, app, next: "call_app_tool", next_args: { app: app.id, tool: focus.next, args: focus.next_args } };
 }
 
