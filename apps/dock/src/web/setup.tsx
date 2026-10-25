@@ -105,29 +105,36 @@ export function Install(props: { label?: string }) {
   );
 }
 
-const STEPS = ["Your dock", "Connect your agent", "Create your world"] as const;
+const STEPS = ["Your dock", "Connect your agent", "Create your world", "Open Pulse", "Open Signals"] as const;
+const WORLD = 2;
 
 /**
- * Open both apps on the world. Both windows open inside the click, before any network call, since
- * a browser lets a click open a window only while it lasts. A browser that allows one window per
- * click blocks the second: the caller is told, and points the person at that app's button.
+ * Pulse for desktop, per platform (TIN-406): each build of main replaces the file on the
+ * pulse-desktop prerelease, so the link never changes. macOS (TIN-398) and Linux (TIN-399) are one
+ * line each when they exist.
  */
-function openApps(seed: number): string[] {
-  const blocked: string[] = [];
-  for (const app of APPS) {
-    const w = window.open(appUrl(app, seed), "_blank");
-    if (w) w.opener = null;
-    else blocked.push(app.name);
-  }
-  return blocked;
+const DESKTOP = [{ label: "Windows", match: /Windows/, url: "https://github.com/tineira/agent-pointed-context/releases/download/pulse-desktop/PulseDesktop.exe", note: "Unsigned for now: Windows asks once (More info, then Run anyway)." }];
+
+/**
+ * An app on the world, as a plain link: a click on a link opens its tab, where a script opening a
+ * second window from the same click is blocked (TIN-406). So each app has its own step.
+ */
+function OpenApp(props: { app: (typeof APPS)[number]; seed: number; onOpened: () => void }) {
+  return (
+    <a className="launch-app" href={appUrl(props.app, props.seed)} target="_blank" rel="noreferrer" onClick={props.onOpened}>
+      <span className="launch-icon" aria-hidden="true">
+        {props.app.glyph}
+      </span>
+      Open {props.app.name}
+    </a>
+  );
 }
 
 /** The world step: a seed the person can keep or change, and why it is there. */
-function World(props: { seed: number; change: boolean; onBack: () => void; onOpen: (seed: number) => void }) {
+function World(props: { seed: number; change: boolean; onBack: () => void; onNext: (seed: number) => void }) {
   const [text, setText] = useState(String(props.seed));
   const n = Number(text);
   const valid = /^\d{1,10}$/.test(text) && n < 2 ** 32;
-  const pulse = APPS[0]!;
   return (
     <>
       <p>
@@ -146,14 +153,67 @@ function World(props: { seed: number; change: boolean; onBack: () => void; onOpe
         <button type="button" onClick={props.onBack}>
           {props.change ? "Cancel" : "Back"}
         </button>
-        <button type="button" className="primary" disabled={!valid} onClick={() => props.onOpen(n)}>
-          Open Pulse and Signals
+        <button type="button" className="primary" disabled={!valid} onClick={() => props.onNext(n)}>
+          Next
         </button>
       </div>
-      <div className="row small">
-        <span className="muted">Pulse for desktop?</span>
-        <button type="button" disabled={!valid} title="The Pulse link on this world, to paste in Pulse for desktop" onClick={() => void navigator.clipboard?.writeText(appUrl(pulse, n))}>
-          Copy the Pulse link
+    </>
+  );
+}
+
+/** Pulse on the world: in the browser, or as an app on this computer. */
+function OpenPulse(props: { seed: number; onBack: () => void; onNext: () => void }) {
+  const [opened, setOpened] = useState(false);
+  const pulse = APPS[0]!;
+  const here = DESKTOP.find((d) => d.match.test(navigator.userAgent));
+  return (
+    <>
+      <p>Pulse is product analytics: customers, the customer bridge, active customers each month. Open it in the browser, or as an app on this computer; either one takes your agent from the dock.</p>
+      <div className="choice">
+        <b>In the browser</b>
+        <OpenApp app={pulse} seed={props.seed} onOpened={() => setOpened(true)} />
+      </div>
+      <div className="choice">
+        <b>On this computer</b>
+        {DESKTOP.map((d) => (
+          <a key={d.label} className="download" href={d.url} onClick={() => setOpened(true)}>
+            Download Pulse for {d.label}
+          </a>
+        ))}
+        {!here && <p>For {DESKTOP.map((d) => d.label).join(" and ")} only, for now; macOS and Linux are next.</p>}
+        <p>Then open it and paste this link, Pulse on your world:</p>
+        <CopyRow text={appUrl(pulse, props.seed)} />
+        {DESKTOP.map((d) => (
+          <p key={d.label} className="small-note">
+            {d.note}
+          </p>
+        ))}
+      </div>
+      <div className="row">
+        <button type="button" onClick={props.onBack}>
+          Back
+        </button>
+        <button type="button" className={opened ? "primary" : ""} onClick={props.onNext}>
+          {opened ? "Next" : "Skip"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** Signals on the same world, and the end of the run. */
+function OpenSignals(props: { seed: number; onBack: () => void; onDone: () => void }) {
+  const [opened, setOpened] = useState(false);
+  return (
+    <>
+      <p>Signals is a market feed from the same world: competitor offers aimed at a region and plan, and our ads with a promo code. Drag your agent onto a post there too, then ask it what explains the churn in Pulse.</p>
+      <OpenApp app={APPS[1]!} seed={props.seed} onOpened={() => setOpened(true)} />
+      <div className="row">
+        <button type="button" onClick={props.onBack}>
+          Back
+        </button>
+        <button type="button" className={opened ? "primary" : ""} onClick={props.onDone}>
+          Done
         </button>
       </div>
     </>
@@ -161,17 +221,15 @@ function World(props: { seed: number; change: boolean; onBack: () => void; onOpe
 }
 
 /**
- * The first run, or only its world step (Change world). onDone gets the apps the browser did not let
- * the click open, if any.
+ * The first run, or from its world step on (Change world): the world, then each app in its own step.
+ * Choosing the world saves it (and ends the first run for the hub); onDone goes back to the dock.
  */
-export function Setup(props: { agent: SetupAgent | undefined; seed: number; only?: "world"; onWorld: (seed: number) => Promise<void>; onDone: (blocked: string[]) => void }) {
-  const [step, setStep] = useState(props.only === "world" ? 2 : 0);
+export function Setup(props: { agent: SetupAgent | undefined; seed: number; only?: "world"; onWorld: (seed: number) => Promise<void>; onDone: () => void }) {
+  const change = props.only === "world";
+  const [step, setStep] = useState(change ? WORLD : 0);
+  const [seed, setSeed] = useState(props.seed);
   const { agent } = props;
   const connected = !!agent?.client_name;
-  const open = (seed: number) => {
-    const blocked = openApps(seed);
-    void props.onWorld(seed).then(() => props.onDone(blocked));
-  };
   let body: ReactNode;
   if (step === 0) {
     body = (
@@ -209,23 +267,36 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
         </div>
       </>
     );
+  } else if (step === WORLD) {
+    body = (
+      <World
+        seed={seed}
+        change={change}
+        onBack={() => (change ? props.onDone() : setStep(1))}
+        onNext={(n) => {
+          setSeed(n);
+          void props.onWorld(n).then(() => setStep(3));
+        }}
+      />
+    );
+  } else if (step === 3) {
+    body = <OpenPulse seed={seed} onBack={() => setStep(WORLD)} onNext={() => setStep(4)} />;
   } else {
-    body = <World seed={props.seed} change={props.only === "world"} onBack={() => (props.only === "world" ? props.onDone([]) : setStep(1))} onOpen={open} />;
+    body = <OpenSignals seed={seed} onBack={() => setStep(3)} onDone={props.onDone} />;
   }
   return (
-    <section className="setup" aria-label={props.only === "world" ? "Change world" : "Set up your dock"}>
-      {props.only === "world" ? (
-        <h2 className="setup-title">Change world</h2>
-      ) : (
-        <ol className="setup-steps">
-          {STEPS.map((s, i) => (
-            <li key={s} className={i === step ? "on" : i < step ? "done" : ""}>
-              <span>{i + 1}</span>
-              {s}
+    <section className="setup" aria-label={change ? "Change world" : "Set up your dock"}>
+      {change && <h2 className="setup-title">Change world</h2>}
+      <ol className="setup-steps">
+        {STEPS.map((name, i) =>
+          change && i < WORLD ? null : (
+            <li key={name} className={i === step ? "on" : i < step ? "done" : ""}>
+              <span>{change ? i - WORLD + 1 : i + 1}</span>
+              {name}
             </li>
-          ))}
-        </ol>
-      )}
+          ),
+        )}
+      </ol>
       {body}
     </section>
   );
