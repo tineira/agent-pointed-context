@@ -10,7 +10,7 @@ import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
-import { StartOver } from "../../../demo/src/web/start-over.tsx";
+import { StartOver, startOverAsked } from "../../../demo/src/web/start-over.tsx";
 
 interface GrantState {
   id: string;
@@ -54,6 +54,7 @@ export function App() {
     return (
       <Shell>
         <p className="muted">
+          {startOverAsked() && <b>Nothing to start over here: this browser has no Signals feed. </b>}
           Signals shows the market of one demo world. Open it from your <a href={DOCK_URL}>agent dock</a>, with its <b>Signals</b> button: the dock opens every app on the same world.
         </p>
       </Shell>
