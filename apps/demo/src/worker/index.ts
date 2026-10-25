@@ -153,11 +153,7 @@ app.post("/api/s/:sid/grants/agent", async (c) => {
   if (c.env.APC_V2 === "1") return c.json({ error: "dock_only" }, 404);
   return c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant()));
 });
-/** APC v2 (TIN-402): the person removes a dock agent from Pulse. */
-app.post("/api/s/:sid/grants/:id/remove", async (c) => {
-  const result = await rpc(c.env, c.var.sid, (s) => s.removeDockGrant(c.req.param("id")));
-  return c.json(result, result.ok ? 200 : 404);
-});
+
 app.get("/api/s/:sid/compat.json", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.compat())));
 app.get("/api/s/:sid/events.jsonl", async (c) =>
   c.body(await rpc(c.env, c.var.sid, (s) => s.eventsJsonl()), 200, { "content-type": "application/x-ndjson" }),

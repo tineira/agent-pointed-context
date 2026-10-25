@@ -1,13 +1,9 @@
 /**
  * Pulse's v2 deploy takes agents only from a dock (TIN-402): no agent of its own, no MCP URL to
- * connect. What stays is what an app owes the person: how to point an agent here, and which agents
- * can read it, with a way to take that away. apc.tineira.com keeps connect.tsx and the how-to.
+ * connect. What stays is how to point an agent here; the dock manages the agents (TIN-410).
+ * apc.tineira.com keeps connect.tsx and the how-to.
  */
-import { displayNames } from "./agent-brands.ts";
-import { AgentIcon } from "./agent-icon.tsx";
-import type { Api, SandboxState } from "./api.ts";
-import { ago } from "./connect.tsx";
-import { isSeen, pinLabel } from "./pin-badges.tsx";
+import type { SandboxState } from "./api.ts";
 
 const dockName = (state: SandboxState) => state.hubs?.[0] ?? "your agent dock";
 
@@ -52,62 +48,5 @@ export function DockHowTo(props: { state: SandboxState }) {
         ))}
       </ol>
     </div>
-  );
-}
-
-/** The Agents screen's list on the v2 deploy: each dock agent that can read Pulse, and Remove. */
-export function DockAgents(props: { api: Api; state: SandboxState; onChanged: () => void }) {
-  const { state } = props;
-  const names = displayNames(state.grants);
-  const dockOf = (grantId: string) => {
-    const hub = state.hub_links?.find((l) => l.grant_id === grantId)?.hub;
-    try {
-      return hub ? new URL(hub).host : null;
-    } catch {
-      return null;
-    }
-  };
-  return (
-    <section className="card">
-      <h2>Agents that can read Pulse</h2>
-      <p>
-        Each came from an agent dock: you dropped it here and allowed it, here and in the dock. Remove takes its access away; its dock stops reading Pulse, and a new drop asks you again.
-      </p>
-      {state.grants.length === 0 && <p className="hint">None yet. Drag your agent from your agent dock ({dockName(state)}) onto any chart or customer.</p>}
-      {state.grants.map((g) => {
-        const active = ago(g.last_active_at);
-        const dock = dockOf(g.id);
-        return (
-          <div key={g.id} className="grant">
-            <div className="grant-head">
-              <h3>
-                <span className="mark-inline mark-logo">
-                  <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} motion={g.client_name ? "idle" : "off"} size={16} />
-                </span>{" "}
-                {names.get(g.id) ?? g.label}
-                <span className="muted">
-                  {dock ? ` · from ${dock}` : ""} · {g.regions ? `${g.regions.map((r) => r.toUpperCase()).join(", ")} only` : "all of Pulse"}
-                </span>
-              </h3>
-              <span className="grant-meta">
-                {active && <span>{active}</span>}
-                {g.pin && <span className={isSeen(g.pin) ? "grant-pin seen" : "grant-pin"}>{isSeen(g.pin) ? `read your pin on ${pinLabel(g.pin)}` : `pinned to ${pinLabel(g.pin)}, not read yet`}</span>}
-                <button
-                  type="button"
-                  className="link grant-toggle"
-                  onClick={async () => {
-                    if (!confirm(`Remove ${names.get(g.id) ?? g.label}? It can no longer read Pulse until you drop it here again.`)) return;
-                    await props.api.removeAgent(g.id);
-                    props.onChanged();
-                  }}
-                >
-                  Remove
-                </button>
-              </span>
-            </div>
-          </div>
-        );
-      })}
-    </section>
   );
 }

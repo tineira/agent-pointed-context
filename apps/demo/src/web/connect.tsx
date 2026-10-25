@@ -56,7 +56,7 @@ export function activeConflict(g: GrantState, now = Date.now()): GrantState["con
   return g.conflict && at && now - at < 60 * 60_000 ? g.conflict : null;
 }
 
-export function ago(iso: string | null, now = Date.now()): string | null {
+function ago(iso: string | null, now = Date.now()): string | null {
   const t = Date.parse(iso ?? "");
   if (!t) return null;
   const s = Math.max(0, Math.round((now - t) / 1000));
