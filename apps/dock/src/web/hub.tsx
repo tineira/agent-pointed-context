@@ -10,6 +10,7 @@ import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
+import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { APPS, appUrl, ConnectAgent, Install, Setup } from "./setup.tsx";
 
 interface AppRef {
@@ -178,11 +179,21 @@ export function HubDock() {
   const decide = (pid: string, action: "approve" | "deny" | "unpair") => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
   const dragProps = (a: DockAgent) => ({
     draggable: true,
-    title: `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)`,
+    title: a.client_name ? `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)` : `Drag ${a.name} into your agent's chat: it pastes the prompt that connects it`,
     onDragStart: (e: React.DragEvent<HTMLElement>) => startDrag(e.nativeEvent, a.id),
     onDragEnd: () => endDrag(a.id),
   });
   function startDrag(e: DragEvent, agentId: string) {
+    // Not connected yet (TIN-408): the drag is the connect prompt, to drop into the agent's chat. It
+    // carries the agent's MCP URL, so only until the agent connects; then it is the APC payload,
+    // which never carries a URL. (A demo choice: with OAuth the prompt would hold no secret.)
+    const agent = state?.agents.find((a) => a.id === agentId);
+    if (agent && !agent.client_name) {
+      e.dataTransfer?.setData("text/plain", askYourAgentPrompt(agent.mcp_url));
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+      setDragging(agentId);
+      return;
+    }
     const t = tickets.current.get(agentId);
     const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
     e.dataTransfer?.setData(APC_AGENT_TYPE, agentDragPayload(agentId, fresh));
@@ -255,7 +266,7 @@ export function HubDock() {
                       → {a.focus.app.name}: {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
                     </>
                   ) : !connected ? (
-                    "not connected yet"
+                    "not connected yet: drag me into your agent's chat"
                   ) : a.waiting ? (
                     "waiting for you to point"
                   ) : paired.length ? (

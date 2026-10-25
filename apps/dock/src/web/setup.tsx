@@ -249,10 +249,19 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
       <>
         {agent && (
           <div className="setup-agent">
-            <span className="chip">
+            <span
+              className="chip"
+              draggable={!connected}
+              title={connected ? undefined : "Drag me into your agent's chat"}
+              onDragStart={(e) => {
+                // TIN-408: before it connects, the agent drags as its connect prompt.
+                e.dataTransfer.setData("text/plain", askYourAgentPrompt(agent.mcp_url));
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+            >
               <AgentIcon clientName={agent.client_name} clientUa={agent.client_ua} clientIcon={agent.client_icon} motion={!connected ? "off" : agent.waiting ? "waiting" : "idle"} size={40} />
             </span>
-            <span>{connected ? <span className="ok">{agent.name} is connected ✓</span> : "Waiting for your agent…"}</span>
+            <span>{connected ? <span className="ok">{agent.name} is connected ✓</span> : <>Waiting for your agent… <span className="muted">The quickest way: drag this plug into your agent's chat and send.</span></>}</span>
           </div>
         )}
         {/* Once the agent connects, the instructions have done their job: the tile keeps them. */}
