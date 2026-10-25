@@ -9,7 +9,7 @@ import { askToDisconnectPrompt } from "./qr.tsx";
 
 /** The APC v2 sites, by name and address: what the dialog tells the person to wipe too. */
 export const V2_SITES = [
-  { name: "Agent dock", host: "v2.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5200/" : "https://v2.apc.tineira.com/" },
+  { name: "Agent dock", host: "v2.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5200/dock" : "https://v2.apc.tineira.com/dock" },
   { name: "Pulse", host: "pulse.v2.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5199/agents" : "https://pulse.v2.apc.tineira.com/agents" },
   { name: "Signals", host: "signals.v2.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.v2.apc.tineira.com/" },
 ] as const;

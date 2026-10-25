@@ -113,7 +113,7 @@ const WORLD = 2;
  * pulse-desktop prerelease, so the link never changes. macOS (TIN-398) and Linux (TIN-399) are one
  * line each when they exist.
  */
-const DESKTOP = [{ label: "Windows", match: /Windows/, url: "https://github.com/tineira/agent-pointed-context/releases/download/pulse-desktop/PulseDesktop.exe", note: "Unsigned for now: Windows asks once (More info, then Run anyway)." }];
+export const DESKTOP = [{ label: "Windows", match: /Windows/, url: "https://github.com/tineira/agent-pointed-context/releases/download/pulse-desktop/PulseDesktop.exe", note: "Unsigned for now: Windows asks once (More info, then Run anyway)." }];
 
 /**
  * An app on the world, as a plain link: a click on a link opens its tab, where a script opening a

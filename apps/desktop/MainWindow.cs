@@ -22,7 +22,7 @@ public sealed class MainWindow : Window
     static readonly IBrush Ok = new SolidColorBrush(Color.Parse("#1f7a4d"));
     static readonly IBrush Line = new SolidColorBrush(Color.Parse("#7f8a99"), 0.35);
     static readonly IBrush Muted = new SolidColorBrush(Color.Parse("#7f8a99"));
-    static readonly string DockUrl = "https://v2.apc.tineira.com/";
+    static readonly string DockUrl = "https://v2.apc.tineira.com/dock";
 
     /// <summary>PULSE_DESKTOP_DEBUG=1 logs every drag's formats to stderr, to see what a source hands over.</summary>
     static readonly bool Debug = Environment.GetEnvironmentVariable("PULSE_DESKTOP_DEBUG") == "1";
@@ -445,7 +445,7 @@ public sealed class MainWindow : Window
                     new TextBlock { Text = "Start over in Pulse for desktop?", FontSize = 17, FontWeight = FontWeight.Bold },
                     new TextBlock { Text = "This deletes this app's Pulse sandbox: the agents your dock paired here and their pins, your view, and the event log. The app forgets its session.", TextWrapping = TextWrapping.Wrap },
                     new TextBlock { Text = "To start from zero everywhere, do the same on the other sites (each opens in your browser and asks you there):", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold },
-                    new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl.TrimEnd('/') + "/"), Link("Pulse (web)", "https://pulse.v2.apc.tineira.com/agents"), Link("Signals", "https://signals.v2.apc.tineira.com/") } },
+                    new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl), Link("Pulse (web)", "https://pulse.v2.apc.tineira.com/agents"), Link("Signals", "https://signals.v2.apc.tineira.com/") } },
                     new TextBlock { Text = "And remove the \"APC\" server from your agent. Paste this to your agent:", TextWrapping = TextWrapping.Wrap },
                     new DockPanel
                     {

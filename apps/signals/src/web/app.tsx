@@ -28,7 +28,7 @@ interface FeedState {
 }
 type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget };
 
-const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/" : "https://v2.apc.tineira.com/";
+const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://v2.apc.tineira.com/dock";
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
 const PLAN_NAME: Record<string, string> = { starter: "Starter", team: "Team", business: "Business" };
 const MONTH_NAME = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
