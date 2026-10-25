@@ -55,6 +55,16 @@ function stable(value: unknown): string {
 
 const bytes = (value: unknown) => new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value ?? null)).length;
 
+/** One call to a dock's hub, server to server (TIN-382, TIN-389). Any failure is an answer, never a throw. */
+async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name?: unknown; icon?: unknown } }> {
+  try {
+    const response = await fetch(`${hub}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
+    return (await response.json().catch(() => ({ ok: false, error: "hub_refused" }))) as Awaited<ReturnType<typeof hubCall>>;
+  } catch {
+    return { ok: false, error: "hub_unreachable" };
+  }
+}
+
 export class Sandbox extends DurableObject<Env> {
   private sql: SqlStorage;
   private cached: Dataset | null = null;
@@ -387,7 +397,17 @@ export class Sandbox extends DurableObject<Env> {
     if (!allowed.includes(hub) && !(dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
     if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
     const linked = this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, b.agent).toArray()[0];
-    if (linked) return { ...(await this.pin(linked.grant_id, b.target)), grant_id: linked.grant_id, status: "paired" };
+    if (linked) {
+      // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
+      const grant = this.grants().find((g) => g.id === linked.grant_id);
+      const answer = grant ? await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent: b.agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : { ok: false, error: "not_paired" };
+      if (!answer.ok) {
+        if (answer.error === "not_paired") await this.dropHubGrant(linked.grant_id);
+        return { ok: false, error: answer.error ?? "hub_refused" };
+      }
+      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: answer.agent?.icon }]), linked.grant_id);
+      return { ...(await this.pin(linked.grant_id, b.target)), grant_id: linked.grant_id, status: answer.status ?? "paired" };
+    }
     const region = (REGIONS as readonly string[]).includes(b.region as string) ? (b.region as Region) : null;
     const id = `g_${randomHex(4)}`;
     const secret = randomHex(16);
@@ -395,18 +415,7 @@ export class Sandbox extends DurableObject<Env> {
       "insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, ?, ?)",
       id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, new Date().toISOString(),
     );
-    let answer: { ok?: boolean; error?: string; pairing_id?: string; agent?: { name?: unknown; icon?: unknown } } = {};
-    try {
-      const response = await fetch(`${hub}/apc/pair`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ticket: b.ticket, agent: b.agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      answer = (await response.json().catch(() => ({}))) as typeof answer;
-    } catch {
-      answer = { ok: false, error: "hub_unreachable" };
-    }
+    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent: b.agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };
@@ -429,12 +438,17 @@ export class Sandbox extends DurableObject<Env> {
     const grant = this.grants().find((g) => g.secret === secret);
     const linked = grant && this.sql.exec("select 1 from hub_links where grant_id = ?", grant.id).toArray().length > 0;
     if (!grant || !linked) return { ok: false };
-    this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
-    this.sql.exec("delete from hub_links where grant_id = ?", grant.id);
-    this.sql.exec("delete from grants where id = ?", grant.id);
-    this.log("hub_revoked", grant.id, {});
-    this.broadcast({ type: "grants" });
+    await this.dropHubGrant(grant.id);
     return { ok: true };
+  }
+
+  /** A dock's grant goes with its pins and its link: given back by the hub, or no longer paired there. */
+  private async dropHubGrant(grantId: string): Promise<void> {
+    this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
+    this.sql.exec("delete from hub_links where grant_id = ?", grantId);
+    this.sql.exec("delete from grants where id = ?", grantId);
+    this.log("hub_revoked", grantId, {});
+    this.broadcast({ type: "grants" });
   }
 
   private allEvents(): LoggedEvent[] {

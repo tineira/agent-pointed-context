@@ -206,11 +206,22 @@ function Sandbox({ sid }: { sid: string }) {
       enablePinning({
         // APC v2 (TIN-369): drops of an agent dragged from a dock in another window, only with ?apc=v2.
         acceptNativeDrops: v2,
-        // A grant id (the bridge dock), or a dock agent paired with one of this sandbox's grants (the hub dock).
-        resolveAgent: (handle) =>
-          stateRef.current?.grants.some((g) => g.id === handle) ? handle : (stateRef.current?.hub_links?.find((l) => l.agent === handle)?.grant_id ?? null),
-        // An agent from a dock not paired yet: ask the person (hub-consent.tsx).
-        onUnknownAgent: hubMode ? (drag, target) => setPendingDrop({ drag, target, at: Date.now() }) : undefined,
+        // A grant id: the bridge dock (TIN-370). An agent from a hub dock is never resolved here; it goes below.
+        resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
+        // An agent from a hub dock (TIN-389): one paired here pins through the server, which checks with the
+        // dock that the pairing still stands; one not paired, or no longer, asks the person (hub-consent.tsx).
+        onUnknownAgent: hubMode
+          ? async (drag, target) => {
+              const paired = stateRef.current?.hub_links?.some((l) => l.hub === drag.hub && l.agent === drag.agent);
+              if (!paired) return setPendingDrop({ drag, target, at: Date.now() });
+              const r = await api.hubPair({ hub: drag.hub, agent: drag.agent, ticket: drag.ticket, region: null, target });
+              if (r.ok) setNotice(`Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".`);
+              else if (r.error === "not_paired") setPendingDrop({ drag, target, at: Date.now() });
+              else setNotice(`Not pinned: ${r.error}`);
+              setTimeout(() => setNotice(null), 4000);
+              void refresh();
+            }
+          : undefined,
         canTarget: (grantId, target: FocusTarget) => {
           const grant = stateRef.current?.grants.find((g) => g.id === grantId);
           if (!grant?.regions) return true;

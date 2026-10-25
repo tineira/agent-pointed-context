@@ -81,6 +81,15 @@ app.post("/apc/pair", async (c) => {
   return c.json(result, result.ok ? 200 : 400);
 });
 
+/** An app checks that the hub still pairs an agent with its grant, on a drop (TIN-389). */
+app.post("/apc/confirm", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { ticket?: unknown } | null;
+  const did = typeof body?.ticket === "string" ? body.ticket.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1] : undefined;
+  if (!did) return c.json({ ok: false, error: "ticket_expired" }, 400);
+  const result = await stubFor(c.env, did).confirm(body);
+  return c.json(result, result.ok ? 200 : 400);
+});
+
 app.all("/mcp/:did/:secret", async (c) => {
   if (!/^[0-9a-f]{32}$/.test(c.req.param("did"))) return c.json({ error: "not_found" }, 404);
   return stubFor(c.env, c.req.param("did")).fetch(c.req.raw);
