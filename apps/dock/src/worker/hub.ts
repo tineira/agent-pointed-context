@@ -244,6 +244,21 @@ export class Hub extends DurableObject<Env> {
     return this.agent(id)!;
   }
 
+  /**
+   * Remove an agent (TIN-418): every grant it holds goes back to its app (TIN-388), then the agent and
+   * all it owns go, so its MCP URL answers 404.
+   */
+  async removeAgent(agentId: string): Promise<{ ok: boolean }> {
+    if (!this.agent(agentId)) return { ok: false };
+    await Promise.allSettled(this.pairings(agentId).map((p) => revokeGrant(p.mcp_url)));
+    this.sql.exec("delete from pointer where agent_id = ?", agentId);
+    this.sql.exec("delete from pairings where agent_id = ?", agentId);
+    this.sql.exec("delete from tickets where agent_id = ?", agentId);
+    this.sql.exec("delete from agents where id = ?", agentId);
+    this.broadcast();
+    return { ok: true };
+  }
+
   async addAgent(): Promise<{ id: string }> {
     const a = this.insertAgent(`Agent ${this.agents().length + 1}`);
     this.broadcast();
