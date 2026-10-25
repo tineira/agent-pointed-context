@@ -189,7 +189,7 @@ export function HubDock() {
     // which never carries a URL. (A demo choice: with OAuth the prompt would hold no secret.)
     const agent = state?.agents.find((a) => a.id === agentId);
     if (agent && !agent.client_name) {
-      e.dataTransfer?.setData("text/plain", askYourAgentPrompt(agent.mcp_url));
+      e.dataTransfer?.setData("text/plain", askYourAgentPrompt(agent.mcp_url, "APC"));
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
       setDragging(agentId);
       return;

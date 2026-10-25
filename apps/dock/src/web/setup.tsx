@@ -77,7 +77,7 @@ export function ConnectAgent(props: { agent: SetupAgent }) {
       <p>Add this URL to your agent as a remote MCP server (Streamable HTTP). No login: the access is in the URL, so keep it to yourself. Leave any OAuth or API key fields empty.</p>
       <CopyRow text={agent.mcp_url} />
       <p>Don't know how to connect an MCP server? Paste this to your agent:</p>
-      <CopyRow text={askYourAgentPrompt(agent.mcp_url)} label="Copy prompt" block />
+      <CopyRow text={askYourAgentPrompt(agent.mcp_url, "APC")} label="Copy prompt" block />
       <div className="qr-row">
         <Qr text={agent.mcp_url} />
         <p>{SCAN_HINT}</p>
@@ -255,7 +255,7 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
               title={connected ? undefined : "Drag me into your agent's chat"}
               onDragStart={(e) => {
                 // TIN-408: before it connects, the agent drags as its connect prompt.
-                e.dataTransfer.setData("text/plain", askYourAgentPrompt(agent.mcp_url));
+                e.dataTransfer.setData("text/plain", askYourAgentPrompt(agent.mcp_url, "APC"));
                 e.dataTransfer.effectAllowed = "copy";
               }}
             >
