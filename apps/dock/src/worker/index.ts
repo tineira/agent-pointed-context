@@ -70,6 +70,11 @@ app.post("/api/d/:did/agents/:aid/remove", async (c) => {
   const result = await stub(c).removeAgent(c.req.param("aid"));
   return c.json(result, result.ok ? 200 : 404);
 });
+/** What an agent did (TIN-419), for its page in the dock. */
+app.get("/api/d/:did/agents/:aid/calls", async (c) => {
+  const result = await stub(c).calls(c.req.param("aid"));
+  return result ? c.json(result) : c.json({ error: "unknown_agent" }, 404);
+});
 app.post("/api/d/:did/agents/:aid/clear", async (c) => {
   await stub(c).clearFocus(c.req.param("aid"));
   return c.json({ ok: true });

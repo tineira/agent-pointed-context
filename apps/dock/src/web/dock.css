@@ -157,3 +157,26 @@ main.landing { max-width: 920px; margin: 0 auto; padding: 20px 16px 48px; gap: 3
 .small-note { margin-top: 10px; font-size: 13px; }
 .landing-list { margin: 0; padding-left: 20px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; line-height: 1.6; }
 .landing-foot { display: flex; justify-content: center; padding-top: 8px; }
+
+/* An agent's page (TIN-419), at /dock/agents/<id>. */
+.tile-more { align-self: center; font-size: 12px; color: var(--muted); text-decoration: none; padding: 2px 0; }
+.tile-more:hover { color: var(--fg); }
+.agent-page .back { font-size: 12px; }
+.agent-hero { display: flex; align-items: center; gap: 12px; }
+.agent-hero .chip { width: 72px; height: 72px; border-radius: 18px; cursor: grab; }
+.agent-hero h1 { margin: 0; font-size: 18px; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.facts .read, .apps .read { color: var(--ok); }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; font-size: inherit; }
+.agent-section { display: flex; flex-direction: column; gap: 8px; }
+.agent-section .apps, .agent-section .compat { padding-left: 0; }
+.calls { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; font-size: 12px; max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.calls li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.calls li:last-child { border-bottom: 0; }
+.calls time { color: var(--muted); font: 11px ui-monospace, monospace; }
+.calls .call-app { font-weight: 600; }
+.calls code { font: 11px ui-monospace, monospace; overflow-wrap: anywhere; }
+.calls .pin { color: var(--ok); }
+.calls li.failed code { color: #c0392b; }

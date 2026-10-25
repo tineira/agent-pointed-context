@@ -15,12 +15,14 @@ import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
-import { appAllowed, appIdFor, combineAttendance, detachKeys, focusLabel, HIDDEN_TOOLS, hubFocus, type AppRef, type HubFocus } from "./logic.ts";
+import { appAllowed, appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
 const TICKET_TTL_MS = 60_000;
 const WAIT_CEILING_S = 50;
 const WAIT_DEFAULT_S = 25;
+/** The calls kept per agent (TIN-419). */
+const CALLS_KEPT = 300;
 
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
@@ -43,6 +45,7 @@ interface Agent {
   client_ua: string | null;
   client_title: string | null;
   client_icon: string | null;
+  client_version: string | null;
   created_at: string;
   last_active_at: string | null;
   /** When the agent's client last listed tools: after a pairing, it sees that app's prefixed tools (TIN-384). */
@@ -110,9 +113,12 @@ export class Hub extends DurableObject<Env> {
       create table if not exists pointer (
         agent_id text primary key references agents(id) on delete cascade,
         pairing_id text not null, app text not null, focus text not null, seen_at text);
+      create table if not exists calls (
+        id integer primary key autoincrement, agent_id text not null references agents(id) on delete cascade,
+        at text not null, app text, tool text not null, via text not null, pin text, error text);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["pairings", "approved_at text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -254,6 +260,7 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
     this.sql.exec("delete from tickets where agent_id = ?", agentId);
+    this.sql.exec("delete from calls where agent_id = ?", agentId);
     this.sql.exec("delete from agents where id = ?", agentId);
     this.broadcast();
     return { ok: true };
@@ -296,11 +303,14 @@ export class Hub extends DurableObject<Env> {
           client_name: a.client_name,
           client_ua: a.client_ua,
           client_icon: a.client_icon,
+          client_version: a.client_version,
+          created_at: a.created_at,
           badge: a.badge,
           mcp_url: `${origin}/mcp/${did}/${a.secret}`,
           last_active_at: a.last_active_at,
           waiting: this.waiting.has(a.id),
           focus: row ? { app: row.app, label: focusLabel(row.focus), pinned_at: row.focus.pinned_at, seen: !!row.seen_at } : null,
+          calls: (this.sql.exec<{ n: number }>("select count(*) as n from calls where agent_id = ?", a.id).toArray()[0]?.n ?? 0),
           // What this agent's client does with a dock (TIN-384), for the compatibility matrix.
           compat: {
             listed_after_pairing: !!a.listed_at && this.pairings(a.id, "paired").some((p) => !!p.approved_at && a.listed_at! > p.approved_at),
@@ -359,6 +369,18 @@ export class Hub extends DurableObject<Env> {
     await Promise.all(this.pairings(agentId, "paired").map((p) => this.introduce(p)));
     this.broadcast();
     return { ok: true };
+  }
+
+  /** What an agent did (TIN-419): its calls through the dock, newest first. */
+  async calls(agentId: string): Promise<{ calls: CallEntry[] } | null> {
+    if (!this.agent(agentId)) return null;
+    const rows = this.sql.exec<Record<string, string | null>>("select at, app, tool, via, pin, error from calls where agent_id = ? order by id desc", agentId).toArray();
+    return { calls: rows as unknown as CallEntry[] };
+  }
+
+  private logCall(agentId: string, entry: Omit<CallEntry, "at">): void {
+    this.sql.exec("insert into calls (agent_id, at, app, tool, via, pin, error) values (?, ?, ?, ?, ?, ?, ?)", agentId, new Date().toISOString(), entry.app, entry.tool, entry.via, entry.pin, entry.error);
+    this.sql.exec("delete from calls where agent_id = ? and id not in (select id from calls where agent_id = ? order by id desc limit ?)", agentId, agentId, CALLS_KEPT);
   }
 
   async clearFocus(agentId: string): Promise<void> {
@@ -535,14 +557,15 @@ export class Hub extends DurableObject<Env> {
 
     try {
       const body = (await request.clone().json()) as unknown;
-      for (const m of (Array.isArray(body) ? body : [body]) as Array<{ method?: string; params?: { clientInfo?: { name?: unknown; title?: unknown; icons?: unknown } } } | null>) {
+      for (const m of (Array.isArray(body) ? body : [body]) as Array<{ method?: string; params?: { clientInfo?: { name?: unknown; title?: unknown; version?: unknown; icons?: unknown } } } | null>) {
         if (m?.method !== "initialize") continue;
         const info = m.params?.clientInfo;
         if (typeof info?.name !== "string" || info.name.length > 100) continue;
         const title = typeof info.title === "string" ? info.title.replace(/[\p{C}]/gu, "").trim().slice(0, 40) || null : null;
+        const version = typeof info.version === "string" ? info.version.replace(/[\p{C}]/gu, "").trim().slice(0, 40) || null : null;
         this.sql.exec(
-          "update agents set client_name = ?, client_ua = ?, client_title = ?, client_icon = ? where id = ?",
-          info.name, (request.headers.get("user-agent") ?? "").slice(0, 120), title, pickClientIcon(info.icons), agent.id,
+          "update agents set client_name = ?, client_ua = ?, client_title = ?, client_icon = ?, client_version = ? where id = ?",
+          info.name, (request.headers.get("user-agent") ?? "").slice(0, 120), title, pickClientIcon(info.icons), version, agent.id,
         );
         this.broadcast();
       }
@@ -567,7 +590,10 @@ export class Hub extends DurableObject<Env> {
       const name = req.params.name;
       const args = (req.params.arguments ?? {}) as Record<string, unknown>;
       this.sql.exec("update agents set last_active_at = ? where id = ?", new Date().toISOString(), agent.id);
+      // The pin before the call, to log whether the call read it (TIN-419).
+      const before = this.pointer(agent.id);
       let result = await this.callTool(agent.id, name, args);
+      this.logCall(agent.id, this.entry(agent.id, name, args, result, before));
       // Every result carries the hub's attention while the focus is unread, and then while the dock is open and the person is on a paired app's page.
       const row = this.unread(agent.id);
       if (row) result = attachAttention(result, { focus: this.render(agent.id, row), note: ATTENTION_NOTE });
@@ -581,6 +607,35 @@ export class Hub extends DurableObject<Env> {
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
     return transport.handleRequest(new Request(request, { headers }));
+  }
+
+  /** The log line for one call: the tool and app, never the arguments' values or the result. */
+  private entry(agentId: string, name: string, args: Record<string, unknown>, result: ToolResult, before: PointerRow | null): Omit<CallEntry, "at"> {
+    const error = errorOf(result);
+    if (name === "get_current_view" || name === "wait_for_focus" || name === "list_app_tools") {
+      const s = result.structuredContent as { focus?: unknown } | undefined;
+      const now = this.pointer(agentId);
+      const pin = !error && s?.focus && now ? focusLabel(now.focus) : null;
+      return { app: null, tool: name, via: "dock", pin, error };
+    }
+    let app: string | null = null;
+    let tool = name;
+    let inner: unknown = args;
+    let via: CallEntry["via"] = "prefixed";
+    if (name === "call_app_tool") {
+      app = typeof args.app === "string" ? args.app.slice(0, 16) : null;
+      tool = typeof args.tool === "string" ? args.tool.slice(0, 64) : "?";
+      inner = args.args ?? {};
+      via = "relay";
+    } else {
+      const split = name.indexOf("__");
+      if (split <= 0) return { app: null, tool: name.slice(0, 64), via: "dock", pin: null, error };
+      app = name.slice(0, split);
+      tool = name.slice(split + 2);
+    }
+    const focus = before ? { app: before.app.id, next: before.focus.next, next_args: before.focus.next_args } : null;
+    const pin = before && app && readsPin(focus, app, tool, inner) ? focusLabel(before.focus) : null;
+    return { app, tool, via, pin, error };
   }
 
   /** Each paired app's tools as <app>__<tool>, with the app's description and input schema; 64 characters at most. */

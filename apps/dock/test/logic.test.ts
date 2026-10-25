@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appAllowed, appIdFor, combineAttendance, detachKeys, focusLabel, hubFocus, newest } from "../src/worker/logic.ts";
+import { appAllowed, appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, hubFocus, newest, readsPin } from "../src/worker/logic.ts";
 
 test("an app's id: short, from its name, numbered on a collision (TIN-382)", () => {
   assert.equal(appIdFor("Pulse", new Set()), "pulse");
@@ -57,4 +57,20 @@ test("the hub pairs only with allowed app origins, and the MCP URL must be on th
   assert.ok(appAllowed("http://localhost:5199", "http://localhost:5199/mcp/a/b", allowed, true));
   assert.equal(appAllowed("https://pulse.v2.apc.tineira.com", "https://u:p@pulse.v2.apc.tineira.com/mcp", allowed, false), false);
   assert.equal(appAllowed("https://pulse.v2.apc.tineira.com", "not a url", allowed, false), false);
+});
+
+test("an agent's call reads the pin only when it is the call the focus names (TIN-419)", () => {
+  const focus = { app: "pulse", next: "get_figure", next_args: { key: "mrr", params: { month: "2026-03" } } };
+  assert.equal(readsPin(focus, "pulse", "get_figure", { params: { month: "2026-03" }, key: "mrr" }), true);
+  assert.equal(readsPin(focus, "pulse", "get_figure", { key: "mrr", params: { month: "2026-04" } }), false);
+  assert.equal(readsPin(focus, "signals", "get_figure", focus.next_args), false);
+  assert.equal(readsPin(focus, "pulse", "get_customer", focus.next_args), false);
+  assert.equal(readsPin(null, "pulse", "get_figure", focus.next_args), false);
+});
+
+test("a failed call logs its error code, never its message (TIN-419)", () => {
+  assert.equal(errorOf({ content: [{ type: "text", text: "{}" }] }), null);
+  assert.equal(errorOf({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: "unknown_app", message: "No paired app" }) }] }), "unknown_app");
+  assert.equal(errorOf({ isError: true, structuredContent: { error: "not_found" } }), "not_found");
+  assert.equal(errorOf({ isError: true, content: [{ type: "text", text: "boom" }] }), "error");
 });

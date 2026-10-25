@@ -85,6 +85,48 @@ export function focusLabel(f: { kind: string; id: string | null; part: string | 
   return [p.key, p.month, p.plan, p.region, f.part].filter((v) => v !== undefined && v !== null && v !== "").join(" ") || f.kind;
 }
 
+/**
+ * One line of an agent's call log (TIN-419): which tool, through which app, whether it read the pin
+ * and whether it failed. Never the arguments' values or the result.
+ */
+export interface CallEntry {
+  at: string;
+  /** The app's id, or null for the dock's own tools. */
+  app: string | null;
+  tool: string;
+  via: "dock" | "prefixed" | "relay";
+  /** The pin the call read, as the dock shows it, or null. */
+  pin: string | null;
+  error: string | null;
+}
+
+/** An app call reads the pin when it is the call the focus names: same app, tool and arguments. */
+export function readsPin(focus: { app: string; next: string; next_args: unknown } | null, app: string, tool: string, args: unknown): boolean {
+  return !!focus && focus.app === app && focus.next === tool && sameJson(focus.next_args ?? {}, args ?? {});
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a).sort();
+  const kb = Object.keys(b).sort();
+  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && sameJson((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/** A failed call's error code: the tool's own { error } when it gives one, else "error". */
+export function errorOf(result: { isError?: boolean; content?: Array<{ type: string; text?: string }>; structuredContent?: unknown }): string | null {
+  if (!result.isError) return null;
+  const s = result.structuredContent as { error?: unknown } | undefined;
+  if (typeof s?.error === "string") return s.error.slice(0, 40);
+  try {
+    const parsed = JSON.parse(result.content?.find((c) => c.type === "text")?.text ?? "") as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error.slice(0, 40);
+  } catch {
+    // not JSON
+  }
+  return "error";
+}
+
 /** An app's origin the hub may pair with, and an MCP URL on that same origin. */
 export function appAllowed(origin: string, mcpUrl: string, allowed: readonly string[], dev: boolean): boolean {
   let url: URL;
