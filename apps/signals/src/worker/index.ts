@@ -81,6 +81,21 @@ app.get("/api/s/:sid/ws", async (c) => {
   return stubFor(c.env, c.var.sid).fetch(new Request(c.req.raw, { headers }));
 });
 
+/** A dock's hub gives back a grant (TIN-388). The MCP URL, on this origin, is the proof. */
+app.post("/apc/revoke", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { mcp_url?: unknown } | null;
+  let m: RegExpMatchArray | null = null;
+  try {
+    const url = new URL(typeof body?.mcp_url === "string" ? body.mcp_url : "");
+    if (url.origin === new URL(c.req.url).origin) m = url.pathname.match(/^\/mcp\/([0-9a-f]{32})\/([0-9a-f]{32})$/);
+  } catch {
+    m = null;
+  }
+  if (!m) return c.json({ ok: false, error: "invalid" }, 400);
+  const result = await stubFor(c.env, m[1]!).revoke(m[2]!);
+  return c.json(result, result.ok ? 200 : 404);
+});
+
 app.all("/mcp/:sid/:secret", async (c) => {
   const sid = c.req.param("sid");
   if (!/^[0-9a-f]{32}$/.test(sid)) return c.json({ error: "not_found" }, 404);
@@ -90,6 +105,7 @@ app.all("/mcp/:sid/:secret", async (c) => {
 
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));
+app.all("/apc/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default app;

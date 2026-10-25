@@ -22,6 +22,7 @@ interface DockAgent {
   client_name: string | null;
   client_ua: string | null;
   client_icon: string | null;
+  badge: string | null;
   mcp_url: string;
   last_active_at: string | null;
   waiting: boolean;
@@ -47,6 +48,40 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok && response.status !== 400) throw new Error(`${path}: ${response.status}`);
   return (await response.json()) as T;
+}
+
+/**
+ * Draw an agent's icon (an <svg> or an <img> from AgentIcon) on a white rounded square, 64 px, as
+ * a PNG data URI: the agent's mark that apps show on its pins. Monochrome marks get a dark ink.
+ */
+async function badgeOf(icon: Element): Promise<string | null> {
+  let src: string;
+  if (icon instanceof HTMLImageElement) src = icon.src;
+  else if (icon instanceof SVGSVGElement) {
+    const clone = icon.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", "64");
+    clone.setAttribute("height", "64");
+    clone.removeAttribute("class");
+    src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone).replaceAll("currentColor", "#0f1419"))}`;
+  } else return null;
+  try {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.roundRect(0, 0, 64, 64, 14);
+    ctx.fill();
+    ctx.drawImage(img, 10, 10, 44, 44);
+    const png = canvas.toDataURL("image/png");
+    return png.length <= 16_384 ? png : null;
+  } catch {
+    return null;
+  }
 }
 
 export function HubDock() {
@@ -99,6 +134,23 @@ export function HubDock() {
     },
     [base],
   );
+  // The agent's mark for the apps (TIN-388): its logo as drawn here, as a 64 px PNG, given to the hub.
+  const drawn = useRef(new Map<string, string>());
+  const marks = state?.agents.map((a) => `${a.id}:${a.client_name ?? ""}:${a.client_ua ?? ""}:${a.client_icon?.length ?? 0}`).join("|") ?? "";
+  useEffect(() => {
+    if (!base || !state) return;
+    for (const a of state.agents) {
+      if (!a.client_name) continue;
+      const icon = document.querySelector(`[data-agent-chip="${a.id}"] > *`);
+      if (!icon) continue;
+      void badgeOf(icon).then((badge) => {
+        if (!badge || badge === a.badge || drawn.current.get(a.id) === badge) return;
+        drawn.current.set(a.id, badge);
+        void call(`${base}/agents/${a.id}/badge`, { badge });
+      });
+    }
+  }, [base, marks]);
+
   const ids = state?.agents.map((a) => a.id).join(",") ?? "";
   useEffect(() => {
     if (!ids) return;
@@ -163,7 +215,7 @@ export function HubDock() {
                   void fetchTicket(a.id);
                 }}
               >
-                <span className="chip">
+                <span className="chip" data-agent-chip={a.id}>
                   <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!connected ? "off" : a.waiting ? "waiting" : "idle"} size={24} />
                 </span>
                 <span className="who">

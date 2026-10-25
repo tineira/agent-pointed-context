@@ -11,6 +11,7 @@ import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, isUnread, 
 import { generateDataset } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
+import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { checkPin, focusPayload, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
 
 export const FEED_TTL_MS = 6 * 60 * 60_000;
@@ -34,6 +35,8 @@ interface Grant {
   hub: string;
   agent: string;
   client_title: string | null;
+  /** The agent's mark from the dock (TIN-388): a small PNG, drawn on its pins. */
+  client_icon: string | null;
   created_at: string;
   last_active_at: string | null;
 }
@@ -60,6 +63,11 @@ export class Feed extends DurableObject<Env> {
         grant_id text primary key references grants(id) on delete cascade,
         kind text not null, target_id text, part text, pinned_at text not null, seen_at text);
     `);
+    try {
+      this.sql.exec("alter table grants add column client_icon text");
+    } catch {
+      // already there (TIN-388)
+    }
   }
 
   private meta(key: string): string | null {
@@ -149,7 +157,7 @@ export class Feed extends DurableObject<Env> {
   async state() {
     return {
       seed: Number(this.meta("seed")),
-      grants: this.grants().map((g) => ({ id: g.id, hub: g.hub, agent: g.agent, name: g.client_title ?? "Agent via dock", connected: !!g.client_title, pin: this.focusRow(g.id) })),
+      grants: this.grants().map((g) => ({ id: g.id, hub: g.hub, agent: g.agent, name: g.client_title ?? "Agent via dock", icon: g.client_icon, connected: !!g.client_title, pin: this.focusRow(g.id) })),
     };
   }
 
@@ -191,7 +199,7 @@ export class Feed extends DurableObject<Env> {
     const id = `g_${randomHex(4)}`;
     const secret = randomHex(16);
     this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, ?, ?)", id, secret, hub, b.agent, new Date().toISOString());
-    let answer: { ok?: boolean; error?: string } = {};
+    let answer: { ok?: boolean; error?: string; agent?: { name?: unknown; icon?: unknown } } = {};
     try {
       const response = await fetch(`${hub}/apc/pair`, {
         method: "POST",
@@ -207,8 +215,21 @@ export class Feed extends DurableObject<Env> {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };
     }
+    // The agent's mark from the hub, so its first pin already shows its logo.
+    const name = typeof answer.agent?.name === "string" ? answer.agent.name.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null : null;
+    this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", name, pickClientIcon([{ src: answer.agent?.icon }]), id);
     this.broadcast();
     return { ...(await this.pin(id, b.target)), grant_id: id };
+  }
+
+  /** A dock's hub gives back its grant (TIN-388): the grant and its pin go, and the next drop asks again. */
+  async revoke(secret: string): Promise<{ ok: boolean }> {
+    const grant = this.grants().find((g) => g.secret === secret);
+    if (!grant) return { ok: false };
+    this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
+    this.sql.exec("delete from grants where id = ?", grant.id);
+    this.broadcast();
+    return { ok: true };
   }
 
   // ---- fetch: the page's WebSocket and the hub's MCP endpoint ----
@@ -240,10 +261,10 @@ export class Feed extends DurableObject<Env> {
     if (!grant) return Response.json({ error: "unknown_grant" }, { status: 404 });
     await this.touch();
     try {
-      const body = (await request.clone().json()) as { method?: string; params?: { clientInfo?: { title?: unknown } } } | null;
-      const title = body?.method === "initialize" ? body.params?.clientInfo?.title : undefined;
-      if (typeof title === "string") {
-        this.sql.exec("update grants set client_title = ? where id = ?", title.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null, grant.id);
+      const body = (await request.clone().json()) as { method?: string; params?: { clientInfo?: { title?: unknown; icons?: unknown } } } | null;
+      const info = body?.method === "initialize" ? body.params?.clientInfo : undefined;
+      if (typeof info?.title === "string") {
+        this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", info.title.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null, pickClientIcon(info.icons), grant.id);
         this.broadcast();
       }
     } catch {

@@ -144,6 +144,25 @@ app.get("/api/s/:sid/ws", async (c) => {
   return stubFor(c.env, c.var.sid).fetch(new Request(c.req.raw, { headers }));
 });
 
+/**
+ * APC v2 (TIN-388): a dock's hub gives back a grant Pulse made for it. The MCP URL is the proof;
+ * it must be this origin's. Only on Pulse's v2 deploy.
+ */
+app.post("/apc/revoke", async (c) => {
+  if (c.env.APC_V2 !== "1") return c.json({ error: "not_found" }, 404);
+  const body = (await c.req.json().catch(() => null)) as { mcp_url?: unknown } | null;
+  let m: RegExpMatchArray | null = null;
+  try {
+    const url = new URL(typeof body?.mcp_url === "string" ? body.mcp_url : "");
+    if (url.origin === new URL(c.req.url).origin) m = url.pathname.match(/^\/mcp\/([0-9a-f]{32})\/([0-9a-f]{32})$/);
+  } catch {
+    m = null;
+  }
+  if (!m) return c.json({ ok: false, error: "invalid" }, 400);
+  const result = await rpc(c.env, m[1]!, (s) => s.revokeHubGrant(m![2]!), 1);
+  return c.json(result, result.ok ? 200 : 404);
+});
+
 /** An agent's endpoint: the sandbox checks the grant secret. */
 app.all("/mcp/:sid/:secret", async (c) => {
   const sid = c.req.param("sid");
@@ -155,6 +174,7 @@ app.all("/mcp/:sid/:secret", async (c) => {
 /** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));
+app.all("/apc/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
 export default app;

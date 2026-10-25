@@ -76,10 +76,15 @@ button, select { font: inherit; color: inherit; }
 
 .pins { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
 .post-head .pins { margin-left: auto; }
-.pin { font: 700 11px system-ui; padding: 2px 4px 2px 8px; border-radius: 999px; border: 1.5px dashed var(--accent); color: var(--accent); background: var(--bg); white-space: nowrap; }
-.pin.seen { border-style: solid; border-color: var(--ok); color: var(--ok); }
-.pin button { border: none; background: none; padding: 0 3px; font-size: 12px; color: inherit; cursor: pointer; }
-
+.pin { position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; border: 2px dashed var(--accent); background: var(--bg); animation: pin-breathe 1.8s ease-in-out infinite; }
+.pin.seen { border: 2px solid transparent; animation: none; }
+.pin img { width: 22px; height: 22px; border-radius: 6px; display: block; }
+.pin-fallback { font: 700 13px system-ui; color: var(--accent); }
+.pin-check { position: absolute; right: -6px; bottom: -6px; width: 16px; height: 16px; border-radius: 50%; background: var(--ok); color: #fff; font: 700 10px/16px system-ui; text-align: center; }
+.pin button { position: absolute; top: -8px; right: -8px; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: var(--muted); color: var(--bg); font-size: 11px; line-height: 16px; cursor: pointer; opacity: 0; }
+.pin:hover button { opacity: 1; }
+@keyframes pin-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .pin { animation: none; } }
 .apc-dragging [data-focus] { outline: 1px dashed var(--muted); outline-offset: 2px; }
 .apc-dragging .apc-target { outline: 2px solid var(--accent); outline-offset: 2px; }
 

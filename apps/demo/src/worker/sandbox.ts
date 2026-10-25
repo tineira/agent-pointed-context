@@ -395,7 +395,7 @@ export class Sandbox extends DurableObject<Env> {
       "insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, ?, ?)",
       id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, new Date().toISOString(),
     );
-    let answer: { ok?: boolean; error?: string; pairing_id?: string } = {};
+    let answer: { ok?: boolean; error?: string; pairing_id?: string; agent?: { name?: unknown; icon?: unknown } } = {};
     try {
       const response = await fetch(`${hub}/apc/pair`, {
         method: "POST",
@@ -412,10 +412,29 @@ export class Sandbox extends DurableObject<Env> {
       return { ok: false, error: answer.error ?? "hub_refused" };
     }
     this.sql.exec("insert into hub_links (hub, agent, grant_id, pairing_id, created_at) values (?, ?, ?, ?, ?)", hub, b.agent, id, answer.pairing_id ?? null, new Date().toISOString());
+    // The agent's mark from the hub (TIN-388), so its first pin shows its logo; initialize keeps it current.
+    this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", cleanName(answer.agent?.name), pickClientIcon([{ src: answer.agent?.icon }]), id);
     this.log("hub_paired", id, { hub, agent: b.agent });
     this.broadcast({ type: "grants" });
     const pinned = await this.pin(id, b.target);
     return { ok: pinned.ok, ...(pinned.error ? { error: pinned.error } : {}), grant_id: id, status: "pending" };
+  }
+
+  /**
+   * A dock's hub gives back the grant Pulse made for it (TIN-388), on unpair or deny in the dock:
+   * the grant, its pins and its dock link go, so the next drop of that agent asks the person again.
+   * Holding the grant's secret is the proof. Only grants made for a dock can be given back this way.
+   */
+  async revokeHubGrant(secret: string): Promise<{ ok: boolean }> {
+    const grant = this.grants().find((g) => g.secret === secret);
+    const linked = grant && this.sql.exec("select 1 from hub_links where grant_id = ?", grant.id).toArray().length > 0;
+    if (!grant || !linked) return { ok: false };
+    this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
+    this.sql.exec("delete from hub_links where grant_id = ?", grant.id);
+    this.sql.exec("delete from grants where id = ?", grant.id);
+    this.log("hub_revoked", grant.id, {});
+    this.broadcast({ type: "grants" });
+    return { ok: true };
   }
 
   private allEvents(): LoggedEvent[] {
