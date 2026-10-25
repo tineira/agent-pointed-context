@@ -25,7 +25,8 @@ export const PRODUCTS = [
   { id: "gemini", name: "Gemini", match: /gemini/i, ua: /^Google\b/ },
   { id: "cursor", name: "Cursor", match: /cursor/i },
   { id: "kimi", name: "Kimi", match: /kimi|moonshot/i },
-  { id: "zai", name: "Z.ai", match: /z\.ai|zhipu|\bglm\b/i },
+  // ZCode, Z.ai's coding agent, names itself zcode (TIN-415).
+  { id: "zai", name: "Z.ai", match: /z\.ai|zhipu|\bglm\b|\bz[- ]?code\b/i },
 ] as const satisfies ReadonlyArray<{ id: string; name: string; match: RegExp; ua?: RegExp }>;
 
 export type ProductId = (typeof PRODUCTS)[number]["id"];
