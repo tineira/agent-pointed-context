@@ -41,3 +41,12 @@ test("missing client info and IP become empty blobs", async () => {
   assert.deepEqual(p.blobs.slice(1, 4), ["", "", ""]);
   assert.equal(p.blobs[5], "");
 });
+
+test("a dock's point is the same shape plus its source; Pulse v1's points carry none (TIN-416)", async () => {
+  const v1 = await sessionPoint("salt", event());
+  const dock = await sessionPoint("salt", event({ source: "dock" }));
+  assert.equal(v1.blobs.length, 7);
+  assert.deepEqual(dock.blobs.slice(0, 7), v1.blobs);
+  assert.equal(dock.blobs[7], "dock");
+  assert.equal(dock.indexes[0], v1.indexes[0]);
+});

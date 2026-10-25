@@ -15,6 +15,8 @@ export interface SessionEvent {
   protocolVersion: string | null;
   userAgent: string;
   ip: string | null;
+  /** Where the agent connected, when not to Pulse v1: "dock" for an APC v2 dock's hub (TIN-416). */
+  source?: string;
 }
 
 /** The shape of Analytics Engine's AnalyticsEngineDataPoint, kept local so tests run under plain Node. */
@@ -34,7 +36,7 @@ export async function hmacHex(salt: string, message: string): Promise<string> {
 /**
  * One data point per initialize. index1 is the session key, so sampling keeps or drops a session whole.
  * blob1 outcome, blob2 client name, blob3 client version, blob4 protocol version, blob5 grant label,
- * blob6 IP hash, blob7 user agent; double1 is 1.
+ * blob6 IP hash, blob7 user agent, blob8 the source (absent on Pulse v1's points); double1 is 1.
  */
 export async function sessionPoint(salt: string, e: SessionEvent): Promise<DataPoint> {
   return {
@@ -47,6 +49,7 @@ export async function sessionPoint(salt: string, e: SessionEvent): Promise<DataP
       e.label.slice(0, 100),
       e.ip ? await hmacHex(salt, `ip:${e.ip}`) : "",
       e.userAgent,
+      ...(e.source ? [e.source] : []),
     ],
     doubles: [1],
   };
