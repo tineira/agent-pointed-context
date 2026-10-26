@@ -29,7 +29,8 @@ export interface DockAgent {
   /** How many calls the dock logged for this agent (TIN-419): a change refreshes its page. */
   calls: number;
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
-  pairings: Array<{ id: string; app: AppRef; status: "pending" | "paired"; created_at: string; page_open: boolean | null; error: string | null }>;
+  /** Apps, and browsers sending page readings (kind "reader", TIN-421). */
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired"; created_at: string; page_open: boolean | null; error: string | null }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 export interface DockState {
@@ -123,7 +124,7 @@ const toolName = (c: CallEntry) => (c.via === "dock" ? c.tool : c.via === "prefi
 export function AgentPage(props: {
   agent: DockAgent;
   base: string;
-  requests: Array<{ id: string; app: AppRef }>;
+  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef }>;
   decide: (pairingId: string, action: "approve" | "deny" | "unpair") => void;
   refresh: () => void;
   back: () => void;
@@ -224,7 +225,15 @@ export function AgentPage(props: {
         {props.requests.map((r) => (
           <div key={r.id} className="request">
             <p>
-              <b>{r.app.name}</b> at <b>{host(r.app.origin)}</b> wants to be read by <b>{a.name}</b>.
+              {r.kind === "reader" ? (
+                <>
+                  <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings: the text you drop it on, on sites you allow in the APC extension.
+                </>
+              ) : (
+                <>
+                  <b>{r.app.name}</b> at <b>{host(r.app.origin)}</b> wants to be read by <b>{a.name}</b>.
+                </>
+              )}
             </p>
             <div className="row">
               <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
@@ -243,7 +252,7 @@ export function AgentPage(props: {
             {paired.map((p) => (
               <li key={p.id}>
                 <span>
-                  {p.app.name} <span className="muted">· {host(p.app.origin)} · since {when(p.created_at)}</span>
+                  {p.app.name} <span className="muted">· {p.kind === "reader" ? "page readings" : host(p.app.origin)} · since {when(p.created_at)}</span>
                   {p.error ? <span className="warn"> · not answering</span> : p.page_open ? <span className="read"> · open now</span> : null}
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")}>

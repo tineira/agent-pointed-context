@@ -111,6 +111,36 @@ app.post("/apc/confirm", async (c) => {
   return c.json(result, result.ok ? 200 : 400);
 });
 
+/** The dock a ticket, claim or reader token belongs to: each starts with the dock's id. */
+const dockOf = (value: unknown) => (typeof value === "string" ? value.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1] : undefined);
+
+/**
+ * The browser extension asks to send an agent page readings (TIN-421, DESIGN.md 13.5), with the
+ * ticket from the agent's drag. Only an allowed extension origin is taken: a page cannot send one.
+ */
+app.post("/apc/reader", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { ticket?: unknown } | null;
+  const did = dockOf(body?.ticket);
+  if (!did) return c.json({ ok: false, error: "ticket_expired" }, 400);
+  const result = await stubFor(c.env, did).reader(body, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/apc/reader/status", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { claim?: unknown } | null;
+  const did = dockOf(body?.claim);
+  if (!did) return c.json({ ok: true, status: "denied" });
+  const result = await stubFor(c.env, did).readerStatus(body, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 400);
+});
+/** A page reading, pushed on a drop with the reader's token. */
+app.post("/apc/reading", async (c) => {
+  const token = c.req.header("authorization")?.match(/^Bearer (\S+)$/)?.[1] ?? null;
+  const did = dockOf(token);
+  if (!did) return c.json({ ok: false, error: "not_paired" }, 401);
+  const result = await stubFor(c.env, did).reading(await c.req.json().catch(() => null), token, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : result.error === "not_paired" ? 401 : 400);
+});
+
 app.all("/mcp/:did/:secret", async (c) => {
   if (!/^[0-9a-f]{32}$/.test(c.req.param("did"))) return c.json({ error: "not_found" }, 404);
   return stubFor(c.env, c.req.param("did")).fetch(c.req.raw);

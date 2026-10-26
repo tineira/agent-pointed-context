@@ -197,7 +197,15 @@ export function HubDock() {
   const requests = pending.map(({ agent, pairing }) => (
     <section key={pairing.id} className="request">
       <p>
-        <b>{pairing.app.name}</b> at <b>{host(pairing.app.origin)}</b> wants to be read by <b>{agent.name}</b>. Its tools and data come from {pairing.app.origin}.
+        {pairing.kind === "reader" ? (
+          <>
+            <b>{pairing.app.name}</b> wants to send <b>{agent.name}</b> page readings: the text you drop it on, on sites you allow in the APC extension. That text passes through this dock and is kept 10 minutes.
+          </>
+        ) : (
+          <>
+            <b>{pairing.app.name}</b> at <b>{host(pairing.app.origin)}</b> wants to be read by <b>{agent.name}</b>. Its tools and data come from {pairing.app.origin}.
+          </>
+        )}
       </p>
       <div className="row">
         <button type="button" className="primary" onClick={() => decide(pairing.id, "approve")}>
@@ -256,7 +264,7 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
-          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, app: p.app }))}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app }))}
           decide={decide}
           refresh={refresh}
           back={back}
@@ -347,7 +355,7 @@ export function HubDock() {
         </button>
         <Float
           agents={state.agents}
-          requests={pending.map(({ agent, pairing }) => ({ id: pairing.id, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name }))}
+          requests={pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name }))}
           decide={(id, action) => decide(id, action)}
           dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })}
         />
@@ -368,6 +376,7 @@ export function HubDock() {
  */
 interface FloatRequest {
   id: string;
+  kind: "app" | "reader";
   app: string;
   host: string;
   agent: string;
@@ -394,7 +403,15 @@ function Float(props: {
           {props.requests.map((r) => (
             <div key={r.id} className="float-request">
               <p>
-                <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+                {r.kind === "reader" ? (
+                  <>
+                    <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
+                  </>
+                ) : (
+                  <>
+                    <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+                  </>
+                )}
               </p>
               <div className="row">
                 <button type="button" className="primary" onClick={() => latest.current.decide(r.id, "approve")}>
