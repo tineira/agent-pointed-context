@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
+import { browserLabel, decide, grantedAlone, hubAllowed, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://v2.apc.tineira.com", false), true);
@@ -57,4 +57,11 @@ test("a site granted by itself matches by scheme and host, whatever the port; th
   assert.equal(grantedAlone("https://es.wikipedia.org", ["https://*.wikipedia.org/*"]), true);
   assert.equal(grantedAlone("https://es.wikipedia.org", ["https://*/*", "http://*/*"]), false);
   assert.equal(grantedAlone("https://evilwikipedia.org", ["https://*.wikipedia.org/*"]), false);
+});
+
+test("a pin is unread, read once the agent read it, and stale once a newer drop replaced it (TIN-469)", () => {
+  assert.equal(pinState("t1", "t1", false), "unread");
+  assert.equal(pinState("t1", "t1", true), "read");
+  assert.equal(pinState("t1", "t2", true), "stale");
+  assert.equal(pinState("t1", null, false), "stale", "cleared or expired at the dock");
 });

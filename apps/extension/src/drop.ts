@@ -96,6 +96,22 @@ export function decide(mode: Mode, choice: SiteChoice | undefined, sensitive: bo
   return "ask";
 }
 
+/** The agent's mark for the pin on the page (TIN-469): its name, its PNG badge if the dock drew one, and which reading it marks. */
+export interface PinMark {
+  name: string;
+  icon: string | null;
+  taken_at: string;
+}
+
+/** A pin's state: not read yet, read by the agent, or replaced by a newer drop at the dock. */
+export type PinState = "unread" | "read" | "stale";
+
+/** What the dock's answer means for a pin taken at taken_at. */
+export function pinState(takenAt: string, latest: string | null | undefined, read: boolean | undefined): PinState {
+  if (latest !== takenAt) return "stale";
+  return read ? "read" : "unread";
+}
+
 /** What the content script tells the person after a drop. */
 export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "blocked" | "not_here";
 

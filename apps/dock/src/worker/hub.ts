@@ -108,6 +108,8 @@ interface Reader {
   approved_at: string | null;
   reading: PageReading | null;
   reading_at: string | null;
+  /** When the agent first read the latest reading (page__get_reading), for the pin's state (TIN-469). */
+  read_at: string | null;
 }
 
 /** The app id and name a reader has for the agent; no app can take the id (see pair). */
@@ -170,7 +172,7 @@ export class Hub extends DurableObject<Env> {
         created_at text not null, approved_at text, reading text, reading_at text);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -217,9 +219,9 @@ export class Hub extends DurableObject<Env> {
   }
   private readers(agentId?: string, status?: Reader["status"]): Reader[] {
     // A reading lives 10 minutes at most (13.2).
-    this.sql.exec("update readers set reading = null, reading_at = null where reading_at < ?", new Date(Date.now() - READING_TTL_MS).toISOString());
+    this.sql.exec("update readers set reading = null, reading_at = null, read_at = null where reading_at < ?", new Date(Date.now() - READING_TTL_MS).toISOString());
     return this.sql
-      .exec<Record<string, string | null>>("select id, agent_id, label, origin, status, created_at, approved_at, reading, reading_at from readers order by created_at")
+      .exec<Record<string, string | null>>("select id, agent_id, label, origin, status, created_at, approved_at, reading, reading_at, read_at from readers order by created_at")
       .toArray()
       .map((r) => ({
         id: r.id!,
@@ -231,6 +233,7 @@ export class Hub extends DurableObject<Env> {
         approved_at: r.approved_at ?? null,
         reading: r.reading ? (JSON.parse(r.reading) as PageReading) : null,
         reading_at: r.reading_at ?? null,
+        read_at: r.read_at ?? null,
       }))
       .filter((r) => (!agentId || r.agent_id === agentId) && (!status || r.status === status));
   }
@@ -592,7 +595,7 @@ export class Hub extends DurableObject<Env> {
    * A reading, pushed on a drop. It becomes the agent's focus (newest wins, as a pin does), read with
    * page__get_reading. The hub keeps it 10 minutes at most and never logs its text.
    */
-  async reading(body: unknown, token: string | null, origin: string | null): Promise<{ ok: boolean; error?: string }> {
+  async reading(body: unknown, token: string | null, origin: string | null): Promise<{ ok: boolean; error?: string; agent?: { name: string; icon: string | null }; taken_at?: string }> {
     if (!(await this.alive())) return { ok: false, error: "not_paired" };
     if (!this.readerOriginOk(origin)) return { ok: false, error: "reader_not_allowed" };
     const row = token ? this.sql.exec<{ id: string }>("select id from readers where token = ? and status = 'paired'", token).toArray()[0] : undefined;
@@ -601,7 +604,7 @@ export class Hub extends DurableObject<Env> {
     const reading = shapeReading((body as { reading?: unknown } | null)?.reading);
     if (!reading) return { ok: false, error: "invalid_reading" };
     const now = new Date().toISOString();
-    this.sql.exec("update readers set reading = ?, reading_at = ? where id = ?", JSON.stringify(reading), now, r.id);
+    this.sql.exec("update readers set reading = ?, reading_at = ?, read_at = null where id = ?", JSON.stringify(reading), now, r.id);
     const site = readingSite(reading);
     const focus: FocusPayload = { kind: "page_reading", id: site, part: null, params: null, app_url: reading.url, pinned_at: now, next: "get_reading", next_args: {} };
     this.sql.exec(
@@ -610,6 +613,32 @@ export class Hub extends DurableObject<Env> {
     );
     this.sql.exec("update agents set last_active_at = coalesce(last_active_at, ?) where id = ?", now, r.agent_id);
     for (const wake of [...(this.readingWaiters.get(r.agent_id) ?? [])]) wake();
+    this.broadcast();
+    // The agent's mark, so the page can pin it where it was dropped (TIN-469), as an app's pin shows it.
+    const agent = this.agent(r.agent_id)!;
+    return { ok: true, agent: { name: this.nameOf(agent), icon: agent.badge }, taken_at: now };
+  }
+
+  /** The reader whose token this is, from an allowed extension origin, or null. */
+  private readerByToken(token: string | null, origin: string | null): Reader | null {
+    if (!token || !this.readerOriginOk(origin)) return null;
+    const row = this.sql.exec<{ id: string }>("select id from readers where token = ? and status = 'paired'", token).toArray()[0];
+    return row ? (this.readers().find((x) => x.id === row.id) ?? null) : null;
+  }
+
+  /** The pin's state (TIN-469): which reading is the latest, and whether the agent read it. */
+  async readingState(token: string | null, origin: string | null): Promise<{ ok: boolean; error?: string; latest?: string | null; read?: boolean }> {
+    const r = this.readerByToken(token, origin);
+    if (!r) return { ok: false, error: "not_paired" };
+    return { ok: true, latest: r.reading ? r.reading_at : null, read: !!r.read_at };
+  }
+
+  /** × on the pin (TIN-469): the reading goes, and the agent's focus with it when it points there. */
+  async readingClear(token: string | null, origin: string | null): Promise<{ ok: boolean; error?: string }> {
+    const r = this.readerByToken(token, origin);
+    if (!r) return { ok: false, error: "not_paired" };
+    this.sql.exec("update readers set reading = null, reading_at = null, read_at = null where id = ?", r.id);
+    this.sql.exec("delete from pointer where pairing_id = ?", r.id);
     this.broadcast();
     return { ok: true };
   }
@@ -621,9 +650,11 @@ export class Hub extends DurableObject<Env> {
     if (!r?.reading) return toolError("no_reading", "No page reading: the person has not dropped you on a page lately (a reading lasts 10 minutes).");
     const row = this.pointer(agentId);
     if (row && row.pairing_id === r.id && !row.seen_at) this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
+    // The pin in the page turns "read" (TIN-469).
+    if (!r.read_at) this.sql.exec("update readers set read_at = ? where id = ?", new Date().toISOString(), r.id);
     return toolResult({
       app: { ...PAGE_APP, origin: new URL(r.reading.url).origin },
-      reading: { url: r.reading.url, title: r.reading.title, read_at: r.reading_at, element: r.reading.element ? { tag: r.reading.element.tag, role: r.reading.element.role, name: r.reading.element.name } : null },
+      reading: { url: r.reading.url, title: r.reading.title, taken_at: r.reading_at, element: r.reading.element ? { tag: r.reading.element.tag, role: r.reading.element.role, name: r.reading.element.name } : null },
       page_text: readingText(r.reading),
       untrusted: true,
       note: PAGE_TEXT_NOTE,

@@ -141,6 +141,23 @@ app.post("/apc/reading", async (c) => {
   return c.json(result, result.ok ? 200 : result.error === "not_paired" ? 401 : 400);
 });
 
+/** The pin's state, and × on it (TIN-469), with the reader's token. */
+const bearer = (h: string | undefined) => h?.match(/^Bearer (\S+)$/)?.[1] ?? null;
+app.post("/apc/reading/state", async (c) => {
+  const token = bearer(c.req.header("authorization"));
+  const did = dockOf(token);
+  if (!did) return c.json({ ok: false, error: "not_paired" }, 401);
+  const result = await stubFor(c.env, did).readingState(token, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 401);
+});
+app.post("/apc/reading/clear", async (c) => {
+  const token = bearer(c.req.header("authorization"));
+  const did = dockOf(token);
+  if (!did) return c.json({ ok: false, error: "not_paired" }, 401);
+  const result = await stubFor(c.env, did).readingClear(token, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 401);
+});
+
 app.all("/mcp/:did/:secret", async (c) => {
   if (!/^[0-9a-f]{32}$/.test(c.req.param("did"))) return c.json({ error: "not_found" }, 404);
   return stubFor(c.env, c.req.param("did")).fetch(c.req.raw);
