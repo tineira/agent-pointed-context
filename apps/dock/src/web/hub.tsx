@@ -13,7 +13,7 @@ import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
-import { APPS, appUrl, ConnectAgent, Install, Setup } from "./setup.tsx";
+import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -47,6 +47,10 @@ async function badgeOf(icon: Element): Promise<string | null> {
     return null;
   }
 }
+
+/** The desktop dock's always-on-top strip (#84): only what Float shows. */
+const STRIP = new URLSearchParams(location.search).get("view") === "strip";
+if (STRIP) document.body.classList.add("float-body");
 
 /** An agent's page (TIN-419): /dock/agents/<id>. */
 const agentRoute = (path: string) => path.match(/^\/dock\/agents\/(ag_[0-9a-f]+)\/?$/)?.[1] ?? null;
@@ -85,7 +89,15 @@ export function HubDock() {
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
 
   useEffect(() => {
-    call<{ did: string }>("/api/dock", {}).then((r) => setDid(r.did), (e: unknown) => setError(String(e)));
+    // The strip only resumes the dock its window opened, and waits for it on a first run (#84).
+    let retry = 0;
+    const open = () =>
+      call<{ did: string }>("/api/dock", STRIP ? { resume: true } : {}).then(
+        (r) => setDid(r.did),
+        (e: unknown) => (STRIP ? (retry = window.setTimeout(open, 2000)) : setError(String(e))),
+      );
+    void open();
+    return () => clearTimeout(retry);
   }, []);
   const base = did ? `/api/d/${did}` : null;
   const refresh = useCallback(() => {
@@ -157,8 +169,18 @@ export function HubDock() {
     return () => clearInterval(id);
   }, [ids, fetchTicket]);
 
-  if (error) return <main><Header /><p>Could not open your dock: {error}</p></main>;
-  if (!state || !base) return <main><Header /><p>Opening your dock…</p></main>;
+  // The strip has no one to read an error: it says so in a line and tries again.
+  useEffect(() => {
+    if (!STRIP || !error) return;
+    const id = setTimeout(() => {
+      setError(null);
+      refresh();
+    }, 3000);
+    return () => clearTimeout(id);
+  }, [error, refresh]);
+
+  if (error) return STRIP ? <div className="float float-empty">Could not reach your dock. Trying again…</div> : <main><Header /><p>Could not open your dock: {error}</p></main>;
+  if (!state || !base) return STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
   const decide = (pid: string, action: "approve" | "deny" | "unpair") => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
@@ -217,6 +239,12 @@ export function HubDock() {
       </div>
     </section>
     ));
+
+  const floatRequests = pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name }));
+  const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
+
+  // The APC dock for Windows' always-on-top strip (#84): only what Float shows, in the page itself.
+  if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />;
 
   // The first run, or Change world (TIN-403): the dock shows only that, and any pairing request.
   if (wizard || !state.setup_done) {
@@ -353,16 +381,17 @@ export function HubDock() {
         <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
           Add an agent
         </button>
-        <Float
-          agents={state.agents}
-          requests={pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name }))}
-          decide={(id, action) => decide(id, action)}
-          dragProps={(a) => ({ startDrag: (e) => startDrag(e, a.id), endDrag: () => endDrag(a.id) })}
-        />
+        {DESKTOP_SHELL ? (
+          <span className="muted" title="The APC dock for Windows keeps your agents on top of every window">
+            {DESKTOP_SHORTCUT} floats your agents
+          </span>
+        ) : (
+          <Float agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />
+        )}
         <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWizard("world")}>
           Change world
         </button>
-        <Install />
+        {!DESKTOP_SHELL && <Install />}
         <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
       </div>
     </main>
@@ -401,46 +430,12 @@ function Float(props: {
     if (!win) return;
     root.current ??= createRoot(win.document.body);
     root.current.render(
-      props.requests.length > 0 ? (
-        <div className="float float-requests">
-          {props.requests.map((r) => (
-            <div key={r.id} className="float-request">
-              <p>
-                {r.kind === "reader" ? (
-                  <>
-                    <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
-                  </>
-                ) : (
-                  <>
-                    <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
-                  </>
-                )}
-              </p>
-              <div className="row">
-                <button type="button" className="primary" onClick={() => latest.current.decide(r.id, "approve")}>
-                  Allow
-                </button>
-                <button type="button" onClick={() => latest.current.decide(r.id, "deny")}>
-                  Deny
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-      <div className="float">
-        {props.agents.map((a) => {
-          const d = latest.current.dragProps(a);
-          return (
-            <div key={a.id} className="float-agent" draggable title={`Drag ${a.name} onto an app`} onDragStart={(e) => d.startDrag(e.nativeEvent)} onDragEnd={d.endDrag}>
-              <span className="chip">
-                <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!a.client_name ? "off" : a.waiting ? "waiting" : "idle"} size={48} />
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      ),
+      <FloatAgents
+        agents={props.agents}
+        requests={props.requests}
+        decide={(id, action) => latest.current.decide(id, action)}
+        dragProps={(a) => latest.current.dragProps(a)}
+      />,
     );
   }, [win, props.agents, props.requests]);
   // Grow while a request waits, so it fits; a browser may refuse without a click, and the request
@@ -514,6 +509,61 @@ function Float(props: {
       </button>
       {prompt}
     </>
+  );
+}
+
+/**
+ * What Float shows (TIN-392), in its Picture-in-Picture window or in the APC dock for Windows' strip
+ * (#84, ?view=strip): the agents' logos, each draggable, or the pairing requests while any waits.
+ */
+function FloatAgents(props: {
+  agents: DockAgent[];
+  requests: FloatRequest[];
+  decide: (id: string, action: "approve" | "deny") => void;
+  dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
+}) {
+  if (props.requests.length > 0)
+    return (
+      <div className="float float-requests">
+        {props.requests.map((r) => (
+          <div key={r.id} className="float-request">
+            <p>
+              {r.kind === "reader" ? (
+                <>
+                  <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
+                </>
+              ) : (
+                <>
+                  <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+                </>
+              )}
+            </p>
+            <div className="row">
+              <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+                Allow
+              </button>
+              <button type="button" onClick={() => props.decide(r.id, "deny")}>
+                Deny
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;
+  return (
+    <div className="float">
+      {props.agents.map((a) => {
+        const d = props.dragProps(a);
+        return (
+          <div key={a.id} className="float-agent" draggable title={`Drag ${a.name} onto an app`} onDragStart={(e) => d.startDrag(e.nativeEvent)} onDragEnd={d.endDrag}>
+            <span className="chip">
+              <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!a.client_name ? "off" : a.waiting ? "waiting" : "idle"} size={48} />
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

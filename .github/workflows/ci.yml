@@ -24,7 +24,8 @@ jobs:
       - run: pnpm build
 
   # Which app a push to main touches: v2 lives in apps/dock and apps/signals (TIN-376, TIN-384), v1 is everything else
-  # but Pulse for desktop (apps/desktop*, TIN-396), which the Desktop workflow builds and nothing deploys.
+  # but Pulse for desktop (apps/desktop*, TIN-396) and the dock for Windows (apps/dock-desktop, #84), which their own
+  # workflows build and nothing deploys.
   # v2 also deploys Pulse a second time (apps/demo with CLOUDFLARE_ENV=v2, TIN-382), so a change to
   # apps/demo or the packages deploys both.
   changes:
@@ -46,7 +47,7 @@ jobs:
           fi
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
-          echo "v1=$(echo "$files" | grep -qvE '^(apps/(dock|signals|desktop|desktop-tests|extension)/|\.github/workflows/desktop\.yml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v1=$(echo "$files" | grep -qvE '^(apps/(dock|signals|desktop|desktop-tests|dock-desktop|extension)/|\.github/workflows/(desktop|dock-desktop)\.yml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches v1 goes live at apc.tineira.com.
