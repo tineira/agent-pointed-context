@@ -172,11 +172,30 @@ function ask(status: "consent" | "consent_sensitive", x: number, y: number, send
 const pins = new Map<string, () => void>();
 
 /**
- * The agent's mark, pinned where it was dropped (TIN-469, 13.6): in the margin at the start of the
- * paragraph, so it covers no text, following it through layout changes. Its ring says whether the
- * agent read the reading (accent, then green), or grey once a newer drop replaced it at the dock.
- * × clears the reading and the agent's focus. Asks the dock every 3 s until read, then every 10 s
- * until replaced: a read pin still turns grey when a newer drop replaces its reading.
+ * Pulse's pin badge (apps/demo/src/web/pin-badges.tsx), drawn in the page: a rounded square with the
+ * agent's logo; a dashed, breathing accent outline until the agent reads the reading, then a green
+ * check; × in its corner. Grey (faded) once a newer drop replaced the reading at the dock.
+ */
+const PIN_CSS = `
+.badge { position: absolute; width: 28px; height: 28px; }
+.mark { box-sizing: border-box; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: #fff; color: #141a24; box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); outline-offset: 2px; }
+.badge[data-apc-pin-state="unread"] .mark { outline: 2px dashed #b85209; animation: breathe 1.8s ease-in-out infinite; }
+.badge[data-apc-pin-state="stale"] { opacity: 0.45; }
+.face { width: 18px; height: 18px; object-fit: contain; }
+.initial { font: 600 12px system-ui, sans-serif; }
+.check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: #157a3a; color: #fff; font: 700 10px/15px ui-monospace, monospace; text-align: center; }
+.unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid #d6dce5; background: #fff; color: #56627a; font: 12px/13px system-ui, sans-serif; cursor: pointer; opacity: 0.85; }
+.unpin:hover { color: #141a24; opacity: 1; }
+@keyframes breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }
+@media (prefers-reduced-motion: reduce) { .mark { animation: none !important; } }
+`;
+
+/**
+ * The agent's mark, pinned where it was dropped (TIN-469, 13.6), in Pulse's look (PIN_CSS): in the
+ * margin at the start of the paragraph, so it covers no text, following it through layout changes.
+ * Dashed and breathing until the agent reads the reading, then a check; faded once a newer drop
+ * replaced it at the dock. × clears the reading and the agent's focus. Asks the dock every 3 s until
+ * read, then every 10 s until replaced: a read pin still fades when a newer drop replaces its reading.
  */
 function pin(target: Target, mark: PinMark): void {
   const key = `${target.hub} ${target.agent}`;
@@ -185,27 +204,25 @@ function pin(target: Target, mark: PinMark): void {
   host.dataset.apcPin = "";
   host.style.cssText = "position:absolute;z-index:2147483646;left:0;top:0;width:0;height:0";
   const root = host.attachShadow({ mode: "closed" });
-  const markEl = document.createElement("div");
-  const close = document.createElement("button");
-  close.type = "button";
-  close.textContent = "×";
-  close.title = "Remove: your agent forgets this reading";
+  const badge = Object.assign(document.createElement("div"), { className: "badge" });
+  const markEl = Object.assign(document.createElement("span"), { className: "mark" });
+  markEl.append(
+    mark.icon ? Object.assign(document.createElement("img"), { src: mark.icon, alt: "", className: "face" }) : Object.assign(document.createElement("span"), { textContent: (mark.name.trim()[0] ?? "A").toUpperCase(), className: "initial" }),
+  );
+  const check = Object.assign(document.createElement("span"), { className: "check", textContent: "✓", hidden: true });
+  check.setAttribute("aria-hidden", "true");
+  const close = Object.assign(document.createElement("button"), { type: "button", className: "unpin", textContent: "×", title: "Remove: your agent forgets this reading" });
+  close.setAttribute("aria-label", `Remove ${mark.name}'s pin`);
   close.dataset.apcPinClose = "";
-  close.style.cssText = "position:absolute;right:-6px;top:-6px;width:16px;height:16px;padding:0;border-radius:50%;border:none;background:#1f1f1f;color:#fff;font:12px/16px system-ui,sans-serif;cursor:pointer;display:none";
-  const face = mark.icon ? Object.assign(document.createElement("img"), { src: mark.icon, alt: "" }) : Object.assign(document.createElement("span"), { textContent: (mark.name.trim()[0] ?? "A").toUpperCase() });
-  face.setAttribute("style", mark.icon ? "width:20px;height:20px;object-fit:contain" : "font:600 13px system-ui,sans-serif;color:#1f1f1f");
-  markEl.append(face, close);
-  markEl.addEventListener("mouseenter", () => (close.style.display = "block"));
-  markEl.addEventListener("mouseleave", () => (close.style.display = "none"));
-  root.append(markEl);
+  badge.append(markEl, check, close);
+  root.append(Object.assign(document.createElement("style"), { textContent: PIN_CSS }), badge);
   document.documentElement.append(host);
 
   let state: PinState = "unread";
   const draw = () => {
-    const ring = state === "read" ? "#2e8b57" : state === "stale" ? "#9a9a9a" : "#d4733a";
-    markEl.dataset.apcPinState = state;
-    markEl.title = `${mark.name} · ${state === "read" ? "read it" : state === "stale" ? "replaced by a newer drop" : "not read yet"}`;
-    markEl.style.cssText = `position:absolute;width:28px;height:28px;box-sizing:border-box;border-radius:50%;background:#fff;border:2px solid ${ring};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.25);opacity:${state === "stale" ? 0.6 : 1}`;
+    badge.dataset.apcPinState = state;
+    check.hidden = state !== "read";
+    badge.title = `${mark.name}: ${state === "read" ? "read this" : state === "stale" ? "replaced by a newer drop" : "has not read this yet"}`;
     place();
   };
   const place = () => {
@@ -214,12 +231,16 @@ function pin(target: Target, mark: PinMark): void {
     let top = target.y - 14;
     if (target.anchor) {
       const r = target.anchor.getBoundingClientRect();
-      left = r.left + scrollX - 34;
-      if (left < 2) left = r.left + scrollX + 2;
+      // In the left margin; with no room there, past the right edge; with no room there either,
+      // inside the top right corner, as Pulse places a badge on a row: never over the first words.
+      const room = 34;
+      if (r.left >= room) left = r.left + scrollX - room;
+      else if (r.right + room <= document.documentElement.clientWidth) left = r.right + scrollX + 6;
+      else left = r.right + scrollX - 30;
       top = r.top + scrollY;
     }
-    markEl.style.left = `${Math.round(left)}px`;
-    markEl.style.top = `${Math.round(top)}px`;
+    badge.style.left = `${Math.round(left)}px`;
+    badge.style.top = `${Math.round(top)}px`;
   };
   const observer = new ResizeObserver(place);
   observer.observe(document.documentElement);
