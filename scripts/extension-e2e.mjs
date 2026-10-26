@@ -247,24 +247,38 @@ try {
     assert.match((await latest()).page_text, /EU-West rose/);
     console.log("C4. Not here sends nothing, now or on the next drop");
 
-    // C5. A sensitive site asks every time and never offers Always.
-    const bank = await open("bank.localhost");
-    await bank.drop("#b");
-    assert.deepEqual([...(await bank.buttons()).keys()].sort(), ["dismiss", "once"]);
-    await bank.click("once");
-    await reads(/SPRING/, "bank.localhost");
-    await bank.drop("#a");
-    assert.deepEqual([...(await bank.buttons()).keys()].sort(), ["dismiss", "once"], "it asks again");
-    await bank.click("dismiss");
-    console.log("C5. a sensitive site asks every time, with no Always");
-
-    // C6. Never ask: every drop is sent at once, even on a sensitive site.
+    // C5. A government domain asks every time and never offers Always (TIN-478).
     const sw = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
     const { sessionId: swSession } = await cdp("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
+    const gov = await open("sii.gob.localhost");
+    await gov.drop("#b");
+    assert.deepEqual([...(await gov.buttons()).keys()].sort(), ["dismiss", "once"]);
+    await gov.click("once");
+    await reads(/SPRING/, "sii.gob.localhost");
+    await gov.drop("#a");
+    assert.deepEqual([...(await gov.buttons()).keys()].sort(), ["dismiss", "once"], "it asks again");
+    await gov.click("dismiss");
+    console.log("C5. a government domain asks every time, with no Always");
+
+    // C5b. A bank is not recognised by name: it asks as any site does, until the person sets it to Always ask.
+    const bank = await open("bank.localhost");
+    await bank.drop("#b");
+    assert.deepEqual([...(await bank.buttons()).keys()].sort(), ["always", "never", "once"], "an ordinary site's card");
+    await bank.click("once");
+    // What the popup's Always ask does.
+    const origin = new URL(pageUrl.replace("127.0.0.1", "bank.localhost")).origin;
+    await cdp("Runtime.evaluate", { expression: `chrome.storage.local.get("sites").then((s) => chrome.storage.local.set({ sites: { ...(s.sites ?? {}), ${JSON.stringify(origin)}: "sensitive" } }))`, awaitPromise: true }, swSession);
+    await bank.drop("#b");
+    assert.deepEqual([...(await bank.buttons()).keys()].sort(), ["dismiss", "once"], "now it asks every time");
+    await bank.click("once");
+    await reads(/SPRING/, "bank.localhost");
+    console.log("C5b. a site set to Always ask asks every time, with no Always");
+
+    // C6. Never ask: every drop is sent at once, even on a sensitive site.
     await cdp("Runtime.evaluate", { expression: "chrome.storage.local.set({ mode: 'never_ask' })", awaitPromise: true }, swSession);
-    await bank.drop("#a");
-    assert.equal((await bank.buttons()).size, 0, "no card under Never ask");
-    await reads(/EU-West rose/, "bank.localhost");
+    await gov.drop("#a");
+    assert.equal((await gov.buttons()).size, 0, "no card under Never ask");
+    await reads(/EU-West rose/, "sii.gob.localhost");
     const fresh = await open("fresh.localhost");
     await fresh.drop("#b");
     await reads(/SPRING/, "fresh.localhost");

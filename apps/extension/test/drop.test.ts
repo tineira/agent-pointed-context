@@ -34,9 +34,16 @@ test("one reader token per dock and agent, and a note for every outcome", () => 
   for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error", "consent", "consent_sensitive", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
 });
 
-test("sensitive sites: mail hosts, government hosts, and hosts naming a bank or health service (TIN-465)", () => {
-  for (const h of ["mail.google.com", "www.sii.gob.cl", "www.gov.uk", "portal.bancochile.cl", "www.bankofamerica.com", "www.clinicaalemana.cl", "www.isapre-colmena.cl", "www.mayoclinic.org", "online.santander-bank.example"]) assert.equal(isSensitive(h), true, h);
-  for (const h of ["en.wikipedia.org", "news.ycombinator.com", "127.0.0.1:8080", "docs.google.com", "github.com"]) assert.equal(isSensitive(h), false, h);
+test("sensitive by domain only: government labels and the .bank and .insurance TLDs, never a guess from the name (TIN-478)", () => {
+  for (const h of ["www.sii.gob.cl", "www.gov.uk", "www.irs.gov", "www.army.mil", "online.example.bank", "my.example.insurance", "sii.gob.localhost:8080"]) assert.equal(isSensitive(h), true, h);
+  // Banks, email and health sites are not recognised by name: the person sets them to Always ask.
+  for (const h of ["mail.google.com", "portal.bancochile.cl", "www.santander.cl", "www.paypal.com", "www.clinicaalemana.cl", "www.sii.cl", "en.wikipedia.org", "127.0.0.1:8080", "bank.localhost", "www.government-news.com"]) assert.equal(isSensitive(h), false, h);
+});
+
+test("a site the person set to Always ask asks every time, as a sensitive domain does (TIN-478)", () => {
+  assert.equal(decide("ask", "sensitive", false, false), "ask_sensitive");
+  assert.equal(decide("ask", "sensitive", false, true), "ask_sensitive", "even when granted by itself");
+  assert.equal(decide("never_ask", "sensitive", false, false), "send", "Never ask still sends everything");
 });
 
 test("a drop is sent, asks or is refused by mode, site choice and sensitivity (TIN-465)", () => {

@@ -52,12 +52,16 @@ async function render(): Promise<void> {
     here.append(el("p", { textContent: `Your agent cannot be dropped on ${hostOf(site.origin)} yet.` }), el("div", { className: "row" }));
     here.lastElementChild!.append(button(`Allow on ${hostOf(site.origin)}`, () => void chrome.permissions.request({ origins: [site.pattern] }).then(render), true));
   } else {
-    const sensitive = isSensitive(hostOf(site.origin));
+    // A government, .bank or .insurance domain always asks (TIN-478); any other site asks every time once the person marks it.
+    const byDomain = isSensitive(hostOf(site.origin));
     const choice = sites[site.origin] ?? (grantedAlone(site.origin, alone) ? "always" : undefined);
-    here.append(el("p", { textContent: `On ${hostOf(site.origin)}: ${mode === "never_ask" ? "every drop is sent (Never ask is on)." : choice === "never" ? "drops are not sent." : sensitive ? "a sensitive site, so every drop asks." : choice === "always" ? "every drop is sent." : "the first drop asks."}` }));
+    const asksAlways = byDomain || choice === "sensitive";
+    here.append(el("p", { textContent: `On ${hostOf(site.origin)}: ${mode === "never_ask" ? "every drop is sent (Never ask is on)." : choice === "never" ? "drops are not sent." : byDomain ? "a government or regulated domain, so every drop asks." : asksAlways ? "every drop asks." : choice === "always" ? "every drop is sent." : "the first drop asks."}` }));
     const row = el("div", { className: "row" });
-    if (!sensitive) row.append(button("Always", () => void setChoice(site.origin, "always"), choice === "always"));
-    row.append(button("Ask", () => void setChoice(site.origin, null), !choice), button("Not here", () => void setChoice(site.origin, "never"), choice === "never"));
+    if (!byDomain) row.append(button("Always", () => void setChoice(site.origin, "always"), choice === "always"));
+    row.append(button("Ask once", () => void setChoice(site.origin, null), !choice && !byDomain));
+    if (!byDomain) row.append(button("Always ask", () => void setChoice(site.origin, "sensitive"), choice === "sensitive"));
+    row.append(button("Not here", () => void setChoice(site.origin, "never"), choice === "never"));
     if (mode !== "never_ask") here.append(row);
   }
 
@@ -77,7 +81,7 @@ async function render(): Promise<void> {
   neverAsk.onchange = () => void chrome.storage.local.set({ mode: neverAsk.checked ? "never_ask" : "ask" }).then(render);
 
   const rows = [
-    ...Object.entries(sites).map(([origin, c]) => item(`${hostOf(origin)} · ${c === "always" ? "always" : "not here"}`, "Remove", () => void setChoice(origin, null))),
+    ...Object.entries(sites).map(([origin, c]) => item(`${hostOf(origin)} · ${c === "always" ? "always" : c === "sensitive" ? "always ask" : "not here"}`, "Remove", () => void setChoice(origin, null))),
     ...alone.filter((p) => !(p.replace(/\/\*$/, "") in sites)).map((p) => item(`${p.replace(/\/\*$/, "").replace(/^https?:\/\//, "")} · allowed by itself`, "Revoke", () => void chrome.permissions.remove({ origins: [p] }).then(render))),
   ];
   $("sites").replaceChildren(...(rows.length ? rows : [el("li", { className: "muted", textContent: "None yet: your choices on the first drop show here." })]));
