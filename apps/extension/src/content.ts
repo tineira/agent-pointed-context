@@ -175,7 +175,8 @@ const pins = new Map<string, () => void>();
  * The agent's mark, pinned where it was dropped (TIN-469, 13.6): in the margin at the start of the
  * paragraph, so it covers no text, following it through layout changes. Its ring says whether the
  * agent read the reading (accent, then green), or grey once a newer drop replaced it at the dock.
- * × clears the reading and the agent's focus. Polls the dock every 3 s until read or replaced.
+ * × clears the reading and the agent's focus. Asks the dock every 3 s until read, then every 10 s
+ * until replaced: a read pin still turns grey when a newer drop replaces its reading.
  */
 function pin(target: Target, mark: PinMark): void {
   const key = `${target.hub} ${target.agent}`;
@@ -226,13 +227,13 @@ function pin(target: Target, mark: PinMark): void {
   addEventListener("resize", place);
   let timer = 0;
   const poll = async () => {
-    if (state !== "unread" || !host.isConnected) return;
+    if (state === "stale" || !host.isConnected) return;
     const r = await chrome.runtime.sendMessage<{ ok?: boolean; latest?: string | null; read?: boolean } | null>({ type: "pin_state", hub: target.hub, agent: target.agent }).catch(() => null);
     if (r?.ok) {
       state = pinState(mark.taken_at, r.latest, r.read);
       draw();
     }
-    if (state === "unread") timer = window.setTimeout(() => void poll(), 3000);
+    if (state !== "stale") timer = window.setTimeout(() => void poll(), state === "read" ? 10_000 : 3000);
   };
   const remove = () => {
     clearTimeout(timer);

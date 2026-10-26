@@ -185,8 +185,8 @@ try {
         },
         buttons,
         click: async (value) => {
-          const nodeId = (await buttons()).get(value);
-          assert.ok(nodeId, `a ${value} button on the card`);
+          // The card comes once the service worker answered, which takes longer when it was asleep.
+          const nodeId = await until(`a ${value} button on the card`, async () => (await buttons()).get(value), 10_000);
           const q = (await cdp("DOM.getBoxModel", { nodeId }, sid)).model.content;
           const x = (q[0] + q[4]) / 2;
           const y = (q[1] + q[5]) / 2;
@@ -355,7 +355,8 @@ try {
     const data2 = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
     for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: at2.x, y: at2.y, data: data2 }, second);
     await until("a pin on the second page", async () => (await pinNodes(second)).states[0] === "unread");
-    await until("the first page's pin turns stale", async () => (await pinNodes()).states[0] === "stale", 15_000);
+    // A read pin asks every 10 s, so this can take that long.
+    await until("the first page's pin turns stale", async () => (await pinNodes()).states[0] === "stale", 25_000);
     await cdp("Target.closeTarget", { targetId: secondId });
     // Back to the SPRING reading the steps below expect.
     await drag("#b", await payload());
