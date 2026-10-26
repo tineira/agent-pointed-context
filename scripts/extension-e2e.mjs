@@ -284,6 +284,17 @@ try {
     });
     assert.equal((await api(`${base}/state`)).agents[0].pairings.filter((p) => p.kind === "reader").length, 1);
     console.log("2. second drop: sent straight away, through page__get_reading");
+
+    // 2b. An agent waiting (wait_for_focus) with only the browser paired is woken by the next drop.
+    const started = Date.now();
+    const waiting = tool("wait_for_focus", { timeout_s: 25 });
+    await sleep(1500);
+    // #b again: the steps below expect the latest reading to be the SPRING paragraph.
+    await drag("#b", await payload());
+    const woke = (await waiting).structuredContent;
+    assert.equal(woke.focus?.kind, "page_reading", `the wait got the drop, not: ${JSON.stringify(woke).slice(0, 160)}`);
+    assert.ok(Date.now() - started < 15_000, "the drop ended the wait, not its timeout");
+    console.log(`2b. a wait in flight is woken by the drop (${((Date.now() - started) / 1000).toFixed(1)} s)`);
     if (HOLD) {
       // Leave the dock and its reading for an agent to read by hand; whoever holds this deletes the dock after.
       console.log("HOLD " + JSON.stringify({ dock: DOCK, did, cookie, mcp_url: agent.mcp_url }));
@@ -304,8 +315,8 @@ try {
     console.log("4. a drag naming an unknown dock sends nothing");
 
     // 5. Only an extension's origin can ask for a reader or send a reading.
-    const forged = await fetch(`${DOCK}/apc/reader`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ ticket: await ticket(), agent: agent.id, label: "evil" }) });
-    assert.equal((await forged.json()).error, "reader_not_allowed");
+    const forged = await request("forged reader", `${DOCK}/apc/reader`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ ticket: await ticket(), agent: agent.id, label: "evil" }) });
+    assert.equal(forged.body.error, "reader_not_allowed");
     console.log("5. a page's origin cannot ask for a reader");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
