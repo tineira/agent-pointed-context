@@ -14,6 +14,15 @@ import { hubAllowed, pinState, STATUS_TEXT, type Consent, type DropStatus, type 
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
 const FIELDS = "input,textarea,select,option,[contenteditable=''],[contenteditable='true']";
 const TEXT_MAX = 2048;
+/** A box of text bigger than this is most of the page, not what the person pointed at. */
+const BOX_MAX = 4000;
+
+/**
+ * An APC app: a page with APC targets (data-focus), whose own enablePinning takes the agent's drop.
+ * Only there does the extension step back when the page handled the drop. Other pages, such as X,
+ * handle drags for their own reasons (attaching files) and would otherwise refuse the agent.
+ */
+const apcApp = () => !!document.querySelector("[data-focus]");
 
 const w = window as Window & { __apcDrop?: boolean };
 // Injected again when the person grants the site from the popup: one listener set per page.
@@ -50,9 +59,9 @@ function listen(): void {
   };
 
   window.addEventListener("dragover", (e) => {
-    if (!e.isTrusted || e.defaultPrevented || !carriesAgent(e)) return;
+    if (!e.isTrusted || !carriesAgent(e) || (e.defaultPrevented && apcApp())) return;
     e.preventDefault();
-    // The dock drags a connected agent as "link"; any other answer makes the browser refuse the drop.
+    // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
     light(blockAt(e.clientX, e.clientY) as HTMLElement | null);
   });
@@ -62,7 +71,7 @@ function listen(): void {
   window.addEventListener("dragend", () => light(null));
   window.addEventListener("drop", (e) => {
     light(null);
-    if (!e.isTrusted || !carriesAgent(e) || e.defaultPrevented) return;
+    if (!e.isTrusted || !carriesAgent(e) || (e.defaultPrevented && apcApp())) return;
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
@@ -96,7 +105,17 @@ function blockAt(x: number, y: number): Element | null {
   // Under the extension's own pins, which can sit right where the person drops.
   const at = document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
   if (!at || at.closest(FIELDS)) return null;
-  return at.closest(BLOCKS);
+  const block = at.closest(BLOCKS);
+  if (block) return block;
+  // Pages built of divs and spans (X, many web apps): the nearest box with text in it, unless that
+  // box is most of the page.
+  for (let el: Element | null = at; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+    const display = getComputedStyle(el).display;
+    if (display === "inline" || display === "contents") continue;
+    const text = ((el as HTMLElement).innerText ?? "").trim();
+    if (text) return text.length <= BOX_MAX ? el : null;
+  }
+  return null;
 }
 
 /** What the person pointed at: the block's text and the heading above it, or only the page. */
