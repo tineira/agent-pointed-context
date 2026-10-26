@@ -12,7 +12,8 @@ declare namespace chrome {
     const onMessage: {
       addListener(callback: (message: unknown, sender: MessageSender, sendResponse: (response?: unknown) => void) => boolean | void): void;
     };
-    const onInstalled: { addListener(callback: () => void): void };
+    const onInstalled: { addListener(callback: (details: { reason: "install" | "update" | "chrome_update" | "shared_module_update" }) => void): void };
+    function getURL(path: string): string;
     const onStartup: { addListener(callback: () => void): void };
     const id: string;
   }
@@ -40,6 +41,7 @@ declare namespace chrome {
       id: string;
       js?: string[];
       matches?: string[];
+      excludeMatches?: string[];
       runAt?: "document_start" | "document_end" | "document_idle";
       allFrames?: boolean;
       persistAcrossSessions?: boolean;
@@ -57,6 +59,7 @@ declare namespace chrome {
     }
     function query(q: { active?: boolean; currentWindow?: boolean; url?: string | string[] }): Promise<Tab[]>;
     function sendMessage(tabId: number, message: unknown): Promise<unknown>;
+    function create(props: { url: string }): Promise<Tab>;
   }
 }
 

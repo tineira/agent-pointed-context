@@ -1,11 +1,13 @@
 /**
  * The service worker (TIN-421, DESIGN.md 13.5). It holds no channel: a drop wakes it, it pushes the
  * reading to the dropped agent's dock and is done. The first drop of an agent in this browser asks
- * the dock for a reader token with the drag's ticket, and the person allows it in the dock. It also
- * keeps the content script registered on exactly the sites the person granted.
+ * the dock for a reader token with the drag's ticket, and the person allows it in the dock. Before
+ * that, the person's consent for the site (TIN-465, 13.3): a new site asks on a card in the page. It
+ * also keeps the content script registered on the sites the person granted, and opens the welcome
+ * page on install.
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
-import { browserLabel, hubAllowed, hubPatterns, readerKey, type DropStatus } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -16,12 +18,18 @@ interface Drop {
   type: "drop";
   drag: { hub: string; agent: string; ticket: string };
   reading: unknown;
+  /** The person's answer on the consent card, when the first try asked for one. */
+  consent?: Consent;
 }
 
 // A registered content script reaches only pages loaded after it, so the tabs already open on a granted
 // site get it injected too: when the person grants the site (the permission prompt closes the popup,
 // so the popup cannot do it) and when the extension is installed or updated.
-chrome.runtime.onInstalled.addListener(() => void syncScripts().then(() => injectOpenTabs()));
+chrome.runtime.onInstalled.addListener((details) => {
+  void syncScripts().then(() => injectOpenTabs());
+  // The welcome page asks for the one grant (13.3), so it is never hidden in the collapsed popup.
+  if (details.reason === "install") void chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
+});
 chrome.runtime.onStartup.addListener(() => void syncScripts());
 chrome.permissions.onAdded.addListener((p) => void syncScripts().then(() => injectOpenTabs(p.origins)));
 chrome.permissions.onRemoved.addListener(() => void syncScripts());
@@ -43,7 +51,7 @@ async function syncScripts(): Promise<void> {
     if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
     return;
   }
-  const script = { id: SCRIPT_ID, js: ["content.js"], matches, runAt: "document_idle" as const, allFrames: false, persistAcrossSessions: true };
+  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: [...docks], runAt: "document_idle" as const, allFrames: false, persistAcrossSessions: true };
   await (existing.length ? chrome.scripting.updateContentScripts([script]) : chrome.scripting.registerContentScripts([script]));
 }
 
@@ -62,6 +70,8 @@ async function handleDrop(m: Drop, tabId: number): Promise<DropStatus> {
   if (!hubAllowed(hub, __APC_DEV__)) return "unknown_dock";
   const reading = shapeReading(m.reading);
   if (!reading) return "error";
+  const consented = await consent(new URL(reading.url).origin, m.consent);
+  if (consented !== true) return consented;
   const key = readerKey(hub, agent);
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[key];
@@ -76,6 +86,27 @@ async function handleDrop(m: Drop, tabId: number): Promise<DropStatus> {
   if (!asked?.ok || typeof asked.claim !== "string") return note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error");
   void waitForAnswer(hub, agent, asked.claim, reading, tabId);
   return note(hub, reading.url, "asking");
+}
+
+/**
+ * The person's consent for this site (13.3): true to send, or what the content script shows instead
+ * (the card, or a note). An answer from the card is kept: Always and Not here for the site; Always is
+ * never kept for a sensitive site, which asks every time.
+ */
+async function consent(origin: string, answer: Consent | undefined): Promise<true | DropStatus> {
+  const stored = await chrome.storage.local.get(["mode", "sites"]);
+  const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
+  const sensitive = isSensitive(new URL(origin).host);
+  if (answer) {
+    if (answer === "never" || (answer === "always" && !sensitive)) {
+      sites[origin] = answer;
+      await chrome.storage.local.set({ sites });
+    }
+    return answer === "never" ? "not_here" : true;
+  }
+  const { origins = [] } = await chrome.permissions.getAll();
+  const decision = decide((stored.mode as Mode | undefined) ?? "ask", sites[origin], sensitive, grantedAlone(origin, origins));
+  return decision === "send" ? true : decision === "ask" ? "consent" : decision === "ask_sensitive" ? "consent_sensitive" : "blocked";
 }
 
 /** Poll the dock until the person answers; then send the held reading, or drop it. */

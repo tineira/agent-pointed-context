@@ -10,6 +10,7 @@ const entries = [
   { entry: "src/content.ts", file: "content.js", format: "iife" },
   { entry: "src/worker.ts", file: "worker.js", format: "es" },
   { entry: "src/popup.ts", file: "popup.js", format: "es" },
+  { entry: "src/welcome.ts", file: "welcome.js", format: "es" },
 ];
 
 for (const [i, e] of entries.entries()) {
@@ -36,6 +37,6 @@ if (dev) {
 }
 await mkdir(outDir, { recursive: true });
 await writeFile(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
-await copyFile("popup.html", `${outDir}/popup.html`);
+for (const page of ["popup.html", "welcome.html"]) await copyFile(page, `${outDir}/${page}`);
 for (const icon of ["icon-32.png", "icon-128.png"]) await copyFile(`public/${icon}`, `${outDir}/${icon}`);
 console.log(`built ${outDir}${dev ? " (dev)" : ""}`);
