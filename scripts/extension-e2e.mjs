@@ -295,6 +295,72 @@ try {
     assert.equal(woke.focus?.kind, "page_reading", `the wait got the drop, not: ${JSON.stringify(woke).slice(0, 160)}`);
     assert.ok(Date.now() - started < 15_000, "the drop ended the wait, not its timeout");
     console.log(`2b. a wait in flight is woken by the drop (${((Date.now() - started) / 1000).toFixed(1)} s)`);
+
+    // 2c. The agent's mark stays pinned on the paragraph: unread, then read; one pin per page; × clears it (TIN-469).
+    const pinNodes = async (sid = sessionId) => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+      const found = { states: [], close: null, mark: null };
+      const walk = (n) => {
+        const a = n.attributes ?? [];
+        const i = a.indexOf("data-apc-pin-state");
+        if (i >= 0) {
+          found.states.push(a[i + 1]);
+          found.mark = n.nodeId;
+        }
+        if (a.includes("data-apc-pin-close")) found.close = n.nodeId;
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      return found;
+    };
+    const centreOf = async (nodeId) => {
+      const q = (await cdp("DOM.getBoxModel", { nodeId }, sessionId)).model.border;
+      return { x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2 };
+    };
+    // 2b's drop on #b left a pin there; this drop on #a moves it.
+    const paraAt = await evaluate(`(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { left: r.left, top: r.top }; })()`);
+    await drag("#a", await payload());
+    // At the start of the paragraph: in the margin, or just inside it when the page has no margin there.
+    const onA = (at) => at.x <= paraAt.left + 30 && Math.abs(at.y - (paraAt.top + 14)) < 12;
+    await until("one unread pin at the start of #a", async () => {
+      const n = await pinNodes();
+      return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(n.mark));
+    });
+    await tool("page__get_reading");
+    await until("the pin turns read", async () => (await pinNodes()).states[0] === "read", 15_000);
+    await drag("#b", await payload());
+    await until("the pin moved to the new drop, unread", async () => {
+      const n = await pinNodes();
+      return n.states.length === 1 && n.states[0] === "unread";
+    });
+    const hover = await centreOf((await pinNodes()).mark);
+    await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: hover.x, y: hover.y }, sessionId);
+    await sleep(300);
+    const closeAt = await centreOf((await pinNodes()).close);
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: closeAt.x, y: closeAt.y, button: "left", clickCount: 1 }, sessionId);
+    await until("the pin is gone", async () => (await pinNodes()).states.length === 0);
+    await until("the dock forgot the reading", async () => (await tool("page__get_reading")).isError === true);
+    assert.equal((await tool("get_current_view")).structuredContent.focus, null);
+    // Back to the SPRING reading the steps below expect.
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("2c. the pin sits on the paragraph, turns read, moves with a new drop, and × clears the reading");
+
+    // 2d. A drop on another page replaces the reading at the dock: the first page's pin turns grey.
+    await until("the pin for the SPRING drop", async () => (await pinNodes()).states.length === 1);
+    const { targetId: secondId } = await cdp("Target.createTarget", { url: pageUrl });
+    const { sessionId: second } = await cdp("Target.attachToTarget", { targetId: secondId, flatten: true });
+    await sleep(2500);
+    const at2 = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, second)).result.value;
+    const data2 = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: at2.x, y: at2.y, data: data2 }, second);
+    await until("a pin on the second page", async () => (await pinNodes(second)).states[0] === "unread");
+    await until("the first page's pin turns stale", async () => (await pinNodes()).states[0] === "stale", 15_000);
+    await cdp("Target.closeTarget", { targetId: secondId });
+    // Back to the SPRING reading the steps below expect.
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("2d. a newer drop on another page turns the first page's pin grey");
     if (HOLD) {
       // Leave the dock and its reading for an agent to read by hand; whoever holds this deletes the dock after.
       console.log("HOLD " + JSON.stringify({ dock: DOCK, did, cookie, mcp_url: agent.mcp_url }));

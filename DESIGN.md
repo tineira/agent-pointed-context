@@ -419,6 +419,8 @@ Page text is untrusted data: any page can carry instructions aimed at an agent. 
 
 ### 13.6 Dock, Float and the extension
 
+**The pin (TIN-469).** Once a reading is sent, the agent's mark stays pinned where it was dropped, as a pinned agent's icon stays on its target in an APC app (TIN-355). It sits in the margin at the start of the paragraph, or just inside it when the page leaves no margin, so it covers no text, and it follows the paragraph through layout changes. It shows the agent's logo (the PNG badge the dock drew, TIN-388, which `/apc/reading` now returns with the agent's name) and the agent's name as its tooltip. Its ring says what the agent did, as the agent bar does (TIN-394): accent while the agent has not read the reading, green once it called `page__get_reading` (the hub records `read_at`), grey once a newer drop elsewhere replaced the reading at the dock. A page has one pin per agent, so a new drop moves it. **×** clears the reading and the agent's focus at the dock (`POST /apc/reading/clear`). The content script asks for the state every 3 s (`POST /apc/reading/state`) until the reading is read or replaced. A reload or a navigation drops the pin: finding the same paragraph again is unreliable on pages that change.
+
 The dock window and Float stay the only places an agent is dragged from, in every browser. The extension adds no UI to drag from. It only makes pages take the drop and keeps its settings in the toolbar popup. Without the extension, everything in section 12 works as before; drops on pages without APC simply do nothing.
 
 ### 13.7 Phases

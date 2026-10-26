@@ -4,10 +4,11 @@
  * first, so this listens on window in the bubble phase and steps back when the page took the drop.
  * On any other page it reads the block of text at the drop point and hands it to the service worker.
  * When the service worker needs the person's consent for the site (TIN-465, 13.3), a card where the
- * agent was dropped asks, and the answer goes back with the same drop.
+ * agent was dropped asks, and the answer goes back with the same drop. Once the reading is sent, the
+ * agent's mark stays pinned on the paragraph (TIN-469, 13.6), showing whether the agent read it.
  */
 import { APC_AGENT_TYPE, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
-import { hubAllowed, STATUS_TEXT, type Consent, type DropStatus } from "./drop.ts";
+import { hubAllowed, pinState, STATUS_TEXT, type Consent, type DropStatus, type PinMark, type PinState } from "./drop.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
@@ -21,7 +22,18 @@ if (!w.__apcDrop && !hubAllowed(location.origin, __APC_DEV__)) {
   listen();
 }
 
+/** Where a drop landed, for its pin: the paragraph, or the point on the page, and whose agent it was. */
+interface Target {
+  anchor: Element | null;
+  x: number;
+  y: number;
+  hub: string;
+  agent: string;
+}
+
 function listen(): void {
+  /** The last drop's place: its pin may come later, once the person allowed this browser in the dock. */
+  let pending: Target | null = null;
   let lit: HTMLElement | null = null;
   let litOutline = "";
   // A copy left from before the extension was reloaded or updated has lost its extension: it stands
@@ -56,21 +68,26 @@ function listen(): void {
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
     if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock");
     const reading = readAt(e.clientX, e.clientY);
+    const target: Target = { anchor: blockAt(e.clientX, e.clientY), x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
+    pending = target;
     const send = (consent?: Consent) =>
       chrome.runtime
-        .sendMessage<{ status: DropStatus }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
+        .sendMessage<{ status: DropStatus; pin?: PinMark }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
         .then((r) => {
           const status = r?.status ?? "error";
-          if (status === "consent" || status === "consent_sensitive") ask(status, e.clientX, e.clientY, send);
-          else say(status);
+          if (status === "consent" || status === "consent_sensitive") return ask(status, e.clientX, e.clientY, send);
+          say(status);
+          if (status === "sent" && r?.pin) pin(target, r.pin);
         })
         .catch(() => say("error"));
     void send();
   });
   // The service worker's later word, once the person answered in the dock.
   chrome.runtime.onMessage.addListener((m) => {
-    const status = (m as { type?: string; status?: DropStatus }).type === "status" ? (m as { status: DropStatus }).status : null;
-    if (status && status in STATUS_TEXT) say(status);
+    const msg = m as { type?: string; status?: DropStatus; pin?: PinMark };
+    if (msg.type !== "status" || !msg.status || !(msg.status in STATUS_TEXT)) return;
+    say(msg.status);
+    if (msg.status === "sent" && msg.pin && pending) pin(pending, msg.pin);
   });
 }
 
@@ -149,6 +166,90 @@ function ask(status: "consent" | "consent_sensitive", x: number, y: number, send
   root.append(card);
   document.documentElement.append(host);
   setTimeout(close, 45_000);
+}
+
+/** The pins on this page, one per dock and agent: a new drop moves it. */
+const pins = new Map<string, () => void>();
+
+/**
+ * The agent's mark, pinned where it was dropped (TIN-469, 13.6): in the margin at the start of the
+ * paragraph, so it covers no text, following it through layout changes. Its ring says whether the
+ * agent read the reading (accent, then green), or grey once a newer drop replaced it at the dock.
+ * × clears the reading and the agent's focus. Polls the dock every 3 s until read or replaced.
+ */
+function pin(target: Target, mark: PinMark): void {
+  const key = `${target.hub} ${target.agent}`;
+  pins.get(key)?.();
+  const host = document.createElement("div");
+  host.dataset.apcPin = "";
+  host.style.cssText = "position:absolute;z-index:2147483646;left:0;top:0;width:0;height:0";
+  const root = host.attachShadow({ mode: "closed" });
+  const markEl = document.createElement("div");
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.title = "Remove: your agent forgets this reading";
+  close.dataset.apcPinClose = "";
+  close.style.cssText = "position:absolute;right:-6px;top:-6px;width:16px;height:16px;padding:0;border-radius:50%;border:none;background:#1f1f1f;color:#fff;font:12px/16px system-ui,sans-serif;cursor:pointer;display:none";
+  const face = mark.icon ? Object.assign(document.createElement("img"), { src: mark.icon, alt: "" }) : Object.assign(document.createElement("span"), { textContent: (mark.name.trim()[0] ?? "A").toUpperCase() });
+  face.setAttribute("style", mark.icon ? "width:20px;height:20px;object-fit:contain" : "font:600 13px system-ui,sans-serif;color:#1f1f1f");
+  markEl.append(face, close);
+  markEl.addEventListener("mouseenter", () => (close.style.display = "block"));
+  markEl.addEventListener("mouseleave", () => (close.style.display = "none"));
+  root.append(markEl);
+  document.documentElement.append(host);
+
+  let state: PinState = "unread";
+  const draw = () => {
+    const ring = state === "read" ? "#2e8b57" : state === "stale" ? "#9a9a9a" : "#d4733a";
+    markEl.dataset.apcPinState = state;
+    markEl.title = `${mark.name} · ${state === "read" ? "read it" : state === "stale" ? "replaced by a newer drop" : "not read yet"}`;
+    markEl.style.cssText = `position:absolute;width:28px;height:28px;box-sizing:border-box;border-radius:50%;background:#fff;border:2px solid ${ring};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.25);opacity:${state === "stale" ? 0.6 : 1}`;
+    place();
+  };
+  const place = () => {
+    if (target.anchor && !target.anchor.isConnected) return remove();
+    let left = target.x - 14;
+    let top = target.y - 14;
+    if (target.anchor) {
+      const r = target.anchor.getBoundingClientRect();
+      left = r.left + scrollX - 34;
+      if (left < 2) left = r.left + scrollX + 2;
+      top = r.top + scrollY;
+    }
+    markEl.style.left = `${Math.round(left)}px`;
+    markEl.style.top = `${Math.round(top)}px`;
+  };
+  const observer = new ResizeObserver(place);
+  observer.observe(document.documentElement);
+  if (target.anchor) observer.observe(target.anchor);
+  addEventListener("resize", place);
+  let timer = 0;
+  const poll = async () => {
+    if (state !== "unread" || !host.isConnected) return;
+    const r = await chrome.runtime.sendMessage<{ ok?: boolean; latest?: string | null; read?: boolean } | null>({ type: "pin_state", hub: target.hub, agent: target.agent }).catch(() => null);
+    if (r?.ok) {
+      state = pinState(mark.taken_at, r.latest, r.read);
+      draw();
+    }
+    if (state === "unread") timer = window.setTimeout(() => void poll(), 3000);
+  };
+  const remove = () => {
+    clearTimeout(timer);
+    observer.disconnect();
+    removeEventListener("resize", place);
+    host.remove();
+    if (pins.get(key) === remove) pins.delete(key);
+  };
+  close.addEventListener("click", (ev) => {
+    if (!ev.isTrusted) return;
+    ev.stopPropagation();
+    remove();
+    void chrome.runtime.sendMessage({ type: "pin_clear", hub: target.hub, agent: target.agent }).catch(() => {});
+  });
+  pins.set(key, remove);
+  draw();
+  timer = window.setTimeout(() => void poll(), 2000);
 }
 
 /** A short note in the page's corner, in its own shadow root so the page's styles cannot touch it. */

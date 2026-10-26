@@ -7,7 +7,7 @@
  * page on install.
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
-import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -35,11 +35,31 @@ chrome.permissions.onAdded.addListener((p) => void syncScripts().then(() => inje
 chrome.permissions.onRemoved.addListener(() => void syncScripts());
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  const m = message as Partial<Drop> | null;
-  if (m?.type !== "drop" || !m.drag || typeof sender.tab?.id !== "number") return;
-  void handleDrop(m as Drop, sender.tab.id).then((status) => reply({ status }));
-  return true;
+  const m = message as (Partial<Omit<Drop, "type">> & { type?: string; hub?: string; agent?: string }) | null;
+  if (typeof sender.tab?.id !== "number") return;
+  if (m?.type === "drop" && m.drag) {
+    void handleDrop(m as Drop, sender.tab.id).then(reply);
+    return true;
+  }
+  // The pin on the page (TIN-469): whether the agent read the reading, and × to clear it.
+  if ((m?.type === "pin_state" || m?.type === "pin_clear") && typeof m.hub === "string" && typeof m.agent === "string") {
+    void pinCall(m.type === "pin_state" ? "state" : "clear", m.hub, m.agent).then(reply);
+    return true;
+  }
 });
+
+/** The pin's state or ×, at the dock, with this browser's token for that agent. */
+async function pinCall(what: "state" | "clear", hub: string, agent: string): Promise<Record<string, unknown> | null> {
+  if (!hubAllowed(hub, __APC_DEV__)) return null;
+  const token = (((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>)[readerKey(hub, agent)];
+  if (!token) return null;
+  try {
+    const r = await fetch(`${hub}/apc/reading/${what}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: "{}" });
+    return (await r.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
 
 /** The content script runs on the sites the person granted, and never on a dock. */
 async function syncScripts(): Promise<void> {
@@ -65,27 +85,33 @@ async function injectOpenTabs(origins?: string[]): Promise<void> {
   }
 }
 
-async function handleDrop(m: Drop, tabId: number): Promise<DropStatus> {
+/** What the content script gets back: what to tell the person, and the agent's mark when the reading went (TIN-469). */
+interface DropReply {
+  status: DropStatus;
+  pin?: PinMark;
+}
+
+async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   const { hub, agent, ticket } = m.drag;
-  if (!hubAllowed(hub, __APC_DEV__)) return "unknown_dock";
+  if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
   const reading = shapeReading(m.reading);
-  if (!reading) return "error";
+  if (!reading) return { status: "error" };
   const consented = await consent(new URL(reading.url).origin, m.consent);
-  if (consented !== true) return consented;
+  if (consented !== true) return { status: consented };
   const key = readerKey(hub, agent);
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[key];
   if (token) {
     const sent = await send(hub, token, reading);
-    if (sent !== "not_paired") return note(hub, reading.url, sent ? "sent" : "error");
+    if (sent.result !== "not_paired") return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}) };
     // The person unpaired this browser in the dock, or the dock expired: ask again with this drag's ticket.
     delete tokens[key];
     await chrome.storage.local.set({ readers: tokens });
   }
   const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
-  if (!asked?.ok || typeof asked.claim !== "string") return note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error");
+  if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error") };
   void waitForAnswer(hub, agent, asked.claim, reading, tabId);
-  return note(hub, reading.url, "asking");
+  return { status: await note(hub, reading.url, "asking") };
 }
 
 /**
@@ -113,6 +139,7 @@ async function consent(origin: string, answer: Consent | undefined): Promise<tru
 async function waitForAnswer(hub: string, agent: string, claim: string, reading: NonNullable<ReturnType<typeof shapeReading>>, tabId: number): Promise<void> {
   const until = Date.now() + ASK_MS;
   let status: DropStatus = "timeout";
+  let pin: PinMark | undefined;
   while (Date.now() < until) {
     await new Promise((r) => setTimeout(r, POLL_MS));
     // An extension API call keeps the service worker alive between polls (it stops after 30 s idle, 13.1).
@@ -122,32 +149,40 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     if (answer?.status === "paired" && typeof answer.token === "string") {
       tokens[readerKey(hub, agent)] = answer.token;
       await chrome.storage.local.set({ readers: tokens });
-      status = (await send(hub, answer.token, reading)) === true ? "sent" : "error";
+      const sent = await send(hub, answer.token, reading);
+      status = sent.result === true ? "sent" : "error";
+      pin = sent.pin;
     } else {
       status = answer ? "denied" : "error";
     }
     break;
   }
   await note(hub, reading.url, status);
-  await chrome.tabs.sendMessage(tabId, { type: "status", status }).catch(() => {});
+  await chrome.tabs.sendMessage(tabId, { type: "status", status, ...(pin ? { pin } : {}) }).catch(() => {});
 }
 
 /**
- * Push one reading: true when the dock took it, "not_paired" when it no longer knows this token. A
- * network error or a 5xx is tried once more: sending the same reading again only replaces it.
+ * Push one reading: true when the dock took it (with the agent's mark for the pin, TIN-469),
+ * "not_paired" when it no longer knows this token. A network error or a 5xx is tried once more:
+ * sending the same reading again only replaces it.
  */
-async function send(hub: string, token: string, reading: unknown): Promise<true | false | "not_paired"> {
+async function send(hub: string, token: string, reading: unknown): Promise<{ result: true | false | "not_paired"; pin?: PinMark }> {
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 500));
     try {
       const r = await fetch(`${hub}/apc/reading`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ reading }) });
-      if (r.status === 401) return "not_paired";
-      if (r.status < 500) return r.ok;
+      if (r.status === 401) return { result: "not_paired" };
+      if (r.status >= 500) continue;
+      if (!r.ok) return { result: false };
+      const body = (await r.json().catch(() => ({}))) as { agent?: { name?: unknown; icon?: unknown }; taken_at?: unknown };
+      const name = typeof body.agent?.name === "string" ? body.agent.name.slice(0, 60) : "Your agent";
+      const icon = typeof body.agent?.icon === "string" && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(body.agent.icon) ? body.agent.icon : null;
+      return { result: true, ...(typeof body.taken_at === "string" ? { pin: { name, icon, taken_at: body.taken_at } } : {}) };
     } catch {
       // network: try again
     }
   }
-  return false;
+  return { result: false };
 }
 
 async function post(url: string, body: unknown): Promise<Record<string, unknown> | null> {
