@@ -33,5 +33,19 @@
   "icons": {
     "32": "icon-32.png",
     "128": "icon-128.png"
+  },
+  "commands": {
+    "open-dock": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Open your APC dock"
+    },
+    "float": {
+      "suggested_key": {
+        "default": "Alt+Shift+F"
+      },
+      "description": "Open your dock ready to float your agents"
+    }
   }
 }

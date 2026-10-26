@@ -372,7 +372,9 @@ export function HubDock() {
 /**
  * Float (TIN-392): an installed web app cannot stay on top of other windows; a Document
  * Picture-in-Picture window can. It holds only the agents' logos, each draggable like in the dock.
- * Shown where the browser has the API (Chrome and Edge on desktop).
+ * Shown where the browser has the API (Chrome and Edge on desktop). Opened with ?float=1 (the APC
+ * extension's Float, TIN-473), the dock asks to float at once: Chrome opens the window only from a
+ * click in this page, so a prompt takes that one click.
  */
 interface FloatRequest {
   id: string;
@@ -391,6 +393,7 @@ function Float(props: {
 }) {
   const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number }): Promise<Window> } }).documentPictureInPicture;
   const [win, setWin] = useState<Window | null>(null);
+  const [asked, setAsked] = useState(() => new URLSearchParams(location.search).has("float"));
   const root = useRef<Root | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -451,34 +454,66 @@ function Float(props: {
       // resize refused
     }
   }, [win, asking]);
-  if (!pip) return null;
+  const dismiss = () => {
+    setAsked(false);
+    const url = new URL(location.href);
+    url.searchParams.delete("float");
+    history.replaceState(null, "", url);
+  };
+  useEffect(() => {
+    if (!asked) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && dismiss();
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [asked]);
+  const prompt = asked && !win && (
+    <div className="float-ask" role="dialog" aria-label="Float your agents">
+      <div className="float-ask-card">
+        <button type="button" className="float-ask-close" aria-label="Not now" onClick={dismiss}>
+          ✕
+        </button>
+        {pip ? (
+          <>
+            <p>Keep your agents on top of every window, ready to drag onto any page or app.</p>
+            <button type="button" className="primary float-ask-go" data-float-ask onClick={() => void openFloat().then(dismiss)}>
+              Float your agents
+            </button>
+          </>
+        ) : (
+          <p>Float needs Chrome or Edge on a computer. Drag your agents from this dock instead.</p>
+        )}
+      </div>
+    </div>
+  );
+  async function openFloat(): Promise<void> {
+    if (!pip) return;
+    if (win) return win.focus();
+    const w = await pip.requestWindow({ width: 96 * Math.max(1, Math.min(3, props.agents.length)), height: 110 });
+    for (const sheet of [...document.styleSheets]) {
+      try {
+        const style = w.document.createElement("style");
+        style.textContent = [...sheet.cssRules].map((r) => r.cssText).join("\n");
+        w.document.head.append(style);
+      } catch {
+        // a sheet from another origin: skipped
+      }
+    }
+    w.document.body.className = "float-body";
+    w.addEventListener("pagehide", () => {
+      root.current?.unmount();
+      root.current = null;
+      setWin(null);
+    });
+    setWin(w);
+  }
+  if (!pip) return prompt || null;
   return (
-    <button
-      type="button"
-      title="Keep your agents on top of every window, ready to drag"
-      onClick={async () => {
-        if (win) return win.focus();
-        const w = await pip.requestWindow({ width: 96 * Math.max(1, Math.min(3, props.agents.length)), height: 110 });
-        for (const sheet of [...document.styleSheets]) {
-          try {
-            const style = w.document.createElement("style");
-            style.textContent = [...sheet.cssRules].map((r) => r.cssText).join("\n");
-            w.document.head.append(style);
-          } catch {
-            // a sheet from another origin: skipped
-          }
-        }
-        w.document.body.className = "float-body";
-        w.addEventListener("pagehide", () => {
-          root.current?.unmount();
-          root.current = null;
-          setWin(null);
-        });
-        setWin(w);
-      }}
-    >
-      {win ? "Floating" : "Float"}
-    </button>
+    <>
+      <button type="button" title="Keep your agents on top of every window, ready to drag" onClick={() => void openFloat()}>
+        {win ? "Floating" : "Float"}
+      </button>
+      {prompt}
+    </>
   );
 }
 

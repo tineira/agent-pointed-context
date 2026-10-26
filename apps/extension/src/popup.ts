@@ -4,6 +4,7 @@
  * sends readings to. Asking Chrome for a grant closes the popup; the service worker injects the
  * content script into the open tabs then.
  */
+import { openDock } from "./open-dock.ts";
 import { ANY_PAGE, grantedAlone, hubPatterns, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -98,5 +99,8 @@ async function render(): Promise<void> {
       : [el("li", { className: "muted", textContent: "None yet: the first drop of an agent asks its dock." })]),
   );
 }
+
+$("open-dock").addEventListener("click", () => void openDock(false).then(() => close()));
+$("float").addEventListener("click", () => void openDock(true).then(() => close()));
 
 void render();

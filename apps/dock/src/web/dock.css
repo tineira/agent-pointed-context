@@ -180,3 +180,10 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent); tex
 .calls code { font: 11px ui-monospace, monospace; overflow-wrap: anywhere; }
 .calls .pin { color: var(--ok); }
 .calls li.failed code { color: #c0392b; }
+
+/* The APC extension's Float (TIN-473): opened with ?float=1, the dock asks for the one click Chrome needs. */
+.float-ask { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / 0.35); }
+.float-ask-card { position: relative; max-width: 340px; padding: 22px 20px 18px; border-radius: 14px; background: var(--card); color: var(--fg); border: 1px solid var(--accent); box-shadow: 0 10px 30px rgb(0 0 0 / 0.25); display: grid; gap: 14px; text-align: center; }
+.float-ask-card p { margin: 0; }
+.float-ask-go { font-size: 1.05em; padding: 10px 18px; justify-self: center; }
+.float-ask-close { position: absolute; top: 8px; right: 8px; border: none; background: transparent; color: inherit; font-size: 15px; cursor: pointer; opacity: 0.6; }
