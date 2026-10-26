@@ -41,6 +41,11 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     void handleDrop(m as Drop, sender.tab.id).then(reply);
     return true;
   }
+  // A pin dragged to another paragraph of its page (TIN-471): the new reading, with no new consent.
+  if (m?.type === "move" && typeof m.hub === "string" && typeof m.agent === "string") {
+    void handleMove(m.hub, m.agent, m.reading).then(reply);
+    return true;
+  }
   // The pin on the page (TIN-469): whether the agent read the reading, and × to clear it.
   if ((m?.type === "pin_state" || m?.type === "pin_clear") && typeof m.hub === "string" && typeof m.agent === "string") {
     void pinCall(m.type === "pin_state" ? "state" : "clear", m.hub, m.agent).then(reply);
@@ -112,6 +117,26 @@ async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error") };
   void waitForAnswer(hub, agent, asked.claim, reading, tabId);
   return { status: await note(hub, reading.url, "asking") };
+}
+
+/**
+ * A pin moved within its page (TIN-471): the person consented when they dropped the agent there, so
+ * no card; the browser's token for that agent, so no ticket. Without a token, the person drags again.
+ */
+async function handleMove(hub: string, agent: string, raw: unknown): Promise<DropReply> {
+  if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
+  const reading = shapeReading(raw);
+  if (!reading) return { status: "error" };
+  const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
+  const token = tokens[readerKey(hub, agent)];
+  if (!token) return { status: await note(hub, reading.url, "no_ticket") };
+  const sent = await send(hub, token, reading);
+  if (sent.result === "not_paired") {
+    delete tokens[readerKey(hub, agent)];
+    await chrome.storage.local.set({ readers: tokens });
+    return { status: await note(hub, reading.url, "no_ticket") };
+  }
+  return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}) };
 }
 
 /**

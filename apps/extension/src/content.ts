@@ -93,7 +93,8 @@ function listen(): void {
 
 /** The nearest block of text at a point, or null (a margin, a form field). */
 function blockAt(x: number, y: number): Element | null {
-  const at = document.elementFromPoint(x, y);
+  // Under the extension's own pins, which can sit right where the person drops.
+  const at = document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
   if (!at || at.closest(FIELDS)) return null;
   return at.closest(BLOCKS);
 }
@@ -178,6 +179,10 @@ const pins = new Map<string, () => void>();
  */
 const PIN_CSS = `
 .badge { position: absolute; width: 28px; height: 28px; }
+.mark { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
+.mark img { -webkit-user-drag: none; pointer-events: none; }
+.badge.moving { pointer-events: none; opacity: 0.85; }
+.badge.moving .mark { cursor: grabbing; }
 .mark { box-sizing: border-box; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: #fff; color: #141a24; box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); outline-offset: 2px; }
 .badge[data-apc-pin-state="unread"] .mark { outline: 2px dashed #b85209; animation: breathe 1.8s ease-in-out infinite; }
 .badge[data-apc-pin-state="stale"] { opacity: 0.45; }
@@ -194,7 +199,9 @@ const PIN_CSS = `
  * The agent's mark, pinned where it was dropped (TIN-469, 13.6), in Pulse's look (PIN_CSS): in the
  * margin at the start of the paragraph, so it covers no text, following it through layout changes.
  * Dashed and breathing until the agent reads the reading, then a check; faded once a newer drop
- * replaced it at the dock. × clears the reading and the agent's focus. Asks the dock every 3 s until
+ * replaced it at the dock. × clears the reading and the agent's focus. Dragging the mark to another
+ * paragraph of the page moves the agent's focus there (TIN-471), as dragging a pin's badge does in
+ * Pulse (TIN-354); Esc, or a drop off any paragraph, puts it back. Asks the dock every 3 s until
  * read, then every 10 s until replaced: a read pin still fades when a newer drop replaces its reading.
  */
 function pin(target: Target, mark: PinMark): void {
@@ -269,9 +276,84 @@ function pin(target: Target, mark: PinMark): void {
     remove();
     void chrome.runtime.sendMessage({ type: "pin_clear", hub: target.hub, agent: target.agent }).catch(() => {});
   });
+  moveWith(markEl, badge, place, (x, y) => {
+    // A paragraph of this page: send its reading with the browser's token, no new consent (TIN-471).
+    const anchor = blockAt(x, y);
+    if (!anchor || anchor === target.anchor) return false;
+    const reading = readAt(x, y);
+    void chrome.runtime
+      .sendMessage<{ status: DropStatus; pin?: PinMark }>({ type: "move", hub: target.hub, agent: target.agent, reading })
+      .then((r) => {
+        if (r?.status === "sent" && r.pin) pin({ anchor, x: x + scrollX, y: y + scrollY, hub: target.hub, agent: target.agent }, r.pin);
+        else say(r?.status ?? "error");
+      })
+      .catch(() => say("error"));
+    return true;
+  });
   pins.set(key, remove);
   draw();
   timer = window.setTimeout(() => void poll(), 2000);
+}
+
+/**
+ * Drag a pin by its mark (TIN-471): past a few pixels it follows the pointer and outlines the paragraph
+ * under it. On release, drop(x, y) says whether it took the place (the pin is then drawn there anew);
+ * if not, or on Esc, the pin goes back. A trusted pointer only.
+ */
+function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, drop: (x: number, y: number) => boolean): void {
+  // The browser's own drag (of the logo image, or of selected text) would cancel the pointer: none.
+  handle.addEventListener("dragstart", (e) => e.preventDefault());
+  handle.addEventListener("pointerdown", (down) => {
+    if (!down.isTrusted || down.button !== 0) return;
+    down.preventDefault();
+    handle.setPointerCapture(down.pointerId);
+    let moving = false;
+    let lit: HTMLElement | null = null;
+    let litOutline = "";
+    const light = (el: HTMLElement | null) => {
+      if (lit === el) return;
+      if (lit) lit.style.outline = litOutline;
+      lit = el;
+      if (el) {
+        litOutline = el.style.outline;
+        el.style.outline = "2px solid #d4733a";
+      }
+    };
+    const end = () => {
+      light(null);
+      badge.classList.remove("moving");
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onCancel);
+      removeEventListener("keydown", onKey, true);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!moving && Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) < 5) return;
+      moving = true;
+      badge.classList.add("moving");
+      badge.style.left = `${Math.round(e.pageX - 14)}px`;
+      badge.style.top = `${Math.round(e.pageY - 14)}px`;
+      light(blockAt(e.clientX, e.clientY) as HTMLElement | null);
+    };
+    const onUp = (e: PointerEvent) => {
+      end();
+      if (moving && e.isTrusted && drop(e.clientX, e.clientY)) return;
+      back();
+    };
+    const onCancel = () => {
+      end();
+      back();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      onCancel();
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onCancel);
+    addEventListener("keydown", onKey, true);
+  });
 }
 
 /** A short note in the page's corner, in its own shadow root so the page's styles cannot touch it. */

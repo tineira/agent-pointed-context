@@ -371,6 +371,42 @@ try {
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("2d. a newer drop on another page turns the first page's pin grey");
+
+    // 2e. Dragging the pin to another paragraph moves the agent's focus there, with no new consent (TIN-471).
+    const pinAt = async () => centreOf((await until("a pin", async () => (await pinNodes()).mark)));
+    const glide = async (from, to, finish) => {
+      await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y }, sessionId);
+      await cdp("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 }, sessionId);
+      for (let i = 1; i <= 8; i++) {
+        const x = from.x + ((to.x - from.x) * i) / 8;
+        const y = from.y + ((to.y - from.y) * i) / 8;
+        await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 }, sessionId);
+        await sleep(40);
+      }
+      await finish?.();
+      await cdp("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 }, sessionId);
+    };
+    await until("the pin on #b", async () => (await pinNodes()).states[0] === "unread");
+    await glide(await pinAt(), await centre("#a"));
+    await until("the reading of #a, after moving the pin", async () => /EU-West rose/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    await until("one unread pin at #a", async () => {
+      const n = await pinNodes();
+      return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(n.mark));
+    });
+    // Esc puts it back: no new reading.
+    const before = await pinAt();
+    await glide(before, await centre("#b"), async () => {
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, sessionId);
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, sessionId);
+    });
+    await sleep(2000);
+    assert.match((await tool("page__get_reading")).structuredContent.page_text, /EU-West rose/);
+    const after = await pinAt();
+    assert.ok(Math.abs(after.x - before.x) < 2 && Math.abs(after.y - before.y) < 2, "Esc put the pin back");
+    // Back to the SPRING reading the steps below expect.
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("2e. dragging the pin to another paragraph moves the focus; Esc puts it back");
     if (HOLD) {
       // Leave the dock and its reading for an agent to read by hand; whoever holds this deletes the dock after.
       console.log("HOLD " + JSON.stringify({ dock: DOCK, did, cookie, mcp_url: agent.mcp_url }));
