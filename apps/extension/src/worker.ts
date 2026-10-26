@@ -154,7 +154,8 @@ async function consent(origin: string, answer: Consent | undefined): Promise<tru
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
   const sensitive = isSensitive(new URL(origin).host);
   if (answer) {
-    if (answer === "never" || (answer === "always" && !sensitive)) {
+    // Always is never kept for a sensitive site, by its domain or set to Always ask by the person (TIN-478).
+    if (answer === "never" || (answer === "always" && !sensitive && sites[origin] !== "sensitive")) {
       sites[origin] = answer;
       await chrome.storage.local.set({ sites });
     }

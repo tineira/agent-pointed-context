@@ -44,27 +44,25 @@ export const ANY_PAGE = ["https://*/*", "http://*/*"];
 
 /** "ask": the first drop on a site asks the person. "never_ask": every drop is sent at once, everywhere. */
 export type Mode = "ask" | "never_ask";
-/** What the person chose for a site, kept by the extension. */
-export type SiteChoice = "always" | "never";
+/** What the person chose for a site, kept by the extension. "sensitive": always ask, never offer Always (TIN-478). */
+export type SiteChoice = "always" | "never" | "sensitive";
 /** What the person answered on the card. */
 export type Consent = "once" | "always" | "never";
 
 /** What happens to a drop before anything is sent. */
 export type Decision = "send" | "ask" | "ask_sensitive" | "blocked";
 
-const MAIL_HOSTS = ["mail.google.com", "outlook.live.com", "outlook.office.com", "outlook.office365.com", "mail.yahoo.com", "mail.proton.me", "app.fastmail.com", "mail.zoho.com", "www.icloud.com"];
-const SENSITIVE_WORDS = /bank|banco|banca|banque|bancaria|credit|health|salud|sante|clinic|clinica|hospital|medic|pharma|farmacia|isapre|fonasa|insurance|seguro/;
-
 /**
- * A bank, email, health or government site: built in, by host (TIN-465). Such a site always asks and
- * never offers "Always"; making the list editable is TIN-423.
+ * A sensitive site by its domain alone (TIN-478): a government domain (a gov, gob or mil label, as in
+ * sii.gob.cl or gov.uk) or the restricted .bank and .insurance TLDs, which only verified institutions
+ * can register. Nothing is guessed from a site's name: no list could keep a promise to recognise every
+ * bank, email or health site, so the person marks any other site sensitive themselves (SiteChoice).
  */
 export function isSensitive(host: string): boolean {
-  const h = host.toLowerCase().replace(/:\d+$/, "");
-  if (MAIL_HOSTS.includes(h)) return true;
-  const labels = h.split(".");
+  const labels = host.toLowerCase().replace(/:\d+$/, "").split(".");
   if (labels.some((l) => l === "gov" || l === "gob" || l === "mil")) return true;
-  return labels.slice(0, -1).some((l) => SENSITIVE_WORDS.test(l));
+  const tld = labels.at(-1);
+  return tld === "bank" || tld === "insurance";
 }
 
 /**
@@ -85,13 +83,13 @@ export function grantedAlone(origin: string, patterns: readonly string[]): boole
 
 /**
  * Whether a drop is sent, asks, or is refused. "Never ask" sends everything. A site the person said
- * "Not here" to never sends. A sensitive site always asks. A site marked Always, or granted by itself
- * from the popup, sends. Any other site asks.
+ * "Not here" to never sends. A sensitive site, by its domain or marked by the person, always asks. A
+ * site marked Always, or granted by itself from the popup, sends. Any other site asks.
  */
 export function decide(mode: Mode, choice: SiteChoice | undefined, sensitive: boolean, grantedAlone: boolean): Decision {
   if (mode === "never_ask") return "send";
   if (choice === "never") return "blocked";
-  if (sensitive) return "ask_sensitive";
+  if (sensitive || choice === "sensitive") return "ask_sensitive";
   if (choice === "always" || grantedAlone) return "send";
   return "ask";
 }
@@ -124,7 +122,7 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   unknown_dock: "This agent is from a dock this extension does not know: nothing was sent",
   error: "Could not reach your dock: nothing was sent",
   consent: "Send this to your agent?",
-  consent_sensitive: "This looks like a bank, email, health or government site. Send this to your agent?",
+  consent_sensitive: "This site is set to ask every time. Send this to your agent?",
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
 };
