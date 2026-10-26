@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>APC</title>
+    <style>
+      :root { color-scheme: light dark; --muted: #6b6b6b; --accent: #d4733a; --line: #d9d9d9; }
+      @media (prefers-color-scheme: dark) { :root { --muted: #a3a3a3; --line: #3a3a3a; } }
+      body { margin: 0; width: 320px; font: 13px/1.45 system-ui, sans-serif; }
+      main { padding: 14px 16px; display: grid; gap: 12px; }
+      h1 { font-size: 14px; margin: 0; }
+      h2 { font-size: 12px; margin: 0 0 4px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+      p { margin: 0; }
+      .muted { color: var(--muted); }
+      button { font: inherit; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+      li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      li span { overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Point your agent at this page</h1>
+      <section id="here"></section>
+      <section>
+        <h2>Sites your agent may read</h2>
+        <ul id="sites"></ul>
+      </section>
+      <section>
+        <h2>Last drop</h2>
+        <p id="last" class="muted">None yet.</p>
+      </section>
+      <section>
+        <h2>Docks this browser sends to</h2>
+        <ul id="docks"></ul>
+      </section>
+      <p class="muted">Drag your agent from your APC dock or Float onto a page you allowed. The text you drop it on goes to your agent through your dock, which keeps it 10 minutes.</p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -17,7 +17,9 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
   // The apps a hub may pair with (comma-separated origins); under vite dev, localhost too.
-  "vars": { "APP_ORIGINS": "https://pulse.v2.apc.tineira.com,https://signals.v2.apc.tineira.com" },
+  // READER_ORIGINS: the APC browser extensions that may send page readings (TIN-421): the unpacked build (its id comes from the key
+  // in apps/extension/manifest.json); add the store ids once published.
+  "vars": { "APP_ORIGINS": "https://pulse.v2.apc.tineira.com,https://signals.v2.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj" },
   // Agent sessions, in Pulse v1's dataset and shape, marked "dock" (TIN-416). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
   "routes": [{ "pattern": "v2.apc.tineira.com", "custom_domain": true }],

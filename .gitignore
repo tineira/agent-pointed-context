@@ -5,3 +5,4 @@ dist/
 *.log
 apps/demo/user-side-out/
 apps/demo/worker-configuration.d.ts
+dist-dev/
