@@ -6,7 +6,8 @@
 // deleted at the end.
 // With --consent, the consent model instead (TIN-465, DESIGN.md 13.3): the extension holds the one grant for any page and
 // no site by itself, so each new site asks on a card in the page, clicked here with real mouse events.
-// usage: node scripts/extension-e2e.mjs [--prod] [--hold | --consent] [browser.exe]   (default: Chrome on Windows)
+// --shots=<dir> saves screenshots of the pin, unread and read (TIN-469).
+// usage: node scripts/extension-e2e.mjs [--prod] [--hold | --consent] [--shots=<dir>] [browser.exe]   (default: Chrome on Windows)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,6 +21,7 @@ const PROD = args.includes("--prod");
 const HOLD = args.includes("--hold");
 /** --consent: the one grant for any page, and the consent card on new sites (TIN-465). */
 const CONSENT = args.includes("--consent");
+const SHOTS = args.find((a) => a.startsWith("--shots="))?.slice("--shots=".length);
 const DOCK = PROD ? "https://v2.apc.tineira.com" : "http://localhost:5200";
 const EXE = args.find((a) => !a.startsWith("--")) ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const EXT = PROD || CONSENT ? grantedCopy(resolve(PROD ? "apps/extension/dist" : "apps/extension/dist-dev")) : resolve("apps/extension/dist-dev");
@@ -318,16 +320,23 @@ try {
       return { x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2 };
     };
     // 2b's drop on #b left a pin there; this drop on #a moves it.
-    const paraAt = await evaluate(`(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { left: r.left, top: r.top }; })()`);
+    const paraAt = await evaluate(`(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top }; })()`);
     await drag("#a", await payload());
-    // At the start of the paragraph: in the margin, or just inside it when the page has no margin there.
-    const onA = (at) => at.x <= paraAt.left + 30 && Math.abs(at.y - (paraAt.top + 14)) < 12;
+    // At the paragraph's first line: in its left margin, or at its right end when the page leaves no margin.
+    const onA = (at) => (at.x < paraAt.left || at.x > paraAt.right - 40) && Math.abs(at.y - (paraAt.top + 14)) < 12;
     await until("one unread pin at the start of #a", async () => {
       const n = await pinNodes();
       return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(n.mark));
     });
+    const shot = async (name) => {
+      if (!SHOTS) return;
+      const clip = { x: Math.max(0, paraAt.right - 640), y: Math.max(0, paraAt.top - 60), width: 680, height: 140, scale: 2 };
+      writeFileSync(join(SHOTS, `pin-${name}.png`), Buffer.from((await cdp("Page.captureScreenshot", { format: "png", clip }, sessionId)).data, "base64"));
+    };
+    await shot("unread");
     await tool("page__get_reading");
     await until("the pin turns read", async () => (await pinNodes()).states[0] === "read", 15_000);
+    await shot("read");
     await drag("#b", await payload());
     await until("the pin moved to the new drop, unread", async () => {
       const n = await pinNodes();
