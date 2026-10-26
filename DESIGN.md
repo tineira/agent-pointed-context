@@ -372,7 +372,7 @@ Not verified: drags from the dock or Float on macOS and Linux.
 
 ### 13.2 Two kinds of target
 
-- **An APC app** handles the drop itself: `enablePinning` calls `preventDefault()`, then pairs and pins as in section 12. The extension sees `defaultPrevented` on a page with APC targets (`data-focus`) and does nothing. Only there: other pages take drags for their own sake (X does, for attaching files) with their own drop effect, and stepping back on those refused the agent (TIN-472), so elsewhere the extension takes the agent's drop and answers `link` whatever the page did.
+- **An APC app** handles the drop itself: `enablePinning` calls `preventDefault()`, then pairs and pins as in section 12. On an APC app (a page with APC targets `data-focus`, the agent bar `apc-agents` or agent marks `data-apc-mark`, checked at each drag since these apps render their targets after load) the extension does nothing at all: no outline, no reading, no pin. It first stepped back only when the app had taken the drop, and moving Pulse's own pin left a second pin from the extension (TIN-476). Other pages that take drags for their own sake (X does, for attaching files) are not APC apps: stepping back there refused the agent (TIN-472), so the extension takes the agent's drop and answers `link` whatever the page did.
 - **Any other page** gets a **page reading**: what the person pointed at, taken by the extension and delivered as data. It is a different trust model from a pin. A pin names a target that the agent then reads through the app's own tools, with the access the app granted. A reading is the text the extension saw, nothing more, with no tools behind it. So the dock and the agent's results call it a reading, not a pin, and draw it differently.
 
 A reading holds:

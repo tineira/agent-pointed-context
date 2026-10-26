@@ -18,11 +18,14 @@ const TEXT_MAX = 2048;
 const BOX_MAX = 4000;
 
 /**
- * An APC app: a page with APC targets (data-focus), whose own enablePinning takes the agent's drop.
- * Only there does the extension step back when the page handled the drop. Other pages, such as X,
- * handle drags for their own reasons (attaching files) and would otherwise refuse the agent.
+ * An APC app (Pulse, Signals): a page with APC targets (data-focus), the agent bar (apc-agents) or
+ * agent marks (data-apc-mark). It takes the agent itself, so there the extension does nothing at all:
+ * no outline, no reading, no pin (TIN-476; it used to step back only when the app had taken the drop,
+ * and moving an app's own pin left a second pin from the extension). Checked at each drag, since these
+ * apps render their targets after load. Other pages that handle drags for their own sake, such as X,
+ * are not APC apps: there the extension takes the agent (TIN-472).
  */
-const apcApp = () => !!document.querySelector("[data-focus]");
+const apcApp = () => !!document.querySelector("[data-focus], apc-agents, [data-apc-mark]");
 
 const w = window as Window & { __apcDrop?: boolean };
 // Injected again when the person grants the site from the popup: one listener set per page.
@@ -59,7 +62,7 @@ function listen(): void {
   };
 
   window.addEventListener("dragover", (e) => {
-    if (!e.isTrusted || !carriesAgent(e) || (e.defaultPrevented && apcApp())) return;
+    if (!e.isTrusted || !carriesAgent(e) || apcApp()) return;
     e.preventDefault();
     // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
@@ -71,7 +74,7 @@ function listen(): void {
   window.addEventListener("dragend", () => light(null));
   window.addEventListener("drop", (e) => {
     light(null);
-    if (!e.isTrusted || !carriesAgent(e) || (e.defaultPrevented && apcApp())) return;
+    if (!e.isTrusted || !carriesAgent(e) || apcApp()) return;
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");

@@ -94,7 +94,9 @@ const ticket = async () => (await api(`${base}/agents/${agent.id}/ticket`, {})).
 const PAGE = `<!doctype html><title>Churn notes</title><h1>Churn notes</h1><h2>EU-West</h2>
 <p id="a">Churn in EU-West rose 4.2% in March, after the Nimbus offer.</p>
 <p id="b">Signups from the SPRING code were mostly Pro.</p>
-<input id="secret" value="hunter2">
+<input id="secret" value="hunter2">`;
+// An APC app, as Pulse is: targets (data-focus) that take the drop, and text around them that does not.
+const APC = `<!doctype html><title>APC-like app</title><h1>Churn</h1><p id="note">Text of the app, outside any target.</p>
 <div id="app" data-focus="figure:kpi" style="padding:30px;background:#eef">APC app area</div>
 <script>
 const app = document.getElementById("app");
@@ -109,7 +111,7 @@ const BUSY = `<!doctype html><title>Busy feed</title><main><div class="post"><di
 addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
 addEventListener("drop", (e) => e.preventDefault());
 </script>`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : PAGE)).listen(0, "::");
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/apc") ? APC : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -423,12 +425,24 @@ try {
       throw new Holding();
     }
 
-    // 3. An APC app keeps its drop: the extension stands back.
-    await drag("#app", await payload());
-    await sleep(1500);
-    assert.equal(await evaluate(`document.getElementById("app").textContent`), "app took it");
+    // 3. An APC app is the app's own (TIN-476): its target keeps the drop, and a drop on its text
+    // outside any target, which the app leaves alone, still gets no reading and no pin from the extension.
+    const { targetId: apcId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/apc") });
+    const { sessionId: apc } = await cdp("Target.attachToTarget", { targetId: apcId, flatten: true });
+    await sleep(2500);
+    const dropOn = async (sid, sel) => {
+      const at = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, sid)).result.value;
+      const data = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+      for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data }, sid);
+      await sleep(2000);
+    };
+    await dropOn(apc, "#app");
+    assert.equal((await cdp("Runtime.evaluate", { expression: `document.getElementById("app").textContent`, returnByValue: true }, apc)).result.value, "app took it");
+    await dropOn(apc, "#note");
+    assert.equal((await pinNodes(apc)).states.length, 0, "no pin from the extension on an APC app");
     assert.match((await tool("page__get_reading")).structuredContent.page_text, /SPRING/);
-    console.log("3. a page that takes the drop keeps it; no reading");
+    await cdp("Target.closeTarget", { targetId: apcId });
+    console.log("3. on an APC app the app keeps the drop, and the extension sends nothing and pins nothing");
 
     // 4. A drag naming another hub is refused in the page.
     await drag("#a", JSON.stringify({ v: 1, agent: agent.id, hub: "https://evil.example", ticket: "x".repeat(32) }));
