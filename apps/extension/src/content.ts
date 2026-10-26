@@ -3,9 +3,11 @@
  * page take the agent the person drags from their dock or Float. An APC app handles its own drops
  * first, so this listens on window in the bubble phase and steps back when the page took the drop.
  * On any other page it reads the block of text at the drop point and hands it to the service worker.
+ * When the service worker needs the person's consent for the site (TIN-465, 13.3), a card where the
+ * agent was dropped asks, and the answer goes back with the same drop.
  */
 import { APC_AGENT_TYPE, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
-import { hubAllowed, STATUS_TEXT, type DropStatus } from "./drop.ts";
+import { hubAllowed, STATUS_TEXT, type Consent, type DropStatus } from "./drop.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
@@ -54,10 +56,16 @@ function listen(): void {
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
     if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock");
     const reading = readAt(e.clientX, e.clientY);
-    chrome.runtime
-      .sendMessage<{ status: DropStatus }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading })
-      .then((r) => say(r?.status ?? "error"))
-      .catch(() => say("error"));
+    const send = (consent?: Consent) =>
+      chrome.runtime
+        .sendMessage<{ status: DropStatus }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
+        .then((r) => {
+          const status = r?.status ?? "error";
+          if (status === "consent" || status === "consent_sensitive") ask(status, e.clientX, e.clientY, send);
+          else say(status);
+        })
+        .catch(() => say("error"));
+    void send();
   });
   // The service worker's later word, once the person answered in the dock.
   chrome.runtime.onMessage.addListener((m) => {
@@ -101,6 +109,46 @@ function headingBefore(el: Element): string | null {
     else break;
   }
   return found ? ((found as HTMLElement).innerText ?? found.textContent ?? "").trim().slice(0, 200) || null : null;
+}
+
+/**
+ * The consent card (13.3), where the agent was dropped, in a closed shadow root. Its buttons take
+ * trusted clicks only. A sensitive site gets Send and Not now, never Always.
+ */
+function ask(status: "consent" | "consent_sensitive", x: number, y: number, send: (c: Consent) => void): void {
+  const host = document.createElement("div");
+  const root = host.attachShadow({ mode: "closed" });
+  const card = document.createElement("div");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-label", "APC");
+  const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
+  const top = Math.max(8, Math.min(y + 12, innerHeight - 150));
+  card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
+  const text = document.createElement("p");
+  text.style.cssText = "margin:0 0 10px";
+  text.textContent = STATUS_TEXT[status];
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
+  const choices: Array<[Consent | null, string]> = status === "consent_sensitive" ? [["once", "Send"], [null, "Not now"]] : [["once", "Just this once"], ["always", "Always on this site"], ["never", "Not here"]];
+  const close = () => host.remove();
+  for (const [consent, label] of choices) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.dataset.apcConsent = consent ?? "dismiss";
+    b.style.cssText = `font:inherit;padding:5px 10px;border-radius:7px;cursor:pointer;border:1px solid ${consent === "once" ? "#d4733a" : "#555"};background:${consent === "once" ? "#d4733a" : "transparent"};color:#fff`;
+    b.addEventListener("click", (ev) => {
+      // A page can click a button by script; only the person's own click counts.
+      if (!ev.isTrusted) return;
+      close();
+      if (consent) send(consent);
+    });
+    row.append(b);
+  }
+  card.append(text, row);
+  root.append(card);
+  document.documentElement.append(host);
+  setTimeout(close, 45_000);
 }
 
 /** A short note in the page's corner, in its own shadow root so the page's styles cannot touch it. */

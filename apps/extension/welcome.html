@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APC: point your agent at any page</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #faf8f5; --fg: #1f1f1f; --muted: #6b6b6b; --accent: #d4733a; --line: #e2ddd6; --card: #fff; --warn: #a23b1d; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #161514; --fg: #f1efec; --muted: #a39f99; --line: #34312d; --card: #1f1e1c; --warn: #f08a6a; } }
+      body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, sans-serif; }
+      main { max-width: 640px; margin: 0 auto; padding: 48px 16px 64px; display: grid; gap: 20px; }
+      h1 { font-size: 26px; margin: 0; line-height: 1.25; }
+      h2 { font-size: 16px; margin: 0 0 6px; }
+      p { margin: 0; }
+      .muted { color: var(--muted); }
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; display: grid; gap: 10px; }
+      ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+      button { font: inherit; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; justify-self: start; }
+      button:disabled { opacity: .6; cursor: default; }
+      label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+      input[type="radio"] { margin-top: 4px; accent-color: var(--accent); }
+      .warn { color: var(--warn); }
+      .ok { color: #2e8b57; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Point your agent at any page</h1>
+      <p>Drag your agent from your APC dock or Float onto anything on a web page, and ask it about "this". The extension reads the block of text you dropped it on and hands it to your agent through your dock.</p>
+
+      <section class="card">
+        <h2>1. Let pages take your agent</h2>
+        <p>So any page can notice the drop, the extension needs access to the pages you visit. It does nothing with them until you drop your agent on one: it only listens for that drop. Chrome will warn that it can "read and change" your data on all sites; you can turn this off at any time.</p>
+        <button type="button" id="grant">Let me drop my agent on any page</button>
+        <p id="granted" class="ok" hidden>Done: you can drop your agent on any page.</p>
+        <p class="muted">Prefer to choose site by site? Skip this, then use the extension's icon on each site you want.</p>
+      </section>
+
+      <section class="card">
+        <h2>2. When to ask you</h2>
+        <label><input type="radio" name="mode" value="ask" /> <span><b>Ask the first time on each site</b> (recommended). A card asks where you drop: <i>Just this once</i>, <i>Always on this site</i> or <i>Not here</i>. Bank, email, health and government sites ask every time.</span></label>
+        <label><input type="radio" name="mode" value="never_ask" /> <span><b>Never ask.</b> <span class="warn">Every drop is sent to your agent at once, on any site, including your bank, your email and health sites.</span> You still have to drop your agent: nothing is sent without that.</span></label>
+      </section>
+
+      <section class="card">
+        <h2>3. The first drop</h2>
+        <ol>
+          <li>Drag your agent from the dock or Float onto a paragraph.</li>
+          <li>The first time, your dock asks you to allow this browser: click <b>Allow</b> there.</li>
+          <li>Ask your agent "what is this?".</li>
+        </ol>
+        <p class="muted">What you drop your agent on goes to your agent through your dock, which keeps it 10 minutes and never logs it. Your agent is told it is page text, never instructions.</p>
+      </section>
+    </main>
+    <script type="module" src="welcome.js"></script>
+  </body>
+</html>

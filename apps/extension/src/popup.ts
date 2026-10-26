@@ -1,22 +1,34 @@
 /**
- * The toolbar popup (TIN-421, DESIGN.md 13.3): grant or revoke the current site, the granted sites,
- * the last drop's outcome, and the docks this browser sends readings to. Granting injects the
- * content script into the current tab at once, so the page needs no reload.
+ * The toolbar popup (TIN-421, TIN-465, DESIGN.md 13.3): this site's choice, the one grant for any page,
+ * "Never ask", the sites the person chose for, the last drop's outcome, and the docks this browser
+ * sends readings to. Asking Chrome for a grant closes the popup; the service worker injects the
+ * content script into the open tabs then.
  */
-import { hubPatterns, sitePattern, STATUS_TEXT, type DropStatus } from "./drop.ts";
+import { ANY_PAGE, grantedAlone, hubPatterns, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}) => Object.assign(document.createElement(tag), props);
+
+function button(label: string, onClick: () => void, primary = false): HTMLButtonElement {
+  const b = el("button", { type: "button", textContent: label, className: primary ? "primary" : "" });
+  b.addEventListener("click", onClick);
+  return b;
+}
 
 function item(label: string, action: string, onClick: () => void): HTMLLIElement {
-  const li = document.createElement("li");
-  const span = document.createElement("span");
-  span.textContent = label;
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = action;
-  button.addEventListener("click", onClick);
-  li.append(span, button);
+  const li = el("li");
+  li.append(el("span", { textContent: label }), button(action, onClick));
   return li;
+}
+
+const hostOf = (origin: string) => new URL(origin).host;
+
+async function setChoice(origin: string, choice: SiteChoice | null): Promise<void> {
+  const sites = ((await chrome.storage.local.get("sites")).sites ?? {}) as Record<string, SiteChoice>;
+  if (choice) sites[origin] = choice;
+  else delete sites[origin];
+  await chrome.storage.local.set({ sites });
+  void render();
 }
 
 async function render(): Promise<void> {
@@ -24,31 +36,51 @@ async function render(): Promise<void> {
   const site = sitePattern(tab?.url);
   const docks = new Set(hubPatterns(__APC_DEV__));
   const { origins = [] } = await chrome.permissions.getAll();
-  const granted = origins.filter((o) => !docks.has(o));
+  const anyPage = ANY_PAGE.every((o) => origins.includes(o));
+  const alone = origins.filter((o) => !docks.has(o) && !ANY_PAGE.includes(o));
+  const stored = await chrome.storage.local.get(["mode", "sites", "last", "readers"]);
+  const mode = (stored.mode as Mode | undefined) ?? "ask";
+  const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
 
+  // This site: its choice, or how to let the agent be dropped here.
   const here = $("here");
   here.replaceChildren();
   if (!site || docks.has(site.pattern)) {
-    here.append(Object.assign(document.createElement("p"), { className: "muted", textContent: site ? "This is your dock: drag your agent from here onto other pages." : "Open a web page to let your agent read it." }));
-  } else if (granted.includes(site.pattern)) {
-    here.append(Object.assign(document.createElement("p"), { textContent: `Your agent may read ${new URL(site.origin).host}. Drag it here from your dock or Float.` }));
+    here.append(el("p", { className: "muted", textContent: site ? "This is your dock: drag your agent from here onto other pages." : "Open a web page to drop your agent on it." }));
+  } else if (!anyPage && !grantedAlone(site.origin, alone)) {
+    here.append(el("p", { textContent: `Your agent cannot be dropped on ${hostOf(site.origin)} yet.` }), el("div", { className: "row" }));
+    here.lastElementChild!.append(button(`Allow on ${hostOf(site.origin)}`, () => void chrome.permissions.request({ origins: [site.pattern] }).then(render), true));
   } else {
-    const button = Object.assign(document.createElement("button"), { type: "button", className: "primary", textContent: `Let your agent read pages on ${new URL(site.origin).host}` });
-    button.addEventListener("click", async () => {
-      if (!(await chrome.permissions.request({ origins: [site.pattern] }))) return;
-      if (typeof tab?.id === "number") await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] }).catch(() => {});
-      void render();
-    });
-    here.append(button);
+    const sensitive = isSensitive(hostOf(site.origin));
+    const choice = sites[site.origin] ?? (grantedAlone(site.origin, alone) ? "always" : undefined);
+    here.append(el("p", { textContent: `On ${hostOf(site.origin)}: ${mode === "never_ask" ? "every drop is sent (Never ask is on)." : choice === "never" ? "drops are not sent." : sensitive ? "a sensitive site, so every drop asks." : choice === "always" ? "every drop is sent." : "the first drop asks."}` }));
+    const row = el("div", { className: "row" });
+    if (!sensitive) row.append(button("Always", () => void setChoice(site.origin, "always"), choice === "always"));
+    row.append(button("Ask", () => void setChoice(site.origin, null), !choice), button("Not here", () => void setChoice(site.origin, "never"), choice === "never"));
+    if (mode !== "never_ask") here.append(row);
   }
 
-  $("sites").replaceChildren(
-    ...(granted.length
-      ? granted.map((pattern) => item(pattern.replace(/\/\*$/, "").replace(/^https?:\/\//, ""), "Revoke", () => void chrome.permissions.remove({ origins: [pattern] }).then(render)))
-      : [Object.assign(document.createElement("li"), { className: "muted", textContent: "None yet." })]),
-  );
+  // The one grant for any page.
+  const any = $("any");
+  any.replaceChildren(el("h2", { textContent: "Any page" }));
+  if (anyPage) {
+    any.append(el("p", { textContent: "Your agent can be dropped on any page." }), el("div", { className: "row" }));
+    any.lastElementChild!.append(button("Turn off", () => void chrome.permissions.remove({ origins: ANY_PAGE }).then(render)));
+  } else {
+    any.append(el("p", { className: "muted", textContent: "Let any page take your agent, instead of allowing sites one by one. Each new site still asks on the first drop." }), el("div", { className: "row" }));
+    any.lastElementChild!.append(button("Let me drop my agent on any page", () => void chrome.permissions.request({ origins: ANY_PAGE }).then(render), true));
+  }
 
-  const stored = await chrome.storage.local.get(["last", "readers"]);
+  const neverAsk = $("never-ask") as HTMLInputElement;
+  neverAsk.checked = mode === "never_ask";
+  neverAsk.onchange = () => void chrome.storage.local.set({ mode: neverAsk.checked ? "never_ask" : "ask" }).then(render);
+
+  const rows = [
+    ...Object.entries(sites).map(([origin, c]) => item(`${hostOf(origin)} · ${c === "always" ? "always" : "not here"}`, "Remove", () => void setChoice(origin, null))),
+    ...alone.filter((p) => !(p.replace(/\/\*$/, "") in sites)).map((p) => item(`${p.replace(/\/\*$/, "").replace(/^https?:\/\//, "")} · allowed by itself`, "Revoke", () => void chrome.permissions.remove({ origins: [p] }).then(render))),
+  ];
+  $("sites").replaceChildren(...(rows.length ? rows : [el("li", { className: "muted", textContent: "None yet: your choices on the first drop show here." })]));
+
   const last = stored.last as { at: string; site: string; status: DropStatus } | undefined;
   $("last").textContent = last ? `${last.site}, ${new Date(last.at).toLocaleTimeString()}: ${STATUS_TEXT[last.status] ?? last.status}` : "None yet.";
   const readers = (stored.readers ?? {}) as Record<string, string>;
@@ -63,7 +95,7 @@ async function render(): Promise<void> {
             void render();
           });
         })
-      : [Object.assign(document.createElement("li"), { className: "muted", textContent: "None yet: the first drop of an agent asks its dock." })]),
+      : [el("li", { className: "muted", textContent: "None yet: the first drop of an agent asks its dock." })]),
   );
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, hubAllowed, hubPatterns, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
+import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://v2.apc.tineira.com", false), true);
@@ -31,5 +31,30 @@ test("a site to grant is an http(s) page's origin as a match pattern", () => {
 
 test("one reader token per dock and agent, and a note for every outcome", () => {
   assert.equal(readerKey("https://v2.apc.tineira.com", "ag_1234"), "https://v2.apc.tineira.com ag_1234");
-  for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error"] as const) assert.ok(STATUS_TEXT[s].length > 0);
+  for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error", "consent", "consent_sensitive", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
+});
+
+test("sensitive sites: mail hosts, government hosts, and hosts naming a bank or health service (TIN-465)", () => {
+  for (const h of ["mail.google.com", "www.sii.gob.cl", "www.gov.uk", "portal.bancochile.cl", "www.bankofamerica.com", "www.clinicaalemana.cl", "www.isapre-colmena.cl", "www.mayoclinic.org", "online.santander-bank.example"]) assert.equal(isSensitive(h), true, h);
+  for (const h of ["en.wikipedia.org", "news.ycombinator.com", "127.0.0.1:8080", "docs.google.com", "github.com"]) assert.equal(isSensitive(h), false, h);
+});
+
+test("a drop is sent, asks or is refused by mode, site choice and sensitivity (TIN-465)", () => {
+  assert.equal(decide("ask", undefined, false, false), "ask");
+  assert.equal(decide("ask", "always", false, false), "send");
+  assert.equal(decide("ask", undefined, false, true), "send", "a site granted by itself counts as Always");
+  assert.equal(decide("ask", "never", false, true), "blocked");
+  assert.equal(decide("ask", "always", true, true), "ask_sensitive", "a sensitive site always asks");
+  assert.equal(decide("ask", "never", true, false), "blocked");
+  assert.equal(decide("never_ask", "never", true, false), "send", "never ask sends everything");
+  assert.equal(decide("never_ask", undefined, true, false), "send");
+});
+
+test("a site granted by itself matches by scheme and host, whatever the port; the grant for any page does not count (TIN-465)", () => {
+  assert.equal(grantedAlone("http://127.0.0.1:61234", ["http://127.0.0.1/*"]), true);
+  assert.equal(grantedAlone("https://en.wikipedia.org", ["https://en.wikipedia.org/*"]), true);
+  assert.equal(grantedAlone("http://en.wikipedia.org", ["https://en.wikipedia.org/*"]), false);
+  assert.equal(grantedAlone("https://es.wikipedia.org", ["https://*.wikipedia.org/*"]), true);
+  assert.equal(grantedAlone("https://es.wikipedia.org", ["https://*/*", "http://*/*"]), false);
+  assert.equal(grantedAlone("https://evilwikipedia.org", ["https://*.wikipedia.org/*"]), false);
 });
