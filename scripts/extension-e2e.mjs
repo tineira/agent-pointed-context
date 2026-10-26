@@ -95,14 +95,21 @@ const PAGE = `<!doctype html><title>Churn notes</title><h1>Churn notes</h1><h2>E
 <p id="a">Churn in EU-West rose 4.2% in March, after the Nimbus offer.</p>
 <p id="b">Signups from the SPRING code were mostly Pro.</p>
 <input id="secret" value="hunter2">
-<div id="app" style="padding:30px;background:#eef">APC app area</div>
+<div id="app" data-focus="figure:kpi" style="padding:30px;background:#eef">APC app area</div>
 <script>
 const app = document.getElementById("app");
 app.addEventListener("dragover", (e) => e.preventDefault());
 app.addEventListener("drop", (e) => { e.preventDefault(); app.textContent = "app took it"; });
 </script>`;
 // Every host name gets the same page: *.localhost names (Chrome resolves them to this machine) are separate sites.
-const server = createServer((_, res) => res.writeHead(200, { "content-type": "text/html" }).end(PAGE)).listen(0, "::");
+// A page like X: its text in divs and spans, and drag handlers of its own (for attaching files) that
+// take every dragover with "copy", which would refuse the agent's "link" drag.
+const BUSY = `<!doctype html><title>Busy feed</title><main><div class="post"><div><span>Nimbus cut its Pro price by 30% in EU-West</span></div></div></main>
+<script>
+addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+addEventListener("drop", (e) => e.preventDefault());
+</script>`;
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -430,6 +437,24 @@ try {
     const forged = await request("forged reader", `${DOCK}/apc/reader`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ ticket: await ticket(), agent: agent.id, label: "evil" }) });
     assert.equal(forged.body.error, "reader_not_allowed");
     console.log("5. a page's origin cannot ask for a reader");
+
+    // 5b. A page built of divs and spans that takes every drag for its own sake (as X does) still takes the agent.
+    const { targetId: busyId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/busy") });
+    const { sessionId: busy } = await cdp("Target.attachToTarget", { targetId: busyId, flatten: true });
+    await sleep(2500);
+    const busyAt = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector(".post span").getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`, returnByValue: true }, busy)).result.value;
+    const busyData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: busyAt.x, y: busyAt.y, data: busyData }, busy);
+    const busyReading = await until("the reading of the busy page's post", async () => {
+      const r = (await tool("page__get_reading")).structuredContent;
+      return /Nimbus cut its Pro price/.test(r?.page_text ?? "") ? r : null;
+    });
+    assert.equal(busyReading.reading.element.tag, "div");
+    await cdp("Target.closeTarget", { targetId: busyId });
+    // Back to the SPRING reading the steps below expect.
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("5b. a page of divs that takes every drag for its own sake still takes the agent");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });

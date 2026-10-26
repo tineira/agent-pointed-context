@@ -372,13 +372,13 @@ Not verified: drags from the dock or Float on macOS and Linux.
 
 ### 13.2 Two kinds of target
 
-- **An APC app** handles the drop itself: `enablePinning` calls `preventDefault()`, then pairs and pins as in section 12. The extension sees `defaultPrevented` and does nothing.
+- **An APC app** handles the drop itself: `enablePinning` calls `preventDefault()`, then pairs and pins as in section 12. The extension sees `defaultPrevented` on a page with APC targets (`data-focus`) and does nothing. Only there: other pages take drags for their own sake (X does, for attaching files) with their own drop effect, and stepping back on those refused the agent (TIN-472), so elsewhere the extension takes the agent's drop and answers `link` whatever the page did.
 - **Any other page** gets a **page reading**: what the person pointed at, taken by the extension and delivered as data. It is a different trust model from a pin. A pin names a target that the agent then reads through the app's own tools, with the access the app granted. A reading is the text the extension saw, nothing more, with no tools behind it. So the dock and the agent's results call it a reading, not a pin, and draw it differently.
 
 A reading holds:
 
 - the page's origin and path (no query string or fragment, which often carry tokens) and its title;
-- the nearest block element at the drop point (a paragraph, list item, cell, heading, quote, link, button or label): its role, accessible name and visible text (up to 2 KB), and the nearest h1 to h3 above it. Math and images give their alternative text (`alttext`, `alt`), not their rendered glyphs;
+- the nearest block element at the drop point (a paragraph, list item, cell, heading, quote, link, button or label; on pages built of divs and spans, such as X, the nearest box with text that is not most of the page, TIN-472): its role, accessible name and visible text (up to 2 KB), and the nearest h1 to h3 above it. Math and images give their alternative text (`alttext`, `alt`), not their rendered glyphs;
 - the person's selection, if any (up to 2 KB);
 - in a table cell, the column header and the row's first cell.
 
