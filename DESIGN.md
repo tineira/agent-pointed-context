@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Cut 1 live at https://apc.tineira.com since 2026-10-15. Open work in GitHub issues. |
+| **Status** | Cut 1 live at https://apc.tineira.com since 2026-10-15. This document records what is built and why (section 11, Decisions); it holds no plans. Public open work: [GitHub issues](https://github.com/tineira/agent-pointed-context/issues). The maintainer's own plans are tracked privately. |
 | **Paper** | T. Neira, *Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen*, 2026. https://doi.org/10.5281/zenodo.23382909 |
 | **Spec** | Companion record, `04-payload-specification.md`. https://doi.org/10.5281/zenodo.23383101 |
 | **License** | MIT (code). The paper is CC BY 4.0. |
@@ -237,7 +237,7 @@ The hub learns about pins with v1's own tool. While the dock is open, the hub ke
 
 The app's `seen_at` now means "the hub received it"; the hub logs the agent's own `seen`.
 
-Later, an optional doorbell cuts latency and held requests: after a pin, the app's server sends `POST {hub}/apc/ring { app, agent }` with a token from pairing. It carries no target; the hub reads the focus as before.
+Not built: an optional doorbell would cut latency and held requests. After a pin, the app's server would send `POST {hub}/apc/ring { app, agent }` with a token from pairing. It would carry no target; the hub would read the focus as before.
 
 ### 12.3 Tool names and the app on the focus
 
@@ -295,7 +295,7 @@ Everything below is **additive and opt-in**, so v1 stays on 0.2.
 
 **Breaking, and avoided:** prefixing tool names inside apps, keying `FocusRow` by app, or requiring OAuth instead of the secret URL. Any of these would make it APC 0.3.
 
-### 12.8 Phases
+### 12.8 What's built
 
 1. **TIN-369 (shipped 2026-10-25):** native drops in `@apc/web`, opt-in. Pulse turns them on only when opened with `?apc=v2`, so v1 is unchanged.
 2. **TIN-370:** the web-window dock and a hub Durable Object in `apps/dock`. One agent connects to the hub. The first drags can land on apc.tineira.com with `?apc=v2` (drops only, onto agents of that sandbox); pairing (`/apc/pair`) runs only on a Pulse under apc-v2, never on apc.tineira.com. That Pulse is `apps/demo` deployed a second time inside apc-v2 with a v2 flag (drops and `/apc/pair` on), not imported into `apps/dock`, so v2 does not depend on v1's internals. The hub watches with v1 `wait_for_focus`; it exposes only `call_app_tool` (prefixed tools wait for phase 3), and `next` uses it. Newest pin wins, and a pairing needs both yeses, as above.
@@ -338,7 +338,7 @@ Everything below is **additive and opt-in**, so v1 stays on 0.2.
    **Pulse for desktop (TIN-396).** An installed app takes the dock's agent too: `apps/desktop`, Pulse's figures in Avalonia (.NET 8), built for Windows by the Desktop workflow as one self-contained `PulseDesktop.exe`. It is a client of Pulse's v2 deploy, not a second Pulse: it opens a sandbox the way the page does (on the dock's world when given the dock's Pulse link or seed), reads the data from `/api/s/:sid/dataset` (v2 deploy only) and computes the figures as `figures.ts` does, keeps the page's WebSocket heartbeat (so the person counts as on Pulse and the app hears every pin and read), and pairs and pins through the same `/hub/pair`, after the same consent. Each bridge step, each month bar, the whole chart and each customer row is a target, with the page's target names, so the agent cannot tell the app from the page.
    - **Reading the drag.** A browser does not hand a custom type to another app under its own name: Chrome and Edge pack every custom type of a drag into one OLE clipboard format, `Chromium Web Custom MIME Data Format` (a Chromium pickle: a uint32 size, a uint32 count, then UTF-16 type and data pairs, each padded to four bytes). The app reads `application/x-apc-agent` out of it, or takes the type directly from a native source. Its tests hold a pickle captured from a real Chromium drag.
    - **Linux and macOS (TIN-398, TIN-399).** Chromium gives the same pickle on X11 as `chromium/x-web-custom-data`, and the app already reads it, but Avalonia 11's X11 backend takes no drops from other apps (tested under Xvfb: the drag reaches the window, no drag event fires). The Linux app needs another drop path.
-4. The extension with a local hub, OAuth pairing and the ring doorbell. **Redesigned in section 13 (TIN-395):** the extension only receives drags from the dock and Float, on the dock's cloud hub; a local hub comes only if it is needed.
+4. The first plan here (an extension with a local hub, OAuth pairing and a ring doorbell) was **redesigned in section 13 (TIN-395):** the extension only receives drags from the dock and Float, on the dock's cloud hub.
 
 ## 13. A browser extension: the agent on any page (TIN-395)
 
@@ -395,7 +395,7 @@ A drop is always the gesture: nothing leaves a page unless the person drops thei
 - **Sensitive sites always ask.** On a sensitive site the card offers only **Send** and **Not now**, never Always. A site is sensitive by its domain alone: a government domain (a `gov`, `gob` or `mil` label, as in `sii.gob.cl` or `gov.uk`) or the restricted `.bank` and `.insurance` TLDs, which only verified institutions can register. Nothing is guessed from a site's name (TIN-478): the first rule did, with a few mail hosts and words like "bank" or "salud", and missed most real banks and payment sites (santander.cl, bci.cl, paypal.com, sii.cl…); no list could keep that promise, so the extension makes none. Instead the person sets any site to **Always ask** from the popup, and removes it from the popup's list.
 - **"Never ask", opt-in.** Off by default, switched on in the welcome page or the popup after a warning that says what it means: every drop is sent at once, on any site, sensitive ones included. It removes the questions, not the drop.
 - **The card lives in the page**, in a closed shadow root, and its buttons take trusted clicks only. A page could still try to trick the person into Send or Always. What it gets is its own text going to the person's agent, which arrives marked untrusted anyway (13.4), and Always on that site, which still needs the person's drop each time.
-- **Every reading is visible.** The popup and the agent's page in the dock (TIN-419) list each reading sent (site, time and size) with Clear (TIN-422).
+- **Every reading is visible.** The popup and the agent's page in the dock (TIN-419) will list each reading sent (site, time and size) with Clear. Not built yet (TIN-422).
 
 ### 13.4 Injection
 
@@ -415,7 +415,7 @@ Page text is untrusted data: any page can carry instructions aimed at an agent. 
 
 **Presence.** The extension reports no presence: on pages without APC there is no `then` or `page_open`, so nobody learns which sites the person visits. A new reading reaches the agent as `attention` on its next hub call, as an unread pin does.
 
-**A local hub** (native messaging to a process on the person's machine) comes later, and only if keeping page text on the person's machine turns out to matter to them. It needs the desktop component that TIN-396 to TIN-399 are building anyway.
+**A local hub** (native messaging to a process on the person's machine) is not built. It would come only if keeping page text on the person's machine turns out to matter to them (TIN-424), and would need a desktop component like Pulse for desktop (TIN-396).
 
 ### 13.6 Dock, Float and the extension
 
@@ -425,7 +425,7 @@ Page text is untrusted data: any page can carry instructions aimed at an agent. 
 
 The dock window and Float stay the only places an agent is dragged from, in every browser. The extension adds no UI to drag from. It only makes pages take the drop and keeps its settings in the toolbar popup. Without the extension, everything in section 12 works as before; drops on pages without APC simply do nothing.
 
-### 13.7 Phases
+### 13.7 What's built
 
 1. **Receive and read (TIN-421).** The content script answers `link`, highlights and confirms, and leaves APC apps alone. Per-site grants come from the popup. Pairing happens on the first drop, with `/apc/reader`, the dock's Allow and `READER_ORIGINS`. The reading (13.2) is pushed on drop, and the hub's `page` app serves `page__get_reading`. Automated tests load the extension over the DevTools Protocol.
 
@@ -437,8 +437,5 @@ The dock window and Float stay the only places an agent is dragged from, in ever
    - **Consent moved to the drop (TIN-465, 2026-10-26).** The welcome page, the card in the page, Never ask and the built-in sensitive list are 13.3. A site granted by itself counts as Always by scheme and host, whatever the port, as Chrome's match patterns do. `scripts/extension-e2e.mjs --consent` clicks the card with real mouse events through its closed shadow root: Just this once, Always, Not here, a sensitive site (`bank.localhost`) and Never ask; it passed in Chrome 156 and Edge 156 against v2.apc.tineira.com.
    - **The extension sends a reading once more** on a network error or a 5xx; the same reading again only replaces it. The dock's dev server on Windows fails a request now and then before it reaches the Worker (vite answers 500, "fetch failed"), and without the retry a drop was sometimes lost.
    - **`scripts/extension-e2e.mjs`** runs the whole path in a real Chrome or Edge, with the drags sent through the DevTools Protocol (`Input.dispatchDragEvent`, so the page sees trusted events): the first drop asks the dock and delivers the reading after Allow, the next goes straight through, a page that takes the drop keeps it, a drag naming an unknown hub sends nothing, a page's `Origin` cannot ask for a reader, and after Unpair the next drop asks again. It passed in Chrome 156 and Edge 156 against the local dock.
-2. **Readings visible and complete (TIN-422).** The lists of readings in the popup and the dock, with Clear. Table context, headings, alternative text for math and images. The README's storage section. A check that the hub never logs a reading's text.
-3. **Sensitive sites and the stores (TIN-423).** Asking on every drop shipped with TIN-465, and sensitive by domain plus Always ask per site with TIN-478 (13.3); left: a preview of what will be sent, then the Chrome Web Store and Edge Add-ons listings and their reviews.
-4. **Only if needed (TIN-424):** a local hub over native messaging, and OAuth pairing.
 
-Firefox comes after phase 1 works in Chrome and Edge (TIN-425).
+Not built yet, each tracked in its own issue: the lists of readings with Clear and a complete reading (TIN-422); a preview of what will be sent, and the Chrome Web Store and Edge Add-ons listings (TIN-423); a local hub over native messaging and OAuth pairing, only if needed (TIN-424); Firefox (TIN-425).
