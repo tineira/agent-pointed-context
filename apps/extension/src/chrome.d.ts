@@ -55,7 +55,7 @@ declare namespace chrome {
       id?: number;
       url?: string;
     }
-    function query(q: { active?: boolean; currentWindow?: boolean }): Promise<Tab[]>;
+    function query(q: { active?: boolean; currentWindow?: boolean; url?: string | string[] }): Promise<Tab[]>;
     function sendMessage(tabId: number, message: unknown): Promise<unknown>;
   }
 }

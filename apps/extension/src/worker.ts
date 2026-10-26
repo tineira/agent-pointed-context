@@ -18,9 +18,12 @@ interface Drop {
   reading: unknown;
 }
 
-chrome.runtime.onInstalled.addListener(() => void syncScripts());
+// A registered content script reaches only pages loaded after it, so the tabs already open on a granted
+// site get it injected too: when the person grants the site (the permission prompt closes the popup,
+// so the popup cannot do it) and when the extension is installed or updated.
+chrome.runtime.onInstalled.addListener(() => void syncScripts().then(() => injectOpenTabs()));
 chrome.runtime.onStartup.addListener(() => void syncScripts());
-chrome.permissions.onAdded.addListener(() => void syncScripts());
+chrome.permissions.onAdded.addListener((p) => void syncScripts().then(() => injectOpenTabs(p.origins)));
 chrome.permissions.onRemoved.addListener(() => void syncScripts());
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
@@ -42,6 +45,16 @@ async function syncScripts(): Promise<void> {
   }
   const script = { id: SCRIPT_ID, js: ["content.js"], matches, runAt: "document_idle" as const, allFrames: false, persistAcrossSessions: true };
   await (existing.length ? chrome.scripting.updateContentScripts([script]) : chrome.scripting.registerContentScripts([script]));
+}
+
+/** Inject the content script into the open tabs on granted sites (all granted sites when none are given). */
+async function injectOpenTabs(origins?: string[]): Promise<void> {
+  const docks = new Set(hubPatterns(__APC_DEV__));
+  const patterns = (origins ?? (await chrome.permissions.getAll()).origins ?? []).filter((o) => !docks.has(o));
+  if (!patterns.length) return;
+  for (const tab of await chrome.tabs.query({ url: patterns })) {
+    if (typeof tab.id === "number") await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] }).catch(() => {});
+  }
 }
 
 async function handleDrop(m: Drop, tabId: number): Promise<DropStatus> {
