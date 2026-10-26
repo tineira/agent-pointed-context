@@ -88,6 +88,8 @@ export function HubDock() {
   }, [setupDone]);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
 
+  // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
+  const [reopen, setReopen] = useState(0);
   useEffect(() => {
     // The strip only resumes the dock its window opened, and waits for it on a first run (#84).
     let retry = 0;
@@ -98,10 +100,19 @@ export function HubDock() {
       );
     void open();
     return () => clearTimeout(retry);
-  }, []);
+  }, [reopen]);
   const base = did ? `/api/d/${did}` : null;
   const refresh = useCallback(() => {
-    if (base) call<DockState>(`${base}/state`).then(setState, (e: unknown) => setError(String(e)));
+    if (!base) return;
+    call<DockState>(`${base}/state`).then(setState, (e: unknown) => {
+      // The desktop app stays open for days, so its windows open the dock again when it is gone (403
+      // without the cookie, 404 once expired): the strip waits for the dock window's new one.
+      if ((STRIP || DESKTOP_SHELL) && /: 40[34]$/.test(String(e))) {
+        setDid(null);
+        setState(null);
+        setReopen((n) => n + 1);
+      } else setError(String(e));
+    });
   }, [base]);
 
   // Live: the hub says "state" on every change; the page pings so the hub knows the dock is open.
@@ -114,7 +125,13 @@ export function HubDock() {
     const open = () => {
       ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
       ws.onmessage = (e) => e.data !== "pong" && refresh();
-      ws.onclose = () => !closed && setTimeout(open, 2000);
+      // The hub closes the socket when the dock goes (Start over, expiry): reading the state again then
+      // shows it, which the desktop app's windows need to open the dock again.
+      ws.onclose = () => {
+        if (closed) return;
+        refresh();
+        setTimeout(open, 2000);
+      };
     };
     open();
     ping = window.setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send("ping"), 30_000);

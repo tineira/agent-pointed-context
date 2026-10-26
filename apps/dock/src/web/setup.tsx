@@ -87,18 +87,11 @@ export function ConnectAgent(props: { agent: SetupAgent }) {
 }
 
 /**
- * The APC dock for Windows (#84) loads the dock in its own windows: the dock with ?shell=desktop (kept
- * for the session, since the dock's own links drop the query), which needs no Install or Float, and
- * its always-on-top strip with ?view=strip.
+ * The APC dock for Windows (#84) loads the dock in its own windows: the dock, marked by a script the
+ * app runs on every load (so it holds through Start over), which needs no Install or Float, and its
+ * always-on-top strip with ?view=strip.
  */
-export const DESKTOP_SHELL = (() => {
-  try {
-    if (new URLSearchParams(location.search).get("shell") === "desktop") sessionStorage.setItem("apc-shell", "desktop");
-    return sessionStorage.getItem("apc-shell") === "desktop";
-  } catch {
-    return false;
-  }
-})();
+export const DESKTOP_SHELL = (window as { __APC_SHELL__?: string }).__APC_SHELL__ === "desktop";
 /** The global shortcut the desktop dock registers (SHORTCUT in apps/dock-desktop/src/main.rs). */
 export const DESKTOP_SHORTCUT = "Alt+Shift+Space";
 

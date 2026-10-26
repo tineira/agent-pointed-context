@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.tineira.apc.dock",
   "build": {
-    "frontendDist": "https://v2.apc.tineira.com/dock?shell=desktop"
+    "frontendDist": "https://v2.apc.tineira.com/dock"
   },
   "app": {
     "windows": [],

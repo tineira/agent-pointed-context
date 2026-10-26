@@ -24,23 +24,32 @@ fn origin() -> Url {
     Url::parse(&dock).expect("APC_DOCK_ORIGIN is a URL")
 }
 
-/// The dock page with this query: shell=desktop for the dock's window, view=strip for the strip.
-fn page(query: &str) -> Url {
+/// The dock page, or with view=strip the strip.
+fn page(query: Option<&str>) -> Url {
     let mut url = origin();
     url.set_path("/dock");
-    url.set_query(Some(query));
+    url.set_query(query);
     url
 }
 
 /// Whether a window may go to this address: the dock's own pages stay; a link out of the dock
 /// (Pulse, Signals, the Pulse for desktop download) opens in the person's browser instead.
+/// Any other address (file:, mailto:, an app's own scheme) goes nowhere.
 fn stays(url: &Url) -> bool {
-    if !matches!(url.scheme(), "http" | "https") || url.origin() == origin().origin() {
-        return true;
+    match url.scheme() {
+        "about" | "blob" => true,
+        "http" | "https" if url.origin() == origin().origin() => true,
+        "http" | "https" => {
+            let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+            false
+        }
+        _ => false,
     }
-    let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
-    false
 }
+
+/// Tells the dock page it is in this app on every load (it then hides Install and Float), and takes
+/// "/" back to the dock: Start over clears the page's storage and goes to "/", the web landing.
+const SHELL_SCRIPT: &str = r#"window.__APC_SHELL__ = "desktop"; if (location.pathname === "/") location.replace("/dock");"#;
 
 /// A window on the dock page. The webview keeps HTML drag and drop (Tauri's own drop handler is off),
 /// so dragging an agent out of it is the page's drag, as in Chrome or Edge.
@@ -58,7 +67,8 @@ fn dock(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     if let Some(w) = app.get_webview_window("dock") {
         return Ok(w);
     }
-    window(app, "dock", page("shell=desktop"))
+    window(app, "dock", page(None))
+        .initialization_script(SHELL_SCRIPT)
         .title("APC Dock")
         .inner_size(400.0, 760.0)
         .min_inner_size(320.0, 420.0)
@@ -80,7 +90,7 @@ fn strip(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         return Ok(w);
     }
     let (width, height) = (200.0, 112.0);
-    let mut builder = window(app, "strip", page("view=strip"))
+    let mut builder = window(app, "strip", page(Some("view=strip")))
         .title("APC agents")
         .inner_size(width, height)
         .min_inner_size(96.0, 96.0)
