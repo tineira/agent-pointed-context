@@ -117,6 +117,8 @@ const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 const profile = mkdtempSync(join(tmpdir(), "apc-e2e-"));
 const browser = spawn(EXE, ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
 const out = browser.stdio[3];
+/** Exceptions and console errors of the pages a step watches (Runtime.enable), shown when it fails. */
+const pageErrors = [];
 let buf = "";
 let n = 0;
 const waiting = new Map();
@@ -127,6 +129,7 @@ browser.stdio[4].on("data", (d) => {
     const m = JSON.parse(buf.slice(0, i));
     buf = buf.slice(i + 1);
     if (m.id && waiting.has(m.id)) (waiting.get(m.id)(m), waiting.delete(m.id));
+    else if (m.method === "Runtime.exceptionThrown" || (m.method === "Runtime.consoleAPICalled" && m.params.type === "error")) pageErrors.push(JSON.stringify(m.params).slice(0, 300));
   }
 });
 const cdp = (method, params = {}, sessionId) =>
@@ -468,6 +471,49 @@ try {
     await cdp("Target.closeTarget", { targetId: other.targetId });
     console.log("7. on a site the person did not grant, a drop sends nothing");
 
+    // 8. Open dock and Float from the extension's popup (TIN-473). The browser gets this dock's cookie,
+    // and the dock leaves its first run, so /dock is this dock with its Float button.
+    await cdp("Storage.setCookies", { cookies: [{ name: cookie.split("=")[0], value: cookie.slice(cookie.indexOf("=") + 1), url: DOCK, path: "/", secure: DOCK.startsWith("https:") }] });
+    await api(`${base}/world`, { seed: 7 });
+    const clickIn = async (sid, selector) => {
+      const { root } = await cdp("DOM.getDocument", { depth: 0 }, sid);
+      const { nodeId } = await cdp("DOM.querySelector", { nodeId: root.nodeId, selector }, sid);
+      assert.ok(nodeId, `${selector} on the page`);
+      const q = (await cdp("DOM.getBoxModel", { nodeId }, sid)).model.border;
+      const x = (q[0] + q[4]) / 2;
+      const y = (q[1] + q[5]) / 2;
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 }, sid);
+    };
+    const popupClick = async (selector) => {
+      const { targetId: popupId } = await cdp("Target.createTarget", { url: `chrome-extension://${extensionId}/popup.html` });
+      const { sessionId: popupSession } = await cdp("Target.attachToTarget", { targetId: popupId, flatten: true });
+      await sleep(1500);
+      await clickIn(popupSession, selector);
+    };
+    const dockTarget = (float) => until(`the dock${float ? " with ?float=1" : ""}`, async () => (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "page" && t.url.startsWith(`${DOCK}/dock`) && t.url.includes("float=1") === float));
+    await popupClick("#open-dock");
+    await dockTarget(false);
+    await popupClick("#float");
+    const floatDock = await dockTarget(true);
+    const { sessionId: dockSession } = await cdp("Target.attachToTarget", { targetId: floatDock.targetId, flatten: true });
+    await cdp("Runtime.enable", {}, dockSession);
+    await until("the Float prompt in the dock", async () => {
+      const page = (await cdp("Runtime.evaluate", { expression: "JSON.stringify({ ask: !!document.querySelector('[data-float-ask]'), failed: document.body.innerText.includes('Could not open your dock') })", returnByValue: true }, dockSession)).result.value;
+      const { ask, failed } = JSON.parse(page ?? "{}");
+      // The dev server sometimes fails the dock's first call (see request() above): load it again.
+      if (failed) await cdp("Page.reload", {}, dockSession);
+      return ask;
+    }, 30_000);
+    // The prompt stays until Float opens, so a click Chrome refused can be made again, as a person would.
+    const floating = async () => (await cdp("Runtime.evaluate", { expression: "!!window.documentPictureInPicture?.window", returnByValue: true }, dockSession)).result.value;
+    for (let attempt = 0; attempt < 3 && !(await floating()); attempt++) {
+      await clickIn(dockSession, "[data-float-ask]");
+      await until("the Float window", floating, 6_000).catch(() => {});
+    }
+    assert.ok(await floating(), "the Float window opened");
+    assert.equal((await cdp("Runtime.evaluate", { expression: "location.search", returnByValue: true }, dockSession)).result.value, "", "the prompt goes once Float is open");
+    console.log("8. Open dock opens the dock; Float opens it ready, and one click floats the agents");
+
     // 6. Unpair in the dock: the next drop asks again.
     const reader = (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader");
     await api(`${base}/pairings/${reader.id}`, { action: "unpair" });
@@ -482,6 +528,7 @@ try {
   } else {
     failed = true;
     console.error("FAILED:", error.message);
+  if (pageErrors.length) console.error("page errors:", pageErrors.join(" | "));
     // What the extension itself recorded about the last drop (its popup shows the same).
     try {
       const sw = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));

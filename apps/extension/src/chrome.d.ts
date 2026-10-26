@@ -52,12 +52,21 @@ declare namespace chrome {
     function unregisterContentScripts(filter?: { ids?: string[] }): Promise<void>;
     function executeScript(injection: { target: { tabId: number }; files: string[] }): Promise<unknown[]>;
   }
+  namespace windows {
+    function create(props: { url: string; type?: "normal" | "popup"; width?: number; height?: number; focused?: boolean }): Promise<{ id?: number }>;
+    function update(windowId: number, props: { focused?: boolean }): Promise<{ id?: number }>;
+  }
+  namespace commands {
+    const onCommand: { addListener(callback: (command: string) => void): void };
+  }
   namespace tabs {
     interface Tab {
       id?: number;
       url?: string;
+      windowId?: number;
     }
     function query(q: { active?: boolean; currentWindow?: boolean; url?: string | string[] }): Promise<Tab[]>;
+    function update(tabId: number, props: { active?: boolean; url?: string }): Promise<Tab>;
     function sendMessage(tabId: number, message: unknown): Promise<unknown>;
     function create(props: { url: string }): Promise<Tab>;
   }

@@ -7,6 +7,7 @@
  * page on install.
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
+import { openDock } from "./open-dock.ts";
 import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
@@ -31,6 +32,10 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") void chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
 });
 chrome.runtime.onStartup.addListener(() => void syncScripts());
+// Open dock (Alt+Shift+A) and Float (Alt+Shift+F), TIN-473; the person can change them at chrome://extensions/shortcuts.
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "open-dock" || command === "float") void openDock(command === "float");
+});
 chrome.permissions.onAdded.addListener((p) => void syncScripts().then(() => injectOpenTabs(p.origins)));
 chrome.permissions.onRemoved.addListener(() => void syncScripts());
 
