@@ -22,7 +22,9 @@ if (!w.__apcDrop && !hubAllowed(location.origin, __APC_DEV__)) {
 function listen(): void {
   let lit: HTMLElement | null = null;
   let litOutline = "";
-  const carriesAgent = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes(APC_AGENT_TYPE);
+  // A copy left from before the extension was reloaded or updated has lost its extension: it stands
+  // back, so the fresh copy injected next to it takes the drop.
+  const carriesAgent = (e: DragEvent) => !!chrome.runtime?.id && !!e.dataTransfer && [...e.dataTransfer.types].includes(APC_AGENT_TYPE);
   const light = (el: HTMLElement | null) => {
     if (lit === el) return;
     if (lit) lit.style.outline = litOutline;
