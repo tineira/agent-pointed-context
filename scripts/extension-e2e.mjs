@@ -1,18 +1,34 @@
 // End to end check of the APC browser extension (TIN-421, DESIGN.md 13), by hand: a real Chrome or Edge with the
-// extension's dev build, a local dock, and real drags sent through the DevTools Protocol (Input.dispatchDragEvent, so
-// the page sees trusted events). Needs the dock's dev server (cd apps/dock && pnpm dev, port 5200) and
-// apps/extension built with --dev.
-// usage: node scripts/extension-e2e.mjs [browser.exe]   (default: Chrome on Windows)
+// extension, a dock, and real drags sent through the DevTools Protocol (Input.dispatchDragEvent, so the page sees
+// trusted events). By default against a local dock: needs the dock's dev server (cd apps/dock && pnpm dev, port 5200)
+// and apps/extension built with --dev. With --prod, against v2.apc.tineira.com with the published build (apps/extension
+// built without --dev), given the test page's site as if the person had granted it; the dock is a throwaway one,
+// deleted at the end.
+// usage: node scripts/extension-e2e.mjs [--prod] [--hold] [browser.exe]   (default: Chrome on Windows)
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import assert from "node:assert/strict";
 
-const DOCK = "http://localhost:5200";
-const EXE = process.argv[2] ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const EXT = resolve("apps/extension/dist-dev");
+const args = process.argv.slice(2);
+const PROD = args.includes("--prod");
+/** --hold: stop once a reading is delivered and keep the dock, printing what an agent needs to read it. */
+const HOLD = args.includes("--hold");
+const DOCK = PROD ? "https://v2.apc.tineira.com" : "http://localhost:5200";
+const EXE = args.find((a) => !a.startsWith("--")) ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const EXT = PROD ? grantedCopy(resolve("apps/extension/dist")) : resolve("apps/extension/dist-dev");
+
+/** The published build with the test page's site granted up front, as the popup's grant would; nothing else changes. */
+function grantedCopy(dist) {
+  const dir = mkdtempSync(join(tmpdir(), "apc-ext-"));
+  cpSync(dist, dir, { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  manifest.host_permissions.push("http://127.0.0.1/*");
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
+  return dir;
+}
 const T = "application/x-apc-agent";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (what, fn, ms = 20_000) => {
@@ -102,7 +118,10 @@ const cdp = (method, params = {}, sessionId) =>
   });
 
 let failed = false;
+let held = false;
 let extensionId = "";
+/** Thrown to stop after step 2 under --hold. */
+class Holding extends Error {}
 try {
   console.log("browser", (await cdp("Browser.getVersion")).product);
   extensionId = (await cdp("Extensions.loadUnpacked", { path: EXT })).id;
@@ -149,6 +168,11 @@ try {
   });
   assert.equal((await api(`${base}/state`)).agents[0].pairings.filter((p) => p.kind === "reader").length, 1);
   console.log("2. second drop: sent straight away, through page__get_reading");
+  if (HOLD) {
+    // Leave the dock and its reading for an agent to read by hand; whoever holds this deletes the dock after.
+    console.log("HOLD " + JSON.stringify({ dock: DOCK, did, cookie, mcp_url: agent.mcp_url }));
+    throw new Holding();
+  }
 
   // 3. An APC app keeps its drop: the extension stands back.
   await drag("#app", await payload());
@@ -168,6 +192,18 @@ try {
   assert.equal((await forged.json()).error, "reader_not_allowed");
   console.log("5. a page's origin cannot ask for a reader");
 
+  // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
+  const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });
+  const { sessionId: otherSession } = await cdp("Target.attachToTarget", { targetId: other.targetId, flatten: true });
+  await sleep(2000);
+  const at = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, otherSession)).result.value;
+  const data = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+  for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data }, otherSession);
+  await sleep(2000);
+  assert.match((await tool("page__get_reading")).structuredContent.page_text, /SPRING/);
+  await cdp("Target.closeTarget", { targetId: other.targetId });
+  console.log("7. on a site the person did not grant, a drop sends nothing");
+
   // 6. Unpair in the dock: the next drop asks again.
   const reader = (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader");
   await api(`${base}/pairings/${reader.id}`, { action: "unpair" });
@@ -176,22 +212,27 @@ try {
   console.log("6. after Unpair, the next drop asks the dock again");
   console.log("all passed");
 } catch (error) {
-  failed = true;
-  console.error("FAILED:", error.message);
-  // What the extension itself recorded about the last drop (its popup shows the same).
-  try {
-    const sw = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
-    const { sessionId } = await cdp("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
-    const last = await cdp("Runtime.evaluate", { expression: "chrome.storage.local.get('last').then((s) => JSON.stringify(s.last))", awaitPromise: true, returnByValue: true }, sessionId);
-    console.error("extension's last drop:", last.result.value);
-  } catch (e) {
-    console.error("(could not read the extension's last drop:", e.message + ")");
+  if (error instanceof Holding) {
+    held = true;
+  } else {
+    failed = true;
+    console.error("FAILED:", error.message);
+    // What the extension itself recorded about the last drop (its popup shows the same).
+    try {
+      const sw = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
+      const { sessionId } = await cdp("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
+      const last = await cdp("Runtime.evaluate", { expression: "chrome.storage.local.get('last').then((s) => JSON.stringify(s.last))", awaitPromise: true, returnByValue: true }, sessionId);
+      console.error("extension's last drop:", last.result.value);
+    } catch (e) {
+      console.error("(could not read the extension's last drop:", e.message + ")");
+    }
   }
 } finally {
-  await api(`${base}/reset`, {}).catch(() => {});
+  if (!held) await api(`${base}/reset`, {}).catch(() => {});
   browser.kill();
   server.close();
   await sleep(1000);
   rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
+  if (PROD) rmSync(EXT, { recursive: true, force: true, maxRetries: 5 });
   process.exit(failed ? 1 : 0);
 }
