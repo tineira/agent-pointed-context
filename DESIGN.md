@@ -181,6 +181,7 @@ The p50 is mostly network (Chile to the edge to the sandbox): inside the Durable
 | v2 pairing | the drag carries a public handle and a single-use 60 s ticket, never a grant; the app hands its grant to the hub over a back channel after consent in the app and in the dock; MCP authorization (OAuth 2.1 + PKCE) replaces the secret URL later | 2026-10-25 |
 | v2 dock host | a web window at v2.apc.tineira.com with a Durable Object hub first (TIN-370), against a Pulse under apc-v2; a browser extension with a local hub next; package changes additive and opt-in, v1 stays on 0.2 | 2026-10-25 |
 | v2 prototype (TIN-370) | Pulse for the dock is `apps/demo` deployed again inside apc-v2 with a v2 flag; the hub exposes only `call_app_tool`; newest pin wins; pairing needs consent in the app and in the dock | 2026-10-25 |
+| Browser extension (TIN-395) | a client of the dock's cloud hub, not a local hub: the side panel is the drag source; on an APC app the app takes the drop; on any other page the extension sends a bounded **page reading** (untrusted data, not a pin), pushed on drop, after a per-site grant | 2026-10-26 |
 
 ## 12. APC v2: one agent across apps (TIN-371)
 
@@ -337,4 +338,66 @@ Everything below is **additive and opt-in**, so v1 stays on 0.2.
    **Pulse for desktop (TIN-396).** An installed app takes the dock's agent too: `apps/desktop`, Pulse's figures in Avalonia (.NET 8), built for Windows by the Desktop workflow as one self-contained `PulseDesktop.exe`. It is a client of Pulse's v2 deploy, not a second Pulse: it opens a sandbox the way the page does (on the dock's world when given the dock's Pulse link or seed), reads the data from `/api/s/:sid/dataset` (v2 deploy only) and computes the figures as `figures.ts` does, keeps the page's WebSocket heartbeat (so the person counts as on Pulse and the app hears every pin and read), and pairs and pins through the same `/hub/pair`, after the same consent. Each bridge step, each month bar, the whole chart and each customer row is a target, with the page's target names, so the agent cannot tell the app from the page.
    - **Reading the drag.** A browser does not hand a custom type to another app under its own name: Chrome and Edge pack every custom type of a drag into one OLE clipboard format, `Chromium Web Custom MIME Data Format` (a Chromium pickle: a uint32 size, a uint32 count, then UTF-16 type and data pairs, each padded to four bytes). The app reads `application/x-apc-agent` out of it, or takes the type directly from a native source. Its tests hold a pickle captured from a real Chromium drag.
    - **Linux and macOS (TIN-398, TIN-399).** Chromium gives the same pickle on X11 as `chromium/x-web-custom-data`, and the app already reads it, but Avalonia 11's X11 backend takes no drops from other apps (tested under Xvfb: the drag reaches the window, no drag event fires). The Linux app needs another drop path.
-4. The extension with a local hub, OAuth pairing and the ring doorbell.
+4. The extension with a local hub, OAuth pairing and the ring doorbell. **Redesigned in section 13 (TIN-395):** the extension starts on the dock's cloud hub, and a local hub comes only if it is needed.
+
+## 13. A browser extension: the agent on any page (TIN-395)
+
+**The idea.** Most pages the person reads will never implement APC. A browser extension lets them drag their agent onto any of those pages too: the extension reads what was pointed at and hands it to the agent through the dock's hub. On an APC app, the extension stays out of the way and the app takes the drop as it does today. The extension's side panel holds the dock's agents, so in Chrome and Edge it is the drag source the dock window and **Float** are today.
+
+### 13.1 What two spikes settled (2026-10-26)
+
+Both spikes are throwaway: an MV3 extension (side panel, content script on every page, service worker) and a fake hub, a Durable Object under `wrangler dev`. They ran in Chromium 134. Edge 156 loaded the extension and connected to the hub on its first launch, but ignored `--load-extension` on the next one, after it signed the scratch profile in to sync. Chrome 156 ignores the flag altogether, since branded Chrome dropped it.
+
+- **Dragging from the side panel into a tab works.** A drag started in the side panel (`setData("application/x-apc-agent", …)`) reaches the page: on `dragenter` the content script sees the types `text/plain` and `application/x-apc-agent`, on `drop` the payload arrives whole, and `dragend` in the panel reports `copy`. It worked on a local page and on en.wikipedia.org, where the page's CSP did not get in the way. The content script, not the page, listens: it ran in the capture phase on `document`.
+- **Without feedback the person cannot tell that a drop landed.** The spike drew nothing on `dragover` or `drop`, so drops that did land in the page looked like failures, and the person tried the tab strip next. There the drop missed the page, and the browser searched Google for the drag's `text/plain` ("apc agent ag_spike"). Two rules follow. The content script highlights the element under the pointer while a drag carrying an APC agent is over it, and shows a short confirmation when the drop lands. And a connected agent's drag carries no `text/plain` that a browser could act on. The only `text/plain` drag stays the not-yet-connected agent's connect prompt (TIN-408), which is meant for an agent's chat box.
+- **The drop point needs choosing.** `elementFromPoint` on a margin returned `<html>` or a whole `<section>`, which is the page's whole text. A reading is taken from the nearest meaningful block at the drop point, never from a container larger than a size cap (13.3).
+- **A service worker cannot keep a channel open on its own.** The service worker opened a WebSocket to the hub, which the hub accepted with `Origin: chrome-extension://<id>`. With no traffic, Chromium stopped the service worker after exactly 30 s, and the socket closed with 1001. The reconnect timer died with it, so the hub could not reach the extension (`no_extension`) until something woke it again, such as a page loading. With the hub sending a ping every 20 s, the service worker stayed alive for more than 5 minutes, and a hub call went to the service worker, on to the tab's content script, and back.
+
+So the extension **pushes** to the hub and is never called by it: a drop wakes the service worker, which sends the reading at once. The live channel for presence is held by the side panel, a page that lives as long as it is open, not by the service worker. That is still to verify, together with Chrome 156, Edge 156, and dragging from the side panel into another window.
+
+### 13.2 Two kinds of target
+
+The content script listens for `drop` on `window` in the bubble phase, after the page's own handlers have run.
+
+- **An APC app** handles the drop itself: `enablePinning` calls `preventDefault()`, pairs and pins as in section 12. The extension sees `defaultPrevented` and does nothing. The payload is the dock's `AgentDrag` (`hub`, `agent`, a 60 s single-use `ticket`); the side panel gets fresh tickets from the hub over its channel, as the dock page does.
+- **Any other page** gets a **page reading**: what the person pointed at, taken by the extension and delivered as data. It is a different trust model from a pin. A pin names a target that the agent then reads through the app's own tools with the access the app granted. A reading is the text the extension saw, nothing more, with no tools behind it. So the dock and the agent's results call it a reading, not a pin, and draw it differently.
+
+A reading holds:
+
+- the page's origin and path (no query string or fragment, which often carry tokens) and its title;
+- the element at the drop point: its role, accessible name and visible text (up to 2 KB), and the nearest heading above it (h1 to h3);
+- the person's selection, if any (up to 2 KB);
+- in a table cell, the column header and the row's first cell.
+
+Never in a reading: form field values, password or hidden inputs, anything outside the visible part of the element, cookies or storage, other tabs, or a screenshot.
+
+On the wire, the extension pairs with the hub as one more app, with id `page`. The hub exposes `page__get_reading`. The focus has kind `page_reading`, with `app: { id: "page", name: "This browser", origin }` and `next: "page__get_reading"`. A reading lives at the hub until it is read, replaced by the next drop, or 10 minutes old, whichever comes first.
+
+### 13.3 Consent
+
+- **Per site, given ahead of time.** The extension asks for no host access at install: `<all_urls>` is under `optional_host_permissions`, and the content script is registered with `chrome.scripting.registerContentScripts` only for the origins the person grants. On a page without that grant, the side panel offers "Let your agent read pages on *site*". The click calls `chrome.permissions.request` from a user gesture. Without the grant there is no listener, so a drop does nothing there. This also keeps the store review simple.
+- **Ask on every drop for sensitive sites.** For banks, email, health and government sites (a shipped list the person can edit), each drop holds the reading in the side panel with a preview of exactly what will be sent and **Send** / **Discard** buttons. Nothing leaves the browser before Send.
+- **Every reading is visible.** The side panel and the agent's page in the dock (TIN-419) list each reading sent: site, time and size, with Clear. The panel lists the granted sites, each with Revoke.
+
+### 13.4 Injection
+
+Page text is untrusted data: any page can carry instructions aimed at an agent. The hub returns a reading under `page_text` with `untrusted: true`, and `HUB_INSTRUCTIONS` says that page text is data to read, never instructions to follow. The hub never builds `next` or `next_args` from page text. A reading is capped at 6 KB. As between apps (12.5, the C7 boundary), the agent can still be fooled by what it reads. Showing every reading in the dock makes that visible, not impossible.
+
+### 13.5 Where the hub lives
+
+**On the dock's cloud hub.** The extension is a client of the person's dock, not a hub of its own. Pairing is short. The dock page lists the extension's id, and the extension's `externally_connectable` lists v2.apc.tineira.com, so section 12.1's problem, a static list of sites, goes away: the only site the extension needs to know is the dock. The dock page sends the extension a pairing ticket. The extension trades it at the hub for a token, which it keeps in `chrome.storage.local` and sends as a bearer header on its pushes and on the side panel's WebSocket.
+
+**The cost:** the text of real pages now passes through Cloudflare. Until now only Pulse's synthetic data did. So the per-site consent says so, the README's "What the hosted demo stores" adds readings (their content kept at most 10 minutes; the log keeps site, time and size), and the hub never logs a reading's text.
+
+**A local hub** (native messaging to a process on the person's machine) comes later, and only if keeping page text on the person's machine turns out to matter to them. It needs the desktop component that TIN-396 to TIN-399 are building anyway. OAuth pairing (section 12.1) is unchanged by this choice.
+
+### 13.6 Side panel, dock and Float
+
+With the extension installed, the side panel is the drag source in Chrome and Edge. It follows the person across tabs, shows the dock's agents with their marks, and needs no Document Picture-in-Picture. The dock page stays where agents are added, connected and removed. Float stays for people without the extension, and for dragging into native apps (Pulse for desktop): whether a drag from the side panel reaches a native window is not yet verified.
+
+### 13.7 Phases
+
+1. **The side panel as drag source.** An extension that pairs with a dock (13.5) and lists its agents in the side panel. Dragging one onto an APC app pairs and pins as from the dock. The extension highlights drop targets while a drag is over the page and confirms the drop. Verify on Chrome 156 and Edge 156, and between windows.
+2. **Page readings.** Per-site grants, the reading taken at the drop point, the push to the hub, the `page` app with `page__get_reading`, readings in the dock, and the README.
+3. **Sensitive sites and the stores.** Ask on every drop with a preview, the editable list, then the Chrome Web Store and Edge Add-ons listings and their reviews.
+4. **Only if needed:** a local hub over native messaging, and OAuth pairing.
