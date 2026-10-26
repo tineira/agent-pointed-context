@@ -344,16 +344,27 @@ Everything below is **additive and opt-in**, so v1 stays on 0.2.
 
 **The idea.** Most pages the person reads will never implement APC. A browser extension lets them drag their agent onto any of those pages too: the extension reads what was pointed at and hands it to the agent through the dock's hub. On an APC app, the extension stays out of the way and the app takes the drop as it does today. The extension's side panel holds the dock's agents, so in Chrome and Edge it is the drag source the dock window and **Float** are today.
 
-### 13.1 What two spikes settled (2026-10-26)
+### 13.1 What the spikes settled (2026-10-26)
 
-Both spikes are throwaway: an MV3 extension (side panel, content script on every page, service worker) and a fake hub, a Durable Object under `wrangler dev`. They ran in Chromium 134. Edge 156 loaded the extension and connected to the hub on its first launch, but ignored `--load-extension` on the next one, after it signed the scratch profile in to sync. Chrome 156 ignores the flag altogether, since branded Chrome dropped it.
+The spikes are throwaway: an MV3 extension (side panel, content script on every page, service worker) and a fake hub, a Durable Object under `wrangler dev`. The first round ran in Chromium 134, because Chrome 156 ignores `--load-extension` (branded Chrome dropped the flag) and Edge 156 ignored it once it had signed the scratch profile in to sync. The second round ran in Chrome 156 and Edge 156, each on a fresh profile with its own hub, with the extension loaded over the DevTools Protocol: `Extensions.loadUnpacked`, which needs `--remote-debugging-pipe` and `--enable-unsafe-extension-debugging`. That is also how phase 1's automated tests can load it.
 
 - **Dragging from the side panel into a tab works.** A drag started in the side panel (`setData("application/x-apc-agent", …)`) reaches the page: on `dragenter` the content script sees the types `text/plain` and `application/x-apc-agent`, on `drop` the payload arrives whole, and `dragend` in the panel reports `copy`. It worked on a local page and on en.wikipedia.org, where the page's CSP did not get in the way. The content script, not the page, listens: it ran in the capture phase on `document`.
 - **Without feedback the person cannot tell that a drop landed.** The spike drew nothing on `dragover` or `drop`, so drops that did land in the page looked like failures, and the person tried the tab strip next. There the drop missed the page, and the browser searched Google for the drag's `text/plain` ("apc agent ag_spike"). Two rules follow. The content script highlights the element under the pointer while a drag carrying an APC agent is over it, and shows a short confirmation when the drop lands. And a connected agent's drag carries no `text/plain` that a browser could act on. The only `text/plain` drag stays the not-yet-connected agent's connect prompt (TIN-408), which is meant for an agent's chat box.
 - **The drop point needs choosing.** `elementFromPoint` on a margin returned `<html>` or a whole `<section>`, which is the page's whole text. A reading is taken from the nearest meaningful block at the drop point, never from a container larger than a size cap (13.3).
 - **A service worker cannot keep a channel open on its own.** The service worker opened a WebSocket to the hub, which the hub accepted with `Origin: chrome-extension://<id>`. With no traffic, Chromium stopped the service worker after exactly 30 s, and the socket closed with 1001. The reconnect timer died with it, so the hub could not reach the extension (`no_extension`) until something woke it again, such as a page loading. With the hub sending a ping every 20 s, the service worker stayed alive for more than 5 minutes, and a hub call went to the service worker, on to the tab's content script, and back.
 
-So the extension **pushes** to the hub and is never called by it: a drop wakes the service worker, which sends the reading at once. The live channel for presence is held by the side panel, a page that lives as long as it is open, not by the service worker. That is still to verify, together with Chrome 156, Edge 156, and dragging from the side panel into another window.
+The second round, on Chrome 156 and Edge 156, with the rules above applied to the spike (feedback on `dragover` and `drop`, no `text/plain`, bubble-phase listeners on `window`, the side panel holding its own WebSocket):
+
+- **The service worker behaves the same:** stopped after 30 s idle, socket closed with 1001, `no_extension` at the hub, in both browsers.
+- **Dragging from the side panel into a page works in both:** the page sees only `application/x-apc-agent`, the target is highlighted, and the drop is confirmed. It worked on a local page and on Wikipedia.
+- **An APC app keeps its drop.** On a page that handles the drop itself, as `enablePinning` does, the app took it, the content script saw `defaultPrevented`, and the extension did nothing.
+- **A drop on the tab strip or the address bar does nothing.** `dragend` reported `none`, and no search opened, since the drag carries no `text/plain`.
+- **Another window of the same browser works.** Dragging from the side panel of one window onto a page in a torn-off window landed, in both browsers.
+- **Dragging across browsers works too, and that needs a rule.** Chrome's side panel dropped onto a page in Edge, and Edge's side panel onto a page in Chrome, each carrying its own hub in the payload. So a drop can bring an agent from another browser's dock. On an APC app that is fine, since pairing goes to the hub named in the payload. On any other page, the extension sends a reading only for agents of its own dock: for any other agent it shows "This agent is from another dock" and sends nothing.
+- **The side panel keeps its WebSocket.** The panel's socket had no close in 3.5 minutes (Chrome) and 1.7 minutes (Edge), while the service worker's closed 4 and 2 times. Longer spans were not measured.
+- **A drop on empty space must not read the whole page.** On a short page, a drop beside the text fell back to `<body>`, the whole page. If no block element is at the drop point, the reading holds the page's title and address only.
+
+So the extension **pushes** to the hub and is never called by it: a drop wakes the service worker, which sends the reading at once. The live channel for presence, and for the side panel's tickets, is held by the side panel, which keeps its socket while it is open. Not verified yet: a drag from the side panel into a native window (Pulse for desktop), and macOS and Linux.
 
 ### 13.2 Two kinds of target
 
@@ -397,7 +408,7 @@ With the extension installed, the side panel is the drag source in Chrome and Ed
 
 ### 13.7 Phases
 
-1. **The side panel as drag source.** An extension that pairs with a dock (13.5) and lists its agents in the side panel. Dragging one onto an APC app pairs and pins as from the dock. The extension highlights drop targets while a drag is over the page and confirms the drop. Verify on Chrome 156 and Edge 156, and between windows.
+1. **The side panel as drag source.** An extension that pairs with a dock (13.5) and lists its agents in the side panel. Dragging one onto an APC app pairs and pins as from the dock. The extension highlights drop targets while a drag is over the page and confirms the drop. Its tests load it over the DevTools Protocol (13.1). Still to verify: a drag into Pulse for desktop, and macOS and Linux.
 2. **Page readings.** Per-site grants, the reading taken at the drop point, the push to the hub, the `page` app with `page__get_reading`, readings in the dock, and the README.
 3. **Sensitive sites and the stores.** Ask on every drop with a preview, the editable list, then the Chrome Web Store and Edge Add-ons listings and their reviews.
 4. **Only if needed:** a local hub over native messaging, and OAuth pairing.
