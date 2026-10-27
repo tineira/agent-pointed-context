@@ -102,7 +102,7 @@ export const DOCK_DESKTOP = {
 };
 
 /** Install the dock as an app (Chrome and Edge offer it; elsewhere use the browser's menu). Hidden once installed. */
-export function Install(props: { label?: string }) {
+export function Install(props: { label?: string; children?: (button: ReactNode) => ReactNode }) {
   const [prompt, setPrompt] = useState<(Event & { prompt(): Promise<void> }) | null>(null);
   useEffect(() => {
     const on = (e: Event) => {
@@ -112,12 +112,12 @@ export function Install(props: { label?: string }) {
     window.addEventListener("beforeinstallprompt", on);
     return () => window.removeEventListener("beforeinstallprompt", on);
   }, []);
-  if (!prompt) return null;
-  return (
+  const button = prompt ? (
     <button type="button" className="primary" onClick={() => void prompt.prompt().then(() => setPrompt(null))}>
       {props.label ?? "Install"}
     </button>
-  );
+  ) : null;
+  return props.children ? props.children(button) : button;
 }
 
 /**

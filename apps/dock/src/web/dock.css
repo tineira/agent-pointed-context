@@ -118,6 +118,16 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .launch-app:hover { border-color: var(--muted); }
 .launch-icon { display: grid; place-items: center; color: var(--accent); }
 .footer { justify-content: center; }
+.dock-downloads { display: grid; gap: 8px; }
+.download-buttons { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
+.download-button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg); text-decoration: none; text-align: center; font-size: 12px; line-height: 1.35; }
+.download-button:hover { border-color: var(--muted); }
+.download-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.download-logos { display: flex; gap: 4px; }
+.download-world { display: grid; gap: 5px; min-width: 0; }
+.download-world p, .download-note { font-size: 11px; color: var(--muted); }
+.download-world .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-world button { font-size: 11px; padding: 4px 7px; }
 
 /* The floating window (Document Picture-in-Picture). */
 /* The agents wrap to the window's width, rows centred (TIN-417). */
