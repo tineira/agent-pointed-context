@@ -1,7 +1,8 @@
 name: Dock for Windows
 
 # The APC dock for Windows (#84): the web dock in a Tauri window of its own, with an always-on-top
-# strip, a global shortcut and a tray icon. Built as an NSIS installer, kept as this run's artifact.
+# strip, a global shortcut and a tray icon. Built as an NSIS installer, kept as this run's artifact; on
+# main, also published to the dock-desktop prerelease.
 on:
   push:
     branches: [main]
@@ -37,3 +38,25 @@ jobs:
           name: APC-Dock-win-x64
           path: apps/dock-desktop/target/release/bundle/nsis/*.exe
           if-no-files-found: error
+
+  # The web dock offers the installer on Windows: each build of main replaces it on one fixed
+  # prerelease, under a name without spaces, so its link never changes and releases/latest stays the
+  # APC release.
+  publish:
+    needs: windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: APC-Dock-win-x64
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv ./*-setup.exe APCDockSetup.exe
+          gh release view dock-desktop -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create dock-desktop -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" --title "APC dock for Windows (latest build)" --notes "The APC dock for Windows, built from main."
+          gh release upload dock-desktop APCDockSetup.exe -R "$GITHUB_REPOSITORY" --clobber
+          gh release edit dock-desktop -R "$GITHUB_REPOSITORY" --notes "The APC dock for Windows (installer), the app the web dock offers on Windows: your agents in a strip on top of every window (Alt+Shift+Space, tray). Built from main at ${GITHUB_SHA}. Unsigned: Windows SmartScreen asks once (More info, then Run anyway)."

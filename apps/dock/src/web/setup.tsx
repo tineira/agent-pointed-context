@@ -95,6 +95,16 @@ export const DESKTOP_SHELL = (window as { __APC_SHELL__?: string }).__APC_SHELL_
 /** The global shortcut the desktop dock registers (SHORTCUT in apps/dock-desktop/src/main.rs). */
 export const DESKTOP_SHORTCUT = "Alt+Shift+Space";
 
+/**
+ * The APC dock for Windows (#84), offered on Windows outside the app itself: each build of main
+ * replaces the installer on the dock-desktop prerelease, so the link never changes.
+ */
+export const DOCK_DESKTOP = {
+  url: "https://github.com/tineira/agent-pointed-context/releases/download/dock-desktop/APCDockSetup.exe",
+  note: "Unsigned for now: Windows asks once (More info, then Run anyway).",
+  offered: !DESKTOP_SHELL && /Windows/.test(navigator.userAgent),
+};
+
 /** Install the dock as an app (Chrome and Edge offer it; elsewhere use the browser's menu). Hidden once installed. */
 export function Install(props: { label?: string }) {
   const [prompt, setPrompt] = useState<(Event & { prompt(): Promise<void> }) | null>(null);
@@ -248,6 +258,15 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
           <p>Your agents also float on top of every window, ready to drag: {DESKTOP_SHORTCUT} shows and hides them, and so does the APC Dock icon in the tray.</p>
         ) : (
           <p>Install the dock as an app to keep it at hand; Float keeps your agents on top of other windows.</p>
+        )}
+        {DOCK_DESKTOP.offered && (
+          <>
+            <p>On Windows, the dock is also an app of its own: your agents float on top of every window, {DESKTOP_SHORTCUT} shows and hides them, and it lives in the tray.</p>
+            <a className="download" href={DOCK_DESKTOP.url}>
+              Get the dock for Windows
+            </a>
+            <p className="small-note">{DOCK_DESKTOP.note}</p>
+          </>
         )}
         <div className="row">
           {!DESKTOP_SHELL && <Install label="Install the dock" />}

@@ -13,7 +13,7 @@ import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
-import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
+import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, DOCK_DESKTOP, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -409,6 +409,11 @@ export function HubDock() {
           Change world
         </button>
         {!DESKTOP_SHELL && <Install />}
+        {DOCK_DESKTOP.offered && (
+          <a href={DOCK_DESKTOP.url} title={`Get the APC dock for Windows: your agents on top of every window. ${DOCK_DESKTOP.note}`}>
+            Dock for Windows
+          </a>
+        )}
         <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
       </div>
     </main>
