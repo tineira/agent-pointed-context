@@ -154,7 +154,7 @@ export function Landing() {
             The code: <a href={REPO}>github.com/tineira/agent-pointed-context</a>
           </li>
           <li>
-            Version 1, one app with its own agent: <a href="https://apc.tineira.com">apc.tineira.com</a>
+            Version 1, one app with its own agent: <a href="https://apc.tineira.com/v1">apc.tineira.com</a>
           </li>
         </ul>
       </section>
