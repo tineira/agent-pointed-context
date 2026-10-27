@@ -102,7 +102,7 @@ corepack pnpm test
 corepack pnpm dev          # http://localhost:5173 (Vite + the local Workers runtime)
 ```
 
-The public landing keeps its hero and explanation of the standard, with a chooser after the hero and a comparison after the explanation: **Connect app by app** opens Pulse v1's How-to and creates or resumes your sandbox; **Connect once** links to the separate [v2 dock](https://v2.apc.tineira.com). Visiting `/` creates no sandbox, even when you already have one. `/how-to` covers the V1 prerequisites and steps; `/overview` keeps its existing route.
+The public root `/` is a chooser: **Connect app by app** opens the original V1 landing at `/v1`; **Connect once** links to the separate [v2 dock](https://v2.apc.tineira.com). The two cards have connection diagrams and a comparison table. Neither `/` nor `/v1` opens a sandbox, even when you already have one. The V1 landing keeps its explanation, prerequisites and steps; its demo links create or resume your sandbox. `/how-to` and `/overview` keep their existing routes.
 
 Deploy your own copy to Cloudflare Workers (the free plan is enough to try it):
 

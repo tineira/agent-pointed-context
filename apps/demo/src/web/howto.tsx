@@ -518,24 +518,6 @@ export function HowTo(props: { api: Api; sid: string; state: SandboxState; initi
         <p className="text-sm text-muted">Connect your own agent, point it at things, and ask about them. The steps are the same for any agent that speaks MCP.</p>
       </section>
 
-      <section aria-labelledby="needs-title" className="flex flex-col gap-3">
-        <h2 id="needs-title" className="text-lg font-medium">What you need</h2>
-        <dl className="grid gap-3 min-[900px]:grid-cols-3">
-          <div className="rounded-xl border border-line bg-cream p-4 text-sm">
-            <dt className="font-semibold">An AI agent that speaks MCP</dt>
-            <dd className="mt-1.5 text-muted">Any client that accepts a remote MCP server by URL (Streamable HTTP): Claude Code, claude.ai, ChatGPT, Grok, Cursor and others.</dd>
-          </div>
-          <div className="rounded-xl border border-line bg-cream p-4 text-sm">
-            <dt className="font-semibold">Your MCP URL from the demo</dt>
-            <dd className="mt-1.5 text-muted">You have a private sandbox with synthetic data and one URL per agent. It is deleted after 6 hours without use. Copy your URL in Connect below.</dd>
-          </div>
-          <div className="rounded-xl border border-line bg-cream p-4 text-sm">
-            <dt className="font-semibold">Something you know that the app does not</dt>
-            <dd className="mt-1.5 text-muted">The demo gives you a file of MRR per customer, standing in for your billing data. Give it to your agent, never to the app. Download it in <AppLink href="/how-to?topic=examples" className="text-filament underline underline-offset-2">Bring what you know</AppLink>.</dd>
-          </div>
-        </dl>
-      </section>
-
       <div className="grid grid-cols-2 gap-2 min-[600px]:grid-cols-4" role="radiogroup" aria-label="What you want to do">
         {TOPICS.map((id) => {
           const on = id === shownTopic;

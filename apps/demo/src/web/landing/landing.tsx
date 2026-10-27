@@ -1,13 +1,12 @@
 /**
  * The public landing, laid out like hue.tineira.com (hue-switch-console app/page.tsx): header,
- * hero with a drawing, a choice of connection models, and the sections explaining the standard.
- * It opens no sandbox: that happens when the visitor enters the demo.
+ * hero with a drawing, a numbered list beside a card, a strip of facts, "what you need" cards,
+ * three steps, a closing card. It opens no sandbox: that happens when the visitor enters the demo.
  */
 import type { ReactNode } from "react";
-import { AppLink, CARD_HEADER, EYEBROW, H2, ICON_BUTTON, LogoMark, PAPER_URL, PaperIcon, PartRow, PRIMARY, SPEC_URL, ThemeToggle } from "../ui.tsx";
+import { AppLink, CARD_HEADER, EYEBROW, H2, ICON_BUTTON, LogoMark, PAPER_URL, PaperIcon, PartRow, PRIMARY, SECONDARY, SPEC_URL, ThemeToggle } from "../ui.tsx";
 import { JoinCard } from "./join-visuals.tsx";
 import { PinDiagram } from "./pin-diagram.tsx";
-import "./chooser.css";
 
 const BRING = [
   { n: "1", name: "Pulse knows the product", text: "Customers, plans, regions, seats and activity. It does not know revenue, and it should not." },
@@ -42,64 +41,99 @@ const FOCUS_JSON = `{
     breakdown.churned."
 }`;
 
-const COMPARISON = [
-  ["Your agent connects to", "Each app, one connection per app", "Your dock, once"],
-  ["Adding your 20th app", "One more connection set up in your agent", "Drop your agent on it and allow it"],
-  ["Works with", "Apps that implement the standard", "Apps that implement the standard, plus any web page with the extension"],
-  ["Reading two apps together", "Yes, with both connections", "Yes, through one connection"],
-  ["Runs on", "Web apps today; the standard also fits desktop apps", "Web and desktop apps. Your dock runs on the web and as a Windows app; Mac and Linux later"],
-  ["You drag your agent from", "Inside each app", "Your dock: a window, Float, or Windows"],
-  ["Your data goes", "From each app to your agent", "Through your dock to your agent"],
+const STEPS = [
+  { title: "Connect your agent", text: "Open the demo and copy your MCP URL into your agent, as a remote MCP server. No account and no login: the secret in the URL is your agent's access to your sandbox." },
+  { title: "Point at something", text: "Drag your agent's mark from the top bar onto a bar, a step of the bridge or a customer row. The chip next to the mark says pinned, then seen." },
+  { title: "Ask with what you know", text: "Give your agent your MRR file, then ask about “this”. It answers with numbers the app never had." },
 ];
 
-/** Generic examples keep the standard separate from the demo apps. */
-function ConnectionDiagram({ once = false }: { once?: boolean }) {
-  const marker = once ? "once-arrow" : "per-app-arrow";
+function StepVisual({ index }: { index: number }) {
+  const box = "flex h-[180px] items-center justify-center rounded-2xl border border-line bg-cream px-5";
+  if (index === 0) {
+    return (
+      <div className={box}>
+        <div className="w-full max-w-[280px] rounded-[10px] border border-line bg-background font-mono text-xs">
+          <div className="border-b border-line px-3 py-[9px] text-muted">Remote MCP server</div>
+          <div className="truncate px-3 py-2.5">
+            …/mcp/<span className="text-muted">7f3a…</span>/<span className="text-filament">c41e…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (index === 1) {
+    return (
+      <div className={box}>
+        <div className="relative flex h-[110px] items-end gap-2">
+          {[44, 58, 50, 72, 66, 88].map((h, i) => (
+            <span key={i} className={`block w-5 rounded-[3px] border border-foreground ${i === 4 ? "bg-filament-soft outline-2 outline-offset-2 outline-dashed outline-filament" : "bg-line"}`} style={{ height: h }} />
+          ))}
+          <span className="absolute -top-2 left-[106px] grid h-[22px] w-[22px] place-items-center rounded-[4px] bg-foreground font-mono text-[9px] font-semibold text-cream">CC</span>
+          <span className="absolute -top-3 left-[136px] rounded-full bg-filament-soft px-2 py-0.5 text-[11px] text-filament">pinned</span>
+        </div>
+      </div>
+    );
+  }
   return (
-    <figure className="chooser-diagram">
-      <svg viewBox="0 0 440 180" role="img" aria-label={once ? "Your agent connects to your dock, which connects to a web app, a desktop app and any page with the extension" : "Your agent makes a separate connection to each of three apps"}>
-        <defs>
-          <marker id={marker} markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-            <path d="M0 0 7 3.5 0 7" fill="none" stroke="currentColor" />
-          </marker>
-        </defs>
-        <g className="diagram-arrows" fill="none" stroke="currentColor" markerEnd={`url(#${marker})`}>
-          {once ? <>
-            <path d="M91 90H120" />
-            <path d="M255 90H278V29H307" />
-            <path d="M255 90H307" />
-            <path d="M255 90H278V151H307" />
-          </> : <>
-            <path d="M135 78C190 78 210 29 307 29" />
-            <path d="M135 90H307" />
-            <path d="M135 102C190 102 210 151 307 151" />
-          </>}
-        </g>
-        <rect className="diagram-box" x={once ? 4 : 15} y="68" width={once ? 87 : 120} height="44" rx="8" />
-        <text x={once ? 47.5 : 75} y="94" textAnchor="middle">Your agent</text>
-        {once && <>
-          <rect className="diagram-dock" x="125" y="51" width="130" height="78" rx="8" />
-          <g className="diagram-dock-text" textAnchor="middle">
-            <text x="190" y="76" className="diagram-title">Your dock</text>
-            <text x="190" y="97" className="diagram-platform">Web · Windows</text>
-            <text x="190" y="114" className="diagram-platform">Mac, Linux later</text>
-          </g>
-        </>}
-        {[29, 90, 151].map((y, i) => (
-          <g key={y}>
-            <rect className="diagram-box" x="312" y={y - 22} width="124" height="44" rx="8" strokeDasharray={once && i === 2 ? "5 4" : undefined} />
-            {once && i < 2 && <g fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
-              <rect x="323" y={y - 8} width="16" height="12" rx="1.5" />
-              {i === 0 ? <path d={`M323 ${y - 4}h16`} /> : <path d={`M331 ${y + 4}v4m-5 0h10`} />}
-            </g>}
-            <text x={once && i < 2 ? 385 : 374} y={y + 4} textAnchor="middle">{once ? ["Web app", "Desktop app", "Any page"][i] : "App"}</text>
-          </g>
-        ))}
-      </svg>
-      <figcaption>{once ? "drop your agent on an app to add it" : "one connection in your agent per app"}</figcaption>
-    </figure>
+    <div className={`${box} flex-col items-stretch gap-2`}>
+      <div className="self-end rounded-2xl rounded-br-md bg-filament-soft px-3 py-2 text-[13px]">How much MRR is this?</div>
+      <div className="self-start rounded-2xl rounded-bl-md border border-line bg-background px-3 py-2 text-[13px]">
+        <span className="font-semibold">$48,210.37</span> <span className="text-muted">across 121 customers; best per seat: cus_0042.</span>
+      </div>
+    </div>
   );
 }
+
+function NeedArt({ kind }: { kind: "agent" | "url" | "file" }) {
+  if (kind === "agent") {
+    return (
+      <div className="flex h-full items-center justify-center gap-3">
+        {["CC", "GP", "GR", "CU"].map((t, i) => (
+          <span key={t} className={`grid h-11 w-11 place-items-center rounded-lg font-mono text-[13px] font-semibold ${i === 0 ? "bg-foreground text-cream" : "border border-foreground bg-cream text-foreground"}`}>
+            {t}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  if (kind === "url") {
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <div className="w-full max-w-[260px] rounded-[10px] border border-foreground bg-cream font-mono text-[11px]">
+          <div className="flex items-center justify-between border-b border-line px-3 py-2 text-muted">
+            <span>mcp url</span>
+            <span className="text-filament">copy</span>
+          </div>
+          <div className="truncate px-3 py-2.5">https://…/mcp/7f3a…/c41e…</div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full items-center justify-center px-6">
+      <div className="w-full max-w-[240px] rounded-[10px] border border-foreground bg-cream font-mono text-[11px]">
+        <div className="border-b border-line px-3 py-2 text-muted">mrr-by-customer.csv</div>
+        {[
+          ["customer_id", "month", "mrr"],
+          ["cus_0042", "2026-03", "1,204.37"],
+          ["cus_0107", "2026-03", "318.92"],
+        ].map((row, i) => (
+          <div key={i} className={`grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-1.5 ${i === 0 ? "text-muted" : ""}`}>
+            {row.map((c) => (
+              <span key={c}>{c}</span>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const NEEDS: { label: string; title: string; text: string; art: "agent" | "url" | "file" }[] = [
+  { label: "01 · Agent", title: "An AI agent that speaks MCP", text: "Any client that accepts a remote MCP server by URL (Streamable HTTP): Claude Code, claude.ai, ChatGPT, Grok, Cursor and others.", art: "agent" },
+  { label: "02 · URL", title: "Your MCP URL from the demo", text: "Each visitor gets a private sandbox with synthetic data and one URL per agent. It is deleted after 6 hours without use.", art: "url" },
+  { label: "03 · What you know", title: "Something you know that the app does not", text: "The demo gives you a file of MRR per customer, standing in for your billing data. Give it to your agent, never to the app.", art: "file" },
+];
 
 export function Landing() {
   return (
@@ -115,6 +149,9 @@ export function Landing() {
               <PaperIcon />
             </a>
             <ThemeToggle />
+            <AppLink href="/how-to" className="inline-flex min-h-10 items-center whitespace-nowrap rounded-lg border border-line bg-background px-3.5 text-sm font-medium hover:border-filament">
+              Open the demo
+            </AppLink>
           </header>
 
           <section className="grid items-center gap-[clamp(28px,4cqi,56px)] py-14 min-[860px]:min-h-[calc(100svh-60px)] min-[860px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] min-[860px]:py-6">
@@ -124,39 +161,23 @@ export function Landing() {
               <p className="max-w-[34em] text-pretty text-[clamp(16px,1.5cqi,18px)] leading-[1.55] text-muted">
                 Drag your agent's mark onto a number, a row or one step of a chart, and ask about “this”. The app shares a key, never the screen. Your own agent reads the data behind it with the access it already has, and adds what it knows about you.
               </p>
+              <div className="flex flex-wrap gap-2.5">
+                <AppLink href="/how-to" className={PRIMARY}>
+                  Try the demo
+                </AppLink>
+                <a href={PAPER_URL} target="_blank" rel="noopener noreferrer" className={`${SECONDARY} gap-2`}>
+                  <PaperIcon />
+                  Read the paper
+                </a>
+              </div>
+              <p className="text-sm text-muted">No sign-up. You get a private sandbox with synthetic data, deleted after 6 hours without use.</p>
+              <AppLink href="/how-to" className="text-[15px] font-medium text-filament hover:underline">
+                Read the how-to →
+              </AppLink>
             </div>
             <PinDiagram />
           </section>
         </div>
-
-        <section id="choose" className="chooser-section" aria-labelledby="chooser-title">
-          <div className="chooser-intro">
-            <h2 id="chooser-title">Bring your own agent to any app</h2>
-            <p>Point it at a chart, a row or a paragraph and ask about “this”. No built-in assistant needed. Two ways to try the standard:</p>
-          </div>
-          <div className="chooser-cards">
-            <article className="chooser-card" aria-labelledby="per-app-title">
-              <span className="chooser-version">V1</span>
-              <h3 id="per-app-title">Connect app by app</h3>
-              <p>Each app that implements the standard gives your agent its own connection. Try it on Pulse, our example app.</p>
-              <ConnectionDiagram />
-              <div className="chooser-card-foot">
-                <p>About a minute</p>
-                <AppLink href="/how-to" className="chooser-button">Try it on Pulse <span aria-hidden="true">→</span></AppLink>
-              </div>
-            </article>
-            <article className="chooser-card" aria-labelledby="once-title">
-              <span className="chooser-version">V2</span>
-              <h3 id="once-title">Connect once</h3>
-              <p>Connect your agent once, to your dock. Drop it on any app that implements the standard, on the web or on your desktop, or on any web page with the extension.</p>
-              <ConnectionDiagram once />
-              <div className="chooser-card-foot">
-                <p>Try it on Pulse (web or Windows) and Signals</p>
-                <a href="https://v2.apc.tineira.com" className="chooser-button">Open your dock <span aria-hidden="true">→</span></a>
-              </div>
-            </article>
-          </div>
-        </section>
 
         <section id="bring" className="grid items-center gap-[clamp(28px,4cqi,56px)] min-[860px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
           <div className="flex flex-col gap-5">
@@ -177,15 +198,6 @@ export function Landing() {
             </div>
           </div>
           <JoinCard />
-        </section>
-
-        <section aria-label="Why it works this way" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,230px),1fr))] border-y border-line">
-          {FACTS.map((fact) => (
-            <div key={fact.title} className="flex flex-col gap-1.5 py-[22px] pr-5">
-              <h2 className="text-[15px] font-semibold">{fact.title}</h2>
-              <p className="text-pretty text-sm leading-normal text-muted">{fact.text}</p>
-            </div>
-          ))}
         </section>
 
         <section className="grid items-start gap-[clamp(28px,4cqi,56px)] min-[860px]:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
@@ -214,13 +226,68 @@ export function Landing() {
           </article>
         </section>
 
-        <section className="chooser-comparison" aria-labelledby="compare-title">
-          <h2 id="compare-title">Compare the two ways</h2>
-          <table>
-            <caption className="sr-only">Connect app by app (V1) and connect once (V2)</caption>
-            <thead><tr><td /><th scope="col">Connect app by app <span>(V1)</span></th><th scope="col">Connect once <span>(V2)</span></th></tr></thead>
-            <tbody>{COMPARISON.map(([label, perApp, once]) => <tr key={label}><th scope="row">{label}</th><td>{perApp}</td><td>{once}</td></tr>)}</tbody>
-          </table>
+        <section aria-label="Why it works this way" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,230px),1fr))] border-y border-line">
+          {FACTS.map((fact) => (
+            <div key={fact.title} className="flex flex-col gap-1.5 py-[22px] pr-5">
+              <h2 className="text-[15px] font-semibold">{fact.title}</h2>
+              <p className="text-pretty text-sm leading-normal text-muted">{fact.text}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="flex flex-col gap-7">
+          <h2 className={H2}>What you need</h2>
+          <ul className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] gap-4">
+            {NEEDS.map((card) => (
+              <li key={card.label} className="flex flex-col overflow-hidden rounded-[20px] border border-line bg-cream">
+                <div className={CARD_HEADER}>
+                  <span>{card.label}</span>
+                </div>
+                <div aria-hidden="true" className="bp-grid relative h-[230px] border-b border-line">
+                  <NeedArt kind={card.art} />
+                </div>
+                <div className="flex flex-col gap-1.5 px-[18px] pb-5 pt-4">
+                  <h3 className="text-lg font-semibold">{card.title}</h3>
+                  <p className="text-pretty text-[15px] leading-normal text-muted">{card.text}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section className="flex flex-col gap-7">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h2 className={H2}>From URL to answer in three steps</h2>
+            <AppLink href="/how-to" className="text-[15px] font-medium text-filament hover:underline">
+              Full how-to →
+            </AppLink>
+          </div>
+          <ol className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] gap-4">
+            {STEPS.map((step, i) => (
+              <li key={step.title} className="flex flex-col gap-3.5">
+                <StepVisual index={i} />
+                <span className="font-mono text-xs text-filament">{String(i + 1).padStart(2, "0")}</span>
+                <h3 className="text-lg font-semibold">{step.title}</h3>
+                <p className="text-pretty text-[15px] leading-normal text-muted">{step.text}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="flex flex-wrap items-center justify-between gap-6 rounded-3xl border border-line bg-cream p-[clamp(24px,4cqi,44px)]">
+          <div className="flex flex-[1_1_320px] flex-col gap-2">
+            <h2 className="text-[clamp(24px,2.6cqi,32px)] font-semibold leading-[1.15] tracking-[-0.02em]">Try it with your own agent.</h2>
+            <p className="text-[15px] leading-normal text-muted">Five minutes, no account. The how-to walks you through connecting, pointing and asking, with your own URL in it.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <AppLink href="/how-to" className={PRIMARY}>
+              Open the demo
+            </AppLink>
+            <a href={PAPER_URL} target="_blank" rel="noopener noreferrer" className={`${SECONDARY} gap-2`}>
+              <PaperIcon />
+              Read the paper
+            </a>
+          </div>
         </section>
 
         <p className="mb-8 max-w-[52em] text-xs leading-normal text-muted">

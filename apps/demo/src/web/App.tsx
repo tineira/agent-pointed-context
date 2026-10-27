@@ -12,6 +12,7 @@ import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
+import { Chooser } from "./landing/chooser.tsx";
 import { Landing } from "./landing/landing.tsx";
 import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
@@ -64,7 +65,7 @@ function v2Enabled(): boolean {
   }
 }
 
-/** The landing is public and opens no sandbox; every other page belongs to the visitor's sandbox. */
+/** The chooser and V1 landing are public; entering the demo opens or resumes a sandbox. */
 export function App() {
   const [path, setPath] = useState(location.pathname);
   useEffect(() => {
@@ -74,7 +75,7 @@ export function App() {
   }, []);
   return (
     <div className="flex min-h-svh flex-col">
-      {path === "/" ? <Landing /> : <SandboxGate />}
+      {path === "/" ? <Chooser /> : path === "/v1" ? <div className="v1-landing flex flex-1 flex-col"><Landing /></div> : <SandboxGate />}
       <SiteFooter />
     </div>
   );
