@@ -475,6 +475,8 @@ function Float(props: {
   function shrink(): void {
     const b = sized.current.before;
     if (!win || !b) return;
+    // Already there: no resize event will come to confirm it.
+    if (Math.abs(win.outerWidth - b.width) <= 2 && Math.abs(win.outerHeight - b.height) <= 2) return dispatch({ type: "resize", outer: outerOf(win) });
     try {
       win.resizeTo(b.width, b.height);
     } catch {
@@ -491,15 +493,15 @@ function Float(props: {
     win.addEventListener("resize", measure);
     return () => win.removeEventListener("resize", measure);
   }, [win]);
-  // A shrink that was refused (no click) is retried on the next click or key in the window.
+  // A shrink that was refused (no click) is retried on the next click or key press in the window; not on pointerdown, which would shrink it under a drag of a logo.
   useEffect(() => {
     if (!win || !size.wantShrink) return;
     const retry = () => shrink();
-    win.document.addEventListener("pointerdown", retry, { once: true });
-    win.document.addEventListener("keydown", retry, { once: true });
+    win.document.addEventListener("click", retry);
+    win.document.addEventListener("keyup", retry);
     return () => {
-      win.document.removeEventListener("pointerdown", retry);
-      win.document.removeEventListener("keydown", retry);
+      win.document.removeEventListener("click", retry);
+      win.document.removeEventListener("keyup", retry);
     };
   }, [win, size.wantShrink]);
   useEffect(() => {
@@ -615,7 +617,7 @@ function FloatAgents(props: {
   decide: (id: string, action: "approve" | "deny") => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
-  notice?: { open: boolean; /** The card was opened by a click: focus Allow. */ focus: boolean; onOpen: () => void };
+  notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
 }) {
   if (props.requests.length > 0 && props.notice && !props.notice.open) {
     const first = props.agents.find((a) => a.id === props.requests[0]!.agentId) ?? props.agents[0];
@@ -641,7 +643,7 @@ function FloatAgents(props: {
     return (
       <div className="float float-requests">
         {props.requests.map((r) => (
-          <div key={r.id} className="float-request">
+          <div key={r.id} className="float-request" tabIndex={-1} autoFocus={props.notice?.focus && r === props.requests[0]}>
             <p>
               {r.kind === "reader" ? (
                 <>
@@ -654,7 +656,7 @@ function FloatAgents(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" autoFocus={props.notice?.focus && r === props.requests[0]} onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
               <button type="button" onClick={() => props.decide(r.id, "deny")}>
