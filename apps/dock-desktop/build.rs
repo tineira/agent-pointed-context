@@ -3,8 +3,9 @@ fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "pet_agents",
-            "pet_dropped",
             "pet_bubble",
+            "pet_grip",
+            "pet_move",
             "pet_open_dock",
         ])),
     )

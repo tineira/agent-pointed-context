@@ -85,7 +85,8 @@ export const share = (dt: number, rate: number) => 1 - Math.exp(-Math.max(0, dt)
 /**
  * Where things are drawn, in the SVG's 200 unit box (viewBox -100 -110 200 200, centre (0, -10)). The
  * Windows pet window is clipped to a circle of CLIP.r around that centre (apps/dock-desktop/src/pets.rs),
- * so everything must stay inside it: the tests check the farthest point each state draws.
+ * so everything must stay inside it: the tests check the farthest point each state draws. The pet's
+ * grip (TIN-484) shows above that circle, outside it, so nothing drawn here reaches it.
  */
 export const CLIP = { cx: 0, cy: -10, r: 100 };
 export const GEOM = {

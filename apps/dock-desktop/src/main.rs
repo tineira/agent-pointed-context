@@ -1,8 +1,9 @@
 //! The APC dock for Windows (#84): the web dock (v2.apc.tineira.com/dock) in a window of its own,
-//! and its agents as desktop pets (TIN-479, pets.rs): each agent's logo in a small window of its own
-//! on top of every window, all shown and hidden with a global shortcut or from the tray. The pages are
-//! the web dock's own, so the hub, pairing and the drag are unchanged; only the windows are native.
-//! Closing a window hides it; Quit is in the tray.
+//! and its agents as desktop pets (TIN-479, pets.rs): each agent's character in a small window of
+//! its own on top of every window, moved by a grip shown on hover (TIN-484), all shown and hidden
+//! with a global shortcut or from the tray. The pages are the web dock's own, so the hub, pairing
+//! and the drag are unchanged; only the windows are native. Closing a window hides it; Quit is in
+//! the tray.
 //!
 //! APC_DOCK_ORIGIN points it at another dock (a local `pnpm --dir apps/dock dev`, say).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -167,7 +168,7 @@ fn main() {
         // which the dock page (remote, with no capability in the dock's window) cannot use, so the
         // links did nothing. Without it a click is a new window request, and on_new_window opens the
         // link (tauri_plugin_opener's open_url needs no plugin).
-        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_dropped, pets::pet_bubble, pets::pet_open_dock])
+        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_bubble, pets::pet_grip, pets::pet_move, pets::pet_open_dock])
         .setup(|app| {
             let app = app.handle();
             dock(app)?;
@@ -176,7 +177,7 @@ fn main() {
             tray(app, shown)?;
             // The pets resume the dock this window opens and wait for it on a first run, so both can
             // open at once (POST /api/dock with { resume: true }).
-            pets::start(app, shown)?;
+            pets::start(app)?;
             // Another app may hold the shortcut already: the tray still shows and hides the pets.
             if let Err(e) = app.global_shortcut().on_shortcut(SHORTCUT, |app, _, event| {
                 if event.state() == ShortcutState::Pressed {
@@ -187,8 +188,8 @@ fn main() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 if window.label().starts_with(pets::PREFIX) {
                     set_float(window.app_handle(), false);
@@ -196,6 +197,9 @@ fn main() {
                     let _ = window.hide();
                 }
             }
+            // A pet moved by its grip (TIN-484): its spot is saved once it settles.
+            WindowEvent::Moved(_) => pets::moved(window.app_handle(), window.label()),
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("the APC dock could not start");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { grabPoint, movesPet, petState, pinPhase, READ_HOLD_MS, watchRead, type PetInput } from "../src/web/pet-state.ts";
+import { petState, pinPhase, READ_HOLD_MS, watchRead, type PetInput } from "../src/web/pet-state.ts";
 
 const calm: PetInput = { connected: true, waiting: false, busy: false, pin: "none", requests: 0, dragging: false };
 
@@ -39,19 +39,4 @@ test("A pin read while the page watches shows as read for a moment; one already 
   // A new pin read between two looks shows too; no pin shows nothing.
   assert.equal(pinPhase(watchRead(read, { pinned_at: "2026-10-27T11:00:00Z", seen: true }, 9000), 9000), "read");
   assert.equal(pinPhase(watchRead(read, null, 9000), 9000), "none");
-});
-
-test("A pet's grab point is where the drag held it, inside it", () => {
-  const box = { left: 0, top: 0, width: 72, height: 72 };
-  assert.deepEqual(grabPoint({ x: 30, y: 40 }, box), [30, 40]);
-  // The logo away from the window's corner (a bubble beside it).
-  assert.deepEqual(grabPoint({ x: 200, y: 140 }, { left: 168, top: 106, width: 72, height: 72 }), [32, 34]);
-  assert.deepEqual(grabPoint({ x: -5, y: 90 }, box), [0, 72]);
-});
-
-test("Only a drop nothing took moves the pet", () => {
-  assert.equal(movesPet("none"), true);
-  assert.equal(movesPet("link"), false);
-  assert.equal(movesPet("copy"), false);
-  assert.equal(movesPet(undefined), false);
 });

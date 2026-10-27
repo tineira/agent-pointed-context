@@ -17,8 +17,8 @@ tauri-plugin-single-instance = "=2.5.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 
-# The pets (TIN-479): window regions, so only the logo and its bubble take clicks; the mouse
-# button, to tell a drag cancelled with Esc from a drop; showing a pet without activating it; a
+# The pets (TIN-479): window regions, so only the logo, its grip and its bubble take clicks; the
+# mouse button, to tell when a move by the grip ends (TIN-484); showing a pet without activating it; a
 # subclass, so activating a pet paints no title bar in it.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

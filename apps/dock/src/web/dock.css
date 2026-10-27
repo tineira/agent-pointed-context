@@ -87,19 +87,27 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 
 /*
  * The APC dock for Windows' desktop pets (TIN-479): the window is the pet, transparent around it.
- * The app sizes the window and clips it to the logo and the bubble: keep 104 px, the 4 px inset, the
- * radii (the character is a circle) and the gap in step with apps/dock-desktop/src/pets.rs.
+ * The app sizes the window and clips it to the logo, the grip while the mouse is over the pet, and the
+ * bubble: keep 104 px, the grip's 14 px band and its 32 px pill, the 4 px inset, the radii (the
+ * character is a circle) and the gap in step with apps/dock-desktop/src/pets.rs.
  */
 .pet-body { margin: 0; min-height: 0; overflow: hidden; background: transparent; }
 .pet { position: fixed; inset: 0; --pet-gap: 6px; }
-.pet-logo { position: absolute; left: 0; top: 0; width: 104px; height: 104px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 52px; background: none; color: inherit; cursor: grab; user-select: none; }
+/* The pet: the grip's band, and the logo below it. */
+.pet-block { position: absolute; left: 0; top: 0; width: 104px; height: 118px; }
+.pet-left .pet-block { left: auto; right: 0; }
+.pet-up .pet-block { top: auto; bottom: 0; }
+.pet-logo { position: absolute; left: 0; top: 14px; width: 104px; height: 104px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 52px; background: none; color: inherit; cursor: grab; user-select: none; }
 /* The hint's "+" and the opening pet, which are not characters. */
 .pet-logo .chip { width: 96px; height: 96px; border-radius: 48px; }
-.pet-left .pet-logo { left: auto; right: 0; }
-.pet-up .pet-logo { top: auto; bottom: 0; }
+/* The grip (TIN-484): only it moves the pet, and only while the mouse is over the pet does it show. */
+.pet-grip { position: absolute; left: 36px; top: 0; width: 32px; height: 14px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); cursor: move; opacity: 0; visibility: hidden; transition: opacity 0.12s, visibility 0.12s; }
+.pet-grip svg { display: block; pointer-events: none; }
+.pet-hover .pet-grip { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { .pet-grip { transition: none; } }
 .pet-bubble { position: absolute; left: 0; top: 0; width: 240px; padding: 10px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--fg); font-size: 13px; display: flex; flex-direction: column; gap: 12px; }
 .pet-left .pet-bubble { left: auto; right: 0; }
-.pet-down .pet-bubble { top: calc(104px + var(--pet-gap)); }
+.pet-down .pet-bubble { top: calc(118px + var(--pet-gap)); }
 .pet-measuring .pet-bubble { visibility: hidden; }
 .pet-request p { margin: 0 0 8px; color: var(--fg); }
 .pet-hint { padding: 4px; cursor: pointer; }
