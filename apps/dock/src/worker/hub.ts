@@ -9,6 +9,7 @@
  * app's last view, to show them in the dock.
  */
 import { DurableObject } from "cloudflare:workers";
+import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
 import type { FocusPayload, ViewPayload } from "@apc/protocol";
 import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@apc/server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
@@ -16,7 +17,7 @@ import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
 import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
-import { appAllowed, appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
+import { appAllowed, appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingSite, readingText, shapeReading, type PageReading } from "./reading.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -381,8 +382,9 @@ export class Hub extends DurableObject<Env> {
     if (!this.meta("seed")) this.setMeta("seed", String(crypto.getRandomValues(new Uint32Array(1))[0]));
     return {
       seed: Number(this.meta("seed")),
-      // The first run (TIN-403) is over once a world is chosen; a dock already paired with an app skips it.
+      // Kept for older dock clients; the checklist no longer gates the dock on this flag.
       setup_done: !!this.meta("setup_done") || this.sql.exec("select 1 from pairings limit 1").toArray().length > 0,
+      onboarding: this.onboarding(),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
       agents: this.agents().map((a) => {
         const row = this.pointer(a.id);
@@ -418,6 +420,24 @@ export class Hub extends DurableObject<Env> {
         };
       }),
     };
+  }
+
+  private onboarding(): Onboarding {
+    const saved = this.meta("onboarding");
+    return saved ? JSON.parse(saved) as Onboarding : newOnboarding();
+  }
+
+  private milestone(event: OnboardingEvent): void {
+    const previous = this.onboarding();
+    const next = advanceOnboarding(previous, event);
+    if (next !== previous) this.setMeta("onboarding", JSON.stringify(next));
+  }
+
+  /** Owner-only: a successful Float, installed PWA launch, or native dock launch. */
+  async keptAtHand(): Promise<{ ok: true }> {
+    this.milestone({ type: "kept" });
+    this.broadcast();
+    return { ok: true };
   }
 
   /** A single-use pairing ticket for one agent, valid 60 s: what the dock puts on a drag. */
@@ -488,6 +508,13 @@ export class Hub extends DurableObject<Env> {
   }
 
   private logCall(agentId: string, entry: Omit<CallEntry, "at">): void {
+    if (!entry.error) {
+      if (entry.pin) this.milestone({ type: "pin_read" });
+      const app = entry.app && entry.app !== PAGE_APP.id ? this.pairings(agentId, "paired").find((p) => p.app_id === entry.app) : null;
+      if (app) {
+        this.milestone({ type: "app_read", agent: agentId, app: app.app_origin });
+      }
+    }
     this.sql.exec("insert into calls (agent_id, at, app, tool, via, pin, error) values (?, ?, ?, ?, ?, ?, ?)", agentId, new Date().toISOString(), entry.app, entry.tool, entry.via, entry.pin, entry.error);
     this.sql.exec("delete from calls where agent_id = ? and id not in (select id from calls where agent_id = ? order by id desc limit ?)", agentId, agentId, CALLS_KEPT);
   }
@@ -621,6 +648,7 @@ export class Hub extends DurableObject<Env> {
     if (!reading) return { ok: false, error: "invalid_reading" };
     const now = new Date().toISOString();
     this.sql.exec("update readers set reading = ?, reading_at = ?, read_at = null where id = ?", JSON.stringify(reading), now, r.id);
+    this.milestone({ type: "reading_sent" });
     const site = readingSite(reading);
     const focus: FocusPayload = { kind: "page_reading", id: site, part: null, params: null, app_url: reading.url, pinned_at: now, next: "get_reading", next_args: {} };
     this.sql.exec(
@@ -812,6 +840,7 @@ export class Hub extends DurableObject<Env> {
         if (m?.method !== "initialize") continue;
         const info = m.params?.clientInfo;
         if (typeof info?.name !== "string" || info.name.length > 100) continue;
+        this.milestone({ type: "connected" });
         const title = typeof info.title === "string" ? info.title.replace(/[\p{C}]/gu, "").trim().slice(0, 40) || null : null;
         const version = typeof info.version === "string" ? info.version.replace(/[\p{C}]/gu, "").trim().slice(0, 40) || null : null;
         const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
@@ -887,10 +916,7 @@ export class Hub extends DurableObject<Env> {
   private entry(agentId: string, name: string, args: Record<string, unknown>, result: ToolResult, before: PointerRow | null): Omit<CallEntry, "at"> {
     const error = errorOf(result);
     if (name === "get_current_view" || name === "wait_for_focus" || name === "list_app_tools") {
-      const s = result.structuredContent as { focus?: unknown } | undefined;
-      const now = this.pointer(agentId);
-      const pin = !error && s?.focus && now ? focusLabel(now.focus) : null;
-      return { app: null, tool: name, via: "dock", pin, error };
+      return dockReadEntry(name, result);
     }
     let app: string | null = null;
     let tool = name;

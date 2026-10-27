@@ -4,6 +4,7 @@
  * and calls, and the Remove confirm (TIN-418).
  */
 import { useEffect, useRef, useState } from "react";
+import type { Onboarding } from "../onboarding.ts";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { ConnectAgent, CopyRow } from "./setup.tsx";
@@ -38,6 +39,7 @@ export interface DockAgent {
 export interface DockState {
   seed: number;
   setup_done: boolean;
+  onboarding: Onboarding;
   expires_at: string;
   agents: DockAgent[];
 }

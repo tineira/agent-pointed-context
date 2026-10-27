@@ -114,18 +114,25 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .pet-hint .chip { font-size: 28px; line-height: 1; color: var(--muted); }
 .pet-waiting { opacity: 0.4; }
 
-/* The first run and Change world (TIN-403). */
+/* The event-driven checklist and the separate Change world action (TIN-489). */
 .setup { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
 .setup p { font-size: 13px; }
 .setup-title { margin: 0; }
-.setup-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.setup-steps li { display: flex; align-items: center; gap: 8px; }
-.setup-steps li span { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--line); border-radius: 50%; font-size: 11px; font-weight: 600; }
-.setup-steps li.on { color: var(--fg); font-weight: 600; }
-.setup-steps li.on span { border-color: var(--accent); color: var(--accent); }
-.setup-steps li.done span { border-color: var(--ok); color: var(--ok); }
-.setup-agent { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-.setup-agent .chip { width: 52px; height: 52px; border-radius: 14px; }
+.setup-title { text-transform: none; letter-spacing: normal; color: var(--fg); font-size: 15px; }
+.checklist-items { list-style: none; padding: 0; margin: 0; }
+.checklist-items > li + li { border-top: 1px solid var(--line); }
+.checklist-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 0; border: 0; border-radius: 0; background: none; text-align: left; font-weight: 600; }
+.checklist-toggle small { font-weight: 400; color: var(--muted); }
+.checklist-check { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; font-size: 12px; }
+.done .checklist-check { color: var(--ok); border-color: var(--ok); }
+.checklist-caret { margin-left: auto; color: var(--muted); }
+.checklist-body > div { display: flex; flex-direction: column; gap: 10px; padding: 0 0 14px; min-width: 0; }
+.checklist-body[hidden] { display: none; }
+.allow-guide { margin: 0; padding-left: 20px; font-size: 13px; color: var(--muted); }
+.allow-guide li + li { margin-top: 8px; }
+.allow-guide .current { color: var(--accent); font-weight: 600; }
+.dock-menu summary { cursor: pointer; color: var(--muted); }
+.dock-menu[open] { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .ok { color: var(--ok); }
 .copy-row { flex-wrap: nowrap; align-items: stretch; }
 .url-block { white-space: pre-wrap; }
@@ -141,7 +148,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .download { display: block; text-align: center; padding: 9px; border: 1px solid var(--line); border-radius: 12px; color: var(--fg); text-decoration: none; font-weight: 600; }
 .download:hover { border-color: var(--muted); }
 .small-note { font-size: 11px; }
-.setup-agent .chip[draggable="true"] { cursor: grab; }
 .float-requests { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; }
 .float-request { padding: 10px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .float-request:focus { outline: none; }

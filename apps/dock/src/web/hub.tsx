@@ -16,7 +16,7 @@ import { AgentPet } from "./apc-pet.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
-import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, DOCK_DESKTOP, Install, Setup } from "./setup.tsx";
+import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -84,13 +84,7 @@ export function HubDock() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [shown, setShown] = useState<Set<string>>(new Set());
-  // The first run or Change world (TIN-403, TIN-406). It stays open until the person is done, though
-  // the hub marks the first run over as soon as the world is chosen.
-  const [wizard, setWizard] = useState<"first" | "world" | null>(null);
-  const setupDone = state?.setup_done;
-  useEffect(() => {
-    if (setupDone === false) setWizard((w) => w ?? "first");
-  }, [setupDone]);
+  const [world, setWorld] = useState(false);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
@@ -119,6 +113,16 @@ export function HubDock() {
       } else setError(String(e));
     });
   }, [base]);
+  const keptAtHand = useCallback(() => {
+    if (base) void call(`${base}/kept`, {}).then(refresh).catch(() => undefined);
+  }, [base, refresh]);
+  useEffect(() => {
+    if (!base || state?.onboarding.kept) return;
+    const installed = () => keptAtHand();
+    if (DESKTOP_SHELL || window.matchMedia("(display-mode: standalone)").matches) installed();
+    window.addEventListener("appinstalled", installed);
+    return () => window.removeEventListener("appinstalled", installed);
+  }, [base, state?.onboarding.kept, keptAtHand]);
 
   // Live: the hub says "state" on every change; the page pings so the hub knows the dock is open.
   useEffect(() => {
@@ -297,30 +301,6 @@ export function HubDock() {
   // The APC dock for Windows' always-on-top strip (#84), in its builds before the pets: only what Float shows.
   if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />;
 
-  // The first run, or Change world (TIN-403): the dock shows only that, and any pairing request.
-  if (wizard || !state.setup_done) {
-    return (
-      <main className="dock">
-        <Header />
-        <BadgeSources agents={state.agents} />
-        {requests}
-        <Setup
-          agent={state.agents[0]}
-          seed={state.seed}
-          {...(wizard === "world" ? { only: "world" as const } : {})}
-          onWorld={async (seed) => {
-            await call(`${base}/world`, { seed });
-            refresh();
-          }}
-          onDone={() => setWizard(null)}
-        />
-        <div className="row small footer">
-          <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
-        </div>
-      </main>
-    );
-  }
-
   const pageOf = agentRoute(path);
   if (pageOf) {
     const agent = state.agents.find((a) => a.id === pageOf);
@@ -367,7 +347,7 @@ export function HubDock() {
           return (
             <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
               <div className="tile-drag" {...dragProps(a)}>
-                <AgentPet agent={a} size={104} dragging={dragging === a.id} decorative />
+                {connected ? <AgentPet agent={a} size={104} dragging={dragging === a.id} decorative /> : <AgentIcon clientName={null} motion="idle" size={64} />}
                 <span className="tile-name">{a.name}</span>
                 <span className="tile-where">
                   {a.focus ? (
@@ -400,7 +380,7 @@ export function HubDock() {
                 </a>
               ) : (
                 // Not connected yet: how to connect it stays under its tile, as in the first run.
-                <details className="tile-details" open>
+                <details className="tile-details">
                   <summary>Connect this agent</summary>
                   <ConnectAgent agent={a} />
                   <RemoveAgent agent={a} apps={[]} remove={() => call(`${base}/agents/${a.id}/remove`, {}).then(refresh)} />
@@ -410,45 +390,34 @@ export function HubDock() {
           );
         })}
       </ul>
+      <Setup agents={state.agents} seed={state.seed} progress={state.onboarding} keepAtHand={
+        <div className="row">
+          {DESKTOP_SHELL ? <span className="muted">{DESKTOP_SHORTCUT} floats your agents</span> : <>
+            <Float agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand} />
+            <Install />
+          </>}
+        </div>
+      } />
       <nav className="launch" aria-label="Apps">
         {APPS.map((app) => (
-          <a
-            key={app.name}
-            className="launch-app"
-            href={appUrl(app, state.seed)}
-            target="_blank"
-            rel="noreferrer"
-            title={`Open ${app.name} on this dock's world`}
-          >
-            <span className="launch-icon" aria-hidden="true">
-              {app.glyph}
-            </span>
-            {app.name}
-          </a>
+          <OpenApp key={app.name} app={app} seed={state.seed} />
         ))}
       </nav>
       <div className="row small footer">
         <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
           Add an agent
         </button>
-        {DESKTOP_SHELL ? (
-          <span className="muted" title="The APC dock for Windows keeps your agents on top of every window">
-            {DESKTOP_SHORTCUT} floats your agents
-          </span>
-        ) : (
-          <Float agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />
-        )}
-        <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWizard("world")}>
-          Change world
-        </button>
-        {!DESKTOP_SHELL && <Install />}
-        {DOCK_DESKTOP.offered && (
-          <a href={DOCK_DESKTOP.url} title={`Get the APC dock for Windows: your agents on top of every window. ${DOCK_DESKTOP.note}`}>
-            Dock for Windows
-          </a>
-        )}
-        <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
+        <details className="dock-menu">
+          <summary>Menu</summary>
+          <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWorld(true)}>Change world</button>
+          <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
+        </details>
       </div>
+      {world && <World seed={state.seed} onDone={() => setWorld(false)} onWorld={async (seed) => {
+        const result = await call<{ ok: boolean }>(`${base}/world`, { seed });
+        if (!result.ok) throw new Error("Could not change world");
+        refresh();
+      }} />}
     </main>
   );
 }
@@ -471,6 +440,7 @@ interface FloatRequest {
 
 function Float(props: {
   agents: DockAgent[];
+  onUsed: () => void;
   /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
   requests: FloatRequest[];
   decide: (id: string, action: "approve" | "deny") => void;
@@ -627,6 +597,7 @@ function Float(props: {
       setWin(null);
     });
     setWin(w);
+    props.onUsed();
   }
   if (!pip) return prompt || null;
   return (

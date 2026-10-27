@@ -51,6 +51,7 @@ app.use("/api/d/:did/*", async (c, next) => {
 const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.did);
 app.get("/api/d/:did/state", async (c) => c.json(await stub(c).state(new URL(c.req.url).origin)));
 app.post("/api/d/:did/agents", async (c) => c.json(await stub(c).addAgent()));
+app.post("/api/d/:did/kept", async (c) => c.json(await stub(c).keptAtHand()));
 /** Start over (TIN-411): the dock gives its grants back and forgets everything, and its cookie goes. */
 app.post("/api/d/:did/reset", async (c) => {
   await stub(c).reset();
