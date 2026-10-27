@@ -86,6 +86,15 @@ export function ConnectAgent(props: { agent: SetupAgent }) {
   );
 }
 
+/**
+ * The APC dock for Windows (#84) loads the dock in its own windows: the dock, marked by a script the
+ * app runs on every load (so it holds through Start over), which needs no Install or Float, and its
+ * always-on-top strip with ?view=strip.
+ */
+export const DESKTOP_SHELL = (window as { __APC_SHELL__?: string }).__APC_SHELL__ === "desktop";
+/** The global shortcut the desktop dock registers (SHORTCUT in apps/dock-desktop/src/main.rs). */
+export const DESKTOP_SHORTCUT = "Alt+Shift+Space";
+
 /** Install the dock as an app (Chrome and Edge offer it; elsewhere use the browser's menu). Hidden once installed. */
 export function Install(props: { label?: string }) {
   const [prompt, setPrompt] = useState<(Event & { prompt(): Promise<void> }) | null>(null);
@@ -235,9 +244,13 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
     body = (
       <>
         <p>This is your agent dock. Your agents live here: connect each one once, then drag it onto anything in an APC app to point it at what you see. The apps have no agent of their own.</p>
-        <p>Install the dock as an app to keep it at hand; Float keeps your agents on top of other windows.</p>
+        {DESKTOP_SHELL ? (
+          <p>Your agents also float on top of every window, ready to drag: {DESKTOP_SHORTCUT} shows and hides them, and so does the APC Dock icon in the tray.</p>
+        ) : (
+          <p>Install the dock as an app to keep it at hand; Float keeps your agents on top of other windows.</p>
+        )}
         <div className="row">
-          <Install label="Install the dock" />
+          {!DESKTOP_SHELL && <Install label="Install the dock" />}
           <button type="button" className="primary" onClick={() => setStep(1)}>
             Next
           </button>

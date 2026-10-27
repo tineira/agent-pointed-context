@@ -24,10 +24,15 @@ function session(cookie: string | undefined): { did: string; owner: string } | n
   return m ? { did: m[1]!, owner: m[2]! } : null;
 }
 
-/** Resume the visitor's dock, or open a new one. */
+/**
+ * Resume the visitor's dock, or open a new one. With { resume: true } (the desktop dock's strip, #84,
+ * which opens beside the dock's own window and must not make a second dock), only resume: 404 without one.
+ */
 app.post("/api/dock", async (c) => {
   const current = session(getCookie(c, COOKIE));
   if (current && (await stubFor(c.env, current.did).isOwner(current.owner))) return c.json({ did: current.did, created: false });
+  const body = (await c.req.json().catch(() => null)) as { resume?: unknown } | null;
+  if (body?.resume === true) return c.json({ error: "no_dock" }, 404);
   const did = randomHex(16);
   const { owner } = await stubFor(c.env, did).init(did);
   setCookie(c, COOKIE, `${did}.${owner}`, { path: "/", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: Math.floor(DOCK_TTL_MS / 1000) });

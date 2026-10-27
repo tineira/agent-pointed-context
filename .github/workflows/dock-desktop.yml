@@ -1,0 +1,39 @@
+name: Dock for Windows
+
+# The APC dock for Windows (#84): the web dock in a Tauri window of its own, with an always-on-top
+# strip, a global shortcut and a tray icon. Built as an NSIS installer, kept as this run's artifact.
+on:
+  push:
+    branches: [main]
+    paths: ["apps/dock-desktop/**", ".github/workflows/dock-desktop.yml"]
+  pull_request:
+    paths: ["apps/dock-desktop/**", ".github/workflows/dock-desktop.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/dock-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/dock-desktop
+      - run: cargo clippy --locked -- -D warnings
+      # The Tauri CLI at a release at least two weeks old, outside the pnpm workspace (it needs no package.json).
+      - run: npx --yes @tauri-apps/cli@2.12.2 build --bundles nsis -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APC-Dock-win-x64
+          path: apps/dock-desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

@@ -1,0 +1,23 @@
+[package]
+name = "apc-dock"
+version = "0.1.0"
+description = "The APC agent dock for Windows: always on top, a global shortcut, a tray icon"
+license = "MIT"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "=2.7.2", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.3", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "=2.4.1"
+tauri-plugin-opener = "=2.7.1"
+tauri-plugin-single-instance = "=2.5.3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
