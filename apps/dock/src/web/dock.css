@@ -114,7 +114,14 @@ button:disabled { opacity: 0.5; cursor: default; }
 .setup-agent .chip[draggable="true"] { cursor: grab; }
 .float-requests { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 8px; }
 .float-request { padding: 10px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.float-request:focus { outline: none; }
 .float-request p { color: var(--fg); margin: 0; }
+/* The notice that fits the smallest Float window, 96 x 110 (TIN-480); a click opens the request. */
+.float-notice-wrap { padding: 4px; }
+.float-notice { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; padding: 6px 4px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); font-size: 12px; line-height: 1.2; cursor: pointer; }
+.float-notice b { color: var(--accent); }
+.float-notice .chip { position: relative; width: 36px; height: 36px; border-radius: 10px; }
+.float-notice-badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
 
 /* Remove an agent (TIN-418). */
 .danger-link { border: 0; background: none; padding: 0; color: #c0392b; text-decoration: underline; }

@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "lib": ["es2023"], "types": ["node"] },
-  "include": ["test", "src/worker/logic.ts", "src/worker/reading.ts"]
+  "include": ["test", "src/worker/logic.ts", "src/worker/reading.ts", "src/web/float-size.ts"]
 }
