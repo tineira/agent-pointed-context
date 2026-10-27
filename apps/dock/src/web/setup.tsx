@@ -214,7 +214,7 @@ export function Setup(props: { agents: DockAgent[]; seed: number; progress: Onbo
     </div>,
     <div key="page">
       <p>Add the extension, then drop your agent on any paragraph. Allow the site in the extension and this browser in the dock when asked.</p>
-      <a href="https://github.com/tineira/agent-pointed-context/blob/main/README.md#status" target="_blank" rel="noreferrer">Developer install — extension instructions</a>
+      <a href="/extension" target="_blank" rel="noreferrer">Add the browser extension — step by step</a>
       <p className="small-note">The extension is not in the stores yet. This checks itself when your first page reading is sent.</p>
     </div>,
     <div key="keep">

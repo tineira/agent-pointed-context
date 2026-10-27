@@ -27,10 +27,18 @@ interface Drop {
 // site get it injected too: when the person grants the site (the permission prompt closes the popup,
 // so the popup cannot do it) and when the extension is installed or updated.
 chrome.runtime.onInstalled.addListener((details) => {
+  void injectDockPresence();
   void syncScripts().then(() => injectOpenTabs());
   // The welcome page asks for the one grant (13.3), so it is never hidden in the collapsed popup.
   if (details.reason === "install") void chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
 });
+
+/** An install can happen while the instructions or dock are already open. */
+async function injectDockPresence(): Promise<void> {
+  for (const tab of await chrome.tabs.query({ url: hubPatterns(__APC_DEV__) })) {
+    if (typeof tab.id === "number") await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["dock-presence.js"] }).catch(() => {});
+  }
+}
 chrome.runtime.onStartup.addListener(() => void syncScripts());
 // Open dock (Alt+Shift+A) and Float (Alt+Shift+F), TIN-473; the person can change them at chrome://extensions/shortcuts.
 chrome.commands.onCommand.addListener((command) => {
