@@ -13,6 +13,7 @@ import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
+import { cardOuterSize, fitsCard } from "./float-size.ts";
 import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, DOCK_DESKTOP, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
@@ -448,6 +449,40 @@ function Float(props: {
   const root = useRef<Root | null>(null);
   const latest = useRef(props);
   latest.current = props;
+  // Chrome resizes a Picture-in-Picture window only during a user activation (TIN-480): a request
+  // shows a compact notice, and the click on it (the activation) grows the window to the card.
+  const [opened, setOpened] = useState(false);
+  const [inner, setInner] = useState({ width: 0, height: 0 });
+  const before = useRef<{ width: number; height: number } | null>(null);
+  const asking = props.requests.length > 0;
+  const showCard = opened || (!!win && fitsCard(inner));
+  function grow(): void {
+    if (!win) return;
+    try {
+      before.current ??= { width: win.outerWidth, height: win.outerHeight };
+      const t = cardOuterSize({ width: win.innerWidth, height: win.innerHeight }, { width: win.outerWidth, height: win.outerHeight });
+      win.resizeTo(t.width, t.height);
+    } catch {
+      // resize refused
+    }
+  }
+  function shrink(): void {
+    const b = before.current;
+    before.current = null;
+    if (!win || !b) return;
+    try {
+      win.resizeTo(b.width, b.height);
+    } catch {
+      // resize refused
+    }
+  }
+  useEffect(() => {
+    if (!win) return;
+    const measure = () => setInner({ width: win.innerWidth, height: win.innerHeight });
+    measure();
+    win.addEventListener("resize", measure);
+    return () => win.removeEventListener("resize", measure);
+  }, [win]);
   useEffect(() => {
     if (!win) return;
     root.current ??= createRoot(win.document.body);
@@ -455,20 +490,24 @@ function Float(props: {
       <FloatAgents
         agents={props.agents}
         requests={props.requests}
-        decide={(id, action) => latest.current.decide(id, action)}
+        decide={(id, action) => {
+          // The click is a user activation: the last decision gives the logos' size back at once.
+          if (latest.current.requests.length <= 1) shrink();
+          latest.current.decide(id, action);
+        }}
         dragProps={(a) => latest.current.dragProps(a)}
+        notice={{ open: showCard, onOpen: () => (setOpened(true), grow()) }}
       />,
     );
-  }, [win, props.agents, props.requests]);
-  // Grow while a request waits, so it fits; a browser may refuse without a click, and the request
-  // then shows in place of the logos anyway.
-  const asking = props.requests.length > 0;
+  }, [win, props.agents, props.requests, showCard]);
+  // Where a browser allows a resize without a click, the card shows at once (the window then fits);
+  // otherwise the notice stays until the click. With no request left, back to the logos' size.
   useEffect(() => {
     if (!win) return;
-    try {
-      if (asking) win.resizeTo(Math.max(win.outerWidth, 300), Math.max(win.outerHeight, 190));
-    } catch {
-      // resize refused
+    if (asking) grow();
+    else {
+      setOpened(false);
+      shrink();
     }
   }, [win, asking]);
   const dismiss = () => {
@@ -519,6 +558,8 @@ function Float(props: {
     w.addEventListener("pagehide", () => {
       root.current?.unmount();
       root.current = null;
+      before.current = null;
+      setOpened(false);
       setWin(null);
     });
     setWin(w);
@@ -543,7 +584,29 @@ function FloatAgents(props: {
   requests: FloatRequest[];
   decide: (id: string, action: "approve" | "deny") => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
+  /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
+  notice?: { open: boolean; onOpen: () => void };
 }) {
+  if (props.requests.length > 0 && props.notice && !props.notice.open) {
+    const first = props.agents[0];
+    const n = props.requests.length;
+    return (
+      <div className="float float-notice-wrap">
+        <button type="button" className="float-notice" onClick={props.notice.onOpen} title="Open the request">
+          <span className="chip">
+            {first && <AgentIcon clientName={first.client_name} clientUa={first.client_ua} clientIcon={first.client_icon} motion="off" size={28} />}
+            <span className="float-notice-badge" aria-hidden="true">
+              {n}
+            </span>
+          </span>
+          <span>
+            {n} {n === 1 ? "request" : "requests"}
+          </span>
+          <b>Review</b>
+        </button>
+      </div>
+    );
+  }
   if (props.requests.length > 0)
     return (
       <div className="float float-requests">
