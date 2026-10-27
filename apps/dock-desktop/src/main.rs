@@ -166,7 +166,10 @@ fn main() {
         // A second launch brings the running dock to the front.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show_dock(app)))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_opener::init())
+        // No opener plugin: its script takes over clicks on target=_blank links to open them over IPC,
+        // which the dock page (remote, no capabilities) cannot use, so the links did nothing. Without
+        // it a click is a new window request, and on_new_window opens the link (tauri_plugin_opener's
+        // open_url needs no plugin).
         .setup(|app| {
             let app = app.handle();
             dock(app)?;
