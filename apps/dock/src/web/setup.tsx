@@ -88,8 +88,9 @@ export function ConnectAgent(props: { agent: SetupAgent }) {
 
 /**
  * The APC dock for Windows (#84) loads the dock in its own windows: the dock, marked by a script the
- * app runs on every load (so it holds through Start over), which needs no Install or Float, and its
- * always-on-top strip with ?view=strip.
+ * app runs on every load (so it holds through Start over), which needs no Install or Float, and each
+ * agent as a desktop pet with ?view=pet&agent=<id> (TIN-479, pet.tsx). Its builds before the pets
+ * opened an always-on-top strip with ?view=strip, which still works.
  */
 export const DESKTOP_SHELL = (window as { __APC_SHELL__?: string }).__APC_SHELL__ === "desktop";
 /** The global shortcut the desktop dock registers (SHORTCUT in apps/dock-desktop/src/main.rs). */
@@ -255,7 +256,7 @@ export function Setup(props: { agent: SetupAgent | undefined; seed: number; only
       <>
         <p>This is your agent dock. Your agents live here: connect each one once, then drag it onto anything in an APC app to point it at what you see. The apps have no agent of their own.</p>
         {DESKTOP_SHELL ? (
-          <p>Your agents also float on top of every window, ready to drag: {DESKTOP_SHORTCUT} shows and hides them, and so does the APC Dock icon in the tray.</p>
+          <p>Your agents also float on top of every window, each on its own: drag one onto an app to point it, or onto any empty spot to move it there. {DESKTOP_SHORTCUT} shows and hides them, and so does the APC Dock icon in the tray.</p>
         ) : (
           <p>Install the dock as an app to keep it at hand; Float keeps your agents on top of other windows.</p>
         )}

@@ -84,6 +84,26 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .float-empty { color: var(--muted); font-size: 13px; text-align: center; }
 .float-agent .chip { width: 72px; height: 72px; border-radius: 18px; }
 
+/*
+ * The APC dock for Windows' desktop pets (TIN-479): the window is the pet, transparent around it.
+ * The app sizes the window and clips it to the logo and the bubble: keep 72 px, the 4 px inset, the
+ * radii and the gap in step with apps/dock-desktop/src/pets.rs.
+ */
+.pet-body { margin: 0; min-height: 0; overflow: hidden; background: transparent; }
+.pet { position: fixed; inset: 0; --pet-gap: 6px; }
+.pet-logo { position: absolute; left: 0; top: 0; width: 72px; height: 72px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 16px; background: none; color: inherit; cursor: grab; user-select: none; }
+.pet-logo .chip { width: 64px; height: 64px; border-radius: 16px; }
+.pet-left .pet-logo { left: auto; right: 0; }
+.pet-up .pet-logo { top: auto; bottom: 0; }
+.pet-bubble { position: absolute; left: 0; top: 0; width: 240px; padding: 10px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--fg); font-size: 13px; display: flex; flex-direction: column; gap: 12px; }
+.pet-left .pet-bubble { left: auto; right: 0; }
+.pet-down .pet-bubble { top: calc(72px + var(--pet-gap)); }
+.pet-measuring .pet-bubble { visibility: hidden; }
+.pet-request p { margin: 0 0 8px; color: var(--fg); }
+.pet-hint { padding: 4px; cursor: pointer; }
+.pet-hint .chip { font-size: 28px; line-height: 1; color: var(--muted); }
+.pet-waiting { opacity: 0.4; }
+
 /* The first run and Change world (TIN-403). */
 .setup { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
 .setup p { font-size: 13px; }
