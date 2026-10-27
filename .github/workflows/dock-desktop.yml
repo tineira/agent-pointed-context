@@ -1,7 +1,7 @@
 name: Dock for Windows
 
-# The APC dock for Windows (#84): the web dock in a Tauri window of its own, with an always-on-top
-# strip, a global shortcut and a tray icon. Built as an NSIS installer, kept as this run's artifact; on
+# The APC dock for Windows (#84): the web dock in a Tauri window of its own, with its agents as
+# always-on-top desktop pets (TIN-479), a global shortcut and a tray icon. Built as an NSIS installer, kept as this run's artifact; on
 # main, also published to the dock-desktop prerelease.
 on:
   push:
@@ -59,4 +59,4 @@ jobs:
           mv ./*-setup.exe APCDockSetup.exe
           gh release view dock-desktop -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create dock-desktop -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" --title "APC dock for Windows (latest build)" --notes "The APC dock for Windows, built from main."
           gh release upload dock-desktop APCDockSetup.exe -R "$GITHUB_REPOSITORY" --clobber
-          gh release edit dock-desktop -R "$GITHUB_REPOSITORY" --notes "The APC dock for Windows (installer), the app the web dock offers on Windows: your agents in a strip on top of every window (Alt+Shift+Space, tray). Built from main at ${GITHUB_SHA}. Unsigned: Windows SmartScreen asks once (More info, then Run anyway)."
+          gh release edit dock-desktop -R "$GITHUB_REPOSITORY" --notes "The APC dock for Windows (installer), the app the web dock offers on Windows: your agents as desktop pets on top of every window, each dragged onto an app to point it or anywhere else to move it (Alt+Shift+Space, tray). Built from main at ${GITHUB_SHA}. Unsigned: Windows SmartScreen asks once (More info, then Run anyway)."

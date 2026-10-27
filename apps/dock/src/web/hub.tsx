@@ -14,6 +14,7 @@ import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
+import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, DOCK_DESKTOP, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
@@ -49,9 +50,11 @@ async function badgeOf(icon: Element): Promise<string | null> {
   }
 }
 
-/** The desktop dock's always-on-top strip (#84): only what Float shows. */
+/** The desktop dock's always-on-top strip (#84): only what Float shows. Its builds since the pets (TIN-479, pet.tsx) open no strip; older ones still do. */
 const STRIP = new URLSearchParams(location.search).get("view") === "strip";
 if (STRIP) document.body.classList.add("float-body");
+/** A window of the desktop dock other than the dock itself: the strip, or a pet. It only resumes the dock, and has no one to read an error. */
+const FLOATING = STRIP || PET;
 
 /** An agent's page (TIN-419): /dock/agents/<id>. */
 const agentRoute = (path: string) => path.match(/^\/dock\/agents\/(ag_[0-9a-f]+)\/?$/)?.[1] ?? null;
@@ -92,12 +95,12 @@ export function HubDock() {
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
   const [reopen, setReopen] = useState(0);
   useEffect(() => {
-    // The strip only resumes the dock its window opened, and waits for it on a first run (#84).
+    // The strip and the pets only resume the dock its window opened, and wait for it on a first run (#84).
     let retry = 0;
     const open = () =>
-      call<{ did: string }>("/api/dock", STRIP ? { resume: true } : {}).then(
+      call<{ did: string }>("/api/dock", FLOATING ? { resume: true } : {}).then(
         (r) => setDid(r.did),
-        (e: unknown) => (STRIP ? (retry = window.setTimeout(open, 2000)) : setError(String(e))),
+        (e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError(String(e))),
       );
     void open();
     return () => clearTimeout(retry);
@@ -107,8 +110,8 @@ export function HubDock() {
     if (!base) return;
     call<DockState>(`${base}/state`).then(setState, (e: unknown) => {
       // The desktop app stays open for days, so its windows open the dock again when it is gone (403
-      // without the cookie, 404 once expired): the strip waits for the dock window's new one.
-      if ((STRIP || DESKTOP_SHELL) && /: 40[34]$/.test(String(e))) {
+      // without the cookie, 404 once expired): the strip and the pets wait for the dock window's new one.
+      if ((FLOATING || DESKTOP_SHELL) && /: 40[34]$/.test(String(e))) {
         setDid(null);
         setState(null);
         setReopen((n) => n + 1);
@@ -174,10 +177,12 @@ export function HubDock() {
   }, [base, marks]);
 
   const ids = state?.agents.map((a) => a.id).join(",") ?? "";
+  // A pet drags only its own agent, so it keeps only that agent's ticket.
+  const ticketed = PET ? ids.split(",").filter((id) => id === PET_AGENT).join(",") : ids;
   useEffect(() => {
-    if (!ids) return;
+    if (!ticketed) return;
     const top = () => {
-      for (const id of ids.split(",")) {
+      for (const id of ticketed.split(",")) {
         const t = tickets.current.get(id);
         if (!t || t.expires_at - Date.now() < 20_000) void fetchTicket(id);
       }
@@ -185,11 +190,17 @@ export function HubDock() {
     top();
     const id = setInterval(top, 10_000);
     return () => clearInterval(id);
-  }, [ids, fetchTicket]);
+  }, [ticketed, fetchTicket]);
 
-  // The strip has no one to read an error: it says so in a line and tries again.
+  // The pets tell the app the dock's agents on every change, so a pet comes and goes with each (TIN-479).
+  const agentList = state ? ids : null;
   useEffect(() => {
-    if (!STRIP || !error) return;
+    if (PET && agentList !== null) petApp.agents(agentList ? agentList.split(",") : []);
+  }, [agentList]);
+
+  // The strip and the pets have no one to read an error: they say so (in a line, in a title) and try again.
+  useEffect(() => {
+    if (!FLOATING || !error) return;
     const id = setTimeout(() => {
       setError(null);
       refresh();
@@ -197,8 +208,8 @@ export function HubDock() {
     return () => clearTimeout(id);
   }, [error, refresh]);
 
-  if (error) return STRIP ? <div className="float float-empty">Could not reach your dock. Trying again…</div> : <main><Header /><p>Could not open your dock: {error}</p></main>;
-  if (!state || !base) return STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
+  if (error) return PET ? <PetWaiting note="Could not reach your dock. Trying again…" /> : STRIP ? <div className="float float-empty">Could not reach your dock. Trying again…</div> : <main><Header /><p>Could not open your dock: {error}</p></main>;
+  if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
   const decide = (pid: string, action: "approve" | "deny" | "unpair") => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
@@ -261,7 +272,24 @@ export function HubDock() {
   const floatRequests = pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name, agentId: agent.id }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
 
-  // The APC dock for Windows' always-on-top strip (#84): only what Float shows, in the page itself.
+  // The APC dock for Windows' pets (TIN-479): one agent, and its pairing requests; with no agent, the hint.
+  if (PET) {
+    if (!PET_AGENT) return state.agents.length ? null : <PetHint />;
+    const agent = state.agents.find((a) => a.id === PET_AGENT);
+    // An agent gone from the dock: the app closes its pet.
+    if (!agent) return null;
+    return (
+      <PetView
+        agent={agent}
+        requests={floatRequests.filter((r) => r.agentId === agent.id)}
+        decide={(id, action) => decide(id, action)}
+        startDrag={(e) => startDrag(e, agent.id)}
+        endDrag={() => endDrag(agent.id)}
+      />
+    );
+  }
+
+  // The APC dock for Windows' always-on-top strip (#84), in its builds before the pets: only what Float shows.
   if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />;
 
   // The first run, or Change world (TIN-403): the dock shows only that, and any pairing request.

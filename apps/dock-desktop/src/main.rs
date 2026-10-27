@@ -1,12 +1,19 @@
 //! The APC dock for Windows (#84): the web dock (v2.apc.tineira.com/dock) in a window of its own,
-//! and its agents in a small strip that stays on top of every window, shown and hidden with a global
-//! shortcut or from the tray. The page is the web dock's own, so the hub, pairing and the drag are
-//! unchanged; only the windows are native. Closing a window hides it; Quit is in the tray.
+//! and its agents as desktop pets (TIN-479, pets.rs): each agent's logo in a small window of its own
+//! on top of every window, all shown and hidden with a global shortcut or from the tray. The pages are
+//! the web dock's own, so the hub, pairing and the drag are unchanged; only the windows are native.
+//! Closing a window hides it; Quit is in the tray.
 //!
 //! APC_DOCK_ORIGIN points it at another dock (a local `pnpm --dir apps/dock dev`, say).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{fs, path::PathBuf};
+mod pets;
+
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -16,7 +23,7 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-/// Shows and hides the strip; the dock page names it too (DESKTOP_SHORTCUT in apps/dock/src/web/hub.tsx).
+/// Shows and hides the pets; the dock page names it too (DESKTOP_SHORTCUT in apps/dock/src/web/setup.tsx).
 const SHORTCUT: &str = "Alt+Shift+Space";
 
 fn origin() -> Url {
@@ -24,7 +31,7 @@ fn origin() -> Url {
     Url::parse(&dock).expect("APC_DOCK_ORIGIN is a URL")
 }
 
-/// The dock page, or with view=strip the strip.
+/// The dock page, or with view=pet a pet.
 fn page(query: Option<&str>) -> Url {
     let mut url = origin();
     url.set_path("/dock");
@@ -83,59 +90,43 @@ fn show_dock(app: &AppHandle) {
     }
 }
 
-/// The strip: the agents' logos only (the dock page's ?view=strip), on top of every window, near the
-/// top right of the main screen. Made hidden; the shortcut or the tray shows it.
-fn strip(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    if let Some(w) = app.get_webview_window("strip") {
-        return Ok(w);
-    }
-    let (width, height) = (200.0, 112.0);
-    let mut builder = window(app, "strip", page(Some("view=strip")))
-        .title("APC agents")
-        .inner_size(width, height)
-        .min_inner_size(96.0, 96.0)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .maximizable(false)
-        .minimizable(false)
-        .visible(false);
-    if let Some(screen) = app.primary_monitor()? {
-        let size = screen.size().to_logical::<f64>(screen.scale_factor());
-        builder = builder.position(size.width - width - 32.0, 96.0);
-    }
-    builder.build()
+/// Whether the pets show (Float agents in the tray), for pets opened later.
+struct Floating(AtomicBool);
+
+fn floating(app: &AppHandle) -> bool {
+    app.try_state::<Floating>().is_some_and(|f| f.0.load(Ordering::Relaxed))
 }
 
-/// Whether the strip was showing when the app last ran (shown on the first run).
-fn strip_flag(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("strip"))
+/// Whether the pets were showing when the app last ran (shown on the first run).
+fn float_flag(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("float"))
 }
 
-fn strip_was_shown(app: &AppHandle) -> bool {
-    strip_flag(app).and_then(|f| fs::read_to_string(f).ok()).is_none_or(|s| s != "0")
+fn float_was_shown(app: &AppHandle) -> bool {
+    float_flag(app).and_then(|f| fs::read_to_string(f).ok()).is_none_or(|s| s != "0")
 }
 
-fn set_strip(app: &AppHandle, shown: bool) {
-    if let Ok(w) = strip(app) {
-        let _ = if shown { w.show() } else { w.hide() };
+fn set_float(app: &AppHandle, shown: bool) {
+    if let Some(f) = app.try_state::<Floating>() {
+        f.0.store(shown, Ordering::Relaxed);
     }
+    pets::show_all(app, shown);
     if let Some(item) = app.try_state::<CheckMenuItem<Wry>>() {
         let _ = item.set_checked(shown);
     }
-    if let Some(flag) = strip_flag(app) {
+    if let Some(flag) = float_flag(app) {
         let _ = flag.parent().map(fs::create_dir_all);
         let _ = fs::write(flag, if shown { "1" } else { "0" });
     }
 }
 
-fn toggle_strip(app: &AppHandle) {
-    let shown = app.get_webview_window("strip").and_then(|w| w.is_visible().ok()).unwrap_or(false);
-    set_strip(app, !shown);
+fn toggle_float(app: &AppHandle) {
+    set_float(app, !floating(app));
 }
 
-fn tray(app: &AppHandle, strip_shown: bool) -> tauri::Result<()> {
+fn tray(app: &AppHandle, shown: bool) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open dock", true, None::<&str>)?;
-    let float = CheckMenuItem::with_id(app, "float", format!("Float agents\t{SHORTCUT}"), true, strip_shown, None::<&str>)?;
+    let float = CheckMenuItem::with_id(app, "float", format!("Float agents\t{SHORTCUT}"), true, shown, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit APC Dock", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &float, &PredefinedMenuItem::separator(app)?, &quit])?;
     app.manage(float);
@@ -145,7 +136,7 @@ fn tray(app: &AppHandle, strip_shown: bool) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_dock(app),
-            "float" => toggle_strip(app),
+            "float" => toggle_float(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -167,21 +158,23 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show_dock(app)))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // No opener plugin: its script takes over clicks on target=_blank links to open them over IPC,
-        // which the dock page (remote, no capabilities) cannot use, so the links did nothing. Without
-        // it a click is a new window request, and on_new_window opens the link (tauri_plugin_opener's
-        // open_url needs no plugin).
+        // which the dock page (remote, with no capability in the dock's window) cannot use, so the
+        // links did nothing. Without it a click is a new window request, and on_new_window opens the
+        // link (tauri_plugin_opener's open_url needs no plugin).
+        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_dropped, pets::pet_bubble, pets::pet_open_dock])
         .setup(|app| {
             let app = app.handle();
             dock(app)?;
-            let shown = strip_was_shown(app);
+            let shown = float_was_shown(app);
+            app.manage(Floating(AtomicBool::new(shown)));
             tray(app, shown)?;
-            // The strip resumes the dock this window opens and waits for it on a first run, so both
-            // can open at once (POST /api/dock with { resume: true }).
-            set_strip(app, shown);
-            // Another app may hold the shortcut already: the tray still shows and hides the strip.
+            // The pets resume the dock this window opens and wait for it on a first run, so both can
+            // open at once (POST /api/dock with { resume: true }).
+            pets::start(app, shown)?;
+            // Another app may hold the shortcut already: the tray still shows and hides the pets.
             if let Err(e) = app.global_shortcut().on_shortcut(SHORTCUT, |app, _, event| {
                 if event.state() == ShortcutState::Pressed {
-                    toggle_strip(app);
+                    toggle_float(app);
                 }
             }) {
                 eprintln!("{SHORTCUT} is taken: {e}");
@@ -191,8 +184,8 @@ fn main() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                if window.label() == "strip" {
-                    set_strip(window.app_handle(), false);
+                if window.label().starts_with(pets::PREFIX) {
+                    set_float(window.app_handle(), false);
                 } else {
                     let _ = window.hide();
                 }

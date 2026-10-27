@@ -25,8 +25,8 @@ function session(cookie: string | undefined): { did: string; owner: string } | n
 }
 
 /**
- * Resume the visitor's dock, or open a new one. With { resume: true } (the desktop dock's strip, #84,
- * which opens beside the dock's own window and must not make a second dock), only resume: 404 without one.
+ * Resume the visitor's dock, or open a new one. With { resume: true } (the desktop dock's pets, #84,
+ * which open beside the dock's own window and must not make a second dock), only resume: 404 without one.
  */
 app.post("/api/dock", async (c) => {
   const current = session(getCookie(c, COOKIE));
