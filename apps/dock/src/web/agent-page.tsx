@@ -4,8 +4,8 @@
  * and calls, and the Remove confirm (TIN-418).
  */
 import { useEffect, useRef, useState } from "react";
-import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
+import { AgentPet } from "./apc-pet.tsx";
 import { ConnectAgent, CopyRow } from "./setup.tsx";
 
 export interface AppRef {
@@ -26,6 +26,8 @@ export interface DockAgent {
   mcp_url: string;
   last_active_at: string | null;
   waiting: boolean;
+  /** A call other than wait_for_focus is in flight (TIN-483): the pet's "calling tools". */
+  busy: boolean;
   /** How many calls the dock logged for this agent (TIN-419): a change refreshes its page. */
   calls: number;
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
@@ -129,6 +131,8 @@ export function AgentPage(props: {
   refresh: () => void;
   back: () => void;
   dragProps: Record<string, unknown>;
+  /** The person is dragging this agent (its pet stretches). */
+  dragging?: boolean;
 }) {
   const { agent: a, base } = props;
   const [calls, setCalls] = useState<CallEntry[] | null>(null);
@@ -150,8 +154,8 @@ export function AgentPage(props: {
       </nav>
 
       <section className="agent-hero">
-        <span className="chip" {...props.dragProps}>
-          <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!connected ? "off" : a.waiting ? "waiting" : "idle"} size={56} />
+        <span className="agent-hero-pet" {...props.dragProps}>
+          <AgentPet agent={a} size={88} dragging={props.dragging} />
         </span>
         <div className="who">
           <h1>{a.name}</h1>

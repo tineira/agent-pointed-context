@@ -22,6 +22,9 @@ a { color: var(--accent); }
 .log .ok { color: var(--ok); }
 h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 
+/* The APC character (TIN-483, apc-pet.tsx): the drag source is its wrapper, never the drawing. */
+.apc-pet { display: block; flex: none; pointer-events: none; overflow: visible; }
+
 /* An agent's icon moves with what the agent does, as in Pulse (apps/demo/src/web/styles.css). */
 .agent-icon { display: block; flex: none; pointer-events: none; }
 .agent-icon-off { filter: grayscale(1); opacity: 0.4; }
@@ -62,7 +65,6 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .tile.dragging .tile-drag { opacity: 0.5; }
 .tile-drag { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 10px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); cursor: grab; user-select: none; text-align: center; }
 .tile-drag:active { cursor: grabbing; }
-.tile-drag .chip { width: 88px; height: 88px; border-radius: 22px; }
 .tile-name { font-weight: 700; font-size: 15px; }
 .tile-where { font-size: 12px; color: var(--muted); }
 .tile-where .read { color: var(--ok); }
@@ -82,22 +84,22 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .float { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-content: center; align-items: center; min-height: 100vh; padding: 8px; background: var(--bg); }
 .float-agent { cursor: grab; }
 .float-empty { color: var(--muted); font-size: 13px; text-align: center; }
-.float-agent .chip { width: 72px; height: 72px; border-radius: 18px; }
 
 /*
  * The APC dock for Windows' desktop pets (TIN-479): the window is the pet, transparent around it.
- * The app sizes the window and clips it to the logo and the bubble: keep 72 px, the 4 px inset, the
- * radii and the gap in step with apps/dock-desktop/src/pets.rs.
+ * The app sizes the window and clips it to the logo and the bubble: keep 104 px, the 4 px inset, the
+ * radii (the character is a circle) and the gap in step with apps/dock-desktop/src/pets.rs.
  */
 .pet-body { margin: 0; min-height: 0; overflow: hidden; background: transparent; }
 .pet { position: fixed; inset: 0; --pet-gap: 6px; }
-.pet-logo { position: absolute; left: 0; top: 0; width: 72px; height: 72px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 16px; background: none; color: inherit; cursor: grab; user-select: none; }
-.pet-logo .chip { width: 64px; height: 64px; border-radius: 16px; }
+.pet-logo { position: absolute; left: 0; top: 0; width: 104px; height: 104px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 52px; background: none; color: inherit; cursor: grab; user-select: none; }
+/* The hint's "+" and the opening pet, which are not characters. */
+.pet-logo .chip { width: 96px; height: 96px; border-radius: 48px; }
 .pet-left .pet-logo { left: auto; right: 0; }
 .pet-up .pet-logo { top: auto; bottom: 0; }
 .pet-bubble { position: absolute; left: 0; top: 0; width: 240px; padding: 10px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--fg); font-size: 13px; display: flex; flex-direction: column; gap: 12px; }
 .pet-left .pet-bubble { left: auto; right: 0; }
-.pet-down .pet-bubble { top: calc(72px + var(--pet-gap)); }
+.pet-down .pet-bubble { top: calc(104px + var(--pet-gap)); }
 .pet-measuring .pet-bubble { visibility: hidden; }
 .pet-request p { margin: 0 0 8px; color: var(--fg); }
 .pet-hint { padding: 4px; cursor: pointer; }
@@ -140,7 +142,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .float-notice-wrap { padding: 4px; }
 .float-notice { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; padding: 6px 4px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); font-size: 12px; line-height: 1.2; cursor: pointer; }
 .float-notice b { color: var(--accent); }
-.float-notice .chip { position: relative; width: 36px; height: 36px; border-radius: 10px; }
+.float-notice .chip { position: relative; width: 44px; height: 44px; border-radius: 12px; }
 .float-notice-badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
 
 /* Remove an agent (TIN-418). */
@@ -191,7 +193,7 @@ main.landing { max-width: 920px; margin: 0 auto; padding: 20px 16px 48px; gap: 3
 .tile-more:hover { color: var(--fg); }
 .agent-page .back { font-size: 12px; }
 .agent-hero { display: flex; align-items: center; gap: 12px; }
-.agent-hero .chip { width: 72px; height: 72px; border-radius: 18px; cursor: grab; }
+.agent-hero-pet { cursor: grab; line-height: 0; }
 .agent-hero h1 { margin: 0; font-size: 18px; }
 .facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
 .facts dt { color: var(--muted); }

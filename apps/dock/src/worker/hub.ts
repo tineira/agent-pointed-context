@@ -117,10 +117,17 @@ const PAGE_APP = { id: "page", name: "This browser" };
 
 const appRef = (p: Pairing): AppRef => ({ id: p.app_id, name: p.app_name, origin: p.app_origin });
 
+/** How long an agent shows as calling tools after its last call ended: long enough for the dock to see it (TIN-483). */
+const BUSY_TAIL_MS = 1500;
+
 export class Hub extends DurableObject<Env> {
   private sql: SqlStorage;
   /** Agents with a wait_for_focus in flight, for the dock's icon (memory only). */
   private waiting = new Set<string>();
+  /** Calls in flight per agent, other than wait_for_focus, for the pet's "calling tools" (TIN-483; memory only). */
+  private busy = new Map<string, number>();
+  /** Until when an agent still shows as calling after its last call ended (memory only): a quick call would be gone before the dock asked. */
+  private busyUntil = new Map<string, number>();
   /** Waits in flight that a page reading ends (memory only): agent id to their wake-ups. */
   private readingWaiters = new Map<string, Set<() => void>>();
 
@@ -245,6 +252,10 @@ export class Hub extends DurableObject<Env> {
     const row = this.pointer(agentId);
     return row && !row.seen_at ? row : null;
   }
+  /** A call (not a wait) is in flight for the agent, or ended a moment ago. */
+  private isBusy(agentId: string): boolean {
+    return (this.busy.get(agentId) ?? 0) > 0 || (this.busyUntil.get(agentId) ?? 0) > Date.now();
+  }
   private broadcast(): void {
     for (const ws of this.ctx.getWebSockets()) {
       try {
@@ -290,6 +301,8 @@ export class Hub extends DurableObject<Env> {
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "dock expired");
     await this.ctx.storage.deleteAll();
+    this.busy.clear();
+    this.busyUntil.clear();
     this.migrate();
   }
 
@@ -337,6 +350,8 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from tickets where agent_id = ?", agentId);
     this.sql.exec("delete from calls where agent_id = ?", agentId);
     this.sql.exec("delete from agents where id = ?", agentId);
+    this.busy.delete(agentId);
+    this.busyUntil.delete(agentId);
     this.broadcast();
     return { ok: true };
   }
@@ -384,6 +399,7 @@ export class Hub extends DurableObject<Env> {
           mcp_url: `${origin}/mcp/${did}/${a.secret}`,
           last_active_at: a.last_active_at,
           waiting: this.waiting.has(a.id),
+          busy: this.isBusy(a.id),
           focus: row ? { app: row.app, label: focusLabel(row.focus), pinned_at: row.focus.pinned_at, seen: !!row.seen_at } : null,
           calls: (this.sql.exec<{ n: number }>("select count(*) as n from calls where agent_id = ?", a.id).toArray()[0]?.n ?? 0),
           // What this agent's client does with a dock (TIN-384), for the compatibility matrix.
@@ -829,7 +845,28 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("update agents set last_active_at = ? where id = ?", new Date().toISOString(), agent.id);
       // The pin before the call, to log whether the call read it (TIN-419).
       const before = this.pointer(agent.id);
-      let result = await this.callTool(agent.id, name, args);
+      // A call in flight shows on the agent's pet (TIN-483); the wait has its own state.
+      const counted = name !== "wait_for_focus";
+      if (counted) {
+        // Tell the dock only when the agent was not showing as calling already.
+        const showing = this.isBusy(agent.id);
+        this.busy.set(agent.id, (this.busy.get(agent.id) ?? 0) + 1);
+        if (!showing) this.broadcast();
+      }
+      let result: ToolResult;
+      try {
+        result = await this.callTool(agent.id, name, args);
+      } finally {
+        if (counted) {
+          const left = (this.busy.get(agent.id) ?? 1) - 1;
+          if (left > 0) this.busy.set(agent.id, left);
+          else {
+            this.busy.delete(agent.id);
+            this.busyUntil.set(agent.id, Date.now() + BUSY_TAIL_MS);
+            setTimeout(() => this.broadcast(), BUSY_TAIL_MS + 50);
+          }
+        }
+      }
       this.logCall(agent.id, this.entry(agent.id, name, args, result, before));
       // Every result carries the hub's attention while the focus is unread, and then while the dock is open and the person is on a paired app's page.
       const row = this.unread(agent.id);

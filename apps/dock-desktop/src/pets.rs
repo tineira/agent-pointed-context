@@ -1,4 +1,4 @@
-//! Float as desktop pets (TIN-479): each agent is its logo in a small frameless window of its own,
+//! Float as desktop pets (TIN-479): each agent is the APC character (its logo a badge on it, TIN-483) in a small frameless window of its own,
 //! on top of every window. The window loads the dock page (?view=pet&agent=<id>), so dragging a pet
 //! is the page's HTML drag, as from the dock: dropped on an APC app that takes it, it points the agent.
 //! A drop nothing took (dropEffect "none") moves the pet to the cursor instead, and it stays there
@@ -20,11 +20,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::CapabilityBuilder, AppHandle, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-/// A pet window, logical px: the page's .pet-logo (its logo, 64 px, and a margin).
-pub const PET: f64 = 72.0;
-/// The logo inside it (the page's .pet .chip): only this, and the bubble, take clicks.
+/// A pet window, logical px: the page's .pet-logo (the APC character, 96 px, and a margin).
+pub const PET: f64 = 104.0;
+/// The character inside it (the page's .pet-logo, less this inset): only this circle (radius LOGO_RADIUS, half its 96 px), and the bubble, take clicks. pet-pose.ts CLIP says the same, and its test keeps the drawing inside.
 const LOGO_INSET: f64 = 4.0;
-const LOGO_RADIUS: f64 = 16.0;
+const LOGO_RADIUS: f64 = 48.0;
 const BUBBLE_RADIUS: f64 = 12.0;
 /// Between the logo and its bubble (the page's --pet-gap).
 const GAP: f64 = 6.0;
