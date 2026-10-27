@@ -17,7 +17,7 @@ import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
 import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
-import { appAllowed, appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
+import { appAllowed, appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingSite, readingText, shapeReading, type PageReading } from "./reading.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
@@ -916,10 +916,7 @@ export class Hub extends DurableObject<Env> {
   private entry(agentId: string, name: string, args: Record<string, unknown>, result: ToolResult, before: PointerRow | null): Omit<CallEntry, "at"> {
     const error = errorOf(result);
     if (name === "get_current_view" || name === "wait_for_focus" || name === "list_app_tools") {
-      const s = result.structuredContent as { focus?: unknown } | undefined;
-      const now = this.pointer(agentId);
-      const pin = !error && s?.focus && now ? focusLabel(now.focus) : null;
-      return { app: null, tool: name, via: "dock", pin, error };
+      return dockReadEntry(name, result);
     }
     let app: string | null = null;
     let tool = name;

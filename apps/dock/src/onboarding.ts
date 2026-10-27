@@ -18,7 +18,7 @@ export type OnboardingEvent =
 export function advanceOnboarding(previous: Onboarding, event: OnboardingEvent): Onboarding {
   if (event.type !== "app_read") return previous[event.type] ? previous : { ...previous, [event.type]: true };
   if (previous.second_app) return previous;
-  const apps = previous.read_apps[event.agent] ?? [];
+  const apps = previous.read_apps?.[event.agent] ?? [];
   if (apps.includes(event.app)) return previous;
   const next = [...apps, event.app];
   return { ...previous, second_app: next.length >= 2, read_apps: { ...previous.read_apps, [event.agent]: next } };

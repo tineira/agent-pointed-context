@@ -131,10 +131,11 @@ export const DESKTOP = [{ label: "Windows", match: /Windows/, url: "https://gith
 export function OpenApp(props: { app: (typeof APPS)[number]; seed: number; onOpened?: () => void }) {
   return (
     <a className="launch-app" href={appUrl(props.app, props.seed)} target="_blank" rel="noreferrer" onClick={(e) => {
+      props.onOpened?.();
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 || DESKTOP_SHELL || screen.availWidth < 820) return;
       const left = Math.min(window.screenX + window.outerWidth + 12, Math.max(0, screen.availWidth - 390));
       const w = window.open(appUrl(props.app, props.seed), `apc-example-${props.app.name}`, `popup,width=${Math.max(390, screen.availWidth - left)},height=${screen.availHeight},left=${left},top=0`);
-      if (w) { e.preventDefault(); props.onOpened?.(); }
+      if (w) e.preventDefault();
     }}>
       <span className="launch-icon" aria-hidden="true">{props.app.glyph}</span>
       Open {props.app.name}

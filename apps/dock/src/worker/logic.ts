@@ -91,13 +91,21 @@ export function focusLabel(f: { kind: string; id: string | null; part: string | 
  */
 export interface CallEntry {
   at: string;
-  /** The app's id, or null for the dock's own tools. */
+  /** The app's id, or null when the call read no app. */
   app: string | null;
   tool: string;
   via: "dock" | "prefixed" | "relay";
   /** The pin the call read, as the dock shows it, or null. */
   pin: string | null;
   error: string | null;
+}
+
+/** Credit only the focus actually returned by a successful dock read, never a later pointer or a tool listing. */
+export function dockReadEntry(name: string, result: Parameters<typeof errorOf>[0]): Omit<CallEntry, "at"> {
+  const error = errorOf(result);
+  const focus = !error && (name === "get_current_view" || name === "wait_for_focus")
+    ? (result.structuredContent as { focus?: HubFocus | null } | undefined)?.focus : null;
+  return { app: focus?.app.id ?? null, tool: name, via: "dock", pin: focus ? focusLabel(focus) : null, error };
 }
 
 /** An app call reads the pin when it is the call the focus names: same app, tool and arguments. */
