@@ -7,13 +7,13 @@
  * never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once.
  */
 import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
-import { cardOuterSize, fitsCard } from "./float-size.ts";
+import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { APPS, appUrl, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, DOCK_DESKTOP, Install, Setup } from "./setup.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
@@ -258,7 +258,7 @@ export function HubDock() {
     </section>
     ));
 
-  const floatRequests = pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name }));
+  const floatRequests = pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name, agentId: agent.id }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
 
   // The APC dock for Windows' always-on-top strip (#84): only what Float shows, in the page itself.
@@ -434,6 +434,7 @@ interface FloatRequest {
   app: string;
   host: string;
   agent: string;
+  agentId: string;
 }
 
 function Float(props: {
@@ -443,7 +444,7 @@ function Float(props: {
   decide: (id: string, action: "approve" | "deny") => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
 }) {
-  const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number }): Promise<Window> } }).documentPictureInPicture;
+  const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number; preferInitialWindowPlacement?: boolean }): Promise<Window> } }).documentPictureInPicture;
   const [win, setWin] = useState<Window | null>(null);
   const [asked, setAsked] = useState(() => new URLSearchParams(location.search).has("float"));
   const root = useRef<Root | null>(null);
@@ -451,24 +452,28 @@ function Float(props: {
   latest.current = props;
   // Chrome resizes a Picture-in-Picture window only during a user activation (TIN-480): a request
   // shows a compact notice, and the click on it (the activation) grows the window to the card.
-  const [opened, setOpened] = useState(false);
+  // float-size.ts keeps the bookkeeping: the size to give back, and the request the card was opened for.
+  const [size, dispatch] = useReducer(floatSizeReducer, FLOAT_START);
+  const sized = useRef(size);
+  sized.current = size;
   const [inner, setInner] = useState({ width: 0, height: 0 });
-  const before = useRef<{ width: number; height: number } | null>(null);
   const asking = props.requests.length > 0;
-  const showCard = opened || (!!win && fitsCard(inner));
-  function grow(): void {
-    if (!win) return;
+  const showCard = (asking && size.opened === props.requests[0]!.id) || (!!win && fitsCard(inner));
+  const outerOf = (w: Window) => ({ width: w.outerWidth, height: w.outerHeight });
+  /** Try the card size; false when the browser threw (a refusal without a throw shows in the resize event). */
+  function grow(): boolean {
+    if (!win) return false;
     try {
-      before.current ??= { width: win.outerWidth, height: win.outerHeight };
-      const t = cardOuterSize({ width: win.innerWidth, height: win.innerHeight }, { width: win.outerWidth, height: win.outerHeight });
+      const t = cardOuterSize({ width: win.innerWidth, height: win.innerHeight }, outerOf(win));
       win.resizeTo(t.width, t.height);
+      return true;
     } catch {
-      // resize refused
+      return false;
     }
   }
+  /** Give back the earlier size. Kept until a resize confirms it: without a click the browser refuses. */
   function shrink(): void {
-    const b = before.current;
-    before.current = null;
+    const b = sized.current.before;
     if (!win || !b) return;
     try {
       win.resizeTo(b.width, b.height);
@@ -478,11 +483,25 @@ function Float(props: {
   }
   useEffect(() => {
     if (!win) return;
-    const measure = () => setInner({ width: win.innerWidth, height: win.innerHeight });
+    const measure = () => {
+      setInner({ width: win.innerWidth, height: win.innerHeight });
+      dispatch({ type: "resize", outer: outerOf(win) });
+    };
     measure();
     win.addEventListener("resize", measure);
     return () => win.removeEventListener("resize", measure);
   }, [win]);
+  // A shrink that was refused (no click) is retried on the next click or key in the window.
+  useEffect(() => {
+    if (!win || !size.wantShrink) return;
+    const retry = () => shrink();
+    win.document.addEventListener("pointerdown", retry, { once: true });
+    win.document.addEventListener("keydown", retry, { once: true });
+    return () => {
+      win.document.removeEventListener("pointerdown", retry);
+      win.document.removeEventListener("keydown", retry);
+    };
+  }, [win, size.wantShrink]);
   useEffect(() => {
     if (!win) return;
     root.current ??= createRoot(win.document.body);
@@ -492,21 +511,32 @@ function Float(props: {
         requests={props.requests}
         decide={(id, action) => {
           // The click is a user activation: the last decision gives the logos' size back at once.
-          if (latest.current.requests.length <= 1) shrink();
+          const last = latest.current.requests.length <= 1;
+          dispatch({ type: "decide", last });
+          if (last) shrink();
           latest.current.decide(id, action);
         }}
         dragProps={(a) => latest.current.dragProps(a)}
-        notice={{ open: showCard, onOpen: () => (setOpened(true), grow()) }}
+        notice={{
+          open: showCard,
+          focus: size.opened !== null,
+          onOpen: () => {
+            const first = latest.current.requests[0];
+            if (first) dispatch({ type: "open", id: first.id, outer: outerOf(win), ok: grow() });
+          },
+        }}
       />,
     );
-  }, [win, props.agents, props.requests, showCard]);
+  }, [win, props.agents, props.requests, showCard, size.opened]);
   // Where a browser allows a resize without a click, the card shows at once (the window then fits);
   // otherwise the notice stays until the click. With no request left, back to the logos' size.
   useEffect(() => {
     if (!win) return;
-    if (asking) grow();
-    else {
-      setOpened(false);
+    if (asking) {
+      dispatch({ type: "grow", outer: outerOf(win) });
+      grow();
+    } else {
+      dispatch({ type: "idle" });
       shrink();
     }
   }, [win, asking]);
@@ -544,7 +574,7 @@ function Float(props: {
   async function openFloat(): Promise<void> {
     if (!pip) return;
     if (win) return win.focus();
-    const w = await pip.requestWindow({ width: 96 * Math.max(1, Math.min(3, props.agents.length)), height: 110 });
+    const w = await pip.requestWindow({ width: 96 * Math.max(1, Math.min(3, props.agents.length)), height: 110, preferInitialWindowPlacement: true });
     for (const sheet of [...document.styleSheets]) {
       try {
         const style = w.document.createElement("style");
@@ -558,8 +588,8 @@ function Float(props: {
     w.addEventListener("pagehide", () => {
       root.current?.unmount();
       root.current = null;
-      before.current = null;
-      setOpened(false);
+      dispatch({ type: "reset" });
+      setInner({ width: 0, height: 0 });
       setWin(null);
     });
     setWin(w);
@@ -585,13 +615,13 @@ function FloatAgents(props: {
   decide: (id: string, action: "approve" | "deny") => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
-  notice?: { open: boolean; onOpen: () => void };
+  notice?: { open: boolean; /** The card was opened by a click: focus Allow. */ focus: boolean; onOpen: () => void };
 }) {
   if (props.requests.length > 0 && props.notice && !props.notice.open) {
-    const first = props.agents[0];
+    const first = props.agents.find((a) => a.id === props.requests[0]!.agentId) ?? props.agents[0];
     const n = props.requests.length;
     return (
-      <div className="float float-notice-wrap">
+      <div className="float float-notice-wrap" role="status" aria-live="polite">
         <button type="button" className="float-notice" onClick={props.notice.onOpen} title="Open the request">
           <span className="chip">
             {first && <AgentIcon clientName={first.client_name} clientUa={first.client_ua} clientIcon={first.client_icon} motion="off" size={28} />}
@@ -624,7 +654,7 @@ function FloatAgents(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" autoFocus={props.notice?.focus && r === props.requests[0]} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
               <button type="button" onClick={() => props.decide(r.id, "deny")}>
