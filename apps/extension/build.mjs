@@ -7,6 +7,7 @@ import { build } from "vite";
 const dev = process.argv.includes("--dev");
 const outDir = dev ? "dist-dev" : "dist";
 const entries = [
+  { entry: "src/dock-presence.ts", file: "dock-presence.js", format: "iife" },
   { entry: "src/content.ts", file: "content.js", format: "iife" },
   { entry: "src/worker.ts", file: "worker.js", format: "es" },
   { entry: "src/popup.ts", file: "popup.js", format: "es" },
@@ -34,6 +35,7 @@ if (dev) {
   // A local dock on localhost (vite dev of apps/dock) and test pages on 127.0.0.1; never in the published build.
   manifest.name += " (dev)";
   manifest.host_permissions.push("http://localhost/*", "http://127.0.0.1/*");
+  manifest.content_scripts[0].matches.push("http://localhost/*");
 }
 await mkdir(outDir, { recursive: true });
 await writeFile(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");

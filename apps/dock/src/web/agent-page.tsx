@@ -233,7 +233,7 @@ export function AgentPage(props: {
             <p>
               {r.kind === "reader" ? (
                 <>
-                  <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings: the text you drop it on, on sites you allow in the APC extension.
+                  <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings: the text you drop it on, on sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>.
                 </>
               ) : (
                 <>

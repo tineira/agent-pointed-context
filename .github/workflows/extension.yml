@@ -1,0 +1,57 @@
+name: Browser extension
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/extension/**", "apps/dock/src/worker/reading.ts", "packages/web/**", "packages/protocol/**", ".github/workflows/extension.yml", "pnpm-lock.yaml"]
+  pull_request:
+    paths: ["apps/extension/**", "apps/dock/src/worker/reading.ts", "packages/web/**", "packages/protocol/**", ".github/workflows/extension.yml", "pnpm-lock.yaml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: node build.mjs
+        working-directory: apps/extension
+      # manifest.json is at the zip root: select the extracted folder in Load unpacked.
+      - run: Compress-Archive -Path apps/extension/dist/* -DestinationPath apc-extension.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apc-extension
+          path: apc-extension.zip
+          if-no-files-found: error
+
+  # One fixed prerelease link, without replacing the project's latest stable release.
+  # Dispatches on other branches build an artifact only.
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: apc-extension
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view apc-extension -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create apc-extension -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" --title "APC browser extension (latest build)" --notes "The APC extension for Chrome and Edge, built from main."
+          gh release upload apc-extension apc-extension.zip -R "$GITHUB_REPOSITORY" --clobber
+          gh release edit apc-extension -R "$GITHUB_REPOSITORY" --notes "The APC extension for Chrome and Edge, built from main at ${GITHUB_SHA}. Download and unzip apc-extension.zip, then follow https://v2.apc.tineira.com/extension to load it in your browser."

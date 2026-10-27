@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { Dock as BridgeDock } from "./bridge.tsx";
 import { HubDock } from "./hub.tsx";
 import { Landing } from "./landing.tsx";
+import { ExtensionInstall } from "./extension.tsx";
 import "./dock.css";
 
 // /: the APC v2 landing (TIN-420; the Worker sends a visitor who has a dock on to /dock). /dock: the dock
@@ -21,4 +22,5 @@ if (matchMedia("(display-mode: standalone)").matches) {
 
 const path = location.pathname;
 if (path === "/") document.title = "APC v2: one agent across your apps";
-createRoot(document.getElementById("root")!).render(path.startsWith("/bridge") ? <BridgeDock /> : path === "/" ? <Landing /> : <HubDock />);
+if (path === "/extension" || path === "/extension/") document.title = "Add the APC browser extension";
+createRoot(document.getElementById("root")!).render(path === "/extension" || path === "/extension/" ? <ExtensionInstall /> : path.startsWith("/bridge") ? <BridgeDock /> : path === "/" ? <Landing /> : <HubDock />);

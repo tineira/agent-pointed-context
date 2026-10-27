@@ -7,6 +7,47 @@ main { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 h1 { margin: 2px 0 0; font-size: 18px; }
 p { margin: 0; color: var(--muted); }
 a { color: var(--accent); }
+/* Extension installation (TIN-491): readable in a dock-sized window and on a phone. */
+main.extension-install { max-width: 900px; margin: 0 auto; padding: 24px 20px 56px; gap: 24px; font-size: 15px; }
+.extension-header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; font-size: 13px; }
+.extension-intro { display: grid; gap: 14px; max-width: 700px; }
+.extension-intro h1 { font-size: clamp(27px, 5vw, 38px); line-height: 1.15; letter-spacing: -0.02em; }
+.extension-computer { font-size: 13px; }
+.extension-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; }
+.extension-step { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); align-items: center; gap: 24px; padding: 24px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; scroll-margin-top: 20px; }
+.extension-step-copy { display: grid; gap: 12px; min-width: 0; }
+.extension-install h2 { color: var(--fg); font-size: 17px; line-height: 1.4; text-transform: none; letter-spacing: normal; }
+.extension-step h2 { display: flex; align-items: baseline; gap: 10px; }
+.extension-number { display: inline-grid; place-items: center; flex: none; width: 27px; height: 27px; border-radius: 50%; background: var(--chip); color: var(--accent); font: 600 14px/1 ui-monospace, monospace; }
+.extension-primary { display: inline-block; justify-self: start; padding: 10px 16px; border-radius: 8px; background: var(--accent); color: var(--card); font-weight: 600; text-decoration: none; }
+.extension-primary:hover { filter: brightness(1.1); }
+.extension-browser { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.extension-browser select { padding: 5px 8px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.extension-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.extension-copy code { user-select: all; font-size: 14px; overflow-wrap: anywhere; }
+.extension-copy button { padding: 7px 10px; }
+.extension-installed { padding: 16px; border: 1px solid var(--ok); border-radius: 10px; }
+.extension-installed b { color: var(--ok); }
+.extension-installed p { margin-top: 6px; }
+.extension-manual summary, .extension-update summary { cursor: pointer; font-weight: 600; }
+.extension-manual[open] summary { margin-bottom: 18px; }
+.extension-note { display: grid; gap: 10px; padding: 20px; border-left: 3px solid var(--accent); background: var(--chip); border-radius: 0 10px 10px 0; }
+.extension-update p { margin-top: 10px; }
+.extension-picture { width: 100%; max-width: 320px; justify-self: center; color: var(--fg); }
+.extension-picture text { fill: currentColor; font: 12px system-ui, sans-serif; }
+.picture-window { fill: var(--bg); stroke: var(--line); }
+.picture-line { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.picture-dot { fill: var(--muted); }
+.picture-highlight { fill: var(--chip); stroke: var(--line); }
+.picture-accent { fill: var(--accent); }
+.picture-knob { fill: var(--card); }
+.extension-picture .picture-button { fill: var(--card); font-weight: 600; }
+.picture-arrow { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 3; }
+@media (max-width: 620px) {
+  main.extension-install { padding: 20px 16px 40px; }
+  .extension-step { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px; }
+  .extension-picture { max-width: 280px; }
+}
 .status { font-size: 12px; color: var(--muted); }
 .status b { color: var(--fg); font-weight: 600; }
 .agents { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
