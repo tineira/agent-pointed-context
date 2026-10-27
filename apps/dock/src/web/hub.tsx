@@ -12,6 +12,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
+import { AgentPet } from "./apc-pet.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
@@ -361,9 +362,7 @@ export function HubDock() {
           return (
             <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
               <div className="tile-drag" {...dragProps(a)}>
-                <span className="chip">
-                  <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!connected ? "off" : a.waiting ? "waiting" : "idle"} size={64} />
-                </span>
+                <AgentPet agent={a} size={104} dragging={dragging === a.id} />
                 <span className="tile-name">{a.name}</span>
                 <span className="tile-where">
                   {a.focus ? (
@@ -604,7 +603,7 @@ function Float(props: {
   async function openFloat(): Promise<void> {
     if (!pip) return;
     if (win) return win.focus();
-    const w = await pip.requestWindow({ width: 96 * Math.max(1, Math.min(3, props.agents.length)), height: 110, preferInitialWindowPlacement: true });
+    const w = await pip.requestWindow({ width: 100 * Math.max(1, Math.min(3, props.agents.length)), height: 110, preferInitialWindowPlacement: true });
     for (const sheet of [...document.styleSheets]) {
       try {
         const style = w.document.createElement("style");
@@ -647,6 +646,8 @@ function FloatAgents(props: {
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
   notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
 }) {
+  // Which agent the person is dragging here: its pet stretches while held (TIN-483).
+  const [dragging, setDragging] = useState<string | null>(null);
   if (props.requests.length > 0 && props.notice && !props.notice.open) {
     const first = props.agents.find((a) => a.id === props.requests[0]!.agentId) ?? props.agents[0];
     const n = props.requests.length;
@@ -701,10 +702,21 @@ function FloatAgents(props: {
       {props.agents.map((a) => {
         const d = props.dragProps(a);
         return (
-          <div key={a.id} className="float-agent" draggable title={`Drag ${a.name} onto an app`} onDragStart={(e) => d.startDrag(e.nativeEvent)} onDragEnd={d.endDrag}>
-            <span className="chip">
-              <AgentIcon clientName={a.client_name} clientUa={a.client_ua} clientIcon={a.client_icon} motion={!a.client_name ? "off" : a.waiting ? "waiting" : "idle"} size={48} />
-            </span>
+          <div
+            key={a.id}
+            className="float-agent"
+            draggable
+            title={`Drag ${a.name} onto an app`}
+            onDragStart={(e) => {
+              setDragging(a.id);
+              d.startDrag(e.nativeEvent);
+            }}
+            onDragEnd={() => {
+              setDragging(null);
+              d.endDrag();
+            }}
+          >
+            <AgentPet agent={a} size={80} dragging={dragging === a.id} />
           </div>
         );
       })}

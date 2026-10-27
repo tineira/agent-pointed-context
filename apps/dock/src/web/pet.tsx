@@ -5,12 +5,12 @@
  * drop nothing took moves the pet there instead (the app does that, from the cursor). A pairing
  * request shows as a bubble beside the pet, and the app grows the window for it.
  *
- * PetLook is all a pet draws; TIN-483 replaces it with a character, from the same PetMood.
+ * A pet draws the APC character (apc-pet.tsx, TIN-483): the same one as Float and the dock's tiles.
  */
 import { useLayoutEffect, useRef, useState } from "react";
-import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import type { DockAgent } from "./agent-page.tsx";
-import { grabPoint, movesPet, petMood, type PetMood } from "./pet-state.ts";
+import { AgentPet } from "./apc-pet.tsx";
+import { grabPoint, movesPet } from "./pet-state.ts";
 
 const params = new URLSearchParams(location.search);
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -45,16 +45,6 @@ export interface PetRequest {
   agent: string;
 }
 
-/** What a pet looks like: the agent's logo, moving with its mood. */
-function PetLook(props: { agent: DockAgent; mood: PetMood }) {
-  const motion = props.mood === "off" ? "off" : props.mood === "idle" ? "idle" : "waiting";
-  return (
-    <span className="chip">
-      <AgentIcon clientName={props.agent.client_name} clientUa={props.agent.client_ua} clientIcon={props.agent.client_icon} motion={motion} size={48} />
-    </span>
-  );
-}
-
 /** One agent's pet, and the bubble of its pairing requests while any waits. */
 export function PetView(props: {
   agent: DockAgent;
@@ -65,7 +55,8 @@ export function PetView(props: {
 }) {
   const logo = useRef<HTMLDivElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
-  const grab = useRef<[number, number]>([36, 36]);
+  const grab = useRef<[number, number]>([52, 52]);
+  const [dragging, setDragging] = useState(false);
   // null while the app sizes the window for a bubble: it is laid out hidden, to be measured.
   const [side, setSide] = useState<Side | null>(null);
   const asking = props.requests.map((r) => r.id).join(",");
@@ -89,14 +80,16 @@ export function PetView(props: {
         title={a.client_name ? `Drag ${a.name} onto an app to point it, or anywhere else to move it` : `Drag ${a.name} into your agent's chat to connect it, or anywhere else to move it`}
         onDragStart={(e) => {
           if (logo.current) grab.current = grabPoint({ x: e.clientX, y: e.clientY }, logo.current.getBoundingClientRect());
+          setDragging(true);
           props.startDrag(e.nativeEvent);
         }}
         onDragEnd={(e) => {
+          setDragging(false);
           props.endDrag();
           if (movesPet(e.dataTransfer?.dropEffect)) petApp.dropped(grab.current);
         }}
       >
-        <PetLook agent={a} mood={petMood(a, props.requests.length)} />
+        <AgentPet agent={a} size={96} dragging={dragging} />
       </div>
       {asking && (
         <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
