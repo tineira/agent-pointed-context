@@ -68,7 +68,7 @@ app.post("/api/s/:sid/view", async (c) => c.json(await stub(c).reportView(await 
 app.post("/api/s/:sid/pin", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { grant_id?: unknown; target?: unknown };
   if (typeof body.grant_id !== "string") return c.json({ error: "invalid" }, 400);
-  const result = await stub(c).pin(body.grant_id, body.target);
+  const result = await stub(c).pin(body.grant_id, body.target, true);
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/s/:sid/unpin", async (c) => {

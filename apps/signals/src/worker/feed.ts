@@ -12,7 +12,7 @@ import { generateDataset } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
-import { checkPin, focusPayload, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
+import { checkPin, focusPayload, samePin, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
 
 export const FEED_TTL_MS = 6 * 60 * 60_000;
 const WAIT_CEILING_S = 50;
@@ -185,11 +185,13 @@ export class Feed extends DurableObject<Env> {
     return { ok: true };
   }
 
-  async pin(grantId: string, raw: unknown): Promise<{ ok: boolean; error?: string }> {
+  /** keepRead: a badge dropped on its own target changes nothing (the /pin route); a dock drop (pairHub) always pins again and wakes the agent. */
+  async pin(grantId: string, raw: unknown, keepRead = false): Promise<{ ok: boolean; error?: string }> {
     if (!this.grants().some((g) => g.id === grantId)) return { ok: false, error: "unknown_grant" };
     const checked = checkPin(raw, this.posts());
     if ("error" in checked) return { ok: false, error: checked.error };
     const t = checked.target;
+    if (keepRead && samePin(this.focusRow(grantId), t)) return { ok: true };
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("insert into agent_focus (grant_id, kind, target_id, part, pinned_at, seen_at) values (?, ?, ?, ?, ?, null)", grantId, t.kind, t.id, t.part, new Date().toISOString());
     this.broadcast();

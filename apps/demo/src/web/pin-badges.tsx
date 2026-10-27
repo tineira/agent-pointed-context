@@ -2,14 +2,15 @@
  * A pinned agent's icon sits on what it was pinned to, the way the landing shows it: a dashed,
  * breathing ring while the agent has not read the pin, a check once it has.
  * The badges float above the page (fixed, under the sticky header) and follow their targets on
- * scroll, resize and re-render. Only the icon and the unpin button take the pointer: the icon is a
- * mark like the top bar's (data-apc-mark), so dragging it to another target moves the pin (TIN-354).
+ * scroll, resize and re-render. Only the icon and the unpin button take the pointer. The badge itself
+ * is the standard <apc-pin> from @apc/web (TIN-482), a mark like the top bar's (data-apc-mark), so
+ * dragging it to another target moves the pin (TIN-354); this file only places it.
  */
 import { canonicalTarget, parseFocusAttrs, type FocusRow } from "@apc/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { displayNames, type AgentMotion } from "./agent-brands.ts";
-import { AgentIcon } from "./agent-icon.tsx";
+import { ApcPin } from "./apc-pin.tsx";
 import type { GrantState } from "./api.ts";
 
 export const isSeen = (pin: FocusRow) => !!pin.seen_at && pin.seen_at >= pin.pinned_at;
@@ -65,21 +66,6 @@ export function PinBadges(props: {
   onPlaced: (grantIds: Set<string>) => void;
 }) {
   const [placed, setPlaced] = useState<Placed[]>([]);
-  // The badge being dragged dims until the drop or Esc (the drag itself is enablePinning's).
-  const [dragging, setDragging] = useState<string | null>(null);
-  useEffect(() => {
-    if (!dragging) return;
-    const stop = () => setDragging(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && stop();
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [dragging]);
   const grantsRef = useRef(props.grants);
   grantsRef.current = props.grants;
   const onPlacedRef = useRef(props.onPlaced);
@@ -121,26 +107,20 @@ export function PinBadges(props: {
       {placed.map((p) => {
         const g = props.grants.find((x) => x.id === p.grantId);
         if (!g?.pin) return null;
-        const seen = isSeen(g.pin);
         return (
-          <div
+          <ApcPin
             key={g.id}
-            className={`pin-badge ${seen ? "pin-badge-seen" : "pin-badge-waiting"}${dragging === g.id ? " pin-badge-dragging" : ""}`}
+            className="pin-badge"
             style={{ left: p.left, top: p.top }}
-            title={`${names.get(g.id)}: ${seen ? "read this pin" : "has not read this pin yet"}. Drag to point it at something else.`}
-          >
-            <span className="pin-badge-mark" data-apc-mark data-grant={g.id} onPointerDown={(e) => e.button === 0 && setDragging(g.id)}>
-              <AgentIcon clientName={g.client_name} clientUa={g.client_ua} clientIcon={g.client_icon} motion={props.motionOf(g.id)} size={18} />
-            </span>
-            {seen && (
-              <span className="pin-badge-check" aria-hidden="true">
-                ✓
-              </span>
-            )}
-            <button type="button" className="pin-badge-unpin" onClick={() => props.onUnpin(g.id)} aria-label={`Remove ${names.get(g.id)}'s pin`}>
-              ×
-            </button>
-          </div>
+            id={g.id}
+            name={names.get(g.id) ?? "Agent"}
+            seen={isSeen(g.pin)}
+            clientName={g.client_name}
+            clientUa={g.client_ua}
+            clientIcon={g.client_icon}
+            motion={props.motionOf(g.id)}
+            onUnpin={props.onUnpin}
+          />
         );
       })}
     </>,
