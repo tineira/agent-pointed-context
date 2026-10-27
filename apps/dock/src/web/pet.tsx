@@ -137,24 +137,20 @@ function PetFrame(props: { where: string; name?: string; children: ReactNode; be
     petApp.grip(on);
   };
   // The app's idea of the hover starts and ends with this frame (a reload, or the hint giving way to an
-  // agent), and a hidden page gets no pointerleave.
+  // agent).
   useEffect(() => {
     petApp.grip(false);
-    const hidden = () => {
-      if (document.visibilityState === "hidden") over(false);
-    };
-    document.addEventListener("visibilitychange", hidden);
-    return () => {
-      document.removeEventListener("visibilitychange", hidden);
-      petApp.grip(false);
-    };
+    return () => petApp.grip(false);
   }, []);
   // The grip shows on a move over the pet, not on pointerenter: when a body drag ends, WebView2 sends
   // the page a pointerenter at the point the drag started, wherever the cursor is. A body drag hides
-  // the grip; the next move over the pet shows it again.
+  // the grip; the next move over the pet shows it again. A pointerenter only forgets what the page last
+  // told the app, so the first move after it always tells the app again: the app may have dropped the
+  // hover meanwhile (it does when the pets are hidden, and a hidden page gets no pointerleave).
   return (
     <div
       className={`pet ${props.where}${hover ? " pet-hover" : ""}`}
+      onPointerEnter={() => (shown.current = false)}
       onPointerMove={() => over(true)}
       onPointerLeave={() => over(false)}
       onDragStart={() => over(false)}

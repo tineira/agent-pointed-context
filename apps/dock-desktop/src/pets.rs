@@ -525,7 +525,11 @@ fn settle(app: &AppHandle, window: &WebviewWindow) -> Option<Side> {
 #[tauri::command]
 pub async fn pet_move(app: AppHandle, window: WebviewWindow) -> Option<Side> {
     let key = key(&window)?;
-    app.state::<Pets>().moving.lock().unwrap().insert(key.clone(), Instant::now());
+    let state = app.state::<Pets>();
+    // One move at a time per pet: a second press while one is on gets the side as it stands.
+    if state.moving.lock().unwrap().insert(key.clone(), Instant::now()).is_some() {
+        return state.placed.lock().unwrap().get(&key).map(|p| p.layout.side);
+    }
     if window.start_dragging().is_err() {
         app.state::<Pets>().moving.lock().unwrap().remove(&key);
         return None;
