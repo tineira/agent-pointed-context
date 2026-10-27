@@ -228,22 +228,21 @@ fn shape(window: &WebviewWindow, l: &Layout, scale: f64) {
 /// DefWindowProc, which paints the window's caption. With a window region the system draws no frame of
 /// its own, so that caption ("APC agent" on pale blue, the classic look) lands in the transparent
 /// window and stays there, cut by the logo's circle. lParam -1 tells DefWindowProc not to paint it;
-/// tao still gets the message. tao's repaint on a Windows theme change calls DefWindowProc directly,
-/// so that one is redrawn away.
+/// tao still gets the message. The window has no frame (tao gives the client area all of it), so the
+/// other ways to paint one, WM_NCPAINT and the theme's own caption and frame messages, paint nothing.
+/// (tao's direct repaint of the caption runs only from set_theme, which the dock never calls.)
 #[cfg(windows)]
 fn no_title_bar(window: &WebviewWindow) {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE};
     use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
-    use windows::Win32::UI::WindowsAndMessaging::{WM_NCACTIVATE, WM_SETTINGCHANGE};
+    use windows::Win32::UI::WindowsAndMessaging::{WM_NCACTIVATE, WM_NCPAINT};
+    /// Undocumented: the theme's caption and frame painting (WM_NCUAHDRAWCAPTION, WM_NCUAHDRAWFRAME).
+    const WM_NCUAHDRAWCAPTION: u32 = 0xAE;
+    const WM_NCUAHDRAWFRAME: u32 = 0xAF;
     unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM, _: usize, _: usize) -> LRESULT {
         match msg {
             WM_NCACTIVATE => unsafe { DefSubclassProc(hwnd, msg, w, LPARAM(-1)) },
-            WM_SETTINGCHANGE => unsafe {
-                let r = DefSubclassProc(hwnd, msg, w, l);
-                let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
-                r
-            },
+            WM_NCPAINT | WM_NCUAHDRAWCAPTION | WM_NCUAHDRAWFRAME => LRESULT(0),
             _ => unsafe { DefSubclassProc(hwnd, msg, w, l) },
         }
     }
@@ -284,10 +283,16 @@ fn open(app: &AppHandle, key: &str, shown: bool) -> tauri::Result<WebviewWindow>
         .build()?;
     // Windows keeps a new window at least ~134 px wide; a resize after it is built gets under that.
     place(app, &w);
-    // A subclass is set from the window's own thread; pet_agents runs on another.
+    // A subclass is set from the window's own thread (pet_agents runs on another), and before the pet
+    // shows, so no click comes first. Without it a pet only risks the title bar, so it still shows.
     let pet = w.clone();
-    w.run_on_main_thread(move || no_title_bar(&pet))?;
-    if shown {
+    let hooked = w.run_on_main_thread(move || {
+        no_title_bar(&pet);
+        if shown {
+            show(&pet, true);
+        }
+    });
+    if hooked.is_err() && shown {
         show(&w, true);
     }
     Ok(w)
