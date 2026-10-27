@@ -1,5 +1,6 @@
 import { APPS, appUrl, CopyRow, DESKTOP, DESKTOP_SHELL, DOCK_DESKTOP } from "./setup.tsx";
 import { downloadPlatform } from "./download-platform.ts";
+import { useExtensionInstalled } from "./extension.tsx";
 
 /** Small platform marks identify the downloads; their adjacent text supplies the accessible name. */
 function WindowsLogo() {
@@ -23,22 +24,25 @@ function BrowserLogos() {
 
 /** Permanent offers below the dock controls, separate from checklist completion. */
 export function Downloads({ seed }: { seed: number }) {
+  const installed = useExtensionInstalled();
   const platform = downloadPlatform(navigator.userAgent, DESKTOP_SHELL);
-  const pulse = DESKTOP.find((d) => d.label === "Windows")!;
   if (!platform.computer) return <p className="download-note">Desktop apps and the browser extension need a computer.</p>;
+  const pulse = DESKTOP.find((d) => d.label === "Windows");
   return <section className="dock-downloads" aria-label="Get apps and extension">
     <nav className="download-buttons" aria-label="Downloads">
       {platform.dock && <a className="download-button" href={DOCK_DESKTOP.url} title={DOCK_DESKTOP.note}>
         <WindowsLogo /><span>Dock for Windows</span>
+        <small className="download-note">Unsigned for now</small>
       </a>}
-      {platform.pulse && <a className="download-button" href={pulse.url} title={pulse.note}>
+      {platform.pulse && pulse && <a className="download-button" href={pulse.url} title={pulse.note}>
         <WindowsLogo /><span>Pulse for Windows</span>
+        <small className="download-note">Unsigned for now</small>
       </a>}
-      <a className="download-button" href="/extension" target="_blank" rel="noreferrer" aria-label="Browser extension for Chrome and Edge">
-        <BrowserLogos /><span>Browser extension</span>
+      <a className="download-button" href="/extension" target="_blank" rel="noreferrer" aria-label={installed ? "Extension installed ✓ — Chrome and Edge" : "Browser extension for Chrome and Edge"}>
+        <BrowserLogos /><span>{installed ? "Extension installed ✓" : "Browser extension"}</span>
       </a>
     </nav>
-    {platform.pulse && <div className="download-world">
+    {platform.pulse && pulse && <div className="download-world">
       <p>In Pulse for Windows, paste this world link:</p>
       <CopyRow text={appUrl(APPS[0]!, seed)} label="Copy world link" />
     </div>}

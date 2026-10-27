@@ -44,12 +44,13 @@ fn page(query: Option<&str>) -> Url {
 }
 
 /// Whether a window may go to this address: the dock's own pages stay; a link out of the dock
-/// (Pulse, Signals, the Pulse for desktop download) opens in the person's browser instead.
+/// (Pulse, Signals, downloads, extension installation) opens in the person's browser instead.
 /// Any other address (file:, mailto:, an app's own scheme) goes nowhere.
 fn stays(url: &Url) -> bool {
     match url.scheme() {
         "about" | "blob" => true,
-        "http" | "https" if url.origin() == origin().origin() => true,
+        "http" | "https"
+            if url.origin() == origin().origin() && url.path().trim_end_matches('/') != "/extension" => true,
         "http" | "https" => {
             let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
             false
