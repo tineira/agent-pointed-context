@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { EXTENSION_PRESENT } from "../../../extension/src/presence.ts";
 import { extensionBrowser, extensionsAddress, EXTENSION_DOWNLOAD, EXTENSION_STORES } from "./extension-install.ts";
 
-function useExtensionInstalled(): boolean {
+export function useExtensionInstalled(): boolean {
   const [installed, setInstalled] = useState(() => document.documentElement.hasAttribute(EXTENSION_PRESENT));
   useEffect(() => {
     // This is an unauthenticated hint. It never calls an API or completes the dock checklist.

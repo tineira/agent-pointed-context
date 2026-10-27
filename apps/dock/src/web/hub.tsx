@@ -7,7 +7,7 @@
  * never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once.
  */
 import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
@@ -17,6 +17,7 @@ import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } fr
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
+import { Downloads } from "./downloads.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -334,7 +335,7 @@ export function HubDock() {
     );
   }
 
-  return (
+  const renderDock = (controls: ReactNode) => (
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
@@ -390,14 +391,7 @@ export function HubDock() {
           );
         })}
       </ul>
-      <Setup agents={state.agents} seed={state.seed} progress={state.onboarding} keepAtHand={
-        <div className="row">
-          {DESKTOP_SHELL ? <span className="muted">{DESKTOP_SHORTCUT} floats your agents</span> : <>
-            <Float agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand} />
-            <Install />
-          </>}
-        </div>
-      } />
+      <Setup agents={state.agents} seed={state.seed} progress={state.onboarding} keepAtHand={<div className="row">{controls}</div>} />
       <nav className="launch" aria-label="Apps">
         {APPS.map((app) => (
           <OpenApp key={app.name} app={app} seed={state.seed} />
@@ -407,18 +401,25 @@ export function HubDock() {
         <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
           Add an agent
         </button>
+        {controls}
+        <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWorld(true)}>Change world</button>
         <details className="dock-menu">
           <summary>Menu</summary>
-          <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWorld(true)}>Change world</button>
           <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
         </details>
       </div>
+      <Downloads seed={state.seed} />
       {world && <World seed={state.seed} onDone={() => setWorld(false)} onWorld={async (seed) => {
         const result = await call<{ ok: boolean }>(`${base}/world`, { seed });
         if (!result.ok) throw new Error("Could not change world");
         refresh();
       }} />}
     </main>
+  );
+  return (
+    <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand}>
+      {renderDock}
+    </KeepAtHand>
   );
 }
 
@@ -438,14 +439,23 @@ interface FloatRequest {
   agentId: string;
 }
 
-function Float(props: {
+interface FloatProps {
   agents: DockAgent[];
   onUsed: () => void;
   /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
   requests: FloatRequest[];
   decide: (id: string, action: "approve" | "deny") => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
-}) {
+  children: (button: ReactNode) => ReactNode;
+}
+
+/** One Float window and install event, with controls in both the checklist and permanent footer. */
+function KeepAtHand(props: FloatProps) {
+  if (DESKTOP_SHELL) return props.children(<span className="muted" title="The APC dock for Windows keeps your agents on top of every window">{DESKTOP_SHORTCUT} floats your agents</span>);
+  return <Float {...props}>{(float) => <Install>{(install) => props.children(<>{float}{install}</>)}</Install>}</Float>;
+}
+
+function Float(props: FloatProps) {
   const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number; preferInitialWindowPlacement?: boolean }): Promise<Window> } }).documentPictureInPicture;
   const [win, setWin] = useState<Window | null>(null);
   const [asked, setAsked] = useState(() => new URLSearchParams(location.search).has("float"));
@@ -599,12 +609,11 @@ function Float(props: {
     setWin(w);
     props.onUsed();
   }
-  if (!pip) return prompt || null;
   return (
     <>
-      <button type="button" title="Keep your agents on top of every window, ready to drag" onClick={() => void openFloat()}>
+      {props.children(pip ? <button type="button" title="Keep your agents on top of every window, ready to drag" onClick={() => void openFloat()}>
         {win ? "Floating" : "Float"}
-      </button>
+      </button> : null)}
       {prompt}
     </>
   );
