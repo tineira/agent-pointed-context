@@ -12,15 +12,19 @@ const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
 const BRANDS = ["claude", "openai", "gemini", "grok", "cursor", "kimi", "zai"];
 
 const STEPS = [
-  { title: "Open your dock", text: "Your agent dock is a small page (or an installed app) that holds your agents. It is yours alone: no account, one cookie." },
+  { title: "Open your dock", text: "Your agent dock is a small page that holds your agents. It is yours alone: no account, one cookie, nothing to install first." },
   { title: "Connect your agent", text: "Add one MCP server to your agent (Claude, ChatGPT, Cursor, Grok…). That single connection is all it ever needs." },
-  { title: "Create your world", text: "The demo apps fill with the same made-up company: customers in Pulse, competitor news in Signals." },
+  { title: "Try an example app", text: "The checklist opens Pulse on a ready-made demo world. Drop your agent on a bar, allow it in Pulse and then in your dock, and ask: what is this?" },
   { title: "Point", text: "Drag your agent from the dock onto a bar, a customer, a headline. Ask about \"this\". Point somewhere else in another app, and ask how the two connect." },
 ];
 
 function Cta(props: { big?: boolean }) {
   return (
-    <a className={`landing-cta${props.big ? " big" : ""}`} href={DOCK}>
+    <a className={`landing-cta${props.big ? " big" : ""}`} href={DOCK} onClick={(e) => {
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 || screen.availWidth < 820) return;
+      // One window per click: the next click in the checklist opens Pulse beside this compact dock.
+      if (window.open(DOCK, "apc-dock", "popup,width=420,height=780,left=0,top=0")) e.preventDefault();
+    }}>
       Open your dock
     </a>
   );
@@ -68,7 +72,7 @@ export function Landing() {
           </p>
           <div className="row">
             <Cta big />
-            <span className="muted">Free demo, made-up data. Nothing to sign up for.</span>
+            <span className="muted">You need an agent that can add a remote MCP server. Free demo, made-up data.</span>
           </div>
           <div className="landing-brands" aria-label="Works with any agent that takes an MCP server">
             {BRANDS.map((b) => (
