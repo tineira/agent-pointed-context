@@ -133,7 +133,7 @@ svg [data-apc-pinned] .bar { stroke: var(--accent); stroke-width: 3; }
 .pin-badge { position: fixed; z-index: 5; transform: translate(-50%, -50%); pointer-events: none; }
 .pin-badge .apc-pin__mark, .pin-badge .apc-pin__unpin { pointer-events: auto; }
 /* On :root, not on the badge, so the copy that follows the pointer while dragging (in body) is themed too. */
-:root { --apc-chip: var(--surface); --apc-line: var(--line); --apc-ink: var(--foreground); --apc-muted: var(--muted); --apc-accent: var(--accent); --apc-ok: var(--up); --apc-pin-font: var(--font-mono); }
+:root { --apc-chip: var(--surface); --apc-line: var(--line); --apc-ink: var(--foreground); --apc-muted: var(--muted); --apc-accent: var(--accent); --apc-ok: var(--up); --apc-pin-font: var(--font-mono); --apc-pin-unpin-bg: var(--surface); }
 html[data-theme="slate"] { --apc-chip: #263040; }
 /* The top bar: a dot by the mark says pending (accent) or read (green); it opens the pinned screen when the target is elsewhere. */
 .pin-dot { display: inline-flex; align-items: center; gap: 2px; }

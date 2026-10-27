@@ -3,7 +3,7 @@
  * its parts (offer, audience, code, text), is a target. Agents arrive from the agent dock: the
  * first drop asks the person here, then in the dock; later drops pin at once.
  */
-import { focusAttrs, type FocusRow, type FocusTarget } from "@apc/protocol";
+import { canonicalTarget, focusAttrs, type FocusRow, type FocusTarget } from "@apc/protocol";
 import { createViewReporter, enablePinning, type AgentDrag } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
@@ -152,6 +152,9 @@ function Feed({ sid }: { sid: string }) {
           refresh();
         },
         onPin: async (grantId, target) => {
+          // A badge dropped back on its own target (a click) changes nothing: the pin keeps its read state.
+          const current = stateRef.current?.grants.find((g) => g.id === grantId)?.pin;
+          if (current && canonicalTarget(current) === canonicalTarget(target)) return;
           const r = await call<{ ok: boolean; error?: string }>(`${base}/pin`, { grant_id: grantId, target });
           say(r.ok ? `Pinned ${stateRef.current?.grants.find((g) => g.id === grantId)?.name ?? "your agent"}. Ask it about "this".` : `Not pinned: ${r.error}`);
         },

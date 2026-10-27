@@ -180,6 +180,16 @@ test("enablePinning drags a pin badge onto another target; Esc and a drop outsid
   stop();
 });
 
+test("an agent set before the element was upgraded is taken in on connect; the mark is named", () => {
+  definePinBadge();
+  const el = new (defined.get("apc-pin")!)() as Pin;
+  // What a framework leaves on a not yet upgraded element: an own data property.
+  Object.defineProperty(el, "agent", { value: { id: "g_early", name: "Codex", seen: false }, writable: true, configurable: true, enumerable: true });
+  doc.body.append(el);
+  assert.equal(el.mark.getAttribute("data-grant"), "g_early");
+  assert.equal(el.mark.getAttribute("aria-label"), "Codex, has not read its pin yet", "an agent with no icon still has an accessible name");
+});
+
 test("× asks the app to remove the pin (apc-unpin)", () => {
   const pin = badge({ id: "g_x", name: "Claude", seen: false });
   const seen: string[] = [];

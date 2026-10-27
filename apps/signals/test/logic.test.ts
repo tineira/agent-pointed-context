@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildMarket } from "../../demo/src/model/market.ts";
 import { generateDataset } from "../../demo/src/model/seed.ts";
-import { checkPin, focusPayload, listPosts, postAnswer, sanitizeView, viewPayload } from "../src/worker/logic.ts";
+import { checkPin, focusPayload, samePin, listPosts, postAnswer, sanitizeView, viewPayload } from "../src/worker/logic.ts";
 
 const posts = buildMarket(generateDataset(42)).posts;
 const ad = posts.find((p) => p.kind === "our_ad")!;
@@ -40,4 +40,12 @@ test("posts read back whole, and list by kind and month", () => {
   assert.ok(!("error" in a) && a.post.kind === "our_ad" && ad.kind === "our_ad" && a.post.code === ad.code);
   assert.equal(listPosts(posts, { kind: "our_ad" }).rows.every((r) => r.kind === "our_ad"), true);
   assert.equal(listPosts(posts, { month: ad.month }).rows.some((r) => r.id === ad.id), true);
+});
+
+test("a pin dropped back on its own target changes nothing, so it keeps its read state (TIN-482)", () => {
+  const row = { grant_id: "g_1", kind: "post", id: ad.id, part: "code", params: null, pinned_at: "2026-01-01T00:00:00Z", seen_at: "2026-01-01T00:00:05Z" };
+  assert.equal(samePin(row, { kind: "post", id: ad.id, part: "code", params: null }), true);
+  assert.equal(samePin(row, { kind: "post", id: ad.id, part: "text", params: null }), false, "another part");
+  assert.equal(samePin(row, { kind: "post", id: offer.id, part: "code", params: null }), false, "another post");
+  assert.equal(samePin(null, { kind: "post", id: ad.id, part: null, params: null }), false, "nothing pinned yet");
 });

@@ -214,7 +214,7 @@ const PIN_CSS = `
 .badge[data-apc-pin-state="stale"] { opacity: 0.45; }
 .face { width: 18px; height: 18px; object-fit: contain; }
 .initial { font: 600 12px system-ui, sans-serif; }
-.check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: #1f7a4d; color: #fff; font: 700 10px/15px ui-monospace, monospace; text-align: center; }
+.check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: #157a3a; color: #fff; font: 700 10px/15px ui-monospace, monospace; text-align: center; }
 .unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid #d6dce5; background: #fff; color: #56627a; font: 12px/13px system-ui, sans-serif; cursor: pointer; opacity: 0.85; }
 .unpin:hover { color: #141a24; opacity: 1; }
 @keyframes breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }

@@ -4,7 +4,7 @@
  * seed. No Workers APIs here, so the tests run it.
  */
 import type { FocusPayload, FocusRow, FocusTarget, ViewPayload } from "@apc/protocol";
-import { parseTarget } from "@apc/protocol";
+import { canonicalTarget, parseTarget } from "@apc/protocol";
 import { MONTHS } from "../../../demo/src/model/seed.ts";
 import { POST_PARTS, type Post } from "../../../demo/src/model/market.ts";
 
@@ -58,6 +58,11 @@ export function checkPin(raw: unknown, posts: readonly Post[]): { target: FocusT
   if (target.part && !(POST_PARTS as readonly string[]).includes(target.part)) return { error: "invalid_target" };
   if (target.part === "code" && post.kind !== "our_ad") return { error: "invalid_target" };
   return { target };
+}
+
+/** A pin dropped back on the target it already has (a click on a badge, TIN-482) changes nothing: it keeps its read state. */
+export function samePin(current: FocusRow | null, target: FocusTarget): boolean {
+  return !!current && canonicalTarget(current) === canonicalTarget(target);
 }
 
 const PART_NOTES: Record<string, string> = {

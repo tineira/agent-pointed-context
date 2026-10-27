@@ -37,7 +37,6 @@ const CSS = `
 apc-pin { position: relative; display: inline-block; width: var(--apc-pin-size, 28px); height: var(--apc-pin-size, 28px); vertical-align: middle; }
 .apc-pin__mark { display: grid; place-items: center; width: var(--apc-pin-size, 28px); height: var(--apc-pin-size, 28px); border-radius: 6px; cursor: grab; touch-action: none; outline-offset: 2px;
   background: var(--apc-chip, #ffffff); color: var(--apc-ink, #141a24); box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); }
-.apc-pin__mark:active { cursor: grabbing; }
 .apc-pin__icon { display: grid; place-items: center; }
 .apc-pin__mark .apc-pin__img { width: 18px; height: 18px; display: block; object-fit: contain; pointer-events: none; }
 apc-pin[data-apc-pin-state="waiting"] .apc-pin__mark { outline: 2px dashed var(--apc-accent, #b85209); animation: apc-pin-breathe 1.8s ease-in-out infinite; }
@@ -46,7 +45,7 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
   font: 700 10px/15px var(--apc-pin-font, ui-monospace, monospace); text-align: center; }
 .apc-pin__check[hidden] { display: none; }
 .apc-pin__unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--apc-line, #d6dce5);
-  background: var(--apc-chip, #ffffff); color: var(--apc-muted, #56627a); font-size: 12px; line-height: 13px; cursor: pointer; opacity: 0.85; }
+  background: var(--apc-pin-unpin-bg, var(--apc-chip, #ffffff)); color: var(--apc-muted, #56627a); font-size: 12px; line-height: 13px; cursor: pointer; opacity: 0.85; }
 .apc-pin__unpin:hover { color: var(--apc-ink, #141a24); opacity: 1; }
 @keyframes apc-pin-breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }
 @media (prefers-reduced-motion: reduce) { apc-pin .apc-pin__mark { animation: none !important; } }
@@ -65,15 +64,32 @@ export function pinBadgeLabels(a: Pick<PinAgent, "name" | "seen">): { title: str
 
 /** The element's constructor, defined only where custom elements exist (a browser), so importing this module in Node is safe. */
 export function definePinBadge(tag = "apc-pin"): void {
-  if (typeof customElements === "undefined" || customElements.get(tag)) return;
+  // Null in a content script, where there are no custom elements.
+  if (!globalThis.customElements || customElements.get(tag)) return;
 
   class ApcPin extends HTMLElement {
     private value: PinAgent | null = null;
     private parts: { mark: HTMLElement; icon: HTMLElement; check: HTMLElement; unpin: HTMLButtonElement } | null = null;
     private iconKey = "";
     private stopDim: (() => void) | null = null;
-    /** The app draws the agent's icon into this element itself (for example with its own logos). Called on every update. */
-    renderIcon: ((agent: PinAgent, into: HTMLElement) => void) | null = null;
+    private draw: ((agent: PinAgent, into: HTMLElement) => void) | null = null;
+
+    /**
+     * The app draws the agent's icon into this element itself (for example with its own logos). Called on every update.
+     * A function that draws nothing says the app draws it elsewhere, into `iconHost` (React: a portal).
+     */
+    get renderIcon(): ((agent: PinAgent, into: HTMLElement) => void) | null {
+      return this.draw;
+    }
+    set renderIcon(next: ((agent: PinAgent, into: HTMLElement) => void) | null) {
+      this.draw = next;
+      this.render();
+    }
+
+    /** Where the agent's icon goes: the app may draw into it once the badge is connected. */
+    get iconHost(): HTMLElement | null {
+      return this.parts?.icon ?? null;
+    }
 
     get agent(): PinAgent | null {
       return this.value;
@@ -89,6 +105,14 @@ export function definePinBadge(tag = "apc-pin"): void {
     }
 
     connectedCallback(): void {
+      // A property set before the element was defined (a framework, a script) sits on the instance: take it in through the setter.
+      const own = this as unknown as Record<string, unknown>;
+      for (const key of ["agent", "renderIcon"]) {
+        if (!Object.hasOwn(own, key)) continue;
+        const value = own[key];
+        delete own[key];
+        own[key] = value;
+      }
       if (!document.getElementById(STYLE_ID)) {
         const style = document.createElement("style");
         style.id = STYLE_ID;
@@ -148,9 +172,11 @@ export function definePinBadge(tag = "apc-pin"): void {
       this.setAttribute("title", labels.title);
       this.setAttribute("data-apc-pin-state", a.seen ? "seen" : "waiting");
       mark.setAttribute("data-grant", a.id);
+      mark.setAttribute("role", "img");
+      mark.setAttribute("aria-label", `${a.name}, ${a.seen ? "has read its pin" : "has not read its pin yet"}`);
       check.hidden = !a.seen;
       unpin.setAttribute("aria-label", labels.unpin);
-      if (this.renderIcon) this.renderIcon(a, icon);
+      if (this.draw) this.draw(a, icon);
       else if (this.iconKey !== JSON.stringify(a.icon ?? null)) {
         this.iconKey = JSON.stringify(a.icon ?? null);
         if (a.icon) {
@@ -171,5 +197,6 @@ export function definePinBadge(tag = "apc-pin"): void {
 export interface ApcPinElement extends HTMLElement {
   agent: PinAgent | null;
   readonly mark: HTMLElement | null;
+  readonly iconHost: HTMLElement | null;
   renderIcon: ((agent: PinAgent, into: HTMLElement) => void) | null;
 }
