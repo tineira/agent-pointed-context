@@ -112,13 +112,18 @@ pub fn layout(at: (i32, i32), bubble: Option<(f64, f64)>, scale: f64, area: Rect
     Layout { size: (w, h), logo, bubble: Some(rect), side: Side { left, up } }
 }
 
-/// The pets' positions and bubbles, and a lock so two pages do not open the same pet at once.
+/// The pets' positions (as saved: a spot on a monitor that is gone stays, for when it is back) and
+/// bubbles, a lock so two pages do not open the same pet at once, and one so saves do not interleave.
 #[derive(Default)]
 pub struct Pets {
     at: Mutex<HashMap<String, (i32, i32)>>,
     bubbles: Mutex<HashMap<String, (f64, f64)>>,
     sync: Mutex<()>,
+    saving: Mutex<()>,
 }
+
+/// The most agents a page's list opens pets for.
+const MAX_PETS: usize = 32;
 
 fn file(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("pets.json"))
@@ -134,12 +139,16 @@ impl Pets {
     }
 }
 
+/// Writes pets.json whole: to a file beside it, then renamed over it, so a crash leaves the old one.
 fn save(app: &AppHandle) {
     let (Some(f), Some(pets)) = (file(app), app.try_state::<Pets>()) else { return };
+    let _one = pets.saving.lock().unwrap();
     let at: HashMap<String, (i32, i32)> = pets.at.lock().unwrap().iter().filter(|(k, _)| k.as_str() != HINT).map(|(k, v)| (k.clone(), *v)).collect();
     let _ = f.parent().map(fs::create_dir_all);
-    if let Ok(json) = serde_json::to_string(&Saved(at)) {
-        let _ = fs::write(f, json);
+    let Ok(json) = serde_json::to_string(&Saved(at)) else { return };
+    let tmp = f.with_extension("json.tmp");
+    if fs::write(&tmp, json).is_ok() && fs::rename(&tmp, &f).is_err() {
+        let _ = fs::remove_file(&tmp);
     }
 }
 
@@ -162,7 +171,9 @@ fn monitor_at(app: &AppHandle, x: i32, y: i32) -> Option<Monitor> {
 }
 
 /// Puts a pet where it belongs: its logo inside a visible monitor's work area (a new pet gets a free
-/// spot near the top right), the window around the logo and its bubble, clicks only on those.
+/// spot near the top right), the window around the logo and its bubble, clicks only on those. Only
+/// a new spot is saved: a clamped one is not, so a pet on a monitor that is unplugged or asleep goes
+/// back there when it returns.
 fn place(app: &AppHandle, window: &WebviewWindow) -> Option<Side> {
     let key = key(window)?;
     let state = app.state::<Pets>();
@@ -181,7 +192,7 @@ fn place(app: &AppHandle, window: &WebviewWindow) -> Option<Side> {
             free_spot(area, size, scale, &taken)
         }
     };
-    if saved != Some(at) {
+    if saved.is_none() {
         state.at.lock().unwrap().insert(key.clone(), at);
         save(app);
     }
@@ -235,22 +246,37 @@ fn open(app: &AppHandle, key: &str, shown: bool) -> tauri::Result<WebviewWindow>
         .minimizable(false)
         .skip_taskbar(true)
         .always_on_top(true)
-        // A new pet does not take the focus from the window the person is in.
         .focused(false)
         .visible(false)
         .build()?;
     // Windows keeps a new window at least ~134 px wide; a resize after it is built gets under that.
     place(app, &w);
     if shown {
-        let _ = w.show();
+        show(&w, true);
     }
     Ok(w)
+}
+
+/// Shows a pet without taking the focus from the window the person is in (tao's show activates the
+/// window, `focused(false)` holds only for its first show), or hides it. Pets are only ever shown
+/// and hidden here, so tao's own idea of their visibility stays "hidden" and never fights this.
+#[cfg(windows)]
+fn show(window: &WebviewWindow, shown: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
+    if let Ok(hwnd) = window.hwnd() {
+        let _ = unsafe { ShowWindow(hwnd, if shown { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
+    }
+}
+
+#[cfg(not(windows))]
+fn show(window: &WebviewWindow, shown: bool) {
+    let _ = if shown { window.show() } else { window.hide() };
 }
 
 /// Shows or hides every pet.
 pub fn show_all(app: &AppHandle, shown: bool) {
     for w in pet_windows(app) {
-        let _ = if shown { w.show() } else { w.hide() };
+        show(&w, shown);
     }
 }
 
@@ -264,10 +290,13 @@ pub fn start(app: &AppHandle, shown: bool) -> tauri::Result<()> {
     if keys.is_empty() {
         keys.push(HINT.into());
     }
-    // The pets' page is the dock's own, remote: only it, in pet windows, may call these commands.
+    // The pets' page is the dock's own, remote: only it, in pet windows, may call these commands. A
+    // release build grants only the deployed dock, whatever APC_DOCK_ORIGIN says; a debug build the
+    // dock it loads (a local one, say).
+    let granted = if cfg!(debug_assertions) { crate::origin() } else { tauri::Url::parse(crate::DOCK_ORIGIN).expect("DOCK_ORIGIN is a URL") };
     app.add_capability(
         CapabilityBuilder::new("pets")
-            .remote(format!("{}/*", crate::origin().origin().ascii_serialization()))
+            .remote(format!("{}/*", granted.origin().ascii_serialization()))
             .window(format!("{PREFIX}*"))
             .permission("allow-pet-agents")
             .permission("allow-pet-dropped")
@@ -299,7 +328,7 @@ pub fn start(app: &AppHandle, shown: bool) -> tauri::Result<()> {
 pub async fn pet_agents(app: AppHandle, agents: Vec<String>) -> Result<(), String> {
     let state = app.state::<Pets>();
     let _one = state.sync.lock().unwrap();
-    let mut wanted: HashSet<String> = agents.into_iter().filter(|a| is_agent(a)).collect();
+    let mut wanted: HashSet<String> = agents.into_iter().filter(|a| is_agent(a)).take(MAX_PETS).collect();
     // Saved spots of agents no longer in the dock go.
     let before = state.at.lock().unwrap().len();
     state.at.lock().unwrap().retain(|k, _| wanted.contains(k));
@@ -324,11 +353,14 @@ pub async fn pet_agents(app: AppHandle, agents: Vec<String>) -> Result<(), Strin
 }
 
 /// Whether the mouse button is still down: a drag cancelled with Esc ends while it is held, a drop
-/// when it is let go.
+/// when it is let go. GetAsyncKeyState reads the physical buttons: the primary one is the right
+/// with the buttons swapped.
 #[cfg(windows)]
 fn button_held() -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-    unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON.0)) < 0 }
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    let primary = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 { VK_RBUTTON } else { VK_LBUTTON };
+    unsafe { GetAsyncKeyState(i32::from(primary.0)) < 0 }
 }
 
 #[cfg(not(windows))]
@@ -351,7 +383,9 @@ pub fn pet_dropped(app: AppHandle, window: WebviewWindow, grab: (f64, f64)) -> b
         return false;
     }
     let scale = monitor_at(&app, x, y).map_or(1.0, |m| m.scale_factor());
-    let at = (x - (grab.0 * scale).round() as i32, y - (grab.1 * scale).round() as i32);
+    // The page's point, kept on the logo (NaN goes to 0).
+    let held = |v: f64| (v.clamp(0.0, PET) * scale).round() as i32;
+    let at = (x.saturating_sub(held(grab.0)), y.saturating_sub(held(grab.1)));
     app.state::<Pets>().at.lock().unwrap().insert(key, at);
     save(&app);
     place(&app, &window);

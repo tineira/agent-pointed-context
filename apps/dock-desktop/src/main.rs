@@ -26,8 +26,11 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 /// Shows and hides the pets; the dock page names it too (DESKTOP_SHORTCUT in apps/dock/src/web/setup.tsx).
 const SHORTCUT: &str = "Alt+Shift+Space";
 
+/// The deployed dock: the only origin a release build lets the pets' page call the app (pets.rs).
+const DOCK_ORIGIN: &str = "https://v2.apc.tineira.com";
+
 fn origin() -> Url {
-    let dock = std::env::var("APC_DOCK_ORIGIN").unwrap_or_else(|_| "https://v2.apc.tineira.com".into());
+    let dock = std::env::var("APC_DOCK_ORIGIN").unwrap_or_else(|_| DOCK_ORIGIN.into());
     Url::parse(&dock).expect("APC_DOCK_ORIGIN is a URL")
 }
 
@@ -102,8 +105,11 @@ fn float_flag(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|dir| dir.join("float"))
 }
 
+/// Builds before the pets kept the same flag for the strip, as `strip`: read once when `float` is not there yet.
 fn float_was_shown(app: &AppHandle) -> bool {
-    float_flag(app).and_then(|f| fs::read_to_string(f).ok()).is_none_or(|s| s != "0")
+    let dir = app.path().app_config_dir().ok();
+    let read = |name: &str| dir.as_ref().and_then(|d| fs::read_to_string(d.join(name)).ok());
+    read("float").or_else(|| read("strip")).is_none_or(|s| s != "0")
 }
 
 fn set_float(app: &AppHandle, shown: bool) {
