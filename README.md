@@ -102,7 +102,7 @@ corepack pnpm test
 corepack pnpm dev          # http://localhost:5173 (Vite + the local Workers runtime)
 ```
 
-The root page is a public chooser: **Connect app by app** opens Pulse v1's How-to and creates or resumes your sandbox; **Connect once** links to the separate [v2 dock](https://v2.apc.tineira.com). Visiting `/` creates no sandbox, even when you already have one. `/how-to` and `/overview` keep their existing routes.
+The public landing keeps its hero and explanation of the standard, with a chooser after the hero and a comparison after the explanation: **Connect app by app** opens Pulse v1's How-to and creates or resumes your sandbox; **Connect once** links to the separate [v2 dock](https://v2.apc.tineira.com). Visiting `/` creates no sandbox, even when you already have one. `/how-to` covers the V1 prerequisites and steps; `/overview` keeps its existing route.
 
 Deploy your own copy to Cloudflare Workers (the free plan is enough to try it):
 
