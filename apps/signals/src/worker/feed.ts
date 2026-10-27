@@ -185,12 +185,13 @@ export class Feed extends DurableObject<Env> {
     return { ok: true };
   }
 
-  async pin(grantId: string, raw: unknown): Promise<{ ok: boolean; error?: string }> {
+  /** keepRead: a badge dropped on its own target changes nothing (the /pin route); a dock drop (pairHub) always pins again and wakes the agent. */
+  async pin(grantId: string, raw: unknown, keepRead = false): Promise<{ ok: boolean; error?: string }> {
     if (!this.grants().some((g) => g.id === grantId)) return { ok: false, error: "unknown_grant" };
     const checked = checkPin(raw, this.posts());
     if ("error" in checked) return { ok: false, error: checked.error };
     const t = checked.target;
-    if (samePin(this.focusRow(grantId), t)) return { ok: true };
+    if (keepRead && samePin(this.focusRow(grantId), t)) return { ok: true };
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("insert into agent_focus (grant_id, kind, target_id, part, pinned_at, seen_at) values (?, ?, ?, ?, ?, null)", grantId, t.kind, t.id, t.part, new Date().toISOString());
     this.broadcast();
