@@ -2,15 +2,15 @@
  * Float as desktop pets in the APC dock for Windows (TIN-479): each agent in a small frameless window
  * of its own, on top of every window (apps/dock-desktop/src/pets.rs opens /dock?view=pet&agent=<id>).
  * Dragging a pet is the dock's own drag: dropped on an APC app that takes it, it points the agent; a
- * drop nothing took moves the pet there instead (the app does that, from the cursor). A pairing
- * request shows as a bubble beside the pet, and the app grows the window for it.
+ * drop nothing took (or Esc) leaves the pet where it is. Only the grip moves it (TIN-484): a pill above
+ * its head, shown while the mouse is over the pet, that moves the window natively (the app saves where
+ * it is let go). A pairing request shows as a bubble beside the pet, and the app grows the window for it.
  *
  * A pet draws the APC character (apc-pet.tsx, TIN-483): the same one as Float and the dock's tiles.
  */
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
 import { AgentPet } from "./apc-pet.tsx";
-import { grabPoint, movesPet } from "./pet-state.ts";
 
 const params = new URLSearchParams(location.search);
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -25,13 +25,19 @@ interface Side {
 }
 
 /** The app's commands for its pets (pets.rs); outside the app they do nothing. */
-const tauri = (window as { __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } }).__TAURI_INTERNALS__;
+const tauri = (
+  window as {
+    __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>; metadata?: { currentWindow?: { label?: string } } };
+  }
+).__TAURI_INTERNALS__;
 const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T | null> => (tauri ? tauri.invoke<T>(cmd, args).catch(() => null) : Promise.resolve(null));
 export const petApp = {
   /** The dock's agents: the app opens a pet for each and closes the others. */
   agents: (ids: string[]) => void invoke("pet_agents", { agents: ids }),
-  /** A drag nothing took: the app moves the pet to the cursor, `grab` under it. */
-  dropped: (grab: [number, number]) => void invoke("pet_dropped", { grab }),
+  /** The mouse is over the pet, or left it: the app lets the grip take clicks while it is. */
+  grip: (shown: boolean) => void invoke("pet_grip", { shown }),
+  /** The grip is pressed: the window moves with the mouse until it is let go (Tauri's own command). */
+  move: () => void invoke("plugin:window|start_dragging", { label: tauri?.metadata?.currentWindow?.label }),
   /** The bubble's size, or null when it goes: the app sizes the window and says which way it opens. */
   bubble: (size: { width: number; height: number } | null) => invoke<Side>("pet_bubble", { bubble: size && [size.width, size.height] }),
   openDock: () => void invoke("pet_open_dock"),
@@ -53,9 +59,7 @@ export function PetView(props: {
   startDrag: (e: DragEvent) => void;
   endDrag: () => void;
 }) {
-  const logo = useRef<HTMLDivElement>(null);
   const bubble = useRef<HTMLDivElement>(null);
-  const grab = useRef<[number, number]>([52, 52]);
   const [dragging, setDragging] = useState(false);
   // null while the app sizes the window for a bubble: it is laid out hidden, to be measured.
   const [side, setSide] = useState<Side | null>(null);
@@ -71,53 +75,95 @@ export function PetView(props: {
   }, [asking]);
   const a = props.agent;
   const where = side ? `${side.left ? "pet-left" : "pet-right"} ${side.up ? "pet-up" : "pet-down"}` : "pet-measuring";
+  const requests = asking ? (
+    <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
+      {props.requests.map((r) => (
+        <div key={r.id} className="pet-request">
+          <p>
+            {r.kind === "reader" ? (
+              <>
+                <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
+              </>
+            ) : (
+              <>
+                <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+              </>
+            )}
+          </p>
+          <div className="row">
+            <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+              Allow
+            </button>
+            <button type="button" onClick={() => props.decide(r.id, "deny")}>
+              Deny
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : null;
   return (
-    <div className={`pet ${where}`}>
+    <PetFrame where={where} name={a.name} beside={requests}>
       <div
-        ref={logo}
         className="pet-logo"
         draggable
-        title={a.client_name ? `Drag ${a.name} onto an app to point it, or anywhere else to move it` : `Drag ${a.name} into your agent's chat to connect it, or anywhere else to move it`}
+        title={a.client_name ? `Drag ${a.name} onto an app to point it` : `Drag ${a.name} into your agent's chat to connect it`}
         onDragStart={(e) => {
-          if (logo.current) grab.current = grabPoint({ x: e.clientX, y: e.clientY }, logo.current.getBoundingClientRect());
           setDragging(true);
           props.startDrag(e.nativeEvent);
         }}
-        onDragEnd={(e) => {
+        onDragEnd={() => {
           setDragging(false);
           props.endDrag();
-          if (movesPet(e.dataTransfer?.dropEffect)) petApp.dropped(grab.current);
         }}
       >
         <AgentPet agent={a} size={96} dragging={dragging} />
       </div>
-      {asking && (
-        <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
-          {props.requests.map((r) => (
-            <div key={r.id} className="pet-request">
-              <p>
-                {r.kind === "reader" ? (
-                  <>
-                    <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
-                  </>
-                ) : (
-                  <>
-                    <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
-                  </>
-                )}
-              </p>
-              <div className="row">
-                <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
-                  Allow
-                </button>
-                <button type="button" onClick={() => props.decide(r.id, "deny")}>
-                  Deny
-                </button>
-              </div>
-            </div>
-          ))}
+    </PetFrame>
+  );
+}
+
+/**
+ * A pet's window: the pet (the grip's band, and the logo below it), and beside it whatever else the
+ * window holds. The grip shows while the mouse is over the window, which is only ever over the pet or
+ * its bubble (the app's region is those); it hides when the mouse leaves. Pressing it moves the window.
+ */
+function PetFrame(props: { where: string; name?: string; children: ReactNode; beside?: ReactNode }) {
+  const [hover, setHover] = useState(false);
+  const shown = useRef(false);
+  const over = (on: boolean) => {
+    if (shown.current === on) return;
+    shown.current = on;
+    setHover(on);
+    petApp.grip(on);
+  };
+  // The grip shows on a move over the pet, not on pointerenter: when a body drag ends, WebView2 sends
+  // the page a pointerenter at the point the drag started, wherever the cursor is. A body drag hides
+  // the grip; the next move over the pet shows it again.
+  return (
+    <div
+      className={`pet ${props.where}${hover ? " pet-hover" : ""}`}
+      onPointerMove={() => over(true)}
+      onPointerLeave={() => over(false)}
+      onDragStart={() => over(false)}
+    >
+      <div className="pet-block">
+        <div
+          className="pet-grip"
+          title={props.name ? `Drag to move ${props.name}` : "Drag to move"}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            petApp.move();
+          }}
+        >
+          <svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true">
+            {[1.5, 6.5].flatMap((x) => [1.5, 5, 8.5].map((y) => <circle key={`${x},${y}`} cx={x} cy={y} r={1.2} fill="currentColor" />))}
+          </svg>
         </div>
-      )}
+        {props.children}
+      </div>
+      {props.beside}
     </div>
   );
 }
@@ -125,21 +171,21 @@ export function PetView(props: {
 /** The empty dock's one pet: a click opens the dock, where agents are added. */
 export function PetHint() {
   return (
-    <div className="pet pet-right pet-up">
+    <PetFrame where="pet-right pet-up">
       <button type="button" className="pet-logo pet-hint" title="No agents yet: open your dock to add one" aria-label="Open your dock to add an agent" onClick={petApp.openDock}>
         <span className="chip">+</span>
       </button>
-    </div>
+    </PetFrame>
   );
 }
 
 /** A pet while its page opens the dock, or tries again. */
 export function PetWaiting(props: { note: string }) {
   return (
-    <div className="pet pet-right pet-up">
+    <PetFrame where="pet-right pet-up">
       <div className="pet-logo" title={props.note}>
         <span className="chip pet-waiting" />
       </div>
-    </div>
+    </PetFrame>
   );
 }
