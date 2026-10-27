@@ -224,6 +224,39 @@ fn shape(window: &WebviewWindow, l: &Layout, scale: f64) {
     }
 }
 
+/// No title bar, ever. A click or a drag activates the pet, and tao hands WM_NCACTIVATE to
+/// DefWindowProc, which paints the window's caption. With a window region the system draws no frame of
+/// its own, so that caption ("APC agent" on pale blue, the classic look) lands in the transparent
+/// window and stays there, cut by the logo's circle. lParam -1 tells DefWindowProc not to paint it;
+/// tao still gets the message. tao's repaint on a Windows theme change calls DefWindowProc directly,
+/// so that one is redrawn away.
+#[cfg(windows)]
+fn no_title_bar(window: &WebviewWindow) {
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{WM_NCACTIVATE, WM_SETTINGCHANGE};
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM, _: usize, _: usize) -> LRESULT {
+        match msg {
+            WM_NCACTIVATE => unsafe { DefSubclassProc(hwnd, msg, w, LPARAM(-1)) },
+            WM_SETTINGCHANGE => unsafe {
+                let r = DefSubclassProc(hwnd, msg, w, l);
+                let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+                r
+            },
+            _ => unsafe { DefSubclassProc(hwnd, msg, w, l) },
+        }
+    }
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let _ = SetWindowSubclass(hwnd, Some(proc), 1, 0);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn no_title_bar(_: &WebviewWindow) {}
+
 #[cfg(not(windows))]
 fn shape(_: &WebviewWindow, _: &Layout, _: f64) {}
 
@@ -251,6 +284,9 @@ fn open(app: &AppHandle, key: &str, shown: bool) -> tauri::Result<WebviewWindow>
         .build()?;
     // Windows keeps a new window at least ~134 px wide; a resize after it is built gets under that.
     place(app, &w);
+    // A subclass is set from the window's own thread; pet_agents runs on another.
+    let pet = w.clone();
+    w.run_on_main_thread(move || no_title_bar(&pet))?;
     if shown {
         show(&w, true);
     }
