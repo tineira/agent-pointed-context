@@ -182,6 +182,7 @@ The p50 is mostly network (Chile to the edge to the sandbox): inside the Durable
 | v2 dock host | a web window at v2.apc.tineira.com with a Durable Object hub first (TIN-370), against a Pulse under apc-v2; a browser extension with a local hub next; package changes additive and opt-in, v1 stays on 0.2 | 2026-10-25 |
 | v2 prototype (TIN-370) | Pulse for the dock is `apps/demo` deployed again inside apc-v2 with a v2 flag; the hub exposes only `call_app_tool`; newest pin wins; pairing needs consent in the app and in the dock | 2026-10-25 |
 | Browser extension (TIN-395) | the extension only receives: the dock and Float stay the drag source; on an APC app the app takes the drop; on any other page the extension pushes a bounded **page reading** (untrusted data, not a pin) to the dropped agent's hub, after a per-site grant; it pairs on the first drop with the drag's ticket, confirmed in the dock, from an allowlisted extension origin | 2026-10-26 |
+| Public entry point | every visit to apc.tineira.com/ shows a chooser: connect app by app (v1) or connect once (v2). It creates no sandbox; choosing v1 opens the existing How-to and creates or resumes the visitor's sandbox. V1 keeps its routes and imports nothing from v2: the v2 choice is a plain link to v2.apc.tineira.com. Paper readers take one extra click to compare the two models | 2026-10-27 |
 
 ## 12. APC v2: one agent across apps (TIN-371)
 

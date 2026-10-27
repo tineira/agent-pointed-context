@@ -102,6 +102,8 @@ corepack pnpm test
 corepack pnpm dev          # http://localhost:5173 (Vite + the local Workers runtime)
 ```
 
+The root page is a public chooser: **Connect app by app** opens Pulse v1's How-to and creates or resumes your sandbox; **Connect once** links to the separate [v2 dock](https://v2.apc.tineira.com). Visiting `/` creates no sandbox, even when you already have one. `/how-to` and `/overview` keep their existing routes.
+
 Deploy your own copy to Cloudflare Workers (the free plan is enough to try it):
 
 ```sh
