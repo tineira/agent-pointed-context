@@ -10,6 +10,7 @@ import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
+import { ApcPin } from "./apc-pin.tsx";
 import { StartOver, startOverAsked } from "../../../demo/src/web/start-over.tsx";
 
 interface GrantState {
@@ -345,35 +346,17 @@ function Feed({ sid }: { sid: string }) {
 }
 
 /**
- * Agents pinned here, drawn by their mark (TIN-388): the agent's icon, a dashed ring until it reads
- * the pin and a check once it has, as in Pulse. The name is the tooltip, not the label.
+ * Agents pinned here, drawn by their mark (TIN-388): the standard pin badge, `<apc-pin>` from @apc/web
+ * (TIN-482). It is a mark, so dragging it onto another part of a post moves the pin through the
+ * same enablePinning as the agent bar's marks. Where it sits is Signals': inline next to a post part.
  */
 function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void }) {
   if (!props.grants.length) return null;
   return (
     <span className="pins">
-      {props.grants.map((g) => {
-        const seen = !!g.pin?.seen_at && g.pin.seen_at >= g.pin.pinned_at;
-        return (
-          <span key={g.id} className={`pin ${seen ? "seen" : "waiting"}`} title={`${g.name}: ${seen ? "read this pin" : "has not read this pin yet"}`}>
-            {g.icon ? (
-              <img src={g.icon} width={22} height={22} alt={g.name} />
-            ) : (
-              <svg className="pin-fallback" width="20" height="20" viewBox="0 0 24 24" role="img" aria-label={g.name}>
-                <path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z" />
-              </svg>
-            )}
-            {seen && (
-              <span className="pin-check" aria-hidden="true">
-                ✓
-              </span>
-            )}
-            <button type="button" aria-label={`Remove ${g.name}'s pin`} onClick={() => props.onUnpin(g.id)}>
-              ×
-            </button>
-          </span>
-        );
-      })}
+      {props.grants.map((g) => (
+        <ApcPin key={g.id} id={g.id} name={g.name} icon={g.icon} seen={!!g.pin?.seen_at && g.pin.seen_at >= g.pin.pinned_at} onUnpin={props.onUnpin} />
+      ))}
     </span>
   );
 }

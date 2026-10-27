@@ -195,22 +195,26 @@ function ask(status: "consent" | "consent_sensitive", x: number, y: number, send
 const pins = new Map<string, () => void>();
 
 /**
- * Pulse's pin badge (apps/demo/src/web/pin-badges.tsx), drawn in the page: a rounded square with the
- * agent's logo; a dashed, breathing accent outline until the agent reads the reading, then a green
- * check; × in its corner. Grey (faded) once a newer drop replaced the reading at the dock.
+ * The standard pin badge (TIN-482, `<apc-pin>` in packages/web/src/pin-badge.ts, which Pulse and
+ * Signals use), drawn in the page: a rounded square with the agent's logo; a dashed, breathing
+ * accent outline until the agent reads the reading, then a green check; × in its corner; the name
+ * as tooltip; dimmed while dragged. Grey (faded) once a newer drop replaced the reading at the dock.
+ * This is a copy of that element's look, not the element: a content script has no customElements
+ * (its isolated world gets none), so the badge is built by hand in the shadow root. Keep the two in
+ * step; the spec is DESIGN.md 12.8, "The pin badge".
  */
 const PIN_CSS = `
 .badge { position: absolute; width: 28px; height: 28px; }
 .mark { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
 .mark img { -webkit-user-drag: none; pointer-events: none; }
-.badge.moving { pointer-events: none; opacity: 0.85; }
+.badge.moving { pointer-events: none; opacity: 0.35; }
 .badge.moving .mark { cursor: grabbing; }
 .mark { box-sizing: border-box; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: #fff; color: #141a24; box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); outline-offset: 2px; }
 .badge[data-apc-pin-state="unread"] .mark { outline: 2px dashed #b85209; animation: breathe 1.8s ease-in-out infinite; }
 .badge[data-apc-pin-state="stale"] { opacity: 0.45; }
 .face { width: 18px; height: 18px; object-fit: contain; }
 .initial { font: 600 12px system-ui, sans-serif; }
-.check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: #157a3a; color: #fff; font: 700 10px/15px ui-monospace, monospace; text-align: center; }
+.check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: #1f7a4d; color: #fff; font: 700 10px/15px ui-monospace, monospace; text-align: center; }
 .unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid #d6dce5; background: #fff; color: #56627a; font: 12px/13px system-ui, sans-serif; cursor: pointer; opacity: 0.85; }
 .unpin:hover { color: #141a24; opacity: 1; }
 @keyframes breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }
@@ -218,7 +222,7 @@ const PIN_CSS = `
 `;
 
 /**
- * The agent's mark, pinned where it was dropped (TIN-469, 13.6), in Pulse's look (PIN_CSS): in the
+ * The agent's mark, pinned where it was dropped (TIN-469, 13.6), in the standard pin badge's look (PIN_CSS): in the
  * margin at the start of the paragraph, so it covers no text, following it through layout changes.
  * Dashed and breathing until the agent reads the reading, then a check; faded once a newer drop
  * replaced it at the dock. × clears the reading and the agent's focus. Dragging the mark to another
@@ -251,7 +255,7 @@ function pin(target: Target, mark: PinMark): void {
   const draw = () => {
     badge.dataset.apcPinState = state;
     check.hidden = state !== "read";
-    badge.title = `${mark.name}: ${state === "read" ? "read this" : state === "stale" ? "replaced by a newer drop" : "has not read this yet"}`;
+    badge.title = `${mark.name}: ${state === "read" ? "read this" : state === "stale" ? "replaced by a newer drop" : "has not read this yet"}. Drag to point it at something else.`;
     place();
   };
   const place = () => {
