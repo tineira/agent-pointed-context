@@ -8,7 +8,7 @@
  *
  * A pet draws the APC character (apc-pet.tsx, TIN-483): the same one as Float and the dock's tiles.
  */
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 
@@ -25,19 +25,18 @@ interface Side {
 }
 
 /** The app's commands for its pets (pets.rs); outside the app they do nothing. */
-const tauri = (
-  window as {
-    __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>; metadata?: { currentWindow?: { label?: string } } };
-  }
-).__TAURI_INTERNALS__;
+const tauri = (window as { __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } }).__TAURI_INTERNALS__;
 const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T | null> => (tauri ? tauri.invoke<T>(cmd, args).catch(() => null) : Promise.resolve(null));
 export const petApp = {
   /** The dock's agents: the app opens a pet for each and closes the others. */
   agents: (ids: string[]) => void invoke("pet_agents", { agents: ids }),
   /** The mouse is over the pet, or left it: the app lets the grip take clicks while it is. */
   grip: (shown: boolean) => void invoke("pet_grip", { shown }),
-  /** The grip is pressed: the window moves with the mouse until it is let go (Tauri's own command). */
-  move: () => void invoke("plugin:window|start_dragging", { label: tauri?.metadata?.currentWindow?.label }),
+  /**
+   * The grip is pressed: this window moves with the mouse until it is let go. Answers once the move has
+   * settled, with which way the bubble opens now (the app may have turned it), or null.
+   */
+  move: () => invoke<Side>("pet_move"),
   /** The bubble's size, or null when it goes: the app sizes the window and says which way it opens. */
   bubble: (size: { width: number; height: number } | null) => invoke<Side>("pet_bubble", { bubble: size && [size.width, size.height] }),
   openDock: () => void invoke("pet_open_dock"),
@@ -103,7 +102,7 @@ export function PetView(props: {
     </div>
   ) : null;
   return (
-    <PetFrame where={where} name={a.name} beside={requests}>
+    <PetFrame where={where} name={a.name} beside={requests} moved={(s) => setSide(s)}>
       <div
         className="pet-logo"
         draggable
@@ -128,7 +127,7 @@ export function PetView(props: {
  * window holds. The grip shows while the mouse is over the window, which is only ever over the pet or
  * its bubble (the app's region is those); it hides when the mouse leaves. Pressing it moves the window.
  */
-function PetFrame(props: { where: string; name?: string; children: ReactNode; beside?: ReactNode }) {
+function PetFrame(props: { where: string; name?: string; children: ReactNode; beside?: ReactNode; moved?: (side: Side) => void }) {
   const [hover, setHover] = useState(false);
   const shown = useRef(false);
   const over = (on: boolean) => {
@@ -137,6 +136,19 @@ function PetFrame(props: { where: string; name?: string; children: ReactNode; be
     setHover(on);
     petApp.grip(on);
   };
+  // The app's idea of the hover starts and ends with this frame (a reload, or the hint giving way to an
+  // agent), and a hidden page gets no pointerleave.
+  useEffect(() => {
+    petApp.grip(false);
+    const hidden = () => {
+      if (document.visibilityState === "hidden") over(false);
+    };
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      document.removeEventListener("visibilitychange", hidden);
+      petApp.grip(false);
+    };
+  }, []);
   // The grip shows on a move over the pet, not on pointerenter: when a body drag ends, WebView2 sends
   // the page a pointerenter at the point the drag started, wherever the cursor is. A body drag hides
   // the grip; the next move over the pet shows it again.
@@ -150,11 +162,13 @@ function PetFrame(props: { where: string; name?: string; children: ReactNode; be
       <div className="pet-block">
         <div
           className="pet-grip"
+          role="button"
+          aria-label={props.name ? `Move ${props.name}` : "Move"}
           title={props.name ? `Drag to move ${props.name}` : "Drag to move"}
           onPointerDown={(e) => {
             if (e.button !== 0) return;
             e.preventDefault();
-            petApp.move();
+            void petApp.move().then((side) => side && props.moved?.(side));
           }}
         >
           <svg width="8" height="10" viewBox="0 0 8 10" aria-hidden="true">

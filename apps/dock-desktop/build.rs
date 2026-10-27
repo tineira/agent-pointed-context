@@ -5,6 +5,7 @@ fn main() {
             "pet_agents",
             "pet_bubble",
             "pet_grip",
+            "pet_move",
             "pet_open_dock",
         ])),
     )

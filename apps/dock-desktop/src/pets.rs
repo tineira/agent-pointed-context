@@ -136,9 +136,10 @@ struct Placed {
 }
 
 /// The pets' positions (as saved: a spot on a monitor that is gone stays, for when it is back),
-/// bubbles, which pets the mouse is over, each window's layout and where `place` last put it (so a
-/// move of its own is not taken for a grip move), the grip moves not settled yet, a lock so two
-/// pages do not open the same pet at once, and one so saves do not interleave.
+/// bubbles, which pets the mouse is over, each window's layout and where `place` last put it, the
+/// grip moves in progress (when each last moved: only these moves are saved, never one Windows or
+/// `place` makes), a lock so two pages do not open the same pet at once, and one so saves do not
+/// interleave.
 #[derive(Default)]
 pub struct Pets {
     at: Mutex<HashMap<String, (i32, i32)>>,
@@ -359,11 +360,37 @@ fn show(window: &WebviewWindow, shown: bool) {
     let _ = if shown { window.show() } else { window.hide() };
 }
 
-/// Shows or hides every pet.
+/// Shows or hides every pet. A hidden pet gets no pointerleave, so its grip stops taking clicks here.
 pub fn show_all(app: &AppHandle, shown: bool) {
+    if !shown {
+        if let Some(state) = app.try_state::<Pets>() {
+            state.hovered.lock().unwrap().clear();
+        }
+    }
     for w in pet_windows(app) {
+        if !shown {
+            reshape(app, &w);
+        }
         show(&w, shown);
     }
+}
+
+/// Sets a pet's region again from its last layout (the grip's box only while the mouse is over it).
+fn reshape(app: &AppHandle, window: &WebviewWindow) {
+    let (Some(key), Some(state)) = (key(window), app.try_state::<Pets>()) else { return };
+    let hovered = state.hovered.lock().unwrap().contains(&key);
+    let placed = state.placed.lock().unwrap().get(&key).copied();
+    if let Some(p) = placed {
+        shape(window, &p.layout, p.scale, hovered);
+    }
+}
+
+/// Drops what the app keeps for a pet window that is gone, but its saved spot.
+fn forget(state: &Pets, key: &str) {
+    state.hovered.lock().unwrap().remove(key);
+    state.placed.lock().unwrap().remove(key);
+    state.bubbles.lock().unwrap().remove(key);
+    state.moving.lock().unwrap().remove(key);
 }
 
 /// Opens the pets the app had last time (the hint when none), lets their page call these commands,
@@ -376,8 +403,8 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
     if keys.is_empty() {
         keys.push(HINT.into());
     }
-    // The pets' page is the dock's own, remote: only it, in pet windows, may call these commands (and
-    // move its own window by the grip). A release build grants only the deployed dock, whatever
+    // The pets' page is the dock's own, remote: only it, in pet windows, may call these commands
+    // (pet_move moves only the window that calls it). A release build grants only the deployed dock, whatever
     // APC_DOCK_ORIGIN says; a debug build the dock it loads (a local one, say).
     let granted = if cfg!(debug_assertions) { crate::origin() } else { tauri::Url::parse(crate::DOCK_ORIGIN).expect("DOCK_ORIGIN is a URL") };
     app.add_capability(
@@ -387,8 +414,8 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
             .permission("allow-pet-agents")
             .permission("allow-pet-bubble")
             .permission("allow-pet-grip")
-            .permission("allow-pet-open-dock")
-            .permission("core:window:allow-start-dragging"),
+            .permission("allow-pet-move")
+            .permission("allow-pet-open-dock"),
     )?;
     for key in keys {
         open(app, &key)?;
@@ -426,8 +453,10 @@ pub async fn pet_agents(app: AppHandle, agents: Vec<String>) -> Result<(), Strin
         wanted.insert(HINT.into());
     }
     for w in pet_windows(&app) {
-        if key(&w).is_none_or(|k| !wanted.contains(&k)) {
+        let k = key(&w).unwrap_or_default();
+        if !wanted.contains(&k) {
             let _ = w.destroy();
+            forget(&state, &k);
         }
     }
     let mut keys: Vec<String> = wanted.into_iter().collect();
@@ -453,50 +482,74 @@ fn button_held() -> bool {
     false
 }
 
-/// A pet window moved (WindowEvent::Moved): once it keeps still with the button up, `settle` takes
-/// where it is. One watcher per pet, however many moves the drag sends.
+/// Notes a move of a pet's window and says whether it is a grip move: one in progress (pet_move
+/// started it), whose time it brings up to date. Any other move (Windows' own, on a display change or
+/// a DPI change, or `place`'s) is not the person's and is never saved.
+fn grip_moved(moving: &mut HashMap<String, Instant>, key: &str, now: Instant) -> bool {
+    moving.get_mut(key).map(|last| *last = now).is_some()
+}
+
+/// A pet window moved (WindowEvent::Moved): during a grip move, its watcher waits for it to keep still.
 pub fn moved(app: &AppHandle, label: &str) {
-    let Some(key) = label.strip_prefix(PREFIX).map(str::to_string) else { return };
-    let Some(state) = app.try_state::<Pets>() else { return };
-    if state.moving.lock().unwrap().insert(key.clone(), Instant::now()).is_some() {
-        return;
-    }
-    let app = app.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(SETTLE / 3);
-        let state = app.state::<Pets>();
-        let mut moving = state.moving.lock().unwrap();
-        let Some(last) = moving.get(&key) else { return };
-        if last.elapsed() < SETTLE || button_held() {
-            continue;
-        }
-        moving.remove(&key);
-        drop(moving);
-        if let Some(w) = app.get_webview_window(&format!("{PREFIX}{key}")) {
-            settle(&app, &w);
-        }
-        return;
-    });
+    let (Some(key), Some(state)) = (label.strip_prefix(PREFIX), app.try_state::<Pets>()) else { return };
+    grip_moved(&mut state.moving.lock().unwrap(), key, Instant::now());
+}
+
+/// Where a pet moved by its grip goes (its top left, physical px, not yet clamped), or None when the
+/// window is where `place` last put it (the grip was pressed and let go without a move).
+fn moved_to(pos: (i32, i32), placed: &Placed, scale: f64) -> Option<(i32, i32)> {
+    let px = |v: f64| (v * scale).round() as i32;
+    (pos != placed.pos).then(|| (pos.0 + px(placed.layout.pet.0), pos.1 + px(placed.layout.pet.1)))
 }
 
 /// A pet moved by its grip: its new spot, kept on the work area of the monitor it is on, is saved
-/// for its agent. A move `place` made itself is not one.
-fn settle(app: &AppHandle, window: &WebviewWindow) {
-    let (Some(key), Ok(pos)) = (key(window), window.outer_position()) else { return };
+/// for its agent. Says which way its bubble now opens.
+fn settle(app: &AppHandle, window: &WebviewWindow) -> Option<Side> {
+    let key = key(window)?;
+    let pos = window.outer_position().ok()?;
     let state = app.state::<Pets>();
-    let Some(Placed { layout: l, pos: placed, .. }) = state.placed.lock().unwrap().get(&key).copied() else { return };
-    if (pos.x, pos.y) == placed {
-        return;
-    }
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let px = |v: f64| (v * scale).round() as i32;
+    let placed = state.placed.lock().unwrap().get(&key).copied()?;
+    let scale = window.scale_factor().unwrap_or(placed.scale);
+    let Some(at) = moved_to((pos.x, pos.y), &placed, scale) else { return Some(placed.layout.side) };
     let size = pet_size(scale);
-    let at = (pos.x + px(l.pet.0), pos.y + px(l.pet.1));
-    let Some(monitor) = monitor_at(app, at.0 + size.0 / 2, at.1 + size.1 / 2) else { return };
+    let monitor = monitor_at(app, at.0 + size.0 / 2, at.1 + size.1 / 2)?;
     let at = clamp(at, pet_size(monitor.scale_factor()), Rect::of(&monitor));
     state.at.lock().unwrap().insert(key, at);
     save(app);
-    place(app, window);
+    place(app, window)
+}
+
+/// The grip is pressed: the window that calls this (and no other) moves with the mouse until it is
+/// let go and keeps still; then its spot is saved. Answers once it has, with which way the bubble now
+/// opens (the move may have turned it), so the page lays the bubble out again.
+#[tauri::command]
+pub async fn pet_move(app: AppHandle, window: WebviewWindow) -> Option<Side> {
+    let key = key(&window)?;
+    app.state::<Pets>().moving.lock().unwrap().insert(key.clone(), Instant::now());
+    if window.start_dragging().is_err() {
+        app.state::<Pets>().moving.lock().unwrap().remove(&key);
+        return None;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        loop {
+            std::thread::sleep(SETTLE / 3);
+            let state = app.state::<Pets>();
+            let mut moving = state.moving.lock().unwrap();
+            match moving.get(&key) {
+                Some(last) if last.elapsed() < SETTLE || button_held() => continue,
+                Some(_) => {
+                    moving.remove(&key);
+                    break;
+                }
+                // The window is gone.
+                None => return None,
+            }
+        }
+        settle(&app, &window)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// The mouse is over the pet, or left it: while it is over, the grip takes clicks too.
@@ -509,10 +562,7 @@ pub fn pet_grip(app: AppHandle, window: WebviewWindow, shown: bool) {
     } else {
         state.hovered.lock().unwrap().remove(&key);
     }
-    let placed = state.placed.lock().unwrap().get(&key).copied();
-    if let Some(p) = placed {
-        shape(&window, &p.layout, p.scale, shown);
-    }
+    reshape(&app, &window);
 }
 
 /// A pairing request's bubble on this pet (its size, logical px), or none: the window grows for it
@@ -521,10 +571,16 @@ pub fn pet_grip(app: AppHandle, window: WebviewWindow, shown: bool) {
 pub fn pet_bubble(app: AppHandle, window: WebviewWindow, bubble: Option<(f64, f64)>) -> Option<Side> {
     let key = key(&window)?;
     let bubble = bubble.filter(|(w, h)| (1.0..=600.0).contains(w) && (1.0..=800.0).contains(h));
+    let state = app.state::<Pets>();
     match bubble {
-        Some(b) => app.state::<Pets>().bubbles.lock().unwrap().insert(key, b),
-        None => app.state::<Pets>().bubbles.lock().unwrap().remove(&key),
+        Some(b) => state.bubbles.lock().unwrap().insert(key.clone(), b),
+        None => state.bubbles.lock().unwrap().remove(&key),
     };
+    // During a grip move, placing would put the pet back on its old spot: the move's end places it,
+    // with this bubble, and tells the page which way it opens then.
+    if state.moving.lock().unwrap().contains_key(&key) {
+        return state.placed.lock().unwrap().get(&key).map(|p| p.layout.side);
+    }
     place(&app, &window)
 }
 
@@ -604,6 +660,31 @@ mod tests {
         // At the bottom of the area, with no room below either: above.
         let l = layout((100, 940), Some((240.0, 100.0)), 1.0, SCREEN);
         assert!(l.side.up);
+    }
+
+    #[test]
+    fn only_a_grip_move_is_the_persons() {
+        let (start, later) = (Instant::now(), Instant::now() + Duration::from_millis(50));
+        let mut moving = HashMap::new();
+        // Windows moved the pet (a display or DPI change), or `place` did: not a grip move, not noted.
+        assert!(!grip_moved(&mut moving, "ag_1", later));
+        assert!(moving.is_empty());
+        // During a grip move each move counts, and the time it last moved is kept.
+        moving.insert("ag_1".to_string(), start);
+        assert!(grip_moved(&mut moving, "ag_1", later));
+        assert_eq!(moving["ag_1"], later);
+        assert!(!grip_moved(&mut moving, "ag_2", later));
+    }
+
+    #[test]
+    fn a_grip_move_lands_where_the_window_is_let_go() {
+        let placed = Placed { layout: layout((500, 500), Some((240.0, 100.0)), 1.25, SCREEN), scale: 1.25, pos: (400, 300) };
+        // Pressed and let go without a move: nothing to save.
+        assert_eq!(moved_to((400, 300), &placed, 1.25), None);
+        // The pet's top left, not the window's: the bubble's room above it is added back.
+        let (dx, dy) = ((placed.layout.pet.0 * 1.25).round() as i32, (placed.layout.pet.1 * 1.25).round() as i32);
+        assert!(dy > 0);
+        assert_eq!(moved_to((100, 50), &placed, 1.25), Some((100 + dx, 50 + dy)));
     }
 
     #[test]
