@@ -51,7 +51,7 @@ export const POSES: Record<PetState, Pose> = {
   idle: { ...base, wander: 3 },
   waiting: { ...base, breath: 0.03, wobble: 0.03, wspeed: 1.0, squash: -0.02, bob: 7, bspeed: 1.9, eyeH: 22, gx: -3, gy: -5, wander: 7 },
   calling: { ...base, breath: 0.02, wobble: 0.06, wspeed: 3.2, squash: 0.02, bspeed: 3, eyeW: 10, eyeH: 18, gx: 6, gy: -7 },
-  pinned: { ...base, breath: 0.02, wobble: 0.03, wspeed: 2, bob: 0, bspeed: 1, hop: 9, eyeW: 13, eyeH: 25, gy: -2 },
+  pinned: { ...base, breath: 0.02, wobble: 0.03, wspeed: 2, bob: 0, bspeed: 1, hop: 7, eyeW: 13, eyeH: 25, gy: -2 },
   read: { ...base, squash: 0.03, tilt: -4, gx: -2 },
   pairing: { ...base, wobble: 0.03, wspeed: 1.6, bob: 3, bspeed: 2.2, tilt: 6, eyeW: 12, eyeH: 23, gx: -8, gy: -2 },
   dragging: { ...base, breath: 0, wobble: 0.05, wspeed: 4, squash: -0.1, bob: 0, bspeed: 1, tilt: 8, eyeW: 14, eyeH: 27, gy: 4 },
@@ -82,10 +82,29 @@ function approach<T extends object>(cur: T, target: T, k: number): void {
 /** The share to move in dt seconds at a given rate: the same speed at any frame rate. */
 export const share = (dt: number, rate: number) => 1 - Math.exp(-Math.max(0, dt) * rate);
 
+/**
+ * Where things are drawn, in the SVG's 200 unit box (viewBox -100 -110 200 200, centre (0, -10)). The
+ * Windows pet window is clipped to a circle of CLIP.r around that centre (apps/dock-desktop/src/pets.rs),
+ * so everything must stay inside it: the tests check the farthest point each state draws.
+ */
+export const CLIP = { cx: 0, cy: -10, r: 100 };
+export const GEOM = {
+  ring: { r: 68, stroke: 3.5 },
+  orbit: { rx: 66, ry: 14, cy: -62, dot: 6 },
+  badge: { x: 40, y: 38, r: 19 },
+  check: { x: 52, y: -46, r: 12.25 },
+  /** The "!": its baseline (the bottom of its dot), the height of the bar above it and its dot's radius, stroke included. */
+  bang: { y: -70, bar: 25, dot: 6.7, half: 7 },
+  zz: [
+    { x: 22, y: -50, fs: 18 },
+    { x: 32, y: -50, fs: 24 },
+  ],
+};
+
 const N = 40;
 
 /** The body: a closed smooth path through N points on a wobbling, breathing ellipse, flatter at the bottom so it sits. */
-export function blobPath(pose: Pose, t: number, scale: number): string {
+export function blobPoints(pose: Pose, t: number, scale: number): Array<[number, number]> {
   const R = 60 * scale;
   const pts: Array<[number, number]> = [];
   for (let i = 0; i < N; i++) {
@@ -98,6 +117,11 @@ export function blobPath(pose: Pose, t: number, scale: number): string {
     if (y > 0) y *= 0.9;
     pts.push([x, y]);
   }
+  return pts;
+}
+
+export function blobPath(pose: Pose, t: number, scale: number): string {
+  const pts = blobPoints(pose, t, scale);
   const f = (n: number) => n.toFixed(2);
   let d = `M${f(pts[0]![0])} ${f(pts[0]![1])}`;
   for (let i = 0; i < N; i++) {
@@ -173,16 +197,17 @@ export function frameAt(pose: Pose, fx: Fx, t: number, still: boolean): Frame {
     left: { x: -21 + gx, y: cy, w: pose.eyeW, h, rx, opacity: 1 },
     right: { x: wx, y: cy, w: pose.eyeW, h, rx, opacity: 1 - fx.wink },
     wink: { d: `M${wx - 8} ${cy + 2} Q${wx} ${cy - 9} ${wx + 8} ${cy + 2}`, opacity: fx.wink },
-    ring: { opacity: fx.ring * 0.95, offset: -time * 22, r: 78 + (still ? 0 : 3 * Math.sin(time * 3.6)) },
-    bang: { opacity: fx.bang, y: -4 * hop, scale: 0.6 + 0.4 * fx.bang },
+    ring: { opacity: fx.ring * 0.95, offset: -time * 22, r: GEOM.ring.r + (still ? 0 : 2 * Math.sin(time * 3.6)) },
+    bang: { opacity: fx.bang, y: -2 * hop, scale: 0.6 + 0.4 * fx.bang },
     check: { opacity: fx.check, scale: 0.5 + 0.5 * fx.check },
     orbit: [0, 1, 2].map((i) => {
       const a = orbitAngle + (i * 2 * Math.PI) / 3;
-      return { cx: Math.cos(a) * 78, cy: -62 + Math.sin(a) * 14, opacity: fx.orbit };
+      return { cx: Math.cos(a) * GEOM.orbit.rx, cy: GEOM.orbit.cy + Math.sin(a) * GEOM.orbit.ry, opacity: fx.orbit };
     }),
     zz: [0, 1].map((i) => {
       const u = still ? 0.5 * i + 0.25 : (time * 0.5 + i * 0.5) % 1;
-      return { x: 36 + i * 14 + u * 10, y: -58 - u * 34, opacity: fx.zz * Math.sin(u * Math.PI) };
+      const g = GEOM.zz[i]!;
+      return { x: g.x + u * 8, y: g.y - u * 20, opacity: fx.zz * Math.sin(u * Math.PI) };
     }),
     badgeOpacity: 1 - 0.45 * pose.grey,
   };
@@ -206,6 +231,13 @@ export class PetSim {
     return frameAt(this.pose, this.fx, t, false);
   }
 
+  /** The pose of a state at once, without starting its clock: the first frame, drawn before the loop runs. */
+  snap(state: PetState, t: number): Frame {
+    this.pose = { ...POSES[state] };
+    this.fx = { ...FX[state] };
+    return frameAt(this.pose, this.fx, t, false);
+  }
+
   /** The still frame of a state (reduced motion): it snaps there, with nothing moving by itself. */
   still(state: PetState): Frame {
     this.state = state;
@@ -214,8 +246,45 @@ export class PetSim {
     return frameAt(this.pose, this.fx, 0, true);
   }
 
-  /** The state has been idle or offline for `after` seconds: the loop may run slowly. */
-  calm(t: number, after = 20): boolean {
-    return (this.state === "idle" || this.state === "offline") && t - this.since > after;
+  /** The state has not changed for `after` seconds, and nobody is dragging: the loop may run slowly. */
+  calm(t: number, after = 10): boolean {
+    return this.state !== null && this.state !== "dragging" && t - this.since > after;
   }
+}
+
+/** The farthest any part of the character is from the clip's centre, in a state at time t (rotation and bob included). */
+export function farthest(state: PetState, t: number, still: boolean): number {
+  const pose = still ? stilled(POSES[state]) : POSES[state];
+  const fx = FX[state];
+  const f = frameAt(pose, fx, t, still);
+  const a = (f.tilt * Math.PI) / 180;
+  const dist = (x: number, y: number, inGroup: boolean) => {
+    if (inGroup) {
+      [x, y] = [x * Math.cos(a) - y * Math.sin(a), x * Math.sin(a) + y * Math.cos(a) + f.bob];
+    }
+    return Math.hypot(x - CLIP.cx, y - CLIP.cy);
+  };
+  let far = 0;
+  const take = (d: number) => (far = Math.max(far, d));
+  for (const [x, y] of blobPoints(pose, still ? 0 : t, 1)) take(dist(x, y, true) + 1.25);
+  // A circle: its centre's distance plus its radius.
+  const disc = (x: number, y: number, r: number, inGroup: boolean) => take(dist(x, y, inGroup) + r);
+  disc(GEOM.badge.x, GEOM.badge.y, GEOM.badge.r, true);
+  if (fx.ring > 0) disc(0, 0, f.ring.r + GEOM.ring.stroke / 2, true);
+  if (fx.orbit > 0) for (const o of f.orbit) disc(o.cx, o.cy, GEOM.orbit.dot, true);
+  if (fx.check > 0) disc(GEOM.check.x, GEOM.check.y, GEOM.check.r, false);
+  if (fx.bang > 0) {
+    // At full size, its bar and dot, hopping with the body: the bar's corners and the dot.
+    const y = GEOM.bang.y + f.bang.y;
+    for (const x of [-GEOM.bang.half, GEOM.bang.half]) take(dist(x, y - GEOM.bang.bar, true));
+    disc(0, y, GEOM.bang.dot, true);
+  }
+  if (fx.zz > 0) {
+    for (const [i, z] of f.zz.entries()) {
+      if (z.opacity < 0.02) continue;
+      const g = GEOM.zz[i]!;
+      take(dist(z.x + g.fs * 0.7, z.y - g.fs * 0.75, false));
+    }
+  }
+  return far;
 }

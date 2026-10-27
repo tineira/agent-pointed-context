@@ -26,15 +26,15 @@ export interface PetInput {
 
 /**
  * The state, by what matters most to the person: their own drag, then a request waiting on them, then
- * not connected, then the pin (unread, then just read), then what the agent is doing.
+ * not connected, then an unread pin, then calling tools (an agent reading the pinned item shows calling, not the read hold), then a pin just read, then waiting.
  */
 export function petState(i: PetInput): PetState {
   if (i.dragging) return "dragging";
   if (i.requests > 0) return "pairing";
   if (!i.connected) return "offline";
   if (i.pin === "unread") return "pinned";
-  if (i.pin === "read") return "read";
   if (i.busy) return "calling";
+  if (i.pin === "read") return "read";
   if (i.waiting) return "waiting";
   return "idle";
 }

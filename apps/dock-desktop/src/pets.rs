@@ -22,7 +22,7 @@ use tauri::{ipc::CapabilityBuilder, AppHandle, Manager, Monitor, PhysicalPositio
 
 /// A pet window, logical px: the page's .pet-logo (the APC character, 96 px, and a margin).
 pub const PET: f64 = 104.0;
-/// The logo inside it (the page's .pet .chip): only this, and the bubble, take clicks.
+/// The character inside it (the page's .pet-logo, less this inset): only this circle (radius LOGO_RADIUS, half its 96 px), and the bubble, take clicks. pet-pose.ts CLIP says the same, and its test keeps the drawing inside.
 const LOGO_INSET: f64 = 4.0;
 const LOGO_RADIUS: f64 = 48.0;
 const BUBBLE_RADIUS: f64 = 12.0;

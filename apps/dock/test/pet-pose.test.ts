@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { blobPath, blink, FX, frameAt, PetSim, POSES, share, stilled } from "../src/web/pet-pose.ts";
+import { blobPath, blink, CLIP, farthest, FX, frameAt, PetSim, POSES, share, stilled } from "../src/web/pet-pose.ts";
 import type { PetState } from "../src/web/pet-state.ts";
 
 const STATES = Object.keys(POSES) as PetState[];
@@ -70,13 +70,33 @@ test("The blink closes the eyes briefly every 3.4 s, and never when still or alr
   assert.equal(blink(3.4 * 0.975, false, 3), 1);
 });
 
-test("A pet runs slowly only after it has been idle or offline for a while", () => {
+test("A pet runs slowly once its state has stayed put, whatever the state, but never while dragged", () => {
   const sim = new PetSim();
-  sim.step("idle", 100, 0.016);
-  assert.equal(sim.calm(105), false);
-  assert.equal(sim.calm(121), true);
-  sim.step("calling", 122, 0.016);
-  assert.equal(sim.calm(200), false);
-  sim.step("offline", 201, 0.016);
-  assert.equal(sim.calm(230), true);
+  assert.equal(sim.calm(5), false);
+  let t = 100;
+  for (const state of ["idle", "waiting", "pinned", "pairing", "offline", "calling"] as const) {
+    sim.step(state, t, 0.016);
+    assert.equal(sim.calm(t + 5), false, state);
+    assert.equal(sim.calm(t + 11), true, state);
+    t += 100;
+  }
+  sim.step("dragging", t, 0.016);
+  assert.equal(sim.calm(t + 100), false);
+});
+
+test("Everything drawn stays inside the Windows pet's circular clip, with a margin (TIN-483)", () => {
+  for (const s of STATES) {
+    let far = 0;
+    for (let t = 0; t < 30; t += 0.05) far = Math.max(far, farthest(s, t, false));
+    far = Math.max(far, farthest(s, 0, true));
+    assert.ok(far <= CLIP.r - 3, `${s}: ${far.toFixed(1)} of ${CLIP.r}`);
+  }
+});
+
+test("The first frame is the state's pose, drawn before the loop runs", () => {
+  const sim = new PetSim();
+  const f = sim.snap("offline", 3);
+  assert.equal(f.fill, "rgb(154,160,171)");
+  // It does not start the clock: the first step of the loop does.
+  assert.equal(sim.calm(1000), false);
 });

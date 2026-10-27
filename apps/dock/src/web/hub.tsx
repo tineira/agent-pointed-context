@@ -235,8 +235,12 @@ export function HubDock() {
     const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
     e.dataTransfer?.setData(APC_AGENT_TYPE, agentDragPayload(agentId, fresh));
     if (e.dataTransfer) e.dataTransfer.effectAllowed = "link";
-    const chip = (e.currentTarget as HTMLElement | null)?.querySelector(".chip");
-    if (chip && e.dataTransfer) e.dataTransfer.setDragImage(chip, 32, 32);
+    // The drag image is the character itself (not the whole tile), held where the person grabbed it.
+    const pet = (e.currentTarget as HTMLElement | null)?.querySelector(".apc-pet");
+    if (pet && e.dataTransfer) {
+      const r = pet.getBoundingClientRect();
+      e.dataTransfer.setDragImage(pet, Math.min(Math.max(e.clientX - r.left, 0), r.width), Math.min(Math.max(e.clientY - r.top, 0), r.height));
+    }
     setDragging(agentId);
   }
   function endDrag(agentId: string) {
@@ -344,6 +348,7 @@ export function HubDock() {
           refresh={refresh}
           back={back}
           dragProps={dragProps(agent)}
+          dragging={dragging === agent.id}
         />
       </>
     );
@@ -362,7 +367,7 @@ export function HubDock() {
           return (
             <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
               <div className="tile-drag" {...dragProps(a)}>
-                <AgentPet agent={a} size={104} dragging={dragging === a.id} />
+                <AgentPet agent={a} size={104} dragging={dragging === a.id} decorative />
                 <span className="tile-name">{a.name}</span>
                 <span className="tile-where">
                   {a.focus ? (
@@ -655,7 +660,7 @@ function FloatAgents(props: {
       <div className="float float-notice-wrap" role="status" aria-live="polite">
         <button type="button" className="float-notice" onClick={props.notice.onOpen} title="Open the request">
           <span className="chip">
-            {first && <AgentIcon clientName={first.client_name} clientUa={first.client_ua} clientIcon={first.client_icon} motion="off" size={28} />}
+            {first && <AgentPet agent={first} size={40} decorative />}
             <span className="float-notice-badge" aria-hidden="true">
               {n}
             </span>

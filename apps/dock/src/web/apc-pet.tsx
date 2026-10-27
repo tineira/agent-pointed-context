@@ -7,11 +7,12 @@
  * Motion: pet-pose.ts says what each state looks like; this file draws a frame into the SVG with no
  * React render per frame. One requestAnimationFrame loop per window drives every pet in it (Float's
  * Picture-in-Picture window is a window of its own, so its pets run on its requestAnimationFrame). The
- * loop stops while the window is hidden and slows down once every pet has been calm for a while.
+ * loop stops while the window is hidden and slows down once every pet has kept its state for a while.
  */
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { brandFor } from "../../../demo/src/web/agent-brands.ts";
 import type { DockAgent } from "./agent-page.tsx";
-import { PetSim, type Frame } from "./pet-pose.ts";
+import { GEOM, PetSim, type Frame } from "./pet-pose.ts";
 import { pinPhase, petState, watchRead, type PetState, type ReadWatch } from "./pet-state.ts";
 
 interface Sub {
@@ -19,8 +20,8 @@ interface Sub {
   calm(t: number): boolean;
 }
 
-/** After this long calm, a loop draws about 10 frames a second. */
-const SLOW_MS = 100;
+/** Once every pet in a window has kept its state for a while (PetSim.calm), the loop draws 20 frames a second instead of 60. */
+const SLOW_MS = 50;
 
 /** The loop of one window: every pet in it, one frame callback. */
 class Loop {
@@ -79,6 +80,17 @@ const loopOf = (win: Window) => {
 
 const BODY_DARK = "#23262f";
 
+const STATE_WORDS: Record<PetState, string> = {
+  idle: "connected",
+  waiting: "waiting for you to point",
+  calling: "calling tools",
+  pinned: "pointed at something, not read yet",
+  read: "read what you pointed at",
+  pairing: "a pairing request waits for you",
+  dragging: "being dragged",
+  offline: "not connected",
+};
+
 /** Writes a frame into the SVG's parts (found by data-k). */
 function paint(parts: Record<string, Element>, f: Frame): void {
   const set = (k: string, attrs: Record<string, string | number>) => {
@@ -91,8 +103,8 @@ function paint(parts: Record<string, Element>, f: Frame): void {
   for (const [k, e] of [["left", f.left], ["right", f.right]] as const) set(k, { x: (e.x - e.w / 2).toFixed(2), y: (e.y - e.h / 2).toFixed(2), width: e.w, height: e.h.toFixed(2), rx: e.rx.toFixed(2), opacity: e.opacity.toFixed(3) });
   set("wink", { d: f.wink.d, opacity: f.wink.opacity.toFixed(3) });
   set("ring", { opacity: f.ring.opacity.toFixed(3), "stroke-dashoffset": f.ring.offset.toFixed(2), r: f.ring.r.toFixed(2) });
-  set("bang", { opacity: f.bang.opacity.toFixed(3), transform: `translate(0 ${(f.bang.y - 78).toFixed(2)}) scale(${f.bang.scale.toFixed(3)})` });
-  set("check", { opacity: f.check.opacity.toFixed(3), transform: `translate(58 58) scale(${f.check.scale.toFixed(3)})` });
+  set("bang", { opacity: f.bang.opacity.toFixed(3), transform: `translate(0 ${(f.bang.y + GEOM.bang.y).toFixed(2)}) scale(${f.bang.scale.toFixed(3)})` });
+  set("check", { opacity: f.check.opacity.toFixed(3), transform: `translate(${GEOM.check.x} ${GEOM.check.y}) scale(${f.check.scale.toFixed(3)})` });
   f.orbit.forEach((o, i) => set(`orbit${i}`, { cx: o.cx.toFixed(2), cy: o.cy.toFixed(2), opacity: o.opacity.toFixed(3) }));
   f.zz.forEach((z, i) => set(`zz${i}`, { x: z.x.toFixed(2), y: z.y.toFixed(2), opacity: z.opacity.toFixed(3) }));
   set("badge", { opacity: f.badgeOpacity.toFixed(3) });
@@ -102,13 +114,14 @@ function paint(parts: Record<string, Element>, f: Frame): void {
  * The character in a given state, `size` px square; `badge` is the agent's logo as a PNG data URI
  * (none: no badge). `phase` offsets its clock, so pets side by side do not breathe in step.
  */
-export function ApcPet(props: { state: PetState; badge: string | null; label: string; size: number; phase?: number }) {
+export function ApcPet(props: { state: PetState; badge: string | null; label: string; size: number; phase?: number; /** The name is written next to it: hide it from screen readers. */ decorative?: boolean }) {
   const uid = useId().replace(/\W/g, "");
   const svg = useRef<SVGSVGElement>(null);
   const state = useRef(props.state);
   state.current = props.state;
   const refresh = useRef<() => void>(() => {});
-  useEffect(() => {
+  // A layout effect, so the first frame is drawn before the browser paints (no blank frame).
+  useLayoutEffect(() => {
     const el = svg.current;
     if (!el) return;
     const win = el.ownerDocument.defaultView ?? window;
@@ -118,6 +131,7 @@ export function ApcPet(props: { state: PetState; badge: string | null; label: st
     const phase = props.phase ?? 0;
     const reduced = win.matchMedia("(prefers-reduced-motion: reduce)");
     let stop = () => {};
+    if (!reduced.matches) paint(parts, sim.snap(state.current, phase));
     const run = () => {
       stop();
       stop = () => {};
@@ -142,7 +156,7 @@ export function ApcPet(props: { state: PetState; badge: string | null; label: st
   }, [props.state]);
   const id = (s: string) => `${s}-${uid}`;
   return (
-    <svg ref={svg} className="apc-pet" width={props.size} height={props.size} viewBox="-100 -110 200 200" role="img" aria-label={props.label}>
+    <svg ref={svg} className="apc-pet" width={props.size} height={props.size} viewBox="-100 -110 200 200" {...(props.decorative ? { "aria-hidden": true } : { role: "img", "aria-label": `${props.label}, ${STATE_WORDS[props.state]}` })}>
       <defs>
         <radialGradient id={id("shine")} cx="35%" cy="28%" r="60%">
           <stop offset="0" stopColor="#fff" stopOpacity="0.22" />
@@ -167,20 +181,20 @@ export function ApcPet(props: { state: PetState; badge: string | null; label: st
             </>
           )}
         </g>
+        <g data-k="bang" opacity="0" fill="#f08a3e" stroke="#fff" strokeWidth="5" paintOrder="stroke">
+          <rect x="-3.6" y="-22.5" width="7.2" height="14" rx="3.6" />
+          <circle r="4.2" />
+        </g>
         {[0, 1, 2].map((i) => (
           <circle key={i} data-k={`orbit${i}`} r="4.5" fill="#fff" stroke={BODY_DARK} strokeWidth="1.5" opacity="0" />
         ))}
       </g>
-      <g data-k="check" opacity="0" transform="translate(58 58)">
+      <g data-k="check" opacity="0" transform={`translate(${GEOM.check.x} ${GEOM.check.y})`}>
         <circle r="11" fill="#157a3a" stroke="#fff" strokeWidth="2.5" />
         <path d="M-5 0 L-1.5 4 L5.5 -4" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
       </g>
-      <g data-k="bang" opacity="0" fill="#f08a3e" stroke="#fff" strokeWidth="5" paintOrder="stroke">
-        <rect x="-4.5" y="-27" width="9" height="19" rx="4.5" />
-        <circle cy="1" r="5" />
-      </g>
       {[0, 1].map((i) => (
-        <text key={i} data-k={`zz${i}`} fontSize={i ? 26 : 20} fontWeight="700" fontFamily="system-ui, sans-serif" fill="#8a96a8" stroke="#fff" strokeWidth="1.5" paintOrder="stroke" opacity="0">
+        <text key={i} data-k={`zz${i}`} fontSize={GEOM.zz[i]!.fs} fontWeight="700" fontFamily="system-ui, sans-serif" fill="#8a96a8" stroke="#fff" strokeWidth="1.5" paintOrder="stroke" opacity="0">
           z
         </text>
       ))}
@@ -192,7 +206,7 @@ export function ApcPet(props: { state: PetState; badge: string | null; label: st
  * An agent's pet: the character in the state the hub's data gives it. `dragging` is local to the
  * page (the person holds the pet). The pin the agent just read shows as "read" for a few seconds.
  */
-export function AgentPet(props: { agent: DockAgent; size: number; dragging?: boolean }) {
+export function AgentPet(props: { agent: DockAgent; size: number; dragging?: boolean; decorative?: boolean }) {
   const a = props.agent;
   const focus = a.focus ? { pinned_at: a.focus.pinned_at, seen: a.focus.seen } : null;
   const watch = useRef<ReadWatch | null | undefined>(undefined);
@@ -214,5 +228,8 @@ export function AgentPet(props: { agent: DockAgent; size: number; dragging?: boo
     dragging: !!props.dragging,
   });
   const phase = [...a.id].reduce((n, c) => (n * 31 + c.charCodeAt(0)) % 997, 7) / 100;
-  return <ApcPet state={state} badge={a.badge} label={a.name} size={props.size} phase={phase} />;
+  // The hub's badge once it has one; before, the logo the client sent or the curated raster logo (an SVG-only brand waits for the hub's PNG).
+  const logo = brandFor(a.client_name, a.client_ua)?.logo;
+  const badge = a.badge ?? a.client_icon ?? (logo && "image" in logo ? logo.image : null);
+  return <ApcPet state={state} badge={badge} label={a.name} size={props.size} phase={phase} decorative={props.decorative} />;
 }

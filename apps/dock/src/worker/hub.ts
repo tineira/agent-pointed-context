@@ -252,6 +252,10 @@ export class Hub extends DurableObject<Env> {
     const row = this.pointer(agentId);
     return row && !row.seen_at ? row : null;
   }
+  /** A call (not a wait) is in flight for the agent, or ended a moment ago. */
+  private isBusy(agentId: string): boolean {
+    return (this.busy.get(agentId) ?? 0) > 0 || (this.busyUntil.get(agentId) ?? 0) > Date.now();
+  }
   private broadcast(): void {
     for (const ws of this.ctx.getWebSockets()) {
       try {
@@ -297,6 +301,8 @@ export class Hub extends DurableObject<Env> {
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "dock expired");
     await this.ctx.storage.deleteAll();
+    this.busy.clear();
+    this.busyUntil.clear();
     this.migrate();
   }
 
@@ -344,6 +350,8 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from tickets where agent_id = ?", agentId);
     this.sql.exec("delete from calls where agent_id = ?", agentId);
     this.sql.exec("delete from agents where id = ?", agentId);
+    this.busy.delete(agentId);
+    this.busyUntil.delete(agentId);
     this.broadcast();
     return { ok: true };
   }
@@ -391,7 +399,7 @@ export class Hub extends DurableObject<Env> {
           mcp_url: `${origin}/mcp/${did}/${a.secret}`,
           last_active_at: a.last_active_at,
           waiting: this.waiting.has(a.id),
-          busy: (this.busy.get(a.id) ?? 0) > 0 || (this.busyUntil.get(a.id) ?? 0) > Date.now(),
+          busy: this.isBusy(a.id),
           focus: row ? { app: row.app, label: focusLabel(row.focus), pinned_at: row.focus.pinned_at, seen: !!row.seen_at } : null,
           calls: (this.sql.exec<{ n: number }>("select count(*) as n from calls where agent_id = ?", a.id).toArray()[0]?.n ?? 0),
           // What this agent's client does with a dock (TIN-384), for the compatibility matrix.
@@ -840,8 +848,10 @@ export class Hub extends DurableObject<Env> {
       // A call in flight shows on the agent's pet (TIN-483); the wait has its own state.
       const counted = name !== "wait_for_focus";
       if (counted) {
+        // Tell the dock only when the agent was not showing as calling already.
+        const showing = this.isBusy(agent.id);
         this.busy.set(agent.id, (this.busy.get(agent.id) ?? 0) + 1);
-        this.broadcast();
+        if (!showing) this.broadcast();
       }
       let result: ToolResult;
       try {

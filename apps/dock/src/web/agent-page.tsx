@@ -131,6 +131,8 @@ export function AgentPage(props: {
   refresh: () => void;
   back: () => void;
   dragProps: Record<string, unknown>;
+  /** The person is dragging this agent (its pet stretches). */
+  dragging?: boolean;
 }) {
   const { agent: a, base } = props;
   const [calls, setCalls] = useState<CallEntry[] | null>(null);
@@ -153,7 +155,7 @@ export function AgentPage(props: {
 
       <section className="agent-hero">
         <span className="agent-hero-pet" {...props.dragProps}>
-          <AgentPet agent={a} size={88} />
+          <AgentPet agent={a} size={88} dragging={props.dragging} />
         </span>
         <div className="who">
           <h1>{a.name}</h1>

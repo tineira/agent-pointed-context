@@ -10,7 +10,10 @@ test("The pet's state: the person's drag, a request, offline, the pin, then what
   assert.equal(petState({ ...calm, busy: true }), "calling");
   assert.equal(petState({ ...calm, busy: true, waiting: true }), "calling");
   assert.equal(petState({ ...calm, pin: "unread" }), "pinned");
-  assert.equal(petState({ ...calm, pin: "read", busy: true }), "read");
+  assert.equal(petState({ ...calm, pin: "read" }), "read");
+  // An agent that reads the pinned item is calling tools: that shows, not the read hold.
+  assert.equal(petState({ ...calm, pin: "read", busy: true }), "calling");
+  assert.equal(petState({ ...calm, pin: "unread", busy: true }), "pinned");
   assert.equal(petState({ ...calm, connected: false }), "offline");
   // A request waits on the person even for an agent no client has connected to yet.
   assert.equal(petState({ ...calm, connected: false, requests: 1 }), "pairing");

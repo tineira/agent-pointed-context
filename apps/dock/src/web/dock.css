@@ -93,6 +93,7 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .pet-body { margin: 0; min-height: 0; overflow: hidden; background: transparent; }
 .pet { position: fixed; inset: 0; --pet-gap: 6px; }
 .pet-logo { position: absolute; left: 0; top: 0; width: 104px; height: 104px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 52px; background: none; color: inherit; cursor: grab; user-select: none; }
+/* The hint's "+" and the opening pet, which are not characters. */
 .pet-logo .chip { width: 96px; height: 96px; border-radius: 48px; }
 .pet-left .pet-logo { left: auto; right: 0; }
 .pet-up .pet-logo { top: auto; bottom: 0; }
@@ -141,7 +142,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .float-notice-wrap { padding: 4px; }
 .float-notice { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; padding: 6px 4px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); color: var(--fg); font-size: 12px; line-height: 1.2; cursor: pointer; }
 .float-notice b { color: var(--accent); }
-.float-notice .chip { position: relative; width: 36px; height: 36px; border-radius: 10px; }
+.float-notice .chip { position: relative; width: 44px; height: 44px; border-radius: 12px; }
 .float-notice-badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
 
 /* Remove an agent (TIN-418). */
