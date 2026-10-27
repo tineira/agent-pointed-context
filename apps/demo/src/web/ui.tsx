@@ -86,11 +86,12 @@ export function navigateTo(href: string): void {
   window.scrollTo(0, 0);
 }
 
-export function AppLink(props: { href: string; className?: string; children: ReactNode }) {
+export function AppLink(props: { href: string; className?: string; children: ReactNode; "aria-labelledby"?: string }) {
   return (
     <a
       href={props.href}
       className={props.className}
+      aria-labelledby={props["aria-labelledby"]}
       onClick={(e) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
         e.preventDefault();

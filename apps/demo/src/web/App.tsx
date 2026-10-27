@@ -18,6 +18,7 @@ import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
 import { PinBadges, isSeen, pinLabel } from "./pin-badges.tsx";
 import { presenceEffects } from "./presence.ts";
+import { entryPage } from "./entry-page.ts";
 import { Tour } from "./tour.tsx";
 
 type Screen = "howto" | "overview" | "customers" | "agents";
@@ -73,9 +74,10 @@ export function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+  const page = entryPage(path);
   return (
     <div className="flex min-h-svh flex-col">
-      {path === "/" ? <Chooser /> : path === "/v1" ? <div className="v1-landing flex flex-1 flex-col"><Landing /></div> : <SandboxGate />}
+      {page === "chooser" ? <Chooser /> : page === "v1" ? <div className="v1-landing flex flex-1 flex-col"><Landing /></div> : <SandboxGate />}
       <SiteFooter />
     </div>
   );

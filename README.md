@@ -6,7 +6,7 @@ Point your own AI agent at what you see in an app, without sharing the screen.
 
 [![Agent Pointed Context: an agent's mark dragged onto a bar of a chart; only a key travels to the person's own agent, which reads the data behind it and joins it with the person's own MRR file, kept apart from the app.](docs/landing.jpg)](https://apc.tineira.com)
 
-**Try it:** [apc.tineira.com](https://apc.tineira.com). No sign-up: each visitor gets a private sandbox with synthetic data, deleted after 6 hours without use. The [how-to](https://apc.tineira.com/how-to) takes about five minutes with Claude Code, claude.ai, ChatGPT, Grok, Cursor or any agent that accepts a remote MCP server by URL.
+**Try it:** [apc.tineira.com](https://apc.tineira.com) is the connection chooser and opens no sandbox. Choose V1 for the [original landing](https://apc.tineira.com/v1), which also opens no sandbox, or V2 to connect through your dock. Entering the V1 demo creates or resumes a private sandbox with synthetic data, with no sign-up; it is deleted after 6 hours without use. The [how-to](https://apc.tineira.com/how-to) takes about five minutes with Claude Code, claude.ai, ChatGPT, Grok, Cursor or any agent that accepts a remote MCP server by URL.
 
 This repo is the open reference implementation and demo of **Agent Pointed Context (APC)**:
 

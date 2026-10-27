@@ -87,17 +87,18 @@ export function Chooser() {
         <ThemeToggle />
       </header>
       <h1>Bring your own agent to any app</h1>
+      <p className="chooser-lede">Point it at a chart, a row or a paragraph and ask about "this". No built-in assistant needed. Two ways to try the standard:</p>
       <section className="chooser-cards" aria-label="Choose a connection model">
-        <AppLink href="/v1" className="chooser-card">
+        <AppLink href="/v1" className="chooser-card" aria-labelledby="v1-card-title">
           <span className="chooser-version">V1</span>
-          <h2>Connect app by app</h2>
+          <h2 id="v1-card-title">Connect app by app</h2>
           <ConnectionDiagram />
           <p>One connection in your agent for each app. Try it on Pulse.</p>
           <span className="chooser-card-link">See how V1 works <span aria-hidden="true">→</span></span>
         </AppLink>
-        <a href="https://v2.apc.tineira.com" className="chooser-card chooser-card-accent">
+        <a href="https://v2.apc.tineira.com" className="chooser-card chooser-card-accent" aria-labelledby="v2-card-title">
           <span className="chooser-version">V2</span>
-          <h2>Connect once</h2>
+          <h2 id="v2-card-title">Connect once</h2>
           <ConnectionDiagram once />
           <p>One connection to your dock. Drop your agent on any app or page.</p>
           <span className="chooser-card-link">See how V2 works <span aria-hidden="true">→</span></span>
