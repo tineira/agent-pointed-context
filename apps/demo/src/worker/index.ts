@@ -55,6 +55,9 @@ async function allowed(limiter: RateLimit | undefined, key: string): Promise<boo
 const tooMany = (c: { json: (body: unknown, status: 429, headers: Record<string, string>) => Response }) =>
   c.json({ error: "rate_limited", message: "Too many requests; try again in a minute." }, 429, { "retry-after": "60" });
 
+/** Public uptime probe without opening a sandbox. */
+app.get("/api/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
+
 /** Resume the visitor's sandbox, or open a new one. */
 app.post("/api/session", async (c) => {
   // On Pulse's v2 deploy, the world a dock opened it on (TIN-393). Ignored on apc.tineira.com.

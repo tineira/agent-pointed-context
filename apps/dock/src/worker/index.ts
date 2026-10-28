@@ -24,6 +24,9 @@ function session(cookie: string | undefined): { did: string; owner: string } | n
   return m ? { did: m[1]!, owner: m[2]! } : null;
 }
 
+/** Public uptime probe without opening a dock. */
+app.get("/api/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
+
 /**
  * Resume the visitor's dock, or open a new one. With { resume: true } (the desktop dock's pets, #84,
  * which open beside the dock's own window and must not make a second dock), only resume: 404 without one.
