@@ -120,7 +120,8 @@ const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countr
 <table><thead><tr><th>Country</th><th>Population</th></tr></thead><tbody><tr><td>Peru</td><td>33</td></tr><tr><td>Chile</td><td id="cell">19.6</td></tr></tbody></table>
 <p id="formula">Churn is <math alttext="L \\times T"><mi>L</mi><mi>T</mi></math><span style="display:none"><math alttext="HIDDEN COPY"><mi>H</mi></math></span>, see <img src="${PIXEL}" alt="the churn chart" width="20" height="20"> and <img src="${PIXEL}" width="20" height="20"> and <img src="${PIXEL}" alt="" width="20" height="20">.</p>
 <table><tr style="display:none"><th>HIDDEN HEADER</th><th>HIDDEN HEADER</th></tr><tr><td>Row</td><td id="unseen">Plain</td></tr></table>
-<p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>`;
+<p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
+<p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>`;
 const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
@@ -603,6 +604,9 @@ try {
     assert.doesNotMatch(unseen, /HIDDEN HEADER/);
     await dropOnFigures("#contents");
     await until("the words inside display: contents", async () => /Pointed at \(p\): Revenue fell as the second chart shows\./.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    // As on Wikipedia: the MathML clipped out of sight beside an image of it, with the same text.
+    await dropOnFigures("#twice");
+    await until("a formula read once", async () => /Pointed at \(p\): Area is x\^\{2\} here\./.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     await cdp("Target.closeTarget", { targetId: figures.targetId });
     const listed = (await api(`${base}/state`)).agents[0].readings;
     assert.equal(listed[0].kept, true);
