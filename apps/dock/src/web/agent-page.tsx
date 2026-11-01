@@ -8,6 +8,7 @@ import type { Onboarding } from "../onboarding.ts";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { ConnectAgent, CopyRow } from "./setup.tsx";
+import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } from "../worker/reading.ts";
 
 export interface AppRef {
   id: string;
@@ -31,6 +32,8 @@ export interface DockAgent {
   busy: boolean;
   /** How many calls the dock logged for this agent (TIN-419): a change refreshes its page. */
   calls: number;
+  /** The page readings sent to this agent (TIN-422): site, time and size, newest first. */
+  readings: ReadingRow[];
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
   /** Apps, and browsers sending page readings (kind "reader", TIN-421). */
   pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired"; created_at: string; page_open: boolean | null; error: string | null }>;
@@ -124,6 +127,46 @@ const when = (iso: string | null) => {
 
 /** The tool as the agent called it: the dock's own, <app>__<tool>, or call_app_tool → app.tool. */
 const toolName = (c: CallEntry) => (c.via === "dock" ? c.tool : c.via === "prefixed" ? `${c.app}__${c.tool}` : `call_app_tool → ${c.app}.${c.tool}`);
+
+/** Each page reading sent to this agent (TIN-422, DESIGN.md 13.3), with Clear. The times move on by themselves. */
+function Readings(props: { agent: DockAgent; clear: () => void }) {
+  const rows = props.agent.readings;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <section className="agent-section">
+      <h2>Page readings</h2>
+      {rows.length === 0 ? (
+        <p className="muted">Each page you send {props.agent.name} shows here: the site, the time and the size. Drop it on a page with the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>.</p>
+      ) : (
+        <>
+          <ol className="calls readings">
+            {rows.map((r) => {
+              const kept = r.kept && Date.parse(r.at) + READING_TTL_MS > now;
+              return (
+                <li key={r.at} className={kept ? undefined : "gone"}>
+                  <span className="call-app">{r.site}</span>
+                  <time dateTime={r.at} title={new Date(r.at).toLocaleString()}>{agoLabel(r.at, now)}</time>
+                  <span>{sizeLabel(r.bytes)}</span>
+                  <span className="reading-state">{kept ? "still at the dock" : "gone"}</span>
+                </li>
+              );
+            })}
+          </ol>
+          <div className="row small">
+            <button type="button" onClick={props.clear}>
+              Clear
+            </button>
+            <span className="muted">Removes this list and any reading still at the dock. What the agent already read stays with it.</span>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
 export function AgentPage(props: {
   agent: DockAgent;
@@ -226,6 +269,8 @@ export function AgentPage(props: {
         )}
       </section>
 
+      <Readings agent={a} clear={() => void call(`${base}/agents/${a.id}/readings/clear`, {}).then(props.refresh)} />
+
       <section className="agent-section">
         <h2>Its apps</h2>
         {props.requests.map((r) => (
@@ -233,7 +278,7 @@ export function AgentPage(props: {
             <p>
               {r.kind === "reader" ? (
                 <>
-                  <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings: the text you drop it on, on sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>.
+                  <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings: the text you drop it on, on sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. {READER_NOTICE}
                 </>
               ) : (
                 <>

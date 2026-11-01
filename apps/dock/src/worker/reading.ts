@@ -10,9 +10,24 @@ export interface PageReading {
   url: string;
   title: string;
   /** The nearest block element at the drop point, or null when the drop was not on one. */
-  element: { tag: string; role: string | null; name: string | null; text: string; heading: string | null } | null;
+  element: { tag: string; role: string | null; name: string | null; text: string; heading: string | null; column: string | null; row: string | null } | null;
   selection: string | null;
 }
+
+/** What the hub's log keeps of a reading (TIN-422, 13.3): site, time and size, never its address or text. */
+export interface ReadingEntry {
+  at: string;
+  site: string;
+  bytes: number;
+}
+
+/** A log entry as the popup and the dock list it; kept while the reading itself is still at the hub. */
+export interface ReadingRow extends ReadingEntry {
+  kept: boolean;
+}
+
+/** Said wherever the dock asks to allow a browser (13.5). */
+export const READER_NOTICE = "That text passes through this dock, on Cloudflare, and is kept 10 minutes at most.";
 
 /** How long the hub keeps a reading: until the next drop replaces it, or this old. */
 export const READING_TTL_MS = 10 * 60_000;
@@ -49,10 +64,10 @@ export function shapeReading(raw: unknown): PageReading | null {
   if (!url) return null;
   let element: PageReading["element"] = null;
   if (r.element && typeof r.element === "object" && !Array.isArray(r.element)) {
-    const e = r.element as { tag?: unknown; role?: unknown; name?: unknown; text?: unknown; heading?: unknown };
+    const e = r.element as { tag?: unknown; role?: unknown; name?: unknown; text?: unknown; heading?: unknown; column?: unknown; row?: unknown };
     const tag = typeof e.tag === "string" && /^[a-z][a-z0-9-]{0,19}$/i.test(e.tag) ? e.tag.toLowerCase() : null;
     const text = clean(e.text, TEXT_MAX);
-    if (tag && text) element = { tag, role: clean(e.role, 40), name: clean(e.name, NAME_MAX), text, heading: clean(e.heading, NAME_MAX) };
+    if (tag && text) element = { tag, role: clean(e.role, 40), name: clean(e.name, NAME_MAX), text, heading: clean(e.heading, NAME_MAX), column: clean(e.column, NAME_MAX), row: clean(e.row, NAME_MAX) };
   }
   return { url, title: clean(r.title, NAME_MAX) ?? "", element, selection: clean(r.selection, TEXT_MAX) };
 }
@@ -62,6 +77,8 @@ export function readingText(r: PageReading): string {
   const lines = [`Page: ${r.title || "(no title)"}`, `Address: ${r.url}`];
   if (r.element) {
     if (r.element.heading) lines.push(`Under the heading: ${r.element.heading}`);
+    if (r.element.column) lines.push(`Table column: ${r.element.column}`);
+    if (r.element.row) lines.push(`Table row: ${r.element.row}`);
     lines.push(`Pointed at (${[r.element.tag, r.element.role].filter(Boolean).join(", ")}): ${r.element.text}`);
   } else {
     lines.push("Pointed at: the page, not a block of text on it.");
@@ -73,6 +90,23 @@ export function readingText(r: PageReading): string {
 /** The site a reading is from, as the dock and the focus show it: its host. */
 export function readingSite(r: PageReading): string {
   return new URL(r.url).host;
+}
+
+/** The one thing the hub logs of a reading. Size is what the agent gets, in bytes. */
+export function readingEntry(r: PageReading, at: string): ReadingEntry {
+  return { at, site: readingSite(r), bytes: new TextEncoder().encode(readingText(r)).length };
+}
+
+/** "1.2 KB": a reading's size as the popup and the dock show it. */
+export const sizeLabel = (bytes: number) => (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`);
+
+/** "2 min ago": a reading's time as the popup and the dock show it. */
+export function agoLabel(iso: string, now: number): string {
+  const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
 }
 
 /**

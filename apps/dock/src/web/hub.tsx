@@ -14,6 +14,7 @@ import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
+import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
@@ -260,7 +261,7 @@ export function HubDock() {
       <p>
         {pairing.kind === "reader" ? (
           <>
-            <b>{pairing.app.name}</b> wants to send <b>{agent.name}</b> page readings: the text you drop it on, on sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. That text passes through this dock and is kept 10 minutes.
+            <b>{pairing.app.name}</b> wants to send <b>{agent.name}</b> page readings: the text you drop it on, on sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. {READER_NOTICE}
           </>
         ) : (
           <>
@@ -661,7 +662,7 @@ function FloatAgents(props: {
             <p>
               {r.kind === "reader" ? (
                 <>
-                  <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
+                  <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings. {READER_NOTICE}
                 </>
               ) : (
                 <>

@@ -114,7 +114,14 @@ addEventListener("drop", (e) => e.preventDefault());
 // A page like Grok: step 5c adds a dragover handler to it that refuses every drag, once the extension's is in place.
 const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply">Nimbus renewed its Enterprise contracts early</p></main>`;
 const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/apc") ? APC : PAGE)).listen(0, "::");
+// A table, and a paragraph with what innerText reads badly: a formula next to a hidden copy of itself, as Wikipedia has, and images with and without alt text (TIN-422).
+const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countries</h2>
+<table><thead><tr><th>Country</th><th>Population</th></tr></thead><tbody><tr><td>Peru</td><td>33</td></tr><tr><td>Chile</td><td id="cell">19.6</td></tr></tbody></table>
+<p id="formula">Churn is <math alttext="L \\times T"><mi>L</mi><mi>T</mi></math><span style="display:none"><math alttext="HIDDEN COPY"><mi>H</mi></math></span>, see <img src="${PIXEL}" alt="the churn chart" width="20" height="20"> and <img src="${PIXEL}" width="20" height="20"> and <img src="${PIXEL}" alt="" width="20" height="20">.</p>
+<table><tr style="display:none"><th>HIDDEN HEADER</th><th>HIDDEN HEADER</th></tr><tr><td>Row</td><td id="unseen">Plain</td></tr></table>
+<p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>`;
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -565,6 +572,55 @@ try {
     assert.ok(await floating(), "the Float window opened");
     assert.equal((await cdp("Runtime.evaluate", { expression: "location.search", returnByValue: true }, dockSession)).result.value, "", "the prompt goes once Float is open");
     console.log("8. Open dock opens the dock; Float opens it ready, and one click floats the agents");
+
+    // 9. A table cell and a formula read whole, and every reading is listed with Clear (TIN-422).
+    const figures = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/figures") });
+    const { sessionId: figuresSession } = await cdp("Target.attachToTarget", { targetId: figures.targetId, flatten: true });
+    await sleep(2000);
+    const dropOnFigures = async (selector) => {
+      const point = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, figuresSession)).result.value;
+      const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+      for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data: dragged }, figuresSession);
+    };
+    await dropOnFigures("#cell");
+    const cell = await until("the reading of the table cell", async () => {
+      const text = (await tool("page__get_reading")).structuredContent?.page_text ?? "";
+      return /Pointed at \(td\): 19\.6/.test(text) ? text : null;
+    });
+    assert.match(cell, /Under the heading: Countries\nTable column: Population\nTable row: Chile\n/);
+    await dropOnFigures("#formula");
+    const formula = await until("the reading of the formula", async () => {
+      const text = (await tool("page__get_reading")).structuredContent?.page_text ?? "";
+      return /Churn is/.test(text) ? text : null;
+    });
+    assert.match(formula, /Pointed at \(p\): Churn is L \\times T, see the churn chart and \[image with no alt text\] and \.$/m);
+    assert.doesNotMatch(formula, /HIDDEN COPY/);
+    await dropOnFigures("#unseen");
+    const unseen = await until("the reading under a hidden header", async () => {
+      const text = (await tool("page__get_reading")).structuredContent?.page_text ?? "";
+      return /Pointed at \(td\): Plain/.test(text) ? text : null;
+    });
+    assert.doesNotMatch(unseen, /HIDDEN HEADER/);
+    await dropOnFigures("#contents");
+    await until("the words inside display: contents", async () => /Pointed at \(p\): Revenue fell as the second chart shows\./.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    await cdp("Target.closeTarget", { targetId: figures.targetId });
+    const listed = (await api(`${base}/state`)).agents[0].readings;
+    assert.equal(listed[0].kept, true);
+    assert.equal(listed[1].kept, false);
+    assert.equal(listed[0].site, "127.0.0.1:" + server.address().port);
+    assert.ok(listed[0].bytes > 0);
+    assert.ok(!JSON.stringify(listed).includes("Churn"), "the list holds no text");
+    const { targetId: listId } = await cdp("Target.createTarget", { url: `chrome-extension://${extensionId}/popup.html` });
+    const { sessionId: listSession } = await cdp("Target.attachToTarget", { targetId: listId, flatten: true });
+    const popupList = async () => (await cdp("Runtime.evaluate", { expression: "document.getElementById('readings').innerText", returnByValue: true }, listSession)).result.value;
+    await until("the readings in the popup", async () => /127\.0\.0\.1.*·.*·.*KB|127\.0\.0\.1.* B ·/.test((await popupList()) ?? ""));
+    assert.match(await popupList(), /gone/, "a replaced reading says it is gone");
+    await clickIn(listSession, "#clear-readings");
+    await until("the list cleared at the dock", async () => (await api(`${base}/state`)).agents[0].readings.length === 0);
+    await until("the list cleared in the popup", async () => /Each page you send/.test(await popupList()));
+    assert.equal((await tool("page__get_reading")).isError, true);
+    await cdp("Target.closeTarget", { targetId: listId });
+    console.log("9. a table cell and a formula read whole; the popup and the dock list readings, and Clear empties both");
 
     // 6. Unpair in the dock: the next drop asks again.
     const reader = (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader");

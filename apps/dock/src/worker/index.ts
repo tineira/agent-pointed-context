@@ -88,6 +88,11 @@ app.post("/api/d/:did/agents/:aid/clear", async (c) => {
   await stub(c).clearFocus(c.req.param("aid"));
   return c.json({ ok: true });
 });
+/** Clear on the agent's page (TIN-422): its list of readings, and what the hub still keeps of them. */
+app.post("/api/d/:did/agents/:aid/readings/clear", async (c) => {
+  const result = await stub(c).clearReadings(c.req.param("aid"));
+  return c.json(result, result.ok ? 200 : 404);
+});
 app.post("/api/d/:did/pairings/:pid", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
   const result = await stub(c).decide(c.req.param("pid"), body.action);
@@ -164,6 +169,21 @@ app.post("/apc/reading/clear", async (c) => {
   const did = dockOf(token);
   if (!did) return c.json({ ok: false, error: "not_paired" }, 401);
   const result = await stubFor(c.env, did).readingClear(token, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 401);
+});
+/** The popup's list of readings, and Clear on it (TIN-422), with the reader's token. */
+app.post("/apc/reading/log", async (c) => {
+  const token = bearer(c.req.header("authorization"));
+  const did = dockOf(token);
+  if (!did) return c.json({ ok: false, error: "not_paired" }, 401);
+  const result = await stubFor(c.env, did).readingLog(token, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 401);
+});
+app.post("/apc/reading/log/clear", async (c) => {
+  const token = bearer(c.req.header("authorization"));
+  const did = dockOf(token);
+  if (!did) return c.json({ ok: false, error: "not_paired" }, 401);
+  const result = await stubFor(c.env, did).readingLogClear(token, c.req.header("origin") ?? null);
   return c.json(result, result.ok ? 200 : 401);
 });
 
