@@ -111,11 +111,9 @@ const BUSY = `<!doctype html><title>Busy feed</title><main><div class="post"><di
 addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
 addEventListener("drop", (e) => e.preventDefault());
 </script>`;
-// A page like Grok: a dragover handler added once the page has started, so after the extension's, that refuses every drag.
-const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply">Nimbus renewed its Enterprise contracts early</p></main>
-<script>
-setTimeout(() => addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; }), 1000);
-</script>`;
+// A page like Grok: step 5c adds a dragover handler to it that refuses every drag, once the extension's is in place.
+const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply">Nimbus renewed its Enterprise contracts early</p></main>`;
+const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
 const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/apc") ? APC : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
@@ -498,7 +496,12 @@ try {
     await sleep(2500);
     const refusingAt = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#reply").getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`, returnByValue: true }, refusing)).result.value;
     const refusingData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
-    for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: refusingAt.x, y: refusingAt.y, data: refusingData }, refusing);
+    const refusingDrag = (type) => cdp("Input.dispatchDragEvent", { type, x: refusingAt.x, y: refusingAt.y, data: refusingData }, refusing);
+    await cdp("Runtime.evaluate", { expression: REFUSE }, refusing);
+    await refusingDrag("dragEnter");
+    // A second handler arrives during the drag: the first dragover answers before it, the next one after it.
+    await cdp("Runtime.evaluate", { expression: REFUSE }, refusing);
+    for (const type of ["dragOver", "dragOver", "drop"]) await refusingDrag(type);
     await until("the reading of the refusing page", async () => /Enterprise contracts/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     await cdp("Target.closeTarget", { targetId: refusingId });
     await drag("#b", await payload());
