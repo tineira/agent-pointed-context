@@ -111,7 +111,10 @@ const BUSY = `<!doctype html><title>Busy feed</title><main><div class="post"><di
 addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
 addEventListener("drop", (e) => e.preventDefault());
 </script>`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/apc") ? APC : PAGE)).listen(0, "::");
+// A page like Grok: step 5c adds a dragover handler to it that refuses every drag, once the extension's is in place.
+const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply">Nimbus renewed its Enterprise contracts early</p></main>`;
+const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/apc") ? APC : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -486,6 +489,24 @@ try {
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("5b. a page of divs that takes every drag for its own sake still takes the agent");
+
+    // 5c. A page that refuses every drag from a handler added after the extension's (as Grok does) still takes the agent.
+    const { targetId: refusingId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/refusing") });
+    const { sessionId: refusing } = await cdp("Target.attachToTarget", { targetId: refusingId, flatten: true });
+    await sleep(2500);
+    const refusingAt = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#reply").getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`, returnByValue: true }, refusing)).result.value;
+    const refusingData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    const refusingDrag = (type) => cdp("Input.dispatchDragEvent", { type, x: refusingAt.x, y: refusingAt.y, data: refusingData }, refusing);
+    await cdp("Runtime.evaluate", { expression: REFUSE }, refusing);
+    await refusingDrag("dragEnter");
+    // A second handler arrives during the drag: the first dragover answers before it, the next one after it.
+    await cdp("Runtime.evaluate", { expression: REFUSE }, refusing);
+    for (const type of ["dragOver", "dragOver", "drop"]) await refusingDrag(type);
+    await until("the reading of the refusing page", async () => /Enterprise contracts/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    await cdp("Target.closeTarget", { targetId: refusingId });
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("5c. a page that refuses every drag from a later handler still takes the agent");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });
