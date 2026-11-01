@@ -1,11 +1,12 @@
 /**
  * The toolbar popup (TIN-421, TIN-465, DESIGN.md 13.3): this site's choice, the one grant for any page,
- * "Never ask", the sites the person chose for, the last drop's outcome, and the docks this browser
- * sends readings to. Asking Chrome for a grant closes the popup; the service worker injects the
- * content script into the open tabs then.
+ * "Never ask", the sites the person chose for, the last drop's outcome, the readings sent (TIN-422),
+ * and the docks this browser sends readings to. Asking Chrome for a grant closes the popup; the service
+ * worker injects the content script into the open tabs then.
  */
+import { agoLabel, sizeLabel, type ReadingRow } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { ANY_PAGE, grantedAlone, hubPatterns, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { ANY_PAGE, grantedAlone, hubAllowed, hubPatterns, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}) => Object.assign(document.createElement(tag), props);
@@ -23,6 +24,40 @@ function item(label: string, action: string, onClick: () => void): HTMLLIElement
 }
 
 const hostOf = (origin: string) => new URL(origin).host;
+
+/** The most readings the popup lists; the dock's agent page has them all. */
+const READINGS_SHOWN = 20;
+
+/** The dock's answer for one reader token, or null when it did not answer or no longer knows the token. */
+async function logCall(key: string, token: string, path: string): Promise<{ agent?: string; readings?: ReadingRow[] } | null> {
+  const hub = key.split(" ")[0]!;
+  if (!hubAllowed(hub, __APC_DEV__)) return null;
+  try {
+    const r = await fetch(`${hub}/apc/reading/${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: "{}" });
+    return r.ok ? ((await r.json()) as { agent?: string; readings?: ReadingRow[] }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The readings this browser sent, across its docks and agents, newest first. The list lives at the dock. */
+async function renderReadings(): Promise<void> {
+  const tokens = Object.entries(((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>);
+  const logs = await Promise.all(tokens.map(([key, token]) => logCall(key, token, "log")));
+  const rows = logs.flatMap((log) => (log?.readings ?? []).map((r) => ({ ...r, agent: log?.agent ?? "your agent" }))).sort((a, b) => b.at.localeCompare(a.at));
+  const now = Date.now();
+  $("readings").replaceChildren(
+    ...(rows.length
+      ? rows.slice(0, READINGS_SHOWN).map((r) => {
+          const li = el("li", { title: new Date(r.at).toLocaleString(), className: r.kept ? "" : "muted" });
+          li.append(el("span", { textContent: `${r.site} · ${agoLabel(r.at, now)} · ${sizeLabel(r.bytes)} · ${r.agent}${r.kept ? "" : " · gone"}` }));
+          return li;
+        })
+      : [el("li", { className: "muted", textContent: tokens.length && logs.every((l) => !l) ? "Could not reach your dock." : "Each page you send your agent shows here." })]),
+  );
+  $("readings-clear").hidden = !rows.length;
+  ($("clear-readings") as HTMLButtonElement).onclick = () => void Promise.all(tokens.map(([key, token]) => logCall(key, token, "log/clear"))).then(renderReadings);
+}
 
 async function setChoice(origin: string, choice: SiteChoice | null): Promise<void> {
   const sites = ((await chrome.storage.local.get("sites")).sites ?? {}) as Record<string, SiteChoice>;
@@ -108,3 +143,4 @@ $("open-dock").addEventListener("click", () => void openDock(false).then(() => c
 $("float").addEventListener("click", () => void openDock(true).then(() => close()));
 
 void render();
+void renderReadings();

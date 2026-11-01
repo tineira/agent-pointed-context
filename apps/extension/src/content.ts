@@ -9,11 +9,15 @@
  */
 import { APC_AGENT_TYPE, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { hubAllowed, pinState, STATUS_TEXT, type Consent, type DropStatus, type PinMark, type PinState } from "./drop.ts";
+import { altText, tableContext } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
 const FIELDS = "input,textarea,select,option,[contenteditable=''],[contenteditable='true']";
+/** What renders as something other than its words (TIN-422): innerText gives glyphs for these, or nothing. */
+const REPLACED = "img,math,svg";
 const TEXT_MAX = 2048;
+const HEADER_MAX = 200;
 /** A box of text bigger than this is most of the page, not what the person pointed at. */
 const BOX_MAX = 4000;
 
@@ -121,7 +125,9 @@ function listen(): void {
 /** The nearest block of text at a point, or null (a margin, a form field). */
 function blockAt(x: number, y: number): Element | null {
   // Under the extension's own pins, which can sit right where the person drops.
-  const at = document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
+  const under = document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
+  // A formula or a drawing as a whole, not the glyph or shape inside it.
+  const at = under?.closest("math,svg") ?? under;
   if (!at || at.closest(FIELDS)) return null;
   const block = at.closest(BLOCKS);
   if (block) return block;
@@ -129,17 +135,57 @@ function blockAt(x: number, y: number): Element | null {
   // box is most of the page.
   for (let el: Element | null = at; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
     const display = getComputedStyle(el).display;
-    if (display === "inline" || display === "contents") continue;
-    const text = ((el as HTMLElement).innerText ?? "").trim();
+    if ((display === "inline" || display === "contents") && !altText(el)) continue;
+    const text = readable(el, BOX_MAX + 1).trim();
     if (text) return text.length <= BOX_MAX ? el : null;
   }
   return null;
 }
 
-/** What the person pointed at: the block's text and the heading above it, or only the page. */
+/** Whether the person can see this element. display: contents has no box of its own, but what is in it shows. */
+function rendered(el: Element): boolean {
+  const style = getComputedStyle(el);
+  if (style.display !== "contents") return el.checkVisibility({ visibilityProperty: true });
+  return style.visibility === "visible" && (!el.parentElement || rendered(el.parentElement));
+}
+
+/**
+ * An element's text as the person reads it, with images and formulas giving their alternative text in
+ * place (TIN-422). Stops soon after max characters. Without any of those it is simply innerText; with
+ * them it walks what is rendered, since a formula often sits next to a hidden copy of itself.
+ */
+function readable(el: Element, max: number): string {
+  // innerText gives a hidden element's text too, and a table's header row can be hidden.
+  if (!rendered(el)) return "";
+  if (!el.matches(REPLACED) && !el.querySelector(REPLACED)) return (el as HTMLElement).innerText ?? el.textContent ?? "";
+  const parts: string[] = [];
+  let size = 0;
+  const add = (text: string) => {
+    parts.push(text);
+    size += text.length;
+  };
+  const walk = (e: Element) => {
+    if (size > max || !rendered(e)) return;
+    const alt = altText(e);
+    if (alt !== null) return add(alt);
+    const apart = e.tagName === "BR" || !getComputedStyle(e).display.startsWith("inline");
+    if (apart) add(" ");
+    for (const node of e.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) add(node.textContent ?? "");
+      else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element);
+    }
+    if (apart) add(" ");
+  };
+  walk(el);
+  return parts.join("");
+}
+
+/** What the person pointed at: the block's text, the heading above it and its place in a table, or only the page. */
 function readAt(x: number, y: number) {
   const block = blockAt(x, y);
   const selection = String(getSelection() ?? "").slice(0, TEXT_MAX);
+  const cell = block?.closest<HTMLTableCellElement>("td,th");
+  const table = cell?.closest("table");
   return {
     url: location.href,
     title: document.title,
@@ -148,8 +194,9 @@ function readAt(x: number, y: number) {
           tag: block.tagName.toLowerCase(),
           role: block.getAttribute("role"),
           name: block.getAttribute("aria-label") || (block as HTMLElement).title || null,
-          text: ((block as HTMLElement).innerText ?? block.textContent ?? "").slice(0, TEXT_MAX),
+          text: readable(block, TEXT_MAX).slice(0, TEXT_MAX),
           heading: headingBefore(block),
+          ...(cell && table ? tableContext(table, cell, (c) => readable(c, HEADER_MAX).slice(0, HEADER_MAX)) : {}),
         }
       : null,
     selection: selection || null,

@@ -11,6 +11,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
 import { AgentPet } from "./apc-pet.tsx";
+import { READER_NOTICE } from "../worker/reading.ts";
 
 const params = new URLSearchParams(location.search);
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -81,7 +82,7 @@ export function PetView(props: {
           <p>
             {r.kind === "reader" ? (
               <>
-                <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings.
+                <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings. {READER_NOTICE}
               </>
             ) : (
               <>

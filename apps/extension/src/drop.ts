@@ -113,6 +113,9 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 /** What the content script tells the person after a drop. */
 export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "blocked" | "not_here";
 
+/** Where the text goes (13.5), said before anything is sent. */
+const PASSES_THROUGH = "It passes through your dock, on Cloudflare, and is kept 10 minutes at most.";
+
 export const STATUS_TEXT: Record<DropStatus, string> = {
   sent: "Sent to your agent",
   asking: "Allow this browser in your dock to send this page",
@@ -121,8 +124,8 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   no_ticket: "Drag your agent again from your dock",
   unknown_dock: "This agent is from a dock this extension does not know: nothing was sent",
   error: "Could not reach your dock: nothing was sent",
-  consent: "Send this to your agent?",
-  consent_sensitive: "This site is set to ask every time. Send this to your agent?",
+  consent: `Send this to your agent? ${PASSES_THROUGH}`,
+  consent_sensitive: `This site is set to ask every time. Send this to your agent? ${PASSES_THROUGH}`,
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
 };

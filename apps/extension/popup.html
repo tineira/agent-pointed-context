@@ -19,6 +19,7 @@
       ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
       li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
       li span { overflow-wrap: anywhere; }
+      .readings { max-height: 160px; overflow-y: auto; }
       label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
       input[type="checkbox"] { margin-top: 3px; accent-color: var(--accent); }
     </style>
@@ -43,6 +44,14 @@
       <section>
         <h2>Last drop</h2>
         <p id="last" class="muted">None yet.</p>
+      </section>
+      <section>
+        <h2>Readings sent</h2>
+        <ul id="readings" class="readings"></ul>
+        <div id="readings-clear" hidden>
+          <div class="row"><button type="button" id="clear-readings">Clear</button></div>
+          <p class="muted">Removes this list and any reading still at your dock, there too. What your agent already read stays with it.</p>
+        </div>
       </section>
       <section>
         <h2>Docks this browser sends to</h2>

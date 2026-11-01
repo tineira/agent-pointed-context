@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PAGE_TEXT_MAX, pageAddress, readerAllowed, readingSite, readingText, shapeReading } from "../src/worker/reading.ts";
+import { agoLabel, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel } from "../src/worker/reading.ts";
 
 const raw = {
   url: "https://en.wikipedia.org/wiki/Churn_rate?session=s3cr3t#History",
@@ -22,7 +22,7 @@ test("a reading keeps origin and path, never the query or fragment (TIN-421)", (
 
 test("a reading is taken only in its shape: text folded, tag checked, empty parts null", () => {
   const r = shapeReading(raw)!;
-  assert.deepEqual(r.element, { tag: "p", role: null, name: null, text: "Churn rate is widely applied in SaaS.", heading: "Churn rate" });
+  assert.deepEqual(r.element, { tag: "p", role: null, name: null, text: "Churn rate is widely applied in SaaS.", heading: "Churn rate", column: null, row: null });
   assert.equal(r.selection, null);
   assert.equal(shapeReading(null), null);
   assert.equal(shapeReading([]), null);
@@ -46,6 +46,33 @@ test("page_text says what the person pointed at, or that it was the page", () =>
   const text = readingText(shapeReading({ ...raw, selection: "widely applied" })!);
   assert.match(text, /^Page: Churn rate - Wikipedia\nAddress: https:\/\/en\.wikipedia\.org\/wiki\/Churn_rate\nUnder the heading: Churn rate\nPointed at \(p\): Churn rate is widely applied in SaaS\.\nSelected: widely applied$/);
   assert.match(readingText(shapeReading({ url: raw.url, title: "" })!), /Page: \(no title\)[\s\S]*Pointed at: the page, not a block of text on it\./);
+});
+
+test("a table cell comes with its column and row (TIN-422)", () => {
+  const r = shapeReading({ ...raw, element: { tag: "td", text: "19.6", heading: "Countries", column: "Population", row: "Chile" } })!;
+  assert.match(readingText(r), /Under the heading: Countries\nTable column: Population\nTable row: Chile\nPointed at \(td\): 19\.6/);
+  const big = shapeReading({ ...raw, element: { tag: "td", text: "x", column: "c".repeat(5000), row: "r".repeat(5000) } })!;
+  assert.ok(big.element!.column!.length <= 200 && big.element!.row!.length <= 200);
+});
+
+test("the log's entry is the site, the time and the size, never a word of the reading (TIN-422)", () => {
+  const r = shapeReading({ ...raw, selection: "widely applied" })!;
+  const entry = readingEntry(r, "2026-11-01T12:00:00.000Z");
+  assert.deepEqual(Object.keys(entry).sort(), ["at", "bytes", "site"]);
+  assert.equal(entry.site, "en.wikipedia.org");
+  assert.equal(entry.bytes, new TextEncoder().encode(readingText(r)).length);
+  assert.doesNotMatch(JSON.stringify(entry), /Churn|widely|\/wiki/i);
+});
+
+test("the list shows size and time in human units", () => {
+  assert.equal(sizeLabel(512), "512 B");
+  assert.equal(sizeLabel(1536), "1.5 KB");
+  const now = Date.parse("2026-11-01T12:00:00.000Z");
+  const ago = (ms: number) => agoLabel(new Date(now - ms).toISOString(), now);
+  assert.equal(ago(20_000), "just now");
+  assert.equal(ago(120_000), "2 min ago");
+  assert.equal(ago(3 * 3_600_000), "3 h ago");
+  assert.equal(ago(49 * 3_600_000), "2 d ago");
 });
 
 test("readers come only from an allowed extension origin; under dev, any unpacked one (13.5)", () => {
