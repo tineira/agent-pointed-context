@@ -546,16 +546,19 @@ try {
     const floatDock = await dockTarget(true);
     const { sessionId: dockSession } = await cdp("Target.attachToTarget", { targetId: floatDock.targetId, flatten: true });
     await cdp("Runtime.enable", {}, dockSession);
-    await until("the Float prompt in the dock", async () => {
-      const page = (await cdp("Runtime.evaluate", { expression: "JSON.stringify({ ask: !!document.querySelector('[data-float-ask]'), failed: document.body.innerText.includes('Could not open your dock') })", returnByValue: true }, dockSession)).result.value;
-      const { ask, failed } = JSON.parse(page ?? "{}");
-      // The dev server sometimes fails the dock's first call (see request() above): load it again.
+    const floatPrompt = () => until("the Float prompt in the dock", async () => {
+      // The dev server sometimes fails a call (see request() above). Vite lays its error overlay over the page, which would take the click.
+      // During a reload the page has no context to evaluate in: this just looks again.
+      const page = await cdp("Runtime.evaluate", { expression: "document.querySelector('vite-error-overlay')?.remove(); JSON.stringify({ ask: !!document.querySelector('[data-float-ask]'), failed: document.body.innerText.includes('Could not open your dock') })", returnByValue: true }, dockSession).catch(() => null);
+      const { ask, failed } = JSON.parse(page?.result.value ?? "{}");
+      // If that call was the dock's first, load it again.
       if (failed) await cdp("Page.reload", {}, dockSession);
       return ask;
     }, 30_000);
     // The prompt stays until Float opens, so a click Chrome refused can be made again, as a person would.
     const floating = async () => (await cdp("Runtime.evaluate", { expression: "!!window.documentPictureInPicture?.window", returnByValue: true }, dockSession)).result.value;
     for (let attempt = 0; attempt < 3 && !(await floating()); attempt++) {
+      await floatPrompt();
       await clickIn(dockSession, "[data-float-ask]");
       await until("the Float window", floating, 6_000).catch(() => {});
     }

@@ -410,11 +410,12 @@ Not verified: drags from the dock or Float on macOS and Linux.
 A reading holds:
 
 - the page's origin and path (no query string or fragment, which often carry tokens) and its title;
-- the nearest block element at the drop point (a paragraph, list item, cell, heading, quote, link, button or label; on pages built of divs and spans, such as X, the nearest box with text that is not most of the page, TIN-472): its role, accessible name and visible text (up to 2 KB), and the nearest h1 to h3 above it. Math and images give their alternative text (`alttext`, `alt`), not their rendered glyphs;
-- the person's selection, if any (up to 2 KB);
-- in a table cell, the column header and the row's first cell.
+- the nearest block element at the drop point (a paragraph, list item, cell, heading, quote, link, button or label; on pages built of divs and spans, such as X, the nearest box with text that is not most of the page, TIN-472): its role, its `aria-label` or `title`, its visible text (up to 2 KB), and the nearest h1 to h3 above it;
+- the person's selection, if any (up to 2 KB).
 
-A drop that is not on a block element reads only the title and address. Never in a reading: form field values, password or hidden inputs, anything outside the element's visible text, cookies or storage, other tabs, or a screenshot.
+A table cell reads as its own text, without its column header or row, and the text is what the page renders: a formula comes as that text, and an image gives nothing.
+
+A drop that is not on a block element reads only the title and address, and any selection. Never in a reading: form field values, hidden inputs, cookies or storage, other tabs, or a screenshot. The one exception is text the person selected inside a field, which goes along as the selection; a password field gives only dots.
 
 On the wire, the extension is one more app of the hub, with id `page` and name "This browser". The hub exposes `page__get_reading`. The focus has kind `page_reading`, with `app: { id: "page", name: "This browser", origin }` (the page's origin) and `next: "page__get_reading"`. A reading lives at the hub until the next drop replaces it or it is 10 minutes old, so the agent can read it again while it answers; reading it marks the focus seen.
 
