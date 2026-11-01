@@ -160,14 +160,21 @@ function readable(el: Element, max: number): string {
   if (!el.matches(REPLACED) && !el.querySelector(REPLACED)) return (el as HTMLElement).innerText ?? el.textContent ?? "";
   const parts: string[] = [];
   let size = 0;
+  /** The last alternative text, until words follow it: Wikipedia clips a formula's MathML out of sight beside an image of it, with the same text. */
+  let lastAlt: string | null = null;
   const add = (text: string) => {
     parts.push(text);
     size += text.length;
+    if (text.trim()) lastAlt = null;
   };
   const walk = (e: Element) => {
     if (size > max || !rendered(e)) return;
     const alt = altText(e);
-    if (alt !== null) return add(alt);
+    if (alt !== null) {
+      if (alt !== lastAlt) add(alt);
+      lastAlt = alt;
+      return;
+    }
     const apart = e.tagName === "BR" || !getComputedStyle(e).display.startsWith("inline");
     if (apart) add(" ");
     for (const node of e.childNodes) {
