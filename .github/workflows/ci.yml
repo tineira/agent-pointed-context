@@ -49,7 +49,7 @@ jobs:
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
           echo "v1=$(echo "$files" | grep -qvE '^(apps/(dock|signals|desktop|desktop-tests|dock-desktop|extension)/|\.github/)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches v1 goes live at apc.tineira.com.
   # Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID.
