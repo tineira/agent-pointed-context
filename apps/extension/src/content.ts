@@ -61,13 +61,28 @@ function listen(): void {
     }
   };
 
-  window.addEventListener("dragover", (e) => {
+  const onDragover = (e: DragEvent) => {
     if (!e.isTrusted || !carriesAgent(e) || apcApp()) return;
     e.preventDefault();
     // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
     light(blockAt(e.clientX, e.clientY) as HTMLElement | null);
-  });
+    keepLast();
+  };
+  // Whichever handler answers last wins, and a page's own can come after this one and refuse every
+  // drag, as Grok's does (TIN-572). Added again, this one runs after them from the next event on.
+  const keepLast = () => {
+    window.removeEventListener("dragover", onDragover);
+    window.addEventListener("dragover", onDragover);
+  };
+  window.addEventListener("dragover", onDragover);
+  window.addEventListener(
+    "dragenter",
+    (e) => {
+      if (e.isTrusted && carriesAgent(e)) keepLast();
+    },
+    true,
+  );
   window.addEventListener("dragleave", (e) => {
     if (!e.relatedTarget) light(null);
   });
