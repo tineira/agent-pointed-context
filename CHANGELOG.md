@@ -103,6 +103,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Docs and tooling
 
+- **The changelog check routes contract changes to the standard's changelog.** A change under `packages/protocol/src/` needs an entry in `packages/protocol/CHANGELOG.md`, other code needs one in `CHANGELOG.md` (each changelog alone is not enough for the other), a git failure now exits 2 with a clear message, and the standard's changelog must open with its version, not an Unreleased section. (TIN-603, `scripts/lib/changelog.mjs`, `scripts/check-changelog.mjs`, `packages/protocol/test/version.test.ts`)
 - **The e2e script's step 8 is fixed,** DESIGN 13.2 corrected and the lockfile updated. (#106, `scripts/extension-e2e.mjs`)
 - **CI: a workflow change alone no longer redeploys v1.** (#92, `.github/workflows/ci.yml`)
 - **DESIGN.md's not-built work points to public GitHub issues.** (#88, `DESIGN.md`)

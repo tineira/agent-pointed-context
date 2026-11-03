@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { checkChangelog } from "./lib/changelog.mjs";
 
-const base = process.argv[2];
+const base = process.argv[2]?.replace(/^origin\//, "");
 if (!base) {
   console.error("usage: node scripts/check-changelog.mjs <base-ref> [labels-json]");
   process.exit(2);
@@ -17,7 +17,14 @@ try {
   console.error(`labels must be a JSON array: ${error.message}`);
   process.exit(2);
 }
-const diff = execFileSync("git", ["diff", "--name-only", `origin/${base}...HEAD`], { encoding: "utf8" });
+let diff;
+try {
+  diff = execFileSync("git", ["diff", "--name-only", `origin/${base}...HEAD`, "--"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+} catch (error) {
+  const detail = String(error.stderr ?? error.message).trim();
+  console.error(`could not diff origin/${base}...HEAD (is the base fetched? checkout needs fetch-depth: 0): ${detail}`);
+  process.exit(2);
+}
 const files = diff.split("\n").filter(Boolean);
 const names = labels.map((label) => (typeof label === "string" ? label : label?.name)).filter(Boolean);
 const result = checkChangelog({ files, labels: names });
