@@ -59,6 +59,12 @@ if (STRIP) document.body.classList.add("float-body");
 /** A window of the desktop dock other than the dock itself: the strip, or a pet. It only resumes the dock, and has no one to read an error. */
 const FLOATING = STRIP || PET;
 
+/**
+ * A fetch that never reached the server ("TypeError: Failed to fetch"): the network is not back yet,
+ * as when the computer wakes from sleep with the dock open. The dock window then tries again too.
+ */
+const unreachable = (e: unknown) => e instanceof TypeError;
+
 /** An agent's page (TIN-419): /dock/agents/<id>. */
 const agentRoute = (path: string) => path.match(/^\/dock\/agents\/(ag_[0-9a-f]+)\/?$/)?.[1] ?? null;
 
@@ -83,7 +89,8 @@ export function HubDock() {
   }, []);
   const [did, setDid] = useState<string | null>(null);
   const [state, setState] = useState<DockState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A new object on each failure, so a failed retry sets up the next one.
+  const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [shown, setShown] = useState<Set<string>>(new Set());
   const [world, setWorld] = useState(false);
@@ -97,7 +104,7 @@ export function HubDock() {
     const open = () =>
       call<{ did: string }>("/api/dock", FLOATING ? { resume: true } : {}).then(
         (r) => setDid(r.did),
-        (e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError(String(e))),
+        (e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError({ message: String(e), retry: unreachable(e) })),
       );
     void open();
     return () => clearTimeout(retry);
@@ -105,14 +112,17 @@ export function HubDock() {
   const base = did ? `/api/d/${did}` : null;
   const refresh = useCallback(() => {
     if (!base) return;
-    call<DockState>(`${base}/state`).then(setState, (e: unknown) => {
+    call<DockState>(`${base}/state`).then((s) => {
+      setState(s);
+      setError(null);
+    }, (e: unknown) => {
       // The desktop app stays open for days, so its windows open the dock again when it is gone (403
       // without the cookie, 404 once expired): the strip and the pets wait for the dock window's new one.
       if ((FLOATING || DESKTOP_SHELL) && /: 40[34]$/.test(String(e))) {
         setDid(null);
         setState(null);
         setReopen((n) => n + 1);
-      } else setError(String(e));
+      } else setError({ message: String(e), retry: FLOATING || unreachable(e) });
     });
   }, [base]);
   const keptAtHand = useCallback(() => {
@@ -205,17 +215,22 @@ export function HubDock() {
     if (PET && agentList !== null) petApp.agents(agentList ? agentList.split(",") : []);
   }, [agentList]);
 
-  // The strip and the pets have no one to read an error: they say so (in a line, in a title) and try again.
+  // The strip and the pets have no one to read an error, and no window can reach the dock while the
+  // network is down: they say so (in a line, in a title) and try again, at once when the network is
+  // back. The error stays until a try succeeds.
   useEffect(() => {
-    if (!FLOATING || !error) return;
-    const id = setTimeout(() => {
-      setError(null);
-      refresh();
-    }, 3000);
-    return () => clearTimeout(id);
-  }, [error, refresh]);
+    if (!error?.retry) return;
+    const again = () => (base ? refresh() : setReopen((n) => n + 1));
+    const id = setTimeout(again, 3000);
+    window.addEventListener("online", again);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener("online", again);
+    };
+  }, [error, base, refresh]);
 
-  if (error) return PET ? <PetWaiting note="Could not reach your dock. Trying again…" /> : STRIP ? <div className="float float-empty">Could not reach your dock. Trying again…</div> : <main><Header /><p>Could not open your dock: {error}</p></main>;
+  const unreached = "Could not reach your dock. Trying again…";
+  if (error) return PET ? <PetWaiting note={unreached} /> : STRIP ? <div className="float float-empty">{unreached}</div> : <main><Header /><p>{error.retry ? unreached : `Could not open your dock: ${error.message}`}</p></main>;
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
