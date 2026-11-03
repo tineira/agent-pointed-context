@@ -1,9 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- **V1 is frozen at apc.tineira.com/v1, in an app of its own.** The paper describes V1, so it no longer shares code with anything else: `apps/v1` is today's V1 build of Pulse with a copy of the `@apc/protocol`, `@apc/server` and `@apc/web` source it uses (and their tests) inside the app, no `@apc/*` workspace dependency, and the v2-only code left out. It runs on the same Worker (`apc-demo`, same Durable Objects, secret and analytics dataset) and serves everything under `/v1`: the page, `/v1/api/*`, the MCP URLs `/v1/mcp/<sandbox>/<secret>` and every `app_url` an agent gets. `/` redirects to `/v1/` until phase 0c; the old root URLs are gone. CI deploys V1 only when `apps/v1/` changes; `apps/demo` is now Pulse for the standard only (its former env `v2` is its top-level config) and the `pulse-agent` skill is generated from, and drift-tested against, V1's copy of the manual. (`apps/v1`, `apps/demo/wrangler.jsonc`, `apps/demo/src/worker/guide.ts`, `scripts/build-skill.mjs`, `package.json`, `.github/workflows/ci.yml`)
-
 ## 0.2.0 (2026-10-19)
 
 - **A customer pin carries no params; a figure pin only the keys its figure reads.** A pin like `{"kind":"customer","id":"cus_0001","params":{"note":"SECRET-1234.57"}}` was stored, logged and handed to the agent; it is now refused with `invalid_target`, and so is a figure pin with an extra key. (`apps/demo/src/worker/domain.ts`)

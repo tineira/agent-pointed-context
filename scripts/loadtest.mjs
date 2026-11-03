@@ -1,5 +1,5 @@
 // Load test: N simulated visitors, C at a time, each running the full APC flow once.
-// usage: node scripts/loadtest.mjs <base> <visitors> <concurrency> [loadtest-key]   (V1: <base> is https://apc.tineira.com/v1)
+// usage: node scripts/loadtest.mjs <base> <visitors> <concurrency> [loadtest-key]
 // From one IP, more than about 10 new sandboxes a minute hit the rate limit unless the Worker has a
 // LOADTEST_KEY secret and the same value is passed here (sent as x-apc-loadtest). Delete the secret
 // after the test: that disables the bypass.
