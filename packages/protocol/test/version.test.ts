@@ -9,9 +9,10 @@ test("the standard's version is valid semver", () => {
   assert.match(APC_STANDARD_VERSION, SEMVER);
 });
 
-test("the standard's version is the latest heading of its changelog", () => {
+test("the first heading of the standard's changelog is its version (no Unreleased section)", () => {
   const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
-  const headings = [...changelog.matchAll(/^## (\d+\.\d+\.\d+\S*)/gm)].map((match) => match[1]);
-  assert.ok(headings.length > 0, "the changelog has a version heading");
-  assert.equal(headings[0], APC_STANDARD_VERSION);
+  const first = changelog.match(/^## (.+)$/m);
+  assert.ok(first, "the changelog has a `## ` heading");
+  const heading = first[1] ?? "";
+  assert.equal(heading.match(/^(\d+\.\d+\.\d+\S*)/)?.[1], APC_STANDARD_VERSION, `first heading is "${heading}"`);
 });
