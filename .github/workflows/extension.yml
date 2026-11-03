@@ -54,4 +54,4 @@ jobs:
         run: |
           gh release view apc-extension -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create apc-extension -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" --title "APC browser extension (latest build)" --notes "The APC extension for Chrome and Edge, built from main."
           gh release upload apc-extension apc-extension.zip -R "$GITHUB_REPOSITORY" --clobber
-          gh release edit apc-extension -R "$GITHUB_REPOSITORY" --notes "The APC extension for Chrome and Edge, built from main at ${GITHUB_SHA}. Download and unzip apc-extension.zip, then follow https://v2.apc.tineira.com/extension to load it in your browser."
+          gh release edit apc-extension -R "$GITHUB_REPOSITORY" --notes "The APC extension for Chrome and Edge, built from main at ${GITHUB_SHA}. Download and unzip apc-extension.zip, then follow https://apc.tineira.com/extension to load it in your browser."

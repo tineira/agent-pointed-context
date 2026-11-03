@@ -1,7 +1,7 @@
 // End to end check of the APC browser extension (TIN-421, DESIGN.md 13), by hand: a real Chrome or Edge with the
 // extension, a dock, and real drags sent through the DevTools Protocol (Input.dispatchDragEvent, so the page sees
 // trusted events). By default against a local dock: needs the dock's dev server (cd apps/dock && pnpm dev, port 5200)
-// and apps/extension built with --dev. With --prod, against v2.apc.tineira.com with the published build (apps/extension
+// and apps/extension built with --dev. With --prod, against apc.tineira.com with the published build (apps/extension
 // built without --dev), given the test page's site as if the person had granted it; the dock is a throwaway one,
 // deleted at the end.
 // With --consent, the consent model instead (TIN-465, DESIGN.md 13.3): the extension holds the one grant for any page and
@@ -22,7 +22,7 @@ const HOLD = args.includes("--hold");
 /** --consent: the one grant for any page, and the consent card on new sites (TIN-465). */
 const CONSENT = args.includes("--consent");
 const SHOTS = args.find((a) => a.startsWith("--shots="))?.slice("--shots=".length);
-const DOCK = PROD ? "https://v2.apc.tineira.com" : "http://localhost:5200";
+const DOCK = PROD ? "https://apc.tineira.com" : "http://localhost:5200";
 const EXE = args.find((a) => !a.startsWith("--")) ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const EXT = PROD || CONSENT ? grantedCopy(resolve(PROD ? "apps/extension/dist" : "apps/extension/dist-dev")) : resolve("apps/extension/dist-dev");
 

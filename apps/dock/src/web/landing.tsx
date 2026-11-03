@@ -1,6 +1,6 @@
 /**
- * The APC v2 landing (TIN-420): what the agent dock is, how a person uses it, the demo apps, and the
- * way in. A visitor who already has a dock never sees it: the Worker sends them on to /dock.
+ * The landing of apc.tineira.com (TIN-420, TIN-605): the APC standard, its two ways to connect side by side,
+ * how the dock works, the demo apps, and the way in. A visitor who already has a dock never sees it: the Worker sends them on to /dock.
  */
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { APPS, DESKTOP } from "./setup.tsx";
@@ -60,18 +60,18 @@ export function Landing() {
   return (
     <main className="landing">
       <header className="landing-head">
-        <span className="kicker">Agent Pointed Context · v2</span>
+        <span className="kicker">Agent Pointed Context</span>
         <a href={REPO}>GitHub</a>
       </header>
 
       <section className="landing-hero">
         <div>
-          <h1>One agent across your apps. You point, it reads.</h1>
+          <h1>Point your own AI agent at what you see</h1>
           <p>
-            Connect your AI agent once, to your agent dock. Then drag it onto anything in any app you paired: it reads exactly what you pointed at, and joins what two apps say, while the apps never share their data with each other.
+            Agent Pointed Context is a standard for pointing an AI agent at a chart, a row or a paragraph in an app and asking about "this", without sharing the screen. Connect your agent once, or app by app: you choose.
           </p>
           <div className="row">
-            <Cta big />
+            <a className="landing-cta big" href="#ways">Choose how to connect</a>
             <span className="muted">You need an agent that can add a remote MCP server. Free demo, made-up data.</span>
           </div>
           <div className="landing-brands" aria-label="Works with any agent that takes an MCP server">
@@ -84,8 +84,32 @@ export function Landing() {
         <Picture />
       </section>
 
+      <section id="ways">
+        <h2>Two ways to connect</h2>
+        <div className="landing-cards">
+          <div className="landing-card">
+            <div className="row">
+              <b>Connect once</b>
+            </div>
+            <p>Dock: one connection in your agent, to your agent dock. Drag it onto any app you paired and it follows your focus from app to app.</p>
+            <div className="row small">
+              <Cta />
+            </div>
+          </div>
+          <div className="landing-card">
+            <div className="row">
+              <b>Connect app by app</b>
+            </div>
+            <p>Direct: each app gives your agent its own connection. The content goes from the app to your agent and never passes through us.</p>
+            <div className="row small">
+              <a href={`${REPO}/blob/main/DESIGN.md`}>How Direct works</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section>
-        <h2>How it works</h2>
+        <h2>How Connect once works</h2>
         <ol className="landing-steps">
           {STEPS.map((s, i) => (
             <li key={s.title}>
@@ -153,14 +177,12 @@ export function Landing() {
           <li>
             The code: <a href={REPO}>github.com/tineira/agent-pointed-context</a>
           </li>
-          <li>
-            Version 1, one app with its own agent: <a href="https://apc.tineira.com/v1">apc.tineira.com</a>
-          </li>
         </ul>
       </section>
 
       <footer className="landing-foot">
         <Cta />
+        <a className="muted" href="/v1/">Version 1, as described in the paper →</a>
       </footer>
     </main>
   );

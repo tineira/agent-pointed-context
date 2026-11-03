@@ -4,7 +4,7 @@
  */
 /** The dock's origin, and Pulse's on the dock's side: production, or any localhost port in development. */
 export function dockOriginAllowed(origin: string): boolean {
-  return origin === "https://v2.apc.tineira.com" || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
+  return origin === "https://apc.tineira.com" || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
 }
 export function appOriginAllowed(origin: string): boolean {
   return origin === "https://apc.tineira.com" || /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);

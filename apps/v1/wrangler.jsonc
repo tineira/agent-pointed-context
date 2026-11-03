@@ -26,7 +26,14 @@
   ],
   // Distinct MCP agent sessions (TIN-347). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
-  "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],
+  // apc.tineira.com itself is the APC standard's dock (Worker apc-dock, a Custom Domain, TIN-605). This Worker keeps only
+  // /v1 on that host through zone routes. Cloudflare runs a route's Worker before the Custom Domain Worker of the same
+  // hostname (https://developers.cloudflare.com/workers/configuration/routing/custom-domains/). Two patterns, so that
+  // /v10 and the like stay with the dock.
+  "routes": [
+    { "pattern": "apc.tineira.com/v1", "zone_name": "tineira.com" },
+    { "pattern": "apc.tineira.com/v1/*", "zone_name": "tineira.com" }
+  ],
   "workers_dev": true,
   "observability": { "enabled": true }
 }

@@ -20,7 +20,7 @@ export interface SetupAgent {
 export const APPS = [
   {
     name: "Pulse",
-    url: import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.v2.apc.tineira.com/overview",
+    url: import.meta.env.DEV ? "http://localhost:5199/overview" : "https://pulse.apc.tineira.com/overview",
     glyph: (
       <svg viewBox="0 0 32 32" width="22" height="22">
         <rect x="4" y="8" width="20" height="20" rx="5" fill="none" stroke="currentColor" strokeWidth="3.5" />
@@ -30,7 +30,7 @@ export const APPS = [
   },
   {
     name: "Signals",
-    url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.v2.apc.tineira.com/",
+    url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.apc.tineira.com/",
     glyph: (
       <svg viewBox="0 0 28 28" width="22" height="22">
         <circle cx="14" cy="14" r="11.5" fill="none" stroke="currentColor" strokeWidth="2.5" />

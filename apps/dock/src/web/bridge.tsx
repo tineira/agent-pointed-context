@@ -70,7 +70,7 @@ export function Dock() {
       <main>
         <Header />
         <p>
-          The dock opens from an app. Open <a href="https://apc.tineira.com/overview?apc=v2">Pulse with APC v2 on</a>, then click <b>Dock</b> in its top bar.
+          The dock opens from an app. Open <a href="https://pulse.apc.tineira.com/overview">Pulse</a>, then click <b>Dock</b> in its top bar.
         </p>
       </main>
     );
@@ -81,7 +81,7 @@ export function Dock() {
     <main>
       <Header />
       <div className="status">
-        {!app ? "Waiting for the app that opened this window…" : quiet ? `${app.name} is not answering: closed, or reloaded without APC v2?` : (
+        {!app ? "Waiting for the app that opened this window…" : quiet ? `${app.name} is not answering: closed, or reloaded without a dock?` : (
           <>
             Agents of <b>{app.name}</b> ({new URL(app.origin).host})
           </>
@@ -150,7 +150,7 @@ export function Dock() {
 function Header() {
   return (
     <div>
-      <div className="kicker">APC v2 · prototype</div>
+      <div className="kicker">Agent Pointed Context</div>
       <h1>Agent dock</h1>
     </div>
   );

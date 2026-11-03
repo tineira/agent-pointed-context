@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { browserLabel, decide, grantedAlone, hubAllowed, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
-  assert.equal(hubAllowed("https://v2.apc.tineira.com", false), true);
+  assert.equal(hubAllowed("https://apc.tineira.com", false), true);
   assert.equal(hubAllowed("https://evil.example", false), false);
   assert.equal(hubAllowed("http://localhost:5173", false), false);
   assert.equal(hubAllowed("http://localhost:5173", true), true);
   assert.equal(hubAllowed("http://localhost.evil.example:80", true), false);
   assert.equal(hubAllowed("http://127.0.0.1:8080", true), false);
-  assert.deepEqual(hubPatterns(false), ["https://v2.apc.tineira.com/*"]);
+  assert.deepEqual(hubPatterns(false), ["https://apc.tineira.com/*"]);
   assert.ok(hubPatterns(true).includes("http://localhost/*"));
 });
 
@@ -30,7 +30,7 @@ test("a site to grant is an http(s) page's origin as a match pattern", () => {
 });
 
 test("one reader token per dock and agent, and a note for every outcome", () => {
-  assert.equal(readerKey("https://v2.apc.tineira.com", "ag_1234"), "https://v2.apc.tineira.com ag_1234");
+  assert.equal(readerKey("https://apc.tineira.com", "ag_1234"), "https://apc.tineira.com ag_1234");
   for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error", "consent", "consent_sensitive", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
 });
 

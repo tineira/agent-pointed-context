@@ -14,7 +14,7 @@ test("the dock marker writes only presence, with no data or capability", () => {
 
 test("the presence script uses only the dock host access already in the manifest", () => {
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.deepEqual(manifest.content_scripts, [{ matches: ["https://v2.apc.tineira.com/*"], js: ["dock-presence.js"], run_at: "document_idle" }]);
+  assert.deepEqual(manifest.content_scripts, [{ matches: ["https://apc.tineira.com/*"], js: ["dock-presence.js"], run_at: "document_idle" }]);
   for (const match of manifest.content_scripts[0].matches) assert.ok(manifest.host_permissions.includes(match));
   assert.equal(manifest.externally_connectable, undefined);
 });

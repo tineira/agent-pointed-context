@@ -6,6 +6,13 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The APC standard at apc.tineira.com (2026-11-03, TIN-605)
+
+- **The APC standard moves to its own home and loses its "v2".** The dock is Worker `apc-dock` on apc.tineira.com, Pulse is `apc-pulse` on pulse.apc.tineira.com and Signals is `apc-signals` on signals.apc.tineira.com, all with fresh Durable Objects and rate-limit namespaces (1007 to 1010). Every allow-list, the extension's host permissions, the desktop apps, the e2e script and the tests use the new hosts. The old Workers and the `v2.` hosts are removed by hand after a production check. (`apps/*/wrangler.jsonc`, `apps/extension`, `apps/dock-desktop`, `apps/desktop`, `scripts/extension-e2e.mjs`)
+- **The landing page presents only the standard**, with "Connect once" (Dock) and "Connect app by app" (Direct) side by side and a footer link "Version 1, as described in the paper" to `/v1/`. "v2", "prototype" and the V1/V2 chooser are gone from every page a person sees; Pulse opens its sandbox at `/`. (`apps/dock/src/web/landing.tsx`, `apps/demo/src/web/App.tsx`)
+- **V1 keeps only `apc.tineira.com/v1` and `/v1/*`** as zone routes of the `apc-demo` Worker (a route runs before the Custom Domain of the same host), and its temporary `GET /` redirect is gone. (`apps/v1/wrangler.jsonc`, `apps/v1/src/worker/index.ts`)
+- **CI deploys "the APC standard"** (dock, Pulse, Signals) after the V1 job when both run. (`.github/workflows/ci.yml`)
+
 ### Dock
 
 - **The dock retries when the network is back after sleep.** A laptop that wakes with no connection no longer leaves the dock stuck on an error; it tries again when the network returns. (#109, `apps/dock/src/web/hub.tsx`)

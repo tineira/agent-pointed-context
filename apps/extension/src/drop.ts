@@ -4,7 +4,7 @@
  */
 
 /** The docks this extension sends readings to. A drag naming any other hub is refused: a page could forge one. */
-export const HUB_ORIGINS = ["https://v2.apc.tineira.com"];
+export const HUB_ORIGINS = ["https://apc.tineira.com"];
 
 /** A dock this extension talks to: a published one, or under a dev build one on localhost (test pages use 127.0.0.1). */
 export function hubAllowed(origin: string, dev: boolean): boolean {

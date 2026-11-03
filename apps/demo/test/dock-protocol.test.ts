@@ -23,10 +23,10 @@ test("the dock refuses anything else", () => {
 });
 
 test("only the known origins talk", () => {
-  assert.ok(dockOriginAllowed("https://v2.apc.tineira.com"));
+  assert.ok(dockOriginAllowed("https://apc.tineira.com"));
   assert.ok(dockOriginAllowed("http://localhost:5200"));
-  assert.equal(dockOriginAllowed("https://apc.tineira.com"), false);
-  assert.equal(dockOriginAllowed("https://v2.apc.tineira.com.evil.example"), false);
+  assert.equal(dockOriginAllowed("https://pulse.apc.tineira.com"), false);
+  assert.equal(dockOriginAllowed("https://apc.tineira.com.evil.example"), false);
   assert.ok(appOriginAllowed("https://apc.tineira.com"));
   assert.equal(appOriginAllowed("http://localhost.evil.example:80"), false);
 });

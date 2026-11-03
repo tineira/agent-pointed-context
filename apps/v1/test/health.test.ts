@@ -36,13 +36,13 @@ test("health is public, uncached and reads no bindings or env vars", async () =>
   }
 });
 
-test("V1 lives under /v1 (TIN-604): / redirects there, and no other root path is served", async () => {
-  for (const path of ["/", "/v1"]) {
+test("V1 lives under /v1 (TIN-604): /v1 redirects to /v1/, and no root path is served (the root is the dock's, TIN-605)", async () => {
+  for (const path of ["/v1"]) {
     const response = await app.request(`https://example.com${path}`, {}, noEnv());
     assert.equal(response.status, 302, path);
     assert.equal(response.headers.get("location"), "/v1/", path);
   }
-  for (const path of ["/api/health", "/api/session", `/mcp/${"a".repeat(32)}/${"b".repeat(32)}`, "/overview", "/how-to", "/favicon.svg", "/.well-known/oauth-authorization-server", "/v10/api/health"]) {
+  for (const path of ["/", "/api/health", "/api/session", `/mcp/${"a".repeat(32)}/${"b".repeat(32)}`, "/overview", "/how-to", "/favicon.svg", "/.well-known/oauth-authorization-server", "/v10/api/health"]) {
     const response = await app.request(`https://example.com${path}`, { method: path === "/api/session" ? "POST" : "GET" }, noEnv());
     assert.equal(response.status, 404, path);
   }

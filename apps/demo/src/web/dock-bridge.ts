@@ -1,13 +1,13 @@
 /**
  * APC v2 dock prototype (TIN-370): Pulse tells a dock window which agents it has, so the dock can
  * show them and drag them back onto Pulse (a native drop, TIN-369). The dock is another origin
- * (v2.apc.tineira.com) opened from Pulse; they talk with postMessage only, and nothing secret
+ * (apc.tineira.com) opened from Pulse; they talk with postMessage only, and nothing secret
  * crosses: an agent's handle is its grant id, which the drop needs and any page may read.
  */
 import { useEffect, useRef } from "react";
 import { dockOriginAllowed, type DockAgent, type DockMessage } from "./dock-protocol.ts";
 
-export const DOCK_ORIGIN = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "http://localhost:5200" : "https://v2.apc.tineira.com";
+export const DOCK_ORIGIN = (import.meta as { env?: { DEV?: boolean } }).env?.DEV ? "http://localhost:5200" : "https://apc.tineira.com";
 
 /**
  * Pulse's side: every dock that says hello gets the agents, then each change. A dock says hello

@@ -12,11 +12,11 @@
     "activeTab"
   ],
   "host_permissions": [
-    "https://v2.apc.tineira.com/*"
+    "https://apc.tineira.com/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://v2.apc.tineira.com/*"],
+      "matches": ["https://apc.tineira.com/*"],
       "js": ["dock-presence.js"],
       "run_at": "document_idle"
     }

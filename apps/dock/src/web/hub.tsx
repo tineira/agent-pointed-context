@@ -747,7 +747,7 @@ function Header() {
   return (
     <header className="dock-head">
       <h1>Agent dock</h1>
-      <span className="kicker">APC v2</span>
+      <span className="kicker">Agent Pointed Context</span>
     </header>
   );
 }

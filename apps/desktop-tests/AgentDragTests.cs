@@ -24,7 +24,7 @@ public class AgentDragTests
         return [.. BitConverter.GetBytes(body.Count), .. body];
     }
 
-    const string Payload = "{\"v\":1,\"agent\":\"ag_1a2b3c4d\",\"hub\":\"https://v2.apc.tineira.com\",\"ticket\":\"0123456789abcdef0123456789abcdef.0123456789abcdef0123456789abcdef\"}";
+    const string Payload = "{\"v\":1,\"agent\":\"ag_1a2b3c4d\",\"hub\":\"https://apc.tineira.com\",\"ticket\":\"0123456789abcdef0123456789abcdef.0123456789abcdef0123456789abcdef\"}";
 
     [Fact]
     public void Reads_the_agent_out_of_Chromiums_custom_data()
@@ -32,7 +32,7 @@ public class AgentDragTests
         var bytes = Pickle(("text/x-other", "x"), (AgentDrag.Type, Payload));
         Assert.Equal(Payload, AgentDrag.ReadChromiumCustomData(bytes)[AgentDrag.Type]);
         var drag = AgentDrag.From(f => f == AgentDrag.ChromiumCustomFormat ? bytes : null, ["Text", AgentDrag.ChromiumCustomFormat]);
-        Assert.Equal(new AgentDrag("ag_1a2b3c4d", "https://v2.apc.tineira.com", "0123456789abcdef0123456789abcdef.0123456789abcdef0123456789abcdef"), drag);
+        Assert.Equal(new AgentDrag("ag_1a2b3c4d", "https://apc.tineira.com", "0123456789abcdef0123456789abcdef.0123456789abcdef0123456789abcdef"), drag);
     }
 
     /// <summary>
@@ -73,7 +73,7 @@ public class AgentDragTests
         Assert.Null(AgentDrag.Parse("{\"v\":2,\"agent\":\"g_1\"}"));
         Assert.Null(AgentDrag.Parse("{\"v\":1,\"agent\":\"https://evil.example/mcp/x\"}"));
         Assert.Equal(new AgentDrag("g_1", null, null), AgentDrag.Parse("{\"v\":1,\"agent\":\"g_1\",\"hub\":\"javascript:alert(1)\",\"ticket\":\"0123456789abcdef0\"}"));
-        Assert.Equal(new AgentDrag("g_1", null, null), AgentDrag.Parse("{\"v\":1,\"agent\":\"g_1\",\"hub\":\"https://v2.apc.tineira.com\",\"ticket\":\"short\"}"));
+        Assert.Equal(new AgentDrag("g_1", null, null), AgentDrag.Parse("{\"v\":1,\"agent\":\"g_1\",\"hub\":\"https://apc.tineira.com\",\"ticket\":\"short\"}"));
     }
 
     [Fact]

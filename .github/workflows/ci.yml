@@ -44,7 +44,7 @@ jobs:
         run: node scripts/check-changelog.mjs "$BASE"
 
   # Which app a push to main touches. V1 is frozen in apps/v1 with its own copy of the APC code (TIN-604): only a
-  # change under apps/v1/ deploys it. v2 is the dock (apps/dock), Pulse for the standard (apps/demo, TIN-382), Signals
+  # change under apps/v1/ deploys it. The standard is the dock (apps/dock), Pulse for the standard (apps/demo, TIN-382), Signals
   # (apps/signals), the packages they share and the lockfile. Pulse for desktop (apps/desktop*, TIN-396), the dock for
   # Windows (apps/dock-desktop, #84) and the browser extension (apps/extension) deploy nothing here; a change to .github/
   # alone redeploys nothing (the next app change runs the new deploy steps).
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       v1: ${{ steps.diff.outputs.v1 }}
-      v2: ${{ steps.diff.outputs.v2 }}
+      standard: ${{ steps.diff.outputs.standard }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,15 +63,15 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
-            echo "v1=true" >> "$GITHUB_OUTPUT"; echo "v2=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "v1=true" >> "$GITHUB_OUTPUT"; echo "standard=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
           echo "v1=$(echo "$files" | grep -qE '^apps/v1/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "standard=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches apps/v1 goes live at apc.tineira.com/v1 (Worker apc-demo,
-  # which also answers / with a redirect to /v1/ until phase 0c). It builds apps/v1 alone: nothing else in the repo
+  # through zone routes; the root is the dock's). It builds apps/v1 alone: nothing else in the repo
   # is part of V1. Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and
   # CLOUDFLARE_ACCOUNT_ID.
   deploy:
@@ -102,21 +102,23 @@ jobs:
           packageManager: pnpm
           command: deploy
 
-  # APC v2: the dock and its hub (apps/dock, Worker apc-v2, v2.apc.tineira.com), Pulse for the standard
-  # (apps/demo, Worker apc-v2-pulse, pulse.v2.apc.tineira.com) and Signals (apps/signals, Worker
-  # apc-v2-signals, signals.v2.apc.tineira.com). Never apc.tineira.com.
-  deploy-v2:
-    name: Deploy v2.apc.tineira.com
-    needs: [check, changes]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.v2 == 'true'
+  # The APC standard: the dock and its hub (apps/dock, Worker apc-dock, apc.tineira.com), Pulse
+  # (apps/demo, Worker apc-pulse, pulse.apc.tineira.com) and Signals (apps/signals, Worker
+  # apc-signals, signals.apc.tineira.com). The dock owns the host apc.tineira.com as a Custom Domain, which
+  # V1's Worker (apc-demo) must have released first (it keeps only the routes apc.tineira.com/v1*), so when
+  # V1 deploys in the same push this job waits for it and runs only if it succeeded or was skipped.
+  deploy-standard:
+    name: Deploy the APC standard
+    needs: [check, changes, deploy]
+    if: ${{ !cancelled() && needs.check.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.standard == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: deploy-v2
+      group: deploy-standard
       cancel-in-progress: false
     environment:
-      name: v2
-      url: https://v2.apc.tineira.com
+      name: standard
+      url: https://apc.tineira.com
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

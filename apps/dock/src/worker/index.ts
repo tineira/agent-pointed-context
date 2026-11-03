@@ -1,7 +1,7 @@
 /**
  * The dock's Worker (TIN-382): the dock page's API (owner only, by cookie), the public pairing
  * endpoint apps call server to server, and each agent's MCP URL (the secret in it is the agent's).
- * The page is static assets: the APC v2 landing at / (TIN-420), the hub dock at /dock, the TIN-370
+ * The page is static assets: the landing of the APC standard at / (TIN-420), the hub dock at /dock, the TIN-370
  * bridge dock at /bridge.
  */
 import { Hono } from "hono";
