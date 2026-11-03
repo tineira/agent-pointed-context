@@ -1,8 +1,10 @@
 /**
  * The Worker routes, all under /v1 (TIN-604): a visitor's session to their sandbox, the browser API
  * (owner only: the session cookie carries the owner secret), and each agent's MCP URL (the secret in
- * the URL is the grant). The page itself is served as static assets under /v1 (wrangler.jsonc
- * assets.base_path). Outside /v1, / redirects to /v1/ and everything else is a 404.
+ * the URL is the grant). The page and its files are static assets under v1/ in the assets directory, so
+ * the platform serves them before the Worker runs; a request that matches none reaches the Worker. Under
+ * /v1/, an app route ("/v1/how-to") gets the page, v1/index.html. Outside /v1, / redirects to /v1/ and
+ * everything else is a 404.
  */
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
@@ -163,8 +165,25 @@ for (const prefix of ["/.well-known", "/api", "/apc", "/mcp"]) {
   app.all(prefix, (c) => c.json({ error: "not_found" }, 404));
   app.all(`${prefix}/*`, (c) => c.json({ error: "not_found" }, 404));
 }
-/** The page: assets under /v1 (assets.base_path), and the app's own routes fall back to its index.html. */
-app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
+/**
+ * An app route: a GET or HEAD whose last segment has no file extension ("/v1/how-to", "/v1/customers/cus_0001"),
+ * not a missing file ("/v1/assets/gone.js", "/v1/robots.txt").
+ */
+function isAppRoute(method: string, pathname: string): boolean {
+  return (method === "GET" || method === "HEAD") && !/\.[^/]*$/.test(pathname);
+}
+
+/**
+ * The page. A file under /v1 is normally served before the Worker runs; this sees the rest. An app route gets
+ * the page (v1/index.html, fetched as /v1/ since the assets' auto-trailing-slash redirects /v1/index.html),
+ * and anything else keeps the assets' 404. There is no index.html at the assets' root, so nothing outside
+ * /v1 can fall back to the page.
+ */
+app.all("*", async (c) => {
+  const asset = await c.env.ASSETS.fetch(c.req.raw);
+  if (asset.status !== 404 || !isAppRoute(c.req.method, new URL(c.req.url).pathname)) return asset;
+  return c.env.ASSETS.fetch(new Request(new URL(`${BASE}/`, c.req.url), { method: c.req.method, headers: c.req.raw.headers }));
+});
 
 /** The host's root, until phase 0c puts the standard's landing there: V1 is the only thing served. */
 const host = new Hono<{ Bindings: Env }>();
