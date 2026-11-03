@@ -36,6 +36,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Pulse
 
+- **V1 is frozen at apc.tineira.com/v1, in an app of its own.** The paper describes V1, so it no longer shares code with anything else: `apps/v1` is today's V1 build of Pulse with a copy of the `@apc/protocol`, `@apc/server` and `@apc/web` source it uses (and their tests) inside the app, no `@apc/*` workspace dependency, and the v2-only code left out. It runs on the same Worker (`apc-demo`, same Durable Objects, secret and analytics dataset) and serves everything under `/v1`: the page, `/v1/api/*`, the MCP URLs `/v1/mcp/<sandbox>/<secret>` and every `app_url` an agent gets. `/` redirects to `/v1/` until phase 0c; the old root URLs are gone. CI deploys V1 only when `apps/v1/` changes; `apps/demo` is now Pulse for the standard only (its former env `v2` is its top-level config) and the `pulse-agent` skill is generated from, and drift-tested against, V1's copy of the manual. (#112, `apps/v1`, `apps/demo/wrangler.jsonc`, `apps/demo/src/worker/guide.ts`, `scripts/build-skill.mjs`, `package.json`, `.github/workflows/ci.yml`)
 - **`GET /api/health` is public** on Pulse and on the dock, for uptime probes. (#104, `apps/demo/src/worker/index.ts`, `apps/dock/src/worker/index.ts`)
 - **A public chooser for the two APC connection models.** (#100, `apps/demo/src/web/landing/chooser.tsx`)
 - **Pulse recognises Z.ai's ZCode as Z.ai.** (#57, `apps/demo/src/model/products.ts`)

@@ -1,6 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "apc-demo",
+  // Pulse for the APC standard (TIN-382): its own Worker, sandboxes and domain, with pairing from an
+  // agent dock's hub turned on. This app no longer builds V1: V1 is frozen in apps/v1 (Worker apc-demo,
+  // apc.tineira.com/v1, TIN-604). Until TIN-604 this was the env "v2" of apps/demo's config; the
+  // Worker, its Durable Objects, rate limits and domain are the same.
+  "name": "apc-v2-pulse",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -8,36 +12,17 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
   },
+  "vars": { "APC_V2": "1", "HUB_ORIGINS": "https://v2.apc.tineira.com" },
   "durable_objects": {
     "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
   // New sandboxes per IP, and calls per sandbox (the page and its agents together). Periods are 10 or 60 s.
   "ratelimits": [
-    { "name": "NEW_SANDBOX", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
-    { "name": "SANDBOX_CALLS", "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
+    { "name": "NEW_SANDBOX", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
+    { "name": "SANDBOX_CALLS", "namespace_id": "1004", "simple": { "limit": 300, "period": 60 } }
   ],
-  // Distinct MCP agent sessions (TIN-347). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
-  "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
-  "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],
+  "routes": [{ "pattern": "pulse.v2.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
-  "observability": { "enabled": true },
-  "env": {
-    // Pulse's APC v2 deploy (TIN-382): the same app, its own Worker, sandboxes and domain, with pairing
-    // from an agent dock's hub turned on. Built with CLOUDFLARE_ENV=v2. apc.tineira.com never has it.
-    "v2": {
-      "name": "apc-v2-pulse",
-      "vars": { "APC_V2": "1", "HUB_ORIGINS": "https://v2.apc.tineira.com" },
-      "durable_objects": {
-        "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }]
-      },
-      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
-      "ratelimits": [
-        { "name": "NEW_SANDBOX", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
-        { "name": "SANDBOX_CALLS", "namespace_id": "1004", "simple": { "limit": 300, "period": 60 } }
-      ],
-      "routes": [{ "pattern": "pulse.v2.apc.tineira.com", "custom_domain": true }],
-      "workers_dev": true
-    }
-  }
+  "observability": { "enabled": true }
 }

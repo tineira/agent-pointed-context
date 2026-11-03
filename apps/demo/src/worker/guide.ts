@@ -1,7 +1,6 @@
 /**
- * Pulse's part of the agent manual. The prompt `guide` serves apcGuide(PULSE_GUIDE),
- * and skills/pulse-agent/SKILL.md is generated from the same text
- * (node scripts/build-skill.mjs; a test keeps them identical).
+ * Pulse's part of the agent manual: the prompt `guide` serves apcGuide(PULSE_GUIDE). The published
+ * pulse-agent skill documents V1 and is generated from the frozen copy in apps/v1 (TIN-604), not from here.
  */
 export const PULSE_GUIDE = {
   appName: "Pulse",
@@ -12,10 +11,3 @@ export const PULSE_GUIDE = {
 - Their file stays with them. Never upload it to Pulse, and never put its values in a Pulse tool argument.
 - Have a name of your own? Call set_agent_name once.`,
 };
-
-/** The skill's front matter: the skills CLI and the agents read name and description to decide when to load it. */
-export const SKILL_FRONT_MATTER = `---
-name: pulse-agent
-description: Load in any session connected to a Pulse or Agent Pointed Context MCP server (tools get_current_view and wait_for_focus). How to read what the person points at, when to wait for their next pin, and the rules for their own files and restricted access.
----
-`;

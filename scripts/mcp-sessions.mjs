@@ -1,7 +1,7 @@
 // Distinct MCP agent sessions per day and client, from Workers Analytics Engine (TIN-347). Run by hand.
 // usage: CF_ACCOUNT_ID=... CF_ANALYTICS_TOKEN=... node scripts/mcp-sessions.mjs [days=30] [--json]
 // The token needs Account > Account Analytics > Read. A session is one agent grant of one sandbox
-// (apps/demo/src/worker/sessions.ts), or one agent of one APC v2 dock, shown as [dock] (TIN-416); days are UTC.
+// (apps/v1/src/worker/sessions.ts), or one agent of one APC v2 dock, shown as [dock] (TIN-416); days are UTC.
 import { countSessions, dailyTotals, sessionsSql } from "./lib/mcp-sessions.mjs";
 
 const args = process.argv.slice(2);
