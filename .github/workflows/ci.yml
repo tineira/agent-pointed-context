@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -22,6 +23,25 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  # A PR that changes more than docs adds an entry to CHANGELOG.md (or the standard's changelog), or carries the
+  # no-changelog label (AGENTS.md, TIN-603). Pull requests only: it never runs on a push to main and gates no deploy.
+  changelog:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check the changelog
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/check-changelog.mjs "$BASE"
 
   # Which app a push to main touches: v2 lives in apps/dock and apps/signals (TIN-376, TIN-384), v1 is everything else
   # but Pulse for desktop (apps/desktop*, TIN-396) and the dock for Windows (apps/dock-desktop, #84), which their own
