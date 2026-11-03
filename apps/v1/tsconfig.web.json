@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "jsx": "react-jsx", "lib": ["es2023", "dom", "dom.iterable"], "types": ["vite/client"] },
-  "include": ["src/web", "src/model", "src/user-side"]
+  "include": ["src/base.ts", "src/apc", "src/web", "src/model", "src/user-side"]
 }

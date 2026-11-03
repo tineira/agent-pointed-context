@@ -49,8 +49,28 @@ test("V1 lives under /v1 (TIN-604): / redirects there, and no other root path is
 });
 
 test("under /v1, discovery, unknown API paths and malformed MCP URLs are 404 without touching a sandbox", async () => {
-  for (const path of ["/v1/.well-known/oauth-protected-resource", "/v1/api/nope", "/v1/apc/revoke", "/v1/mcp/not-a-sid/x"]) {
-    const response = await app.request(`https://example.com${path}`, { method: "POST" }, noEnv());
-    assert.equal(response.status, 404, path);
+  const paths = [
+    "/v1/.well-known/oauth-protected-resource", "/v1/api/nope", "/v1/apc/revoke", "/v1/mcp/not-a-sid/x",
+    // A malformed MCP URL with one or three segments (TIN-604 review): a JSON 404, not the page.
+    `/v1/mcp/${"a".repeat(32)}`, `/v1/mcp/${"a".repeat(32)}/${"b".repeat(32)}/extra`,
+    // The prefixes themselves, without a trailing slash.
+    "/v1/api", "/v1/mcp", "/v1/apc", "/v1/.well-known", "/v1/mcp/",
+  ];
+  for (const path of paths) {
+    for (const method of ["GET", "POST"]) {
+      const response = await app.request(`https://example.com${path}`, { method }, noEnv());
+      assert.equal(response.status, 404, `${method} ${path}`);
+      assert.deepEqual(await response.json(), { error: "not_found" }, `${method} ${path}`);
+    }
+  }
+});
+
+test("wrangler.jsonc runs the Worker first on the API prefixes with and without a trailing slash", async () => {
+  const { readFileSync } = await import("node:fs");
+  const config = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const rules = JSON.parse(/"run_worker_first":\s*(\[[^\]]*\])/.exec(config)![1]!) as string[];
+  for (const prefix of ["/v1/api", "/v1/mcp", "/v1/apc", "/v1/.well-known"]) {
+    assert.ok(rules.includes(prefix), prefix);
+    assert.ok(rules.includes(`${prefix}/*`), `${prefix}/*`);
   }
 });

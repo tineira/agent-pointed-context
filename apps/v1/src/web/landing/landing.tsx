@@ -55,7 +55,7 @@ function StepVisual({ index }: { index: number }) {
         <div className="w-full max-w-[280px] rounded-[10px] border border-line bg-background font-mono text-xs">
           <div className="border-b border-line px-3 py-[9px] text-muted">Remote MCP server</div>
           <div className="truncate px-3 py-2.5">
-            …/mcp/<span className="text-muted">7f3a…</span>/<span className="text-filament">c41e…</span>
+            …/v1/mcp/<span className="text-muted">7f3a…</span>/<span className="text-filament">c41e…</span>
           </div>
         </div>
       </div>
@@ -104,7 +104,7 @@ function NeedArt({ kind }: { kind: "agent" | "url" | "file" }) {
             <span>mcp url</span>
             <span className="text-filament">copy</span>
           </div>
-          <div className="truncate px-3 py-2.5">https://…/mcp/7f3a…/c41e…</div>
+          <div className="truncate px-3 py-2.5">https://…/v1/mcp/7f3a…/c41e…</div>
         </div>
       </div>
     );

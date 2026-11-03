@@ -154,10 +154,15 @@ app.all("/mcp/:sid/:secret", async (c) => {
   return stubFor(c.env, sid).fetch(c.req.raw);
 });
 
-/** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
-app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
-app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));
-app.all("/apc/*", (c) => c.json({ error: "not_found" }, 404));
+/**
+ * No OAuth: the secret in the MCP URL is the grant, and a 404 under /.well-known tells a client to connect
+ * directly. Anything else under these prefixes, with or without a trailing slash (a malformed MCP URL with
+ * one or three segments included), is a JSON 404, never the page.
+ */
+for (const prefix of ["/.well-known", "/api", "/apc", "/mcp"]) {
+  app.all(prefix, (c) => c.json({ error: "not_found" }, 404));
+  app.all(`${prefix}/*`, (c) => c.json({ error: "not_found" }, 404));
+}
 /** The page: assets under /v1 (assets.base_path), and the app's own routes fall back to its index.html. */
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
