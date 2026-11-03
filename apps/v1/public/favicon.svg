@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The Pulse mark (LogoMark in src/web/ui.tsx): a rounded square outline and a dot on its corner, with a clear gap around the dot. -->
+  <style>
+    .s { stroke: #b85209; fill: none; } .f { fill: #b85209; }
+    @media (prefers-color-scheme: dark) { .s { stroke: #ff9f1c; } .f { fill: #ff9f1c; } }
+  </style>
+  <mask id="gap">
+    <rect width="32" height="32" fill="#fff" />
+    <circle cx="24" cy="8" r="8.5" fill="#000" />
+  </mask>
+  <rect class="s" x="3.5" y="7.5" width="21" height="21" rx="5" stroke-width="4" mask="url(#gap)" />
+  <circle class="f" cx="24" cy="8" r="6" />
+</svg>
