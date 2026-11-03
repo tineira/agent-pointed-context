@@ -1,0 +1,182 @@
+/* The app pages (Overview, Customers, Agents) on the hue.tineira.com tokens in theme.css, so they
+   follow Slate Light and Slate like the landing and the how-to. */
+:root {
+  --bg: var(--background);
+  --surface: var(--cream);
+  --ink: var(--foreground);
+  --accent: var(--filament);
+  --accent-soft: var(--filament-soft);
+  --up: var(--ok);
+  --down: var(--danger);
+  --bar: color-mix(in srgb, var(--muted) 38%, var(--cream));
+  --mark: var(--foreground);
+  --mark-ink: var(--cream);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-size: 15px; line-height: 1.5; }
+.card a, .grant a { color: var(--accent); }
+.card button:not(.link):not(.unpin):not(.copy-button), .grant button:not(.copy-button) { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.card button:not(.link):not(.unpin):not(.copy-button):hover { border-color: var(--filament); }
+select { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; margin-left: 6px; }
+.mono, code { font-family: var(--font-mono); font-size: 0.92em; }
+.muted { color: var(--muted); font-weight: normal; }
+
+.marks { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.mark-wrap { display: flex; align-items: center; gap: 6px; }
+.mark { width: 28px; height: 28px; padding: 0; border-radius: 4px; background: var(--mark); color: var(--mark-ink); border: none; font: 600 11px/28px var(--font-mono); letter-spacing: 0.04em; cursor: grab; touch-action: none; transition: opacity 0.3s, box-shadow 0.3s; }
+.mark-idle { opacity: 0.6; }
+.mark-gone { opacity: 0.35; }
+.mark-restricted { background: var(--accent); }
+.mark-pulse { box-shadow: 0 0 0 4px var(--accent-soft); }
+.mark-inline { display: inline-block; width: 22px; height: 22px; border-radius: 3px; background: var(--mark); color: var(--mark-ink); font: 600 10px/22px var(--font-mono); text-align: center; vertical-align: 2px; }
+.mark-logo { display: grid; place-items: center; background: var(--surface); color: var(--foreground); border: 1px solid var(--line); }
+.mark-logo.mark-restricted { background: var(--surface); outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A logo keeps its colors when the agent goes quiet: the fade made them unreadable. Motion shows activity instead. */
+.mark-logo.mark-idle, .mark-logo.mark-gone { opacity: 1; }
+/* On the dark theme the chip is a step lighter, so black marks (the Grok bot's black character) still show. */
+html[data-theme="slate"] .mark-logo { background: #263040; border-color: #33404f; }
+.mark-inline.mark-logo, .agent-inline { display: inline-grid; place-items: center; vertical-align: -6px; }
+
+/* An agent's icon moves with what the agent does (TIN-350). */
+.agent-icon { display: block; flex: none; pointer-events: none; }
+.agent-icon-off { filter: grayscale(1); opacity: 0.4; }
+.agent-icon-waiting { animation: agent-float 3s ease-in-out infinite; }
+.agent-icon-busy { animation: agent-pulse 0.6s ease-in-out infinite; }
+.agent-icon-seen { animation: agent-bounce 0.9s ease-out 1; }
+@keyframes agent-float { 0%, 100% { transform: translateY(1.5px); } 50% { transform: translateY(-2.5px); } }
+@keyframes agent-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+@keyframes agent-bounce { 0% { transform: translateY(0); } 25% { transform: translateY(-6px); } 50% { transform: translateY(0); } 70% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .agent-icon-waiting, .agent-icon-busy, .agent-icon-seen { animation: none; }
+}
+.apc-ghost { cursor: grabbing; box-shadow: 0 4px 12px rgb(0 0 0 / 0.25); }
+.unpin { border: none; background: none; padding: 0 4px; font-size: 14px; line-height: 1; color: inherit; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.card h2 { margin: 0 0 4px; font-size: 16px; }
+.card h3 { font-size: 14px; margin: 16px 0 6px; }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+.filters { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.link { border: none; background: none; padding: 0; color: var(--accent); }
+
+.chart { width: 100%; height: auto; display: block; }
+.chart .hit { fill: transparent; }
+.chart .bar { fill: var(--bar); }
+.chart .bar-selected, .chart .bar-start, .chart .bar-end { fill: var(--accent); }
+.chart .bar-new, .chart .bar-reactivated { fill: var(--up); }
+.chart .bar-churned { fill: var(--down); }
+.chart .axis { fill: var(--muted); font-size: 11px; }
+.chart .value { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.chart .focusable { cursor: pointer; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--bg); }
+
+.facts { display: flex; gap: 32px; flex-wrap: wrap; margin: 12px 0; }
+.facts dt { color: var(--muted); font-size: 12px; }
+.facts dd { margin: 0; }
+.spark { display: flex; align-items: flex-end; gap: 3px; height: 80px; }
+.spark-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.spark-bar { width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; }
+.spark-bar.inactive { background: var(--line); }
+
+.grant { margin: 12px 0 16px; }
+.grant h3 { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0; }
+.grant-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-bottom: 6px; }
+.grant-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.grant-pin { color: var(--accent); }
+.grant-pin.seen { color: var(--up); }
+.grant button.grant-toggle { font-size: 12px; color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.grant-body { display: flex; flex-direction: column; gap: 8px; }
+/* Another product on this agent's URL (TIN-358). */
+.grant-conflict { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); font-size: 13px; }
+.grant-handoff { border-color: var(--accent); background: var(--accent-soft); }
+.grant-handoff .grant-toggle { align-self: flex-start; }
+.grant-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mark-alert { position: absolute; top: -5px; left: 19px; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); color: #fff; font: 700 10px/14px var(--font-mono); text-align: center; padding: 0; border: none; cursor: pointer; }
+.mark-wrap { position: relative; }
+.grant-rename { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.grant-rename input { font: inherit; font-weight: 500; color: inherit; background: var(--background); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; width: 16rem; max-width: 100%; }
+.grant button.grant-rename-open { margin-left: 8px; font-weight: 400; }
+/* In the how-to's steps: a boxed card, spaced by the step's own gap. */
+.grant-compact { margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.qr-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0 4px; }
+.qr { width: 196px; height: 196px; flex: none; display: block; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.qr-row .hint { margin: 0; max-width: 32ch; }
+/* Above Overview and Customers while no agent is connected. */
+.connect-panel { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.connect-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.connect-head .dismiss { font-size: 20px; line-height: 1; color: var(--muted); padding: 0 4px; cursor: pointer; }
+.connect-head .dismiss:hover { color: var(--ink); }
+.connect-body { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-start; }
+.connect-fields { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.connect-fields .hint { margin: 4px 0 0; }
+.connect-body .qr-row { margin: 0; }
+.switch { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+
+/* APC: targets outline while a mark is dragged; the target under the pointer is solid. */
+.apc-dragging [data-focus] { outline: 1px dashed var(--line); outline-offset: 1px; }
+.apc-dragging .apc-target { outline: 2px solid var(--accent); outline-offset: 1px; }
+.apc-dragging svg [data-focus] { outline: none; }
+.apc-dragging svg .apc-target .bar { stroke: var(--accent); stroke-width: 3; }
+[data-apc-pinned] { position: relative; }
+tr[data-apc-pinned], td[data-apc-pinned], div[data-apc-pinned], h3[data-apc-pinned], section[data-apc-pinned] { box-shadow: inset 0 0 0 2px var(--accent); }
+svg [data-apc-pinned] .bar { stroke: var(--accent); stroke-width: 3; }
+/* A pinned agent's badge on its target (pin-badges.tsx): the standard <apc-pin> from src/apc/web, the frozen copy of @apc/web (TIN-482), which draws the badge
+   (dashed and breathing until the agent reads the pin, then a check; dims while dragged). Pulse places it and themes it. */
+.pin-badge { position: fixed; z-index: 5; transform: translate(-50%, -50%); pointer-events: none; }
+.pin-badge .apc-pin__mark, .pin-badge .apc-pin__unpin { pointer-events: auto; }
+/* On :root, not on the badge, so the copy that follows the pointer while dragging (in body) is themed too. */
+:root { --apc-chip: var(--surface); --apc-line: var(--line); --apc-ink: var(--foreground); --apc-muted: var(--muted); --apc-accent: var(--accent); --apc-ok: var(--up); --apc-pin-font: var(--font-mono); --apc-pin-unpin-bg: var(--surface); }
+html[data-theme="slate"] { --apc-chip: #263040; }
+/* The top bar: a dot by the mark says pending (accent) or read (green); it opens the pinned screen when the target is elsewhere. */
+.pin-dot { display: inline-flex; align-items: center; gap: 2px; }
+.pin-dot-go { width: 10px; height: 10px; padding: 0; border-radius: 50%; border: none; background: var(--accent); cursor: default; }
+.pin-dot-go.seen { background: var(--up); }
+.pin-dot-go.away { cursor: pointer; box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Presence: an agent read (dotted) or changed (solid) this element. */
+[data-apc-presence="read"] { outline: 2px dotted var(--accent); outline-offset: 1px; }
+[data-apc-presence="write"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.step h2 { display: flex; align-items: center; gap: 10px; }
+.step-n { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; align-items: center; justify-content: center; flex: none; }
+.step ul, .step ol { margin: 8px 0; padding-left: 20px; }
+.step li { margin: 4px 0; }
+.step q { font-style: italic; }
+.expect { margin: 12px 0 0; padding: 8px 12px; border-left: 3px solid var(--up); background: var(--bg); border-radius: 0 6px 6px 0; font-size: 14px; }
+.intro h2 { font-size: 18px; }
+table.compat td, table.compat th { font-size: 13px; }
+
+/* The guided first run (tour.tsx, TIN-361). */
+.tour-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / 0.35); }
+.tour-modal { width: min(560px, 100%); max-height: calc(100svh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 20px 22px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 12px 40px rgb(0 0 0 / 0.25); }
+.tour-modal h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.tour-modal p, .tour-panel p { margin: 0; font-size: 14px; color: var(--muted); }
+.tour-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+.tour-steps li { display: flex; flex-direction: column; gap: 6px; }
+.tour-steps li > button { align-self: flex-start; }
+.tour-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.tour-primary { cursor: pointer; border: none; border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; background: var(--accent); color: #fff; align-self: flex-start; }
+.tour-skip { cursor: pointer; border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+.tour-link { font-size: 14px; color: var(--accent); }
+.tour-mark { display: inline-grid; vertical-align: middle; cursor: default; }
+.tour-panel { position: fixed; right: 16px; bottom: 16px; z-index: 30; width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; background: var(--surface); border: 1px solid var(--accent); box-shadow: 0 8px 28px rgb(0 0 0 / 0.2); }
+.tour-panel h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.tour-panel-head { display: flex; justify-content: space-between; align-items: center; }
+.tour-kicker { font: 600 11px var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+.tour-nudge { padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--foreground) !important; }
+.tour-arrow { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 20; pointer-events: none; overflow: visible; }
+.tour-arrow path { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 7 6; animation: tour-dash 1s linear infinite; }
+.tour-arrow marker path { fill: var(--accent); stroke: none; animation: none; }
+@keyframes tour-dash { to { stroke-dashoffset: -26; } }
+@media (prefers-reduced-motion: reduce) { .tour-arrow path { animation: none; } }
+
+/* The landing's header wraps on narrow screens, so its demo link stays in view (kept from the chooser's stylesheet, TIN-604). */
+@media (max-width: 760px) { .v1-landing header { flex-wrap: wrap; } }

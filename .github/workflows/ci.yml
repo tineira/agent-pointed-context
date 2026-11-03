@@ -43,12 +43,11 @@ jobs:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: node scripts/check-changelog.mjs "$BASE"
 
-  # Which app a push to main touches: v2 lives in apps/dock and apps/signals (TIN-376, TIN-384), v1 is everything else
-  # but Pulse for desktop (apps/desktop*, TIN-396) and the dock for Windows (apps/dock-desktop, #84), which their own
-  # workflows build and nothing deploys, the browser extension (apps/extension), and .github/ (a workflow change alone redeploys nothing; the next v1 change
-  # runs the new deploy steps).
-  # v2 also deploys Pulse a second time (apps/demo with CLOUDFLARE_ENV=v2, TIN-382), so a change to
-  # apps/demo or the packages deploys both.
+  # Which app a push to main touches. V1 is frozen in apps/v1 with its own copy of the APC code (TIN-604): only a
+  # change under apps/v1/ deploys it. v2 is the dock (apps/dock), Pulse for the standard (apps/demo, TIN-382), Signals
+  # (apps/signals), the packages they share and the lockfile. Pulse for desktop (apps/desktop*, TIN-396), the dock for
+  # Windows (apps/dock-desktop, #84) and the browser extension (apps/extension) deploy nothing here; a change to .github/
+  # alone redeploys nothing (the next app change runs the new deploy steps).
   changes:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -68,11 +67,13 @@ jobs:
           fi
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
-          echo "v1=$(echo "$files" | grep -qvE '^(apps/(dock|signals|desktop|desktop-tests|dock-desktop|extension)/|\.github/)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "v1=$(echo "$files" | grep -qE '^apps/v1/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "v2=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
-  # Every push to main that passes the checks and touches v1 goes live at apc.tineira.com.
-  # Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and CLOUDFLARE_ACCOUNT_ID.
+  # Every push to main that passes the checks and touches apps/v1 goes live at apc.tineira.com/v1 (Worker apc-demo,
+  # which also answers / with a redirect to /v1/ until phase 0c). It builds apps/v1 alone: nothing else in the repo
+  # is part of V1. Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and
+  # CLOUDFLARE_ACCOUNT_ID.
   deploy:
     name: Deploy apc.tineira.com
     needs: [check, changes]
@@ -92,18 +93,18 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      - run: pnpm --dir apps/v1 build
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: apps/demo
+          workingDirectory: apps/v1
           packageManager: pnpm
           command: deploy
 
-  # APC v2: the dock and its hub (apps/dock, Worker apc-v2, v2.apc.tineira.com), Pulse's v2 deploy
-  # (apps/demo with env v2, Worker apc-v2-pulse, pulse.v2.apc.tineira.com) and Signals (apps/signals,
-  # Worker apc-v2-signals, signals.v2.apc.tineira.com). Never apc.tineira.com.
+  # APC v2: the dock and its hub (apps/dock, Worker apc-v2, v2.apc.tineira.com), Pulse for the standard
+  # (apps/demo, Worker apc-v2-pulse, pulse.v2.apc.tineira.com) and Signals (apps/signals, Worker
+  # apc-v2-signals, signals.v2.apc.tineira.com). Never apc.tineira.com.
   deploy-v2:
     name: Deploy v2.apc.tineira.com
     needs: [check, changes]
@@ -132,8 +133,6 @@ jobs:
           packageManager: pnpm
           command: deploy
       - run: pnpm --dir apps/demo build
-        env:
-          CLOUDFLARE_ENV: v2
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
