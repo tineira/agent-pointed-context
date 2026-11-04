@@ -18,7 +18,9 @@ tauri-plugin-opener = "=2.7.1"
 tauri-plugin-single-instance = "=2.5.3"
 # Signed auto-update (TIN-615): the update's question in a native dialog, the update from the dock-desktop prerelease.
 tauri-plugin-dialog = "=2.8.3"
-tauri-plugin-updater = "=2.14.0"
+# Without its default `zip` feature (TIN-618), which only unpacks the zipped bundles of Tauri v1's updater:
+# ours is the bare NSIS .exe (`createUpdaterArtifacts: true`), so the zip crate is not built at all.
+tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 

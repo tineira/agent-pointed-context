@@ -7,3 +7,8 @@ minimumReleaseAgeExclude:
 allowBuilds:
   esbuild: true
   workerd: true
+# TIN-618: miniflare (under wrangler and @cloudflare/vite-plugin) pins undici 7.29.1, which has the
+# advisories fixed in 7.30.1; the wrangler that takes 7.30.1 itself (4.153.0) is not two weeks old yet.
+# Drop this once wrangler is on 4.153.0 or later.
+overrides:
+  undici: 7.30.1
