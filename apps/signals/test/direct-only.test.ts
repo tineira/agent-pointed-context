@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import { APC_JSON_PATH, directOnlyNote, parseApcManifest, type ApcManifest } from "@apc/protocol";
+import { APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, type ApcManifest } from "@apc/protocol";
 
 installWorkersStandIn();
 const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
@@ -194,7 +194,7 @@ test("a drop before the page knows its profiles is held, then answered as its ow
   file.resolve(["direct"]);
   await flush();
   assert.deepEqual(unknown, [], "never sent to pairing");
-  assert.deepEqual(answers, [{ drag: { v: 1, agent: "ag_1a2b3c4d", hub: "https://dock.test", ticket: `${"d".repeat(32)}.${"0".repeat(32)}` }, target: { kind: "post", id: "p_2", part: null, params: null }, name: "Signals", connect: `${ORIGIN}/?connect`, message: directOnlyNote("Signals") }]);
+  assert.deepEqual(answers, [{ drag: { v: 1, agent: "ag_1a2b3c4d", hub: "https://dock.test", ticket: `${"d".repeat(32)}.${"0".repeat(32)}` }, target: { kind: "post", id: "p_2", part: null, params: null }, name: "Signals", connect: `${ORIGIN}/?connect`, reason: "direct_only", message: directOnlyNote("Signals") }]);
   dropFromDock();
   assert.equal(answers.length, 2, "once known, answered at once");
   assert.equal(body.find("data-apc-dock-unsupported"), undefined, "the app's own answer, no default note");
@@ -223,4 +223,74 @@ test("the note links only to an http(s) page of the app itself", async (t) => {
     note.remove();
     stop();
   }
+});
+
+test("the page reads its own apc.json as the hub does: no redirect, a time limit, a byte cap; anything else is null", async () => {
+  const asked: Array<RequestInit | undefined> = [];
+  const serve = (make: () => Response | Promise<Response>) =>
+    (async (_url: string | URL | Request, init?: RequestInit) => {
+      asked.push(init);
+      return make();
+    }) as typeof fetch;
+  const file = { name: "Signals", standard: "0.5.0", origin: "https://a.test", profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: "https://a.test/?connect" } };
+  assert.deepEqual(await loadApcProfiles("https://a.test", serve(() => Response.json(file))), ["direct"]);
+  assert.equal(asked[0]?.redirect, "error", "no redirect followed");
+  assert.equal(asked[0]?.credentials, "omit");
+  assert.ok(asked[0]?.signal instanceof AbortSignal, "with a time limit");
+  assert.equal(await loadApcProfiles("https://b.test", serve(() => Response.json({ ...file, origin: "https://b.test", pad: "x".repeat(20_000) }))), null, "over 16 KiB");
+  assert.equal(await loadApcProfiles("https://c.test", serve(() => new Response("gone", { status: 404 }))), null);
+  assert.equal(await loadApcProfiles("https://d.test", serve(() => Promise.reject(new TypeError("redirect not allowed")))), null, "a redirect, refused by fetch");
+  // A body that never ends: null at the time limit, not when the browser gives up.
+  const started = Date.now();
+  const never = serve(() => new Response(new ReadableStream({ start: () => {} })));
+  assert.equal(await loadApcProfiles("https://e.test", never), null);
+  const took = Date.now() - started;
+  assert.ok(took >= 2900 && took < 5000, `${took} ms`);
+  // A failure is not kept: the next call reads again.
+  assert.deepEqual(await loadApcProfiles("https://c.test", serve(() => Response.json({ ...file, origin: "https://c.test", direct: { connect: "https://c.test/?connect" } }))), ["direct"]);
+});
+
+test("a held drop whose profiles cannot be read is answered as unchecked, never paired; a later drop asks again", async () => {
+  under = new El("article");
+  under.setAttribute("data-focus", "post:p_3");
+  const replies: Array<readonly ("direct" | "dock")[] | null> = [null, ["direct", "dock"]];
+  let loads = 0;
+  const answers: Array<{ reason: string; message: string }> = [];
+  const unknown: string[] = [];
+  const stop = enablePinning({
+    acceptNativeDrops: true,
+    profiles: () => Promise.resolve(replies[loads++] ?? null),
+    direct: { name: "Signals", connect: `${ORIGIN}/?connect` },
+    onDockUnsupported: (answer: { reason: string; message: string }) => void answers.push(answer),
+    onUnknownAgent: (drag: { agent: string }) => void unknown.push(drag.agent),
+    resolveAgent: () => null,
+    onPin: () => {},
+  });
+  assert.equal(loads, 1, "loaded at once");
+  await flush();
+  dropFromDock();
+  await flush();
+  // The first load gave nothing; this drop asked again, and got Dock: it goes to pairing.
+  assert.equal(loads, 2, "a dock drop after a failed load asks again");
+  assert.deepEqual([answers.length, unknown], [0, ["ag_1a2b3c4d"]]);
+  stop();
+
+  // A loader that keeps failing: the drop is answered "unchecked", with no pairing.
+  const answers2: Array<{ reason: string; message: string }> = [];
+  const unknown2: string[] = [];
+  const stop2 = enablePinning({
+    acceptNativeDrops: true,
+    profiles: () => Promise.resolve(null),
+    direct: { name: "Signals", connect: `${ORIGIN}/?connect` },
+    onDockUnsupported: (answer: { reason: string; message: string }) => void answers2.push(answer),
+    onUnknownAgent: (drag: { agent: string }) => void unknown2.push(drag.agent),
+    resolveAgent: () => null,
+    onPin: () => {},
+  });
+  await flush();
+  assert.equal(dropFromDock(), true, "still taken, so the person gets an answer");
+  await flush();
+  assert.deepEqual(unknown2, [], "never sent to pairing on a guess");
+  assert.deepEqual(answers2.map((a) => [a.reason, a.message]), [["unchecked", couldNotCheckNote("Signals")]]);
+  stop2();
 });

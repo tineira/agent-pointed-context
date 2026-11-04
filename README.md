@@ -109,7 +109,7 @@ app.get("/.well-known/apc.json", (c) =>
 );
 ```
 
-If your app offers only Direct, still take a dock agent's drop so the person learns how to connect instead of nothing happening: pass `profiles: loadApcProfiles()` (your own apc.json) and `direct: { name, connect }` to `enablePinning`, and it answers such a drop (holding one made before the file is read) with a note and your connect link, or calls your `onDockUnsupported`. The browser extension gives the same answer on a Direct-only app that does not.
+If your app offers only Direct, still take a dock agent's drop so the person learns how to connect instead of nothing happening: pass `profiles: () => loadApcProfiles()` (your own apc.json) and `direct: { name, connect }` to `enablePinning`, and it answers such a drop (holding one made before the file is read) with a note and your connect link, or calls your `onDockUnsupported`. The browser extension gives the same answer on a Direct-only app that does not.
 
 To offer the Direct profile (each agent on its own MCP URL), your Durable Object makes grants with `newDirectGrant()` in its own table, answers `initialize` with `ApcLinks.arrived(grant, linkClient(initializeOf(body), path))`, and wraps its tools so a result carries `attachApcLink(result, await links.offer(grant, tool))`; the page shows `<apc-direct-agents>` (make, name, URL and prompt to copy) and passes each agent's `paths` to `<apc-agents>`. Declare your profiles in one place (`APC_PROFILES="direct,dock"` in Pulse's and Signals' `wrangler.jsonc`). Signals is the small example ([`apps/signals/src/worker/feed.ts`](apps/signals/src/worker/feed.ts)).
 

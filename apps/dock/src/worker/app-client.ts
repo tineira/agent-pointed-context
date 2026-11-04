@@ -201,16 +201,17 @@ export async function revokeGrant(mcpUrl: string, transport: AppTransport = STRI
 }
 
 /** An app's apc.json as the hub read it: the parsed JSON, or why there is none, in the hub's own words. */
-export type ApcJsonRead = { ok: true; body: unknown } | { ok: false; error: "apc_json_missing" | "apc_json_unreachable" | "apc_json_invalid"; reason: string };
+export type ApcJsonRead = { ok: true; body: unknown } | { ok: false; error: "apc_json_missing" | "apc_json_redirected" | "apc_json_unreachable" | "apc_json_invalid"; reason: string };
 
 /**
  * Read `GET {origin}/.well-known/apc.json` (APC 0.5) under the transport rules of every other call
  * (TIN-580): a time limit that covers the body and a byte cap (APC_JSON_MAX_BYTES). Stricter than the
  * other calls, no redirect is followed for any app, verified too: the file is the origin's own or none.
- * A 4xx is `missing`; no answer, a time limit or a 5xx is `unreachable`; a redirect is `unreachable` for
- * a verified app (its fallback rules apply) and `missing` for an unverified one; too large or not JSON is `invalid`.
+ * A 4xx is `missing`; a redirect is `redirected`, an answer from the origin like a 4xx, verified app or
+ * not; only no answer, a time limit or a 5xx is `unreachable`; too large or not JSON is `invalid`.
+ * The transport is kept for the call's shape; every app is read the same way.
  */
-export async function readApcJson(origin: string, transport: AppTransport = STRICT): Promise<ApcJsonRead> {
+export async function readApcJson(origin: string, _transport: AppTransport = STRICT): Promise<ApcJsonRead> {
   const signal = AbortSignal.timeout(LIMITS.apcJsonMs);
   const ends = deadline(signal, "apc.json", LIMITS.apcJsonMs);
   let response: Response;
@@ -227,11 +228,11 @@ export async function readApcJson(origin: string, transport: AppTransport = STRI
   } catch (error) {
     return { ok: false, error: "apc_json_unreachable", reason: failureReason(error) };
   }
-  // A redirect (3xx, or the opaque answer some runtimes give for one) is no file of the origin's: for a
-  // verified app it counts as unreachable (its last copy, or the operator's word), for an unverified one as missing.
+  // A redirect (3xx, or the opaque answer some runtimes give for one) is the origin answering, with no
+  // file of its own: refused for every app, never the "unreachable" that lets a verified app pair on its last copy.
   if ((response.status >= 300 && response.status < 400) || (response as { type?: string }).type === "opaqueredirect" || response.status === 0) {
     response.body?.cancel().catch(() => {});
-    return { ok: false, error: transport.verified ? "apc_json_unreachable" : "apc_json_missing", reason: `apc.json: a redirect (HTTP ${response.status})` };
+    return { ok: false, error: "apc_json_redirected", reason: `apc.json: a redirect (HTTP ${response.status})` };
   }
   if (!response.ok) {
     response.body?.cancel().catch(() => {});

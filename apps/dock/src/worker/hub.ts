@@ -10,7 +10,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@apc/protocol";
+import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@apc/protocol";
 import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@apc/server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
@@ -674,10 +674,12 @@ export class Hub extends DurableObject<Env> {
    * An app's apc.json (APC 0.5, DESIGN.md section 17), read from its own origin when it asks to pair,
    * after the ticket and the origin passed (so nobody can make the hub fetch an address it would not
    * pair). The copy read is kept per origin: for 10 minutes it is used as is; after that the hub reads
-   * the file again. A definite answer (no file, a file that is not one, another origin) refuses the
-   * pairing and forgets the copy, verified app or not. When the file cannot be reached (no answer, a time
-   * limit, a 5xx), an unverified app is refused, but a verified one keeps pairing: checked against the
-   * last copy the hub read, or, with none, on the operator's word (it is in APP_ORIGINS); then `manifest` is null.
+   * the file again. A definite answer (no file, a redirect, a file that is not one, another origin)
+   * refuses the pairing and forgets the copy, verified app or not: a redirect is the origin answering.
+   * Only when the file cannot be reached at all (no answer, a time limit, a 5xx) is an unverified app
+   * refused while a verified one keeps pairing: checked against the last copy the hub read, or, with
+   * none, on the operator's word (it is in APP_ORIGINS); then `manifest` is null, and pair() still holds
+   * the MCP URL to APC_DEFAULT_MCP_PATH.
    */
   private async manifestFor(origin: string, verified: boolean): Promise<{ ok: true; manifest: ApcManifest | null } | { ok: false; error: ApcJsonRefusal }> {
     const now = Date.now();
@@ -733,9 +735,12 @@ export class Hub extends DurableObject<Env> {
     // profile and declare where its MCP URLs live, so a URL the domain did not declare never pairs.
     const read = await this.manifestFor(origin, verdict.verified);
     if (!read.ok) return { ok: false, error: read.error };
-    const manifest = read.manifest;
-    if (manifest && !manifest.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
-    if (manifest && !declaresMcpUrl(manifest, b.mcp_url)) return { ok: false, error: "mcp_url_not_declared" };
+    // With no file and no copy (a verified app whose file is out of reach), the path guard still holds:
+    // the MCP URL must lie under the default path, APC_DEFAULT_MCP_PATH, and pass the same checks. Only the
+    // profile check rests on the operator's word.
+    const manifest: Pick<ApcManifest, "origin" | "mcp"> & { profiles: ApcManifest["profiles"] | null } = read.manifest ?? { origin, profiles: null, mcp: { path: APC_DEFAULT_MCP_PATH } };
+    if (manifest.profiles && !manifest.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
+    if (!declaresMcpUrl(manifest, b.mcp_url)) return { ok: false, error: "mcp_url_not_declared" };
     // Everything below is synchronous: the agent may have gone while the file was read.
     if (!this.agent(t.agent_id)) return { ok: false, error: "ticket_expired" };
     // The person pairs again after revoking in the app (APC 0.2): the new pairing replaces the revoked one's line, and its app id.

@@ -208,7 +208,7 @@ function Sandbox({ sid }: { sid: string }) {
         // APC 0.5: a Pulse that offers only Direct answers a dock agent's drop with how to connect directly, and
         // opens the Agents screen, where the person does. Its profiles come from its own apc.json (servedProfiles),
         // so a drop before the page's state has loaded is answered right too (held until the file is read).
-        profiles: loadApcProfiles(),
+        profiles: () => loadApcProfiles(),
         direct: { name: "Pulse", connect: `${location.origin}/agents` },
         onDockUnsupported: (answer: DockUnsupported) => {
           navigate({ screen: "agents" }, readRoute().filters);

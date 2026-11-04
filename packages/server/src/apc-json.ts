@@ -1,4 +1,4 @@
-import { APC_STANDARD_VERSION, type ApcManifest, type ApcProfile } from "@apc/protocol";
+import { APC_DEFAULT_MCP_PATH, APC_STANDARD_VERSION, type ApcManifest, type ApcProfile } from "@apc/protocol";
 
 /**
  * An app's `apc.json` (APC 0.5, `ApcManifest` in @apc/protocol), from what it already declares: its
@@ -6,7 +6,7 @@ import { APC_STANDARD_VERSION, type ApcManifest, type ApcProfile } from "@apc/pr
  * live, and, with the Direct profile, the page where the person connects an agent directly.
  */
 export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; mcpPath?: string; connect?: string }): ApcManifest {
-  const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp: { path: o.mcpPath ?? "/mcp/" } };
+  const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp: { path: o.mcpPath ?? APC_DEFAULT_MCP_PATH } };
   if (o.profiles.includes("direct")) manifest.direct = { connect: new URL(o.connect ?? "/", o.origin).href };
   return manifest;
 }

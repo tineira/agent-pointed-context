@@ -21,7 +21,7 @@
  * - **`dock`** (a hub): where it takes pairings, `pair` and `confirm`, as absolute URLs on its origin.
  *
  * A hub reads an app's `apc.json` when the app asks to pair (`POST {hub}/apc/pair`) and refuses the
- * pairing when it is missing (`apc_json_missing`), cannot be read as one (`apc_json_invalid`), names
+ * pairing when it is missing (`apc_json_missing`), answered with a redirect (`apc_json_redirected`), cannot be read as one (`apc_json_invalid`), names
  * another origin (`apc_json_wrong_origin`), does not list the Dock profile (`dock_not_offered`), or
  * does not cover the MCP URL the app sent (`mcp_url_not_declared`); see `ApcJsonRefusal`.
  */
@@ -31,6 +31,11 @@ import type { ApcProfile } from "./core.ts";
 export const APC_JSON_PATH = "/.well-known/apc.json";
 /** The most bytes a reader takes of an `apc.json`. */
 export const APC_JSON_MAX_BYTES = 16_384;
+/**
+ * Where an app's MCP URLs live when it says nothing else: `@apc/server`'s default `mcp.path`, and the
+ * path a hub holds a verified app to when it pairs it without a file (its file out of reach, no copy).
+ */
+export const APC_DEFAULT_MCP_PATH = "/mcp/";
 
 /** A word of `profiles`: an app's profiles, or `"hub"` for a dock's hub. */
 export type ApcRole = ApcProfile | "hub";
@@ -53,7 +58,7 @@ export interface ApcManifest {
 }
 
 /** Why a hub refuses a pairing over the app's `apc.json` (APC 0.5). */
-export type ApcJsonRefusal = "apc_json_missing" | "apc_json_unreachable" | "apc_json_invalid" | "apc_json_wrong_origin" | "dock_not_offered" | "mcp_url_not_declared";
+export type ApcJsonRefusal = "apc_json_missing" | "apc_json_redirected" | "apc_json_unreachable" | "apc_json_invalid" | "apc_json_wrong_origin" | "dock_not_offered" | "mcp_url_not_declared";
 
 const VERSION_RE = /^(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,5})$/;
 const PATH_RE = /^\/([A-Za-z0-9._~!$&'()*+,;=:@-]+\/)*$/;
@@ -132,7 +137,7 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
  * encoded slash, backslash or dot (`%2f`, `%5c`, `%2e`), no encoded percent (`%25`, a second round of
  * encoding), and no backslash.
  */
-export function declaresMcpUrl(manifest: ApcManifest, mcpUrl: string): boolean {
+export function declaresMcpUrl(manifest: Pick<ApcManifest, "origin" | "mcp">, mcpUrl: string): boolean {
   let url: URL;
   try {
     url = new URL(mcpUrl);
@@ -156,4 +161,12 @@ export function declaresMcpUrl(manifest: ApcManifest, mcpUrl: string): boolean {
  */
 export function directOnlyNote(name: string): string {
   return `${name} connects agents directly, not through a dock. Connect your agent to ${name} on its own URL, then drag its mark from the agent bar there.`;
+}
+
+/**
+ * What an app tells a person who drops a dock agent on it when its page could not read its own
+ * `apc.json`: it cannot tell whether it takes dock agents, so it pairs nothing and says so.
+ */
+export function couldNotCheckNote(name: string): string {
+  return `${name} could not check how it connects agents just now, so your agent was not paired. Drop it again in a moment, or connect your agent to ${name} directly on its own URL.`;
 }

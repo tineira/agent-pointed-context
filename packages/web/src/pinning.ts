@@ -1,21 +1,56 @@
-import { APC_JSON_PATH, directOnlyNote, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@apc/protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@apc/protocol";
 
 const profileLoads = new Map<string, Promise<ApcRole[] | null>>();
 
+/** How long the page waits for its own apc.json: a held drop never waits longer. */
+export const APC_JSON_LOAD_MS = 3000;
+
+/** A body as text, at most `cap` bytes, or null past it; the rest is never read. */
+async function readCapped(response: Response, cap: number): Promise<string | null> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > cap) {
+      void reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    all.set(c, at);
+    at += c.byteLength;
+  }
+  return new TextDecoder().decode(all);
+}
+
 /**
  * The profiles the page's own app offers, from its apc.json (APC 0.5), for `enablePinning({ profiles })`:
- * read once per origin, without cookies. Null when there is no valid file (then read again next time).
+ * read without cookies, with no redirect followed, within APC_JSON_LOAD_MS for headers and body, and at
+ * most APC_JSON_MAX_BYTES, as the hub and the extension read it. Kept per origin once read; null when
+ * there is no valid file in time, and then read again on the next call.
  */
 export function loadApcProfiles(origin: string = location.origin, fetcher: typeof fetch = (...a) => fetch(...a)): Promise<ApcRole[] | null> {
   let load = profileLoads.get(origin);
   if (!load) {
-    load = fetcher(`${origin}${APC_JSON_PATH}`, { credentials: "omit", headers: { accept: "application/json" } })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        const parsed = parseApcManifest(body, origin);
+    const signal = AbortSignal.timeout(APC_JSON_LOAD_MS);
+    const ends = new Promise<null>((resolve) => signal.addEventListener("abort", () => resolve(null), { once: true }));
+    const read = fetcher(`${origin}${APC_JSON_PATH}`, { credentials: "omit", redirect: "error", signal, headers: { accept: "application/json" } })
+      .then((r) => (r.ok ? readCapped(r, APC_JSON_MAX_BYTES) : null))
+      .then((text) => {
+        if (text === null) return null;
+        const parsed = parseApcManifest(JSON.parse(text), origin);
         return parsed.ok ? parsed.manifest.profiles : null;
       })
       .catch(() => null);
+    // The time limit covers the body too: a file that never ends gives null on time.
+    load = Promise.race([read, ends]);
     profileLoads.set(origin, load);
     void load.then((p) => p || profileLoads.delete(origin));
   }
@@ -46,14 +81,15 @@ export interface PinningOptions {
    */
   onUnknownAgent?: (drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget, element: Element) => void;
   /**
-   * APC 0.5: the profiles this app offers, as its apc.json says: a list, or a promise of one, such as
-   * `loadApcProfiles()`, which reads the page's own apc.json. An app without "dock" still takes the drop
-   * of an agent dragged from a dock, anywhere on the page and with or without acceptNativeDrops, and
-   * answers it with `onDockUnsupported` instead of `onUnknownAgent`: never a drop that silently does
-   * nothing. While the promise is pending, a dock agent's drop is taken and held until it settles, then
-   * answered or paired as the profiles say. A promise that gives null (no file) counts as offering Dock.
+   * APC 0.5: the profiles this app offers, as its apc.json says: a list; a promise of one; or a loader,
+   * such as `loadApcProfiles` itself, called now and again on a later dock drop if it gave nothing. An app
+   * without "dock" still takes the drop of an agent dragged from a dock, anywhere on the page and with or
+   * without acceptNativeDrops, and answers it with `onDockUnsupported` instead of `onUnknownAgent`: never
+   * a drop that silently does nothing. While the profiles load, a dock agent's drop is taken and held,
+   * then answered or paired as they say. When they cannot be read (null, an error, the time limit), the
+   * drop is never sent to pairing: it is answered as `unchecked` ("could not check this app").
    */
-  profiles?: readonly ApcRole[] | PromiseLike<readonly ApcRole[] | null>;
+  profiles?: readonly ApcRole[] | PromiseLike<readonly ApcRole[] | null> | (() => PromiseLike<readonly ApcRole[] | null>);
   /** For that answer: the app's name and the page where the person connects an agent directly (apc.json's `direct.connect`). */
   direct?: { name: string; connect: string | null };
   /** A dock agent dropped on an app that does not offer Dock. Without it, `showDockUnsupported` tells the person in the page. */
@@ -67,7 +103,12 @@ export interface DockUnsupported {
   target: FocusTarget | null;
   name: string;
   connect: string | null;
-  /** `directOnlyNote(name)`: the app's own words, on its own page. */
+  /**
+   * `direct_only`: the app's apc.json lists no "dock". `unchecked`: the page could not read its own
+   * apc.json, so it cannot tell, and it pairs nothing it cannot check.
+   */
+  reason: "direct_only" | "unchecked";
+  /** `directOnlyNote(name)`, or `couldNotCheckNote(name)`: the app's own words, on its own page. */
   message: string;
 }
 
@@ -238,24 +279,31 @@ export function enablePinning(options: PinningOptions): () => void {
   // target lights up for any APC agent; who it is and whether it may point there is checked on drop.
   let native: { current: { element: Element; target: FocusTarget } | null; depth: number } | null = null;
   // An app that does not offer Dock (APC 0.5) takes a dock agent's drop only to answer it. Its
-  // profiles are known (a list), still loading (a pending promise: `loading`), or unknown (null).
+  // profiles are known (a list), still loading (`loading`), could not be read (`unread`), or not given
+  // at all (undefined: the app takes dock agents as before 0.5).
   const given = options.profiles;
   const isPromise = (p: unknown): p is PromiseLike<readonly ApcRole[] | null> => !!p && typeof (p as PromiseLike<unknown>).then === "function";
-  let profiles: readonly ApcRole[] | null = isPromise(given) ? null : (given ?? null);
-  let loading = isPromise(given);
-  const ready: Promise<void> = isPromise(given)
-    ? Promise.resolve(given).then(
-        (p) => {
-          profiles = p ?? null;
-          loading = false;
-        },
-        () => {
-          loading = false;
-        },
-      )
-    : Promise.resolve();
+  let profiles: readonly ApcRole[] | null | undefined = Array.isArray(given) ? given : undefined;
+  let loading = false;
+  let ready: Promise<void> = Promise.resolve();
+  const load = (p: PromiseLike<readonly ApcRole[] | null>) => {
+    loading = true;
+    ready = Promise.resolve(p).then(
+      (v) => {
+        profiles = v ?? null;
+        loading = false;
+      },
+      () => {
+        profiles = null;
+        loading = false;
+      },
+    );
+  };
+  if (typeof given === "function") load(given());
+  else if (isPromise(given)) load(given);
+  const unread = () => profiles === null && !loading;
   const dockless = () => !!profiles && !profiles.includes("dock");
-  const isAgentDrag = (event: DragEvent) => !!event.dataTransfer && [...event.dataTransfer.types].includes(APC_AGENT_TYPE) && (!!options.acceptNativeDrops || dockless() || loading);
+  const isAgentDrag = (event: DragEvent) => !!event.dataTransfer && [...event.dataTransfer.types].includes(APC_AGENT_TYPE) && (!!options.acceptNativeDrops || dockless() || loading || unread());
   const nativeEnd = () => {
     native?.current?.element.classList.remove("apc-target");
     native = null;
@@ -280,7 +328,7 @@ export function enablePinning(options: PinningOptions): () => void {
     }
     // On a Direct-only app the drop is taken anywhere, so the person always gets the answer; so it is
     // while the app's profiles are still loading, since the drop is answered once they are known.
-    if (hit || dockless() || loading) {
+    if (hit || dockless() || loading || unread()) {
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "link";
     }
@@ -295,17 +343,24 @@ export function enablePinning(options: PinningOptions): () => void {
     const drag = parseAgentDrag(event.dataTransfer!.getData(APC_AGENT_TYPE));
     const hit = targetAt(event.clientX, event.clientY);
     nativeEnd();
-    // A dock agent dropped before the app's profiles are known: held until they are (the ticket lives 60 s).
-    if (drag?.hub && drag.ticket && loading) {
+    const fromDock = !!(drag?.hub && drag.ticket);
+    // Profiles that could not be read are asked again on this drop, when the app gave a loader.
+    if (fromDock && unread() && typeof given === "function") load(given());
+    // A dock agent dropped before the app's profiles are known: held until they are, within the
+    // loader's own time limit (loadApcProfiles: 3 s; the ticket lives 60 s).
+    if (fromDock && loading) {
       void ready.then(() => deliver(drag, hit));
       return;
     }
     deliver(drag, hit);
   };
   const deliver = (drag: AgentDrag | null, hit: { element: Element; target: FocusTarget } | null) => {
-    if (drag?.hub && drag.ticket && dockless()) {
+    // A dock agent on an app that does not offer Dock, or whose profiles could not be read: answered,
+    // never sent to pairing (an app that cannot check its own file pairs nothing on a guess).
+    if (drag?.hub && drag.ticket && (dockless() || unread())) {
       const name = options.direct?.name ?? "This app";
-      const answer: DockUnsupported = { drag, target: hit?.target ?? null, name, connect: options.direct?.connect ?? null, message: directOnlyNote(name) };
+      const reason = dockless() ? "direct_only" : "unchecked";
+      const answer: DockUnsupported = { drag, target: hit?.target ?? null, name, connect: options.direct?.connect ?? null, reason, message: reason === "direct_only" ? directOnlyNote(name) : couldNotCheckNote(name) };
       (options.onDockUnsupported ?? showDockUnsupported)(answer);
       return;
     }

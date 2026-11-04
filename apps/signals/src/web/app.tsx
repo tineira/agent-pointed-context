@@ -152,7 +152,7 @@ function Feed({ sid }: { sid: string }) {
         // APC 0.5: a Signals that offers only Direct answers a dock agent's drop with how to connect directly,
         // and opens its Connect panel. Its profiles come from its own apc.json, so a drop before the page's
         // state has loaded is answered right too (held until the file is read).
-        profiles: loadApcProfiles(),
+        profiles: () => loadApcProfiles(),
         direct: { name: "Signals", connect: `${location.origin}/?connect` },
         onDockUnsupported: (answer) => {
           setConnectOpen(true);
