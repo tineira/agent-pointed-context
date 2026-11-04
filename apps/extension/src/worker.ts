@@ -8,7 +8,7 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, includeSensitive, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -19,8 +19,21 @@ interface Drop {
   type: "drop";
   drag: { hub: string; agent: string; ticket: string };
   reading: unknown;
+  /** The drop's id, made in the page when the reading was taken: "Include them this time" names it (TIN-619). */
+  id?: string;
   /** The person's answer on the consent card, when the first try asked for one. */
   consent?: Consent;
+}
+
+/** The readings kept for "Include them this time", by their drop's id (Held): in session storage, memory only, so a sleeping service worker keeps them. */
+async function heldReadings(): Promise<Record<string, Held>> {
+  return ((await chrome.storage.session.get("held")).held ?? {}) as Record<string, Held>;
+}
+
+/** Keep a drop's reading for "Include them this time", or update it (its consent given). */
+async function hold(id: string, entry: Omit<Held, "at">): Promise<void> {
+  const held = await heldReadings();
+  await chrome.storage.session.set({ held: holdReading(held, id, { ...entry, at: held[id]?.at ?? Date.now() }, Date.now()) });
 }
 
 /** What the person chose for sensitive numbers (TIN-619): read at each drop, so a change takes effect on the next one. */
@@ -78,12 +91,13 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
   // A pin dragged to another paragraph of its page (TIN-471): the new reading, with no new consent.
   if (m?.type === "move" && typeof m.hub === "string" && typeof m.agent === "string") {
-    void handleMove(m.hub, m.agent, m.reading, false).then(reply);
+    void handleMove(m.hub, m.agent, m.reading, readingId(m.id)).then(reply);
     return true;
   }
-  // "Include them this time" (TIN-619): the same reading, captured at the drop, now with its sensitive values.
-  if (m?.type === "include" && typeof m.hub === "string" && typeof m.agent === "string") {
-    void handleMove(m.hub, m.agent, m.reading, true).then(reply);
+  // "Include them this time" (TIN-619): only the reading kept for that drop's id, never what the page sends now.
+  if (m?.type === "include") {
+    const id = readingId(m.id);
+    void (id ? handleInclude(id) : Promise.resolve<DropReply>({ status: "error" })).then(reply);
     return true;
   }
   // The pin on the page (TIN-469): whether the agent read the reading, and × to clear it.
@@ -168,6 +182,8 @@ interface DropReply {
   status: DropStatus;
   pin?: PinMark;
   sensitive?: Sensitive;
+  /** The drop this answers, so the page offers "Include them this time" for that drop and no other. */
+  id?: string;
 }
 
 /** What to say of sensitive values for a reading sent (or about to be) under this setting, or nothing when there were none. */
@@ -178,6 +194,7 @@ function sensitiveReply(count: number, mode: SensitiveMode, included: boolean): 
 async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   const { hub, agent, ticket } = m.drag;
   if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
+  const id = readingId(m.id);
   const mode = await sensitiveSetting();
   const include = includeSensitive(mode, false);
   // How many sensitive values the outline holds, whatever the setting does with them: the card says so.
@@ -186,39 +203,66 @@ async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   if (!without || !prepared) return { status: "error" };
   const { reading } = prepared;
   const sensitive = sensitiveReply(without.withheld, mode, include);
+  const offered = id && sensitive.sensitive?.offer;
+  // This drop's reading, kept as taken for "Include them this time": usable only once this drop's consent is given.
+  if (offered) await hold(id, { raw: m.reading, hub, agent, consented: false });
   const consented = await consent(new URL(reading.url).origin, m.consent);
-  if (consented !== true) return { status: consented, ...sensitive };
+  if (consented !== true) return { status: consented, ...sensitive, ...(id ? { id } : {}) };
+  if (offered) await hold(id, { raw: m.reading, hub, agent, consented: true });
   const key = readerKey(hub, agent);
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[key];
   if (token) {
     const sent = await send(hub, token, reading);
-    if (sent.result !== "not_paired") return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}), ...sensitive };
+    if (sent.result !== "not_paired") return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}), ...sensitive, ...(id ? { id } : {}) };
     // The person unpaired this browser in the dock, or the dock expired: ask again with this drag's ticket.
     delete tokens[key];
     await chrome.storage.local.set({ readers: tokens });
   }
   const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
-  if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error") };
-  void waitForAnswer(hub, agent, asked.claim, reading, tabId, sensitive);
-  return { status: await note(hub, reading.url, "asking") };
+  if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error"), ...(id ? { id } : {}) };
+  void waitForAnswer(hub, agent, asked.claim, reading, tabId, { ...sensitive, ...(id ? { id } : {}) });
+  return { status: await note(hub, reading.url, "asking"), ...(id ? { id } : {}) };
 }
 
 /**
  * A pin moved within its page (TIN-471): the person consented when they dropped the agent there, so
  * no card; the browser's token for that agent, so no ticket. Without a token, the person drags again.
- * With include, "Include them this time" (TIN-619): the reading captured at the drop, sent again with
- * its sensitive values, which only Ask per drop allows.
+ * Its reading is kept for "Include them this time" as a drop's is, consented with the drop.
  */
-async function handleMove(hub: string, agent: string, raw: unknown, includeThisTime: boolean): Promise<DropReply> {
+async function handleMove(hub: string, agent: string, raw: unknown, id: string | null): Promise<DropReply> {
   if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
   const mode = await sensitiveSetting();
-  if (includeThisTime && mode !== "ask") return { status: "error" };
-  const include = includeSensitive(mode, includeThisTime);
+  const include = includeSensitive(mode, false);
   const without = prepare(raw, false);
   const prepared = include ? prepare(raw, true) : without;
   if (!without || !prepared) return { status: "error" };
-  const { reading } = prepared;
+  const sensitive = sensitiveReply(without.withheld, mode, include);
+  if (id && sensitive.sensitive?.offer) await hold(id, { raw, hub, agent, consented: true });
+  return { ...(await sendWithToken(hub, agent, prepared.reading)), ...sensitive, ...(id ? { id } : {}) };
+}
+
+/**
+ * "Include them this time" (TIN-619): the reading kept for that drop's id, taken at the drop and sent
+ * again with its sensitive values, to that drop's dock and agent. Only under Ask per drop, only once
+ * that drop's consent was given, and once: a later drop never takes its place, and the page sends
+ * nothing but the id.
+ */
+async function handleInclude(id: string): Promise<DropReply> {
+  if ((await sensitiveSetting()) !== "ask") return { status: "error", id };
+  const held = await heldReadings();
+  const entry = heldForInclude(held, id, Date.now());
+  if (!entry) return { status: "error", id };
+  delete held[id];
+  await chrome.storage.session.set({ held });
+  if (!hubAllowed(entry.hub, __APC_DEV__)) return { status: "unknown_dock", id };
+  const prepared = prepare(entry.raw, true);
+  if (!prepared) return { status: "error", id };
+  return { ...(await sendWithToken(entry.hub, entry.agent, prepared.reading)), id };
+}
+
+/** Send a reading with this browser's token for that agent: no ticket, so without a token the person drags again. */
+async function sendWithToken(hub: string, agent: string, reading: PageReading): Promise<DropReply> {
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[readerKey(hub, agent)];
   if (!token) return { status: await note(hub, reading.url, "no_ticket") };
@@ -228,8 +272,9 @@ async function handleMove(hub: string, agent: string, raw: unknown, includeThisT
     await chrome.storage.local.set({ readers: tokens });
     return { status: await note(hub, reading.url, "no_ticket") };
   }
-  return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}), ...sensitiveReply(without.withheld, mode, include) };
+  return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}) };
 }
+
 
 /**
  * The person's consent for this site (13.3): true to send, or what the content script shows instead
@@ -263,7 +308,7 @@ async function consent(origin: string, answer: Consent | undefined): Promise<tru
 }
 
 /** Poll the dock until the person answers; then send the held reading, or drop it. */
-async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, tabId: number, sensitive: { sensitive?: Sensitive }): Promise<void> {
+async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, tabId: number, about: { sensitive?: Sensitive; id?: string }): Promise<void> {
   const until = Date.now() + ASK_MS;
   let status: DropStatus = "timeout";
   let pin: PinMark | undefined;
@@ -285,7 +330,7 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     break;
   }
   await note(hub, reading.url, status);
-  await chrome.tabs.sendMessage(tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(status === "sent" ? sensitive : {}) }).catch(() => {});
+  await chrome.tabs.sendMessage(tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(about.id ? { id: about.id } : {}), ...(status === "sent" && about.sensitive ? { sensitive: about.sensitive } : {}) }).catch(() => {});
 }
 
 

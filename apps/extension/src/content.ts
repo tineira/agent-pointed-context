@@ -13,13 +13,11 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
-import { altText, cardOf, CARD_CONTROLS_MAX, controlVisible, formState, tableContext, type Control, type Seen } from "./read.ts";
+import { altText, ANYWHERE, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, intersect, OPACITY_MIN, showsIn, tableContext, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
 const FIELDS = "input,textarea,select,option,[contenteditable=''],[contenteditable='true']";
-/** What renders as something other than its words (TIN-422): innerText gives glyphs for these, or nothing. */
-const REPLACED = "img,math,svg";
 const TEXT_MAX = 2048;
 const HEADER_MAX = 200;
 /** A box of text bigger than this is most of the page, not what the person pointed at. */
@@ -72,8 +70,8 @@ interface Target {
 }
 
 function listen(): void {
-  /** The last drop's place and reading: its pin may come later, once the person allowed this browser in the dock. */
-  let pending: { target: Target; reading: Reading; x: number; y: number } | null = null;
+  /** Each drop's place, by its id: its pin and its "Include them this time" may come later, once the person allowed this browser in the dock. */
+  const pending = new Map<string, { target: Target; x: number; y: number }>();
   let lit: HTMLElement | null = null;
   let litOutline = "";
   // A copy left from before the extension was reloaded or updated has lost its extension: it stands
@@ -143,24 +141,28 @@ function listen(): void {
 
   /**
    * Any other page's drop: read what was outlined, then send it. The page's own handlers still see the
-   * drop. The reading is taken once, here: "Include them this time" sends this same one again.
+   * drop. The reading is taken once, here, under an id: the service worker keeps it by that id, and
+   * "Include them this time" names the id, never another drop's reading.
    */
   const onPageDrop = (e: DragEvent, outlined: Element | null) => {
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
     if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock");
-    const scope = outlined?.isConnected ? outlined : scopeOf(deepElementAt(e.clientX, e.clientY), elementAt(e.clientX, e.clientY));
-    const reading = readAt(e.clientX, e.clientY, scope);
-    const target: Target = { anchor: scope, x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
-    pending = { target, reading, x: e.clientX, y: e.clientY };
+    // The page took away what was outlined: what is under the pointer now is not what the person saw outlined, so nothing goes.
+    if (outlined && !outlined.isConnected) return say("outline_changed");
+    const reading = readAt(e.clientX, e.clientY, outlined);
+    const id = crypto.randomUUID();
+    const target: Target = { anchor: outlined, x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
+    pending.set(id, { target, x: e.clientX, y: e.clientY });
     const send = (consent?: Consent) =>
       chrome.runtime
-        .sendMessage<Reply>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
+        .sendMessage<Reply>({ type: "drop", id, drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
         .then((r) => {
           const status = r?.status ?? "error";
           if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send, r?.sensitive);
-          sent(r ?? { status }, target, reading, e.clientX, e.clientY);
+          if (status !== "asking") pending.delete(id);
+          sent(r ?? { status }, target, e.clientX, e.clientY);
         })
         .catch(() => say("error"));
     void send();
@@ -205,8 +207,11 @@ function listen(): void {
   chrome.runtime.onMessage.addListener((m) => {
     const msg = m as Reply & { type?: string };
     if (msg.type !== "status" || !msg.status || !(msg.status in STATUS_TEXT)) return;
-    if (pending) sent(msg, pending.target, pending.reading, pending.x, pending.y);
-    else say(msg.status);
+    // The drop this word is about, by its id: never whichever drop came last.
+    const drop = msg.id ? pending.get(msg.id) : undefined;
+    if (!drop) return say(msg.status);
+    pending.delete(msg.id!);
+    sent(msg, drop.target, drop.x, drop.y);
   });
 }
 
@@ -216,17 +221,20 @@ interface Reply {
   pin?: PinMark;
   /** The sensitive values the outline held (TIN-619): how many, the setting, and whether the person may still include them. */
   sensitive?: { count: number; mode: SensitiveMode; offer: boolean };
+  /** The drop it is about (its reading's id). */
+  id?: string;
 }
 
 /**
  * After a reading went (or did not): the note, the pin, and under Ask per drop, when sensitive values
- * were left out, the card that offers to send this same reading with them (TIN-619).
+ * were left out, the card that offers to send that drop's reading with them (TIN-619): it names the
+ * drop's id, and the service worker sends the reading it kept for that id.
  */
-function sent(r: Reply, target: Target, reading: Reading, x: number, y: number): void {
-  if (r.status === "sent" && r.sensitive?.offer) {
+function sent(r: Reply, target: Target, x: number, y: number): void {
+  if (r.status === "sent" && r.sensitive?.offer && r.id) {
     offerInclude(r.sensitive.count, x, y, () =>
       chrome.runtime
-        .sendMessage<Reply>({ type: "include", hub: target.hub, agent: target.agent, reading })
+        .sendMessage<Reply>({ type: "include", id: r.id })
         .then((again) => {
           say(again?.status ?? "error");
           if (again?.status === "sent" && again.pin) pin(target, again.pin);
@@ -386,15 +394,35 @@ function rendered(el: Element): boolean {
   return style.visibility === "visible" && (!el.parentElement || rendered(el.parentElement));
 }
 
+/** Elements whose text is not page text: a form's values go as fields (formIn), scripts and templates never. */
+const NOT_TEXT = "select,textarea,option,datalist,input,script,style,noscript,template";
+
+/** An element's box in the viewport. */
+const boxOf = (el: Element): Rect => el.getBoundingClientRect();
+
+/** What clips an element: the boxes around it, across shadow roots, that clip what overflows them (overflow other than visible). */
+function clipOf(el: Element): Rect {
+  let clip = ANYWHERE;
+  for (let at = parentOf(el); at && at !== document.documentElement; at = parentOf(at)) {
+    const style = getComputedStyle(at);
+    if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, boxOf(at));
+  }
+  return clip;
+}
+
+/** Where what an outline shows can be: inside the outlined element's box, cut to what clips it. */
+const outlineBox = (scope: Element): Rect => intersect(boxOf(scope), clipOf(scope));
+
 /**
- * An element's text as the person reads it, with images and formulas giving their alternative text in
- * place (TIN-422). Stops soon after max characters. Without any of those it is simply innerText; with
- * them it walks what is rendered, since a formula often sits next to a hidden copy of itself.
+ * An element's text as the person sees it (TIN-422, TIN-619), with images and formulas giving their
+ * alternative text in place. Stops soon after max characters. It walks what is rendered, not innerText,
+ * which gives text nobody can see: text in an element (or under ancestors) under 0.1 opacity, through
+ * `opacity` or `filter: opacity()`; in a transparent colour; clipped away (`clip`, `clip-path`); or outside
+ * the element's own box, or cut off by a box around it that clips what overflows it. A formula often
+ * sits next to a hidden copy of itself.
  */
 function readable(el: Element, max: number): string {
-  // innerText gives a hidden element's text too, and a table's header row can be hidden.
   if (!rendered(el)) return "";
-  if (!el.matches(REPLACED) && !el.querySelector(REPLACED)) return (el as HTMLElement).innerText ?? el.textContent ?? "";
   const parts: string[] = [];
   let size = 0;
   /** The last alternative text, until words follow it: Wikipedia clips a formula's MathML out of sight beside an image of it, with the same text. */
@@ -404,28 +432,43 @@ function readable(el: Element, max: number): string {
     size += text.length;
     if (text.trim()) lastAlt = null;
   };
-  const walk = (e: Element) => {
-    if (size > max || !rendered(e)) return;
+  const range = document.createRange();
+  /** Whether a text node draws anything inside the clip. */
+  const shows = (node: Text, clip: Rect) => {
+    range.selectNodeContents(node);
+    return [...range.getClientRects()].some((r) => showsIn(r, clip));
+  };
+  const parent = parentOf(el);
+  const walk = (e: Element, opacity: number, clip: Rect) => {
+    if (size > max || !rendered(e) || e.matches(NOT_TEXT)) return;
+    const style = getComputedStyle(e);
+    const seen = opacity * Number(style.opacity) * filterOpacity(style.filter);
+    if (seen < OPACITY_MIN || clipPathHides(style.clipPath)) return;
+    if ((style.position === "absolute" || style.position === "fixed") && style.clip !== "auto" && style.clip !== "") return;
     const alt = altText(e);
     if (alt !== null) {
-      if (alt !== lastAlt) add(alt);
+      if (alt !== lastAlt && showsIn(boxOf(e), clip)) add(alt);
       lastAlt = alt;
       return;
     }
-    const apart = e.tagName === "BR" || !getComputedStyle(e).display.startsWith("inline");
+    const inner = style.overflowX !== "visible" || style.overflowY !== "visible" ? intersect(clip, boxOf(e)) : clip;
+    const inked = Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)) >= OPACITY_MIN;
+    const apart = e.tagName === "BR" || !style.display.startsWith("inline");
     if (apart) add(" ");
     for (const node of e.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) add(node.textContent ?? "");
-      else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element);
+      if (size > max) break;
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent ?? "";
+        if (!text.trim()) add(text);
+        else if (inked && shows(node as Text, inner)) add(text);
+      } else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element, seen, inner);
     }
     if (apart) add(" ");
   };
-  walk(el);
+  walk(el, parent ? effectiveOpacity(parent) : 1, intersect(boxOf(el), clipOf(el)));
   return parts.join("");
 }
 
-/** A reading as the content script takes it: the service worker shapes it, and the hub again. */
-type Reading = ReturnType<typeof readAt>;
 
 /**
  * What the person pointed at (TIN-619): what the outline covered (scope), its text, the heading above it
@@ -498,7 +541,8 @@ function deepElementAt(x: number, y: number): Element | null {
 
 /**
  * The form state inside the outline (TIN-619): every control in it, its open shadow roots too, the one
- * under the pointer (or the one its label names) marked; formState keeps those the person can see.
+ * under the pointer (or the one its label names) marked; formState keeps those the person can see, inside
+ * the outlined box and not cut off by a box around them.
  */
 function formIn(scope: Element | null, x: number, y: number) {
   if (!scope) return null;
@@ -506,15 +550,18 @@ function formIn(scope: Element | null, x: number, y: number) {
   const label = under?.closest("label");
   const pointed = under?.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
   const found = controlsIn(scope, CONTROLS_SCANNED) ?? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED);
-  const controls = found.map((el) => describe(el, el === pointed)).filter((c): c is Control => c !== null);
+  const outline = outlineBox(scope);
+  const controls = found.map((el) => describe(el, el === pointed, outline)).filter((c): c is Control => c !== null);
   return formState(controls);
 }
 
-
-/** An element's opacity times its ancestors', across shadow roots. */
+/** An element's opacity times its ancestors', across shadow roots, `filter: opacity()` included. */
 function effectiveOpacity(el: Element): number {
   let opacity = 1;
-  for (let at: Element | null = el; at && opacity > 0; at = at.parentElement ?? ((at.getRootNode() as ShadowRoot).host ?? null)) opacity *= Number(getComputedStyle(at).opacity);
+  for (let at: Element | null = el; at && opacity > 0; at = parentOf(at)) {
+    const style = getComputedStyle(at);
+    opacity *= Number(style.opacity) * filterOpacity(style.filter);
+  }
   return opacity;
 }
 
@@ -527,8 +574,8 @@ function alpha(color: string): number {
   return m[1]!.endsWith("%") ? Number(m[1]!.slice(0, -1)) / 100 : Number(m[1]);
 }
 
-/** What visuallyHidden needs of an element. */
-function seenOf(el: Element): Seen {
+/** What visuallyHidden needs of an element; with an outline, whether its box shows inside it, cut to what clips it. */
+function seenOf(el: Element, outline?: Rect): Seen {
   const style = getComputedStyle(el);
   const box = el.getBoundingClientRect();
   const page = document.documentElement;
@@ -548,18 +595,19 @@ function seenOf(el: Element): Seen {
     clip: style.clip,
     clipPath: style.clipPath,
     ariaHidden: !!el.closest('[aria-hidden="true"]'),
+    ...(outline ? { inOutline: showsIn(box, intersect(outline, clipOf(el))) } : {}),
   };
 }
 
 /** A control as formState takes it, or null: a hidden input, or not a control. */
-function describe(el: Element, pointed: boolean): Control | null {
+function describe(el: Element, pointed: boolean, outline: Rect): Control | null {
   if (el instanceof HTMLInputElement && el.type === "hidden") return null;
   const labels = "labels" in el ? [...((el as HTMLInputElement).labels ?? [])] : [];
   const nativeChoice = el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox");
   const typed = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !nativeChoice);
   // A choice is seen through a label the person sees; a typed field only by itself.
   // Only a native radio or checkbox may be seen through its label (custom widgets); anything else must be seen itself.
-  const visible = controlVisible(nativeChoice, typed, seenOf(el), nativeChoice ? labels.map(seenOf) : []);
+  const visible = controlVisible(nativeChoice, typed, seenOf(el, outline), nativeChoice ? labels.map((l) => seenOf(l, outline)) : []);
   const attr = (name: string) => el.getAttribute(name);
   const base = { label: labelOf(el, labels), group: null, groupKey: null, name: attr("name"), id: el.id || null, autocomplete: attr("autocomplete"), placeholder: attr("placeholder"), checked: false, value: "", pointed, visible };
   if (el instanceof HTMLInputElement) {
@@ -887,13 +935,19 @@ function pin(target: Target, mark: PinMark): void {
   });
   moveWith(markEl, badge, place, (x, y, outlined) => {
     // What was outlined on this page: send its reading with the browser's token, no new consent (TIN-471, TIN-619).
-    const anchor = outlined?.isConnected ? outlined : scopeOf(deepElementAt(x, y), elementAt(x, y));
+    // Taken away by the page before the release: nothing goes, and the pin goes back.
+    if (outlined && !outlined.isConnected) {
+      say("outline_changed");
+      return false;
+    }
+    const anchor = outlined;
     if (!anchor || anchor === target.anchor) return false;
     const reading = readAt(x, y, anchor);
+    const id = crypto.randomUUID();
     const moved: Target = { anchor, x: x + scrollX, y: y + scrollY, hub: target.hub, agent: target.agent };
     void chrome.runtime
-      .sendMessage<Reply>({ type: "move", hub: target.hub, agent: target.agent, reading })
-      .then((r) => sent(r ?? { status: "error" }, moved, reading, x, y))
+      .sendMessage<Reply>({ type: "move", id, hub: target.hub, agent: target.agent, reading })
+      .then((r) => sent(r ?? { status: "error" }, moved, x, y))
       .catch(() => say("error"));
     return true;
   });

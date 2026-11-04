@@ -273,7 +273,7 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 }
 
 /** What the content script tells the person after a drop. */
-export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here";
+export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed";
 
 /** The link on the card for a Direct-only app. */
 export const connectLabel = (host: string) => `Connect an agent on ${host}`;
@@ -295,6 +295,40 @@ export const sensitiveMode = (value: unknown): SensitiveMode => (value === "send
 /** Whether a reading goes with its sensitive values: by the setting, or "Include them this time" under Ask per drop. */
 export function includeSensitive(mode: SensitiveMode, includeThisTime: boolean): boolean {
   return mode === "send" || (mode === "ask" && includeThisTime);
+}
+
+/**
+ * A reading the service worker keeps for "Include them this time" (TIN-619): exactly the one taken at
+ * that drop, with its sensitive values, for that drop's dock and agent, and whether that drop's consent
+ * was given. Kept by the drop's id in chrome.storage.session (memory only), at most HELD_MAX of them and
+ * HELD_MS each, so a later drop never replaces it and an Include never sends another drop.
+ */
+export interface Held {
+  raw: unknown;
+  hub: string;
+  agent: string;
+  consented: boolean;
+  at: number;
+}
+export const HELD_MS = 2 * 60_000;
+export const HELD_MAX = 10;
+
+/** A drop's id as the content script makes it (crypto.randomUUID). */
+export const readingId = (value: unknown): string | null => (typeof value === "string" && /^[0-9a-f-]{36}$/.test(value) ? value : null);
+
+/** The held readings with this one kept (or updated), the old ones and the oldest past HELD_MAX gone. */
+export function holdReading(held: Readonly<Record<string, Held>>, id: string, entry: Held, now: number): Record<string, Held> {
+  const kept = Object.entries({ ...held, [id]: entry })
+    .filter(([, h]) => now - h.at < HELD_MS)
+    .sort(([, a], [, b]) => b.at - a.at)
+    .slice(0, HELD_MAX);
+  return Object.fromEntries(kept);
+}
+
+/** The reading "Include them this time" may send for this id: only one whose drop the person consented to, still kept. */
+export function heldForInclude(held: Readonly<Record<string, Held>>, id: string, now: number): Held | null {
+  const h = held[id];
+  return h && h.consented && now - h.at < HELD_MS ? h : null;
 }
 
 /** "1 sensitive value", "3 sensitive values". */
@@ -340,4 +374,5 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   consent_update: `New: the outline is what goes. ${FORM_NOTE} Send this to your agent? ${PASSES_THROUGH} This asks once: your setting for this site stays unless you choose Not here.`,
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
+  outline_changed: "The page changed what was outlined: nothing was sent. Drop again.",
 };

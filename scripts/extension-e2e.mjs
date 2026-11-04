@@ -94,6 +94,8 @@ const ticket = async () => (await api(`${base}/agents/${agent.id}/ticket`, {})).
 const PAGE = `<!doctype html><title>Churn notes</title><h1>Churn notes</h1><h2>EU-West</h2>
 <p id="a">Churn in EU-West rose 4.2% in March, after the Nimbus offer.</p>
 <p id="b">Signups from the SPRING code were mostly Pro.</p>
+<p id="c">Refund to card 4111 1111 1111 1111 by Friday.</p>
+<p id="d">Wire the deposit to DE89 3704 0044 0532 0130 00 today.</p>
 <input id="secret" value="hunter2">`;
 // An APC app, as Pulse is: targets (data-focus) that take the drop, and text around them that does not.
 const APC = `<!doctype html><title>APC-like app</title><h1>Churn</h1><p id="note">Text of the app, outside any target.</p>
@@ -137,7 +139,11 @@ const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>You
 <input type="hidden" name="csrf" value="HIDDENTOKEN">${'<input type="hidden" name="tracking" value="t">'.repeat(20)}
 <label for="rt" id="rt-label">Promo note</label> <input id="rt" role="textbox" value="ROLEVALUE" style="opacity:0;position:absolute">
 <p id="promo" style="position:relative">Promo codes apply at the end.<input id="bait" name="data" value="BAITVALUE" style="opacity:0.02;position:absolute;left:0;top:0;width:100%;height:100%"></p>
+<span style="opacity:0">SPANSECRET</span><span style="filter:opacity(0)">FILTERSECRET</span><span style="color:transparent">INKLESS</span>
+<div style="height:24px;overflow:hidden"><div style="height:24px">Billing extras</div><label>Clipped <input name="clipped" value="CLIPPEDVALUE"></label></div>
+<input id="below" name="below" value="BELOWVALUE" style="position:absolute;left:20px;top:2400px">
 <p id="total">Total: $42.00</p></form>
+<p id="gone">This paragraph goes away while the agent is dragged over it.</p>
 <cvv-box id="cvv" style="display:block;width:200px"></cvv-box>
 <script>
 customElements.define("cvv-box", class extends HTMLElement {
@@ -249,6 +255,7 @@ try {
           await sleep(1500);
         },
         buttons,
+        sid,
         click: async (value) => {
           // The card comes once the service worker answered, which takes longer when it was asleep.
           const nodeId = await until(`a ${value} button on the card`, async () => (await buttons()).get(value), 10_000);
@@ -267,15 +274,44 @@ try {
         return re.test(r?.page_text ?? "") && (!host || r.app?.origin?.includes(host)) ? r : null;
       });
 
-    // C1. A new site asks on the card; Just this once sends (and the dock asks the first time).
+    // C1. A new site asks on the card; Just this once sends (and the dock asks the first time). The first drop is on a
+    // card number: it is left out, and once the browser is allowed, "Include them this time" offers it. Meanwhile a
+    // second drop waits on its own card: Include sends the first drop's reading, never the second's (TIN-619, Grok's review).
     const a = await open("a.localhost");
-    await a.drop("#a");
+    await a.drop("#c");
     assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "never", "once"]);
     await a.click("once");
     const pending = await until("a reader request in the dock", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
+    await a.drop("#d");
+    assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "never", "once"], "the second drop waits on its own card");
     await api(`${base}/pairings/${pending.id}`, { action: "approve" });
-    await reads(/EU-West rose/, "a.localhost");
-    console.log("C1. a new site asks; Just this once sends");
+    assert.match((await reads(/Refund to card/, "a.localhost")).page_text, /Refund to card \[sensitive number left out\] by Friday\./);
+    /** The "Include them this time" card's buttons, through its closed shadow root. */
+    const includeAt = async (value) => {
+      const nodeId = await until(`the ${value} button of the sent card`, async () => {
+        const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, a.sid);
+        let found = null;
+        const walk = (n) => {
+          const at = (n.attributes ?? []).indexOf("data-apc-include");
+          if (at >= 0 && n.attributes[at + 1] === value) found = n.nodeId;
+          for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+        };
+        walk(root);
+        return found;
+      }, 15_000);
+      const q = (await cdp("DOM.getBoxModel", { nodeId }, a.sid)).model.content;
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2, button: "left", clickCount: 1 }, a.sid);
+      await sleep(1500);
+    };
+    await includeAt("include");
+    const included = await reads(/Refund to card 4111 1111 1111 1111/, "a.localhost");
+    assert.doesNotMatch(included.page_text, /DE89|Wire the deposit/, "Include sent the first drop's reading, not the second's");
+    assert.ok((await a.buttons()).has("once"), "the second drop's card is still unanswered");
+    // The second drop, answered now, goes with its number left out.
+    await a.click("once");
+    assert.match((await reads(/Wire the deposit/, "a.localhost")).page_text, /Wire the deposit to \[sensitive number left out\] today\./);
+    await includeAt("dismiss");
+    console.log("C1. a new site asks; Just this once sends; Include them this time sends that drop's reading, never a later one's");
 
     // C2. Just this once asked again; Always on this site sends and is kept.
     await a.drop("#b");
@@ -653,7 +689,8 @@ try {
       await until(`the setting ${value}`, async () => (await cdp("Runtime.evaluate", { expression: "chrome.storage.local.get('sensitive').then((s) => s.sensitive)", awaitPromise: true, returnByValue: true }, popupSession)).result.value === value);
       await cdp("Target.closeTarget", { targetId: popupId });
     };
-    const NEVER = ["hunter2", "HIDDENTOKEN", "BAITVALUE", "ROLEVALUE", "123\n"];
+    // Never in any reading: a password, hidden inputs and fields, text nobody can see, and what a box clips away or the outline leaves out.
+    const NEVER = ["hunter2", "HIDDENTOKEN", "BAITVALUE", "ROLEVALUE", "123\n", "SPANSECRET", "FILTERSECRET", "INKLESS", "CLIPPEDVALUE", "BELOWVALUE", "Clipped"];
     const SENSITIVE = ["4111", "４１１１", "12.345", "de89"];
     const noneOf = (text, list) => {
       for (const secret of list) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
@@ -666,10 +703,10 @@ try {
     assert.match(total, /Pointed at \(p\): Total: \$42\.00\nSelected: before noon\nThe selection is under the heading: Your order\nThe selection is in: Orders placed before noon ship the same day\.$/);
     assert.doesNotMatch(total, /Form fields/, "the outline was the paragraph");
     noSecret(total);
-    // A selection of a card number printed on the page: left out, and the card offers it.
+    // A selection of a card number printed on the page: the number left out, the rest of the selection kept, and the card offers it.
     await inCheckout(`(() => { const label = [...document.querySelectorAll("label")].find((l) => l.textContent.includes("Visa")); const r = document.createRange(); r.selectNodeContents(label.lastChild); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
     const selectedCard = await dropOnCheckout("#total");
-    assert.match(selectedCard, /\nSelected: \(selection left out as sensitive\)/);
+    assert.match(selectedCard, /\nSelected: Visa \[sensitive number left out\]/);
     noSecret(selectedCard);
     assert.equal(await until("the sent card", () => cardText(checkout), 10_000), "Sent to your agent. 1 sensitive value left out.");
     let prior = (await latestReading()).reading.taken_at;
@@ -713,6 +750,16 @@ try {
     const role = await dropOnCheckout("#rt-label");
     assert.match(role, /Pointed at \(label\): Promo note$/);
     noSecret(role);
+    // A page that takes away what was outlined before the drop: nothing is read in its place, and nothing is sent (Grok's review).
+    const gonePoint = await inCheckout(`(() => { const r = document.querySelector("#gone").getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`);
+    const goneDrag = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x: gonePoint.x, y: gonePoint.y, data: goneDrag }, checkout);
+    assert.match(await inCheckout(`document.querySelector("#gone").style.outline`), /solid/);
+    prior = (await latestReading()).reading.taken_at;
+    await inCheckout(`(() => { const p = document.querySelector("#gone"); const q = document.createElement("form"); q.innerHTML = '<input name="other" value="REPLACEDVALUE" style="width:600px;height:40px">'; p.replaceWith(q); })()`);
+    await cdp("Input.dispatchDragEvent", { type: "drop", x: gonePoint.x, y: gonePoint.y, data: goneDrag }, checkout);
+    await sleep(2500);
+    assert.equal((await latestReading()).reading.taken_at, prior, "nothing was sent for a detached outline");
     // The form outlined whole, by a drop on its margin: every field the person can see, with what was typed in each.
     // The outline is drawn on the form while the agent is dragged there, and the drop reads that.
     const margin = { x: 8, y: 8 };

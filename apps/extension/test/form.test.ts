@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { chooseSensitive, CODE_LEFT_OUT, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, LEFT_OUT, NUMBER_LEFT_OUT, readingText, shapeReading, shapeReadingCounted } from "../../dock/src/worker/reading.ts";
 import { includeSensitive, type SensitiveMode } from "../src/drop.ts";
-import { cardOf, classify, controlVisible, FIELDS_SENT, formState, visuallyHidden, type Control, type Seen } from "../src/read.ts";
+import { ANYWHERE, cardOf, classify, controlVisible, FIELDS_SENT, filterOpacity, formState, showsIn, visuallyHidden, type Control, type Seen } from "../src/read.ts";
 
 const shown: Seen = { checkVisible: true, opacity: 1, textAlpha: 1, width: 200, height: 24, left: 10, top: 10, right: 210, bottom: 34, pageWidth: 1200, pageHeight: 900, position: "static", clip: "auto", clipPath: "none", ariaHidden: false };
 
@@ -172,7 +172,11 @@ test("a field the person cannot see is never read, not even its label: transpare
     ["clip on an absolute box", { position: "absolute", clip: "rect(0px, 0px, 0px, 0px)" }],
     ["clip-path inset", { clipPath: "inset(50%)" }],
     ["aria-hidden", { ariaHidden: true }],
+    ["outside the outline, or cut off by a box that clips its overflow (Grok's review)", { inOutline: false }],
   ] as const) assert.equal(visuallyHidden({ ...shown, ...over }), true, why);
+  assert.equal(visuallyHidden({ ...shown, inOutline: true }), false);
+  // A native checkbox outside the outline is not seen through a label that is outside it too.
+  assert.equal(controlVisible(true, false, { ...shown, inOutline: false }, [{ ...shown, inOutline: false }]), false);
   // Transparent text counts for a field one types in, not for a radio.
   assert.equal(visuallyHidden({ ...shown, textAlpha: 0 }, true), true);
   assert.equal(visuallyHidden({ ...shown, textAlpha: 0 }), false);
@@ -180,6 +184,19 @@ test("a field the person cannot see is never read, not even its label: transpare
   const state = sent([typed("Promo", "BAITVALUE", { visible: false, pointed: true }), typed("csrf", "HIDDENTOKEN", { type: "hidden" }), typed("Notes", "Leave at the door")]);
   assert.deepEqual(state.form!.fields, [{ label: "Notes", value: "Leave at the door", kind: "typed", pointed: false }]);
   assert.doesNotMatch(state.text, /BAIT|HIDDEN|Promo|csrf/);
+});
+
+test("what the outline shows is its box cut to what clips it, and filter: opacity() counts as opacity (TIN-619, Grok's review)", () => {
+  const outline = { left: 0, top: 0, right: 400, bottom: 300 };
+  assert.equal(showsIn({ left: 10, top: 10, right: 210, bottom: 34 }, outline), true);
+  assert.equal(showsIn({ left: 10, top: 2000, right: 210, bottom: 2024 }, outline), false, "below the form's box, still on the page");
+  // An overflow: hidden box 20 px high around a field pushed below it.
+  assert.equal(showsIn({ left: 10, top: 40, right: 210, bottom: 64 }, { left: 0, top: 10, right: 400, bottom: 30 }), false);
+  assert.equal(showsIn({ left: 10, top: 10, right: 210, bottom: 34 }, ANYWHERE), true);
+  assert.equal(showsIn({ left: 10, top: 10, right: 11, bottom: 34 }, outline), false, "1 px wide");
+  assert.equal(filterOpacity("none"), 1);
+  assert.equal(filterOpacity("opacity(0)"), 0);
+  assert.equal(filterOpacity("blur(2px) opacity(50%)"), 0.5);
 });
 
 test("only a native radio or checkbox is seen through a label the person sees; a select, a typed field or a role never is (second review)", () => {

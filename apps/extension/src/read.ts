@@ -154,10 +154,41 @@ export interface Seen {
   clipPath: string;
   /** It or an ancestor has aria-hidden="true". */
   ariaHidden: boolean;
+  /**
+   * Whether its box shows inside the outlined element's box, once cut to every box around it that clips
+   * what overflows it (showsIn); undefined when no outline is in question.
+   */
+  inOutline?: boolean;
 }
 
 /** Below this effective opacity, an element is taken as not seen. */
 export const OPACITY_MIN = 0.1;
+
+/** A box in the viewport's coordinates. */
+export interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+/** Everywhere: what an element is clipped to when nothing clips it. */
+export const ANYWHERE: Rect = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+export const intersect = (a: Rect, b: Rect): Rect => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+/** Whether a box shows inside a clip by more than a pixel each way: the person can see some of it. */
+export const showsIn = (box: Rect, clip: Rect): boolean => {
+  const i = intersect(box, clip);
+  return i.right - i.left > 1 && i.bottom - i.top > 1;
+};
+
+/** What a CSS filter does to opacity: opacity(0.5) or opacity(50%), multiplied; 1 without one. */
+export function filterOpacity(filter: string): number {
+  let out = 1;
+  for (const m of filter.matchAll(/opacity\(\s*([\d.]+)(%?)\s*\)/g)) out *= m[2] ? Number(m[1]) / 100 : Number(m[1]);
+  return out;
+}
+
+/** Whether a clip-path leaves nothing of an element to see. */
+export const clipPathHides = (clipPath: string) => /inset\(\s*(50|100)%|circle\(\s*0|polygon\(\s*0px 0px\s*\)/.test(clipPath);
 
 /**
  * Whether the person cannot see an element (TIN-571): not rendered, nearly transparent (an effective
@@ -171,7 +202,9 @@ export function visuallyHidden(s: Seen, typed = false): boolean {
   if (s.width <= 1 || s.height <= 1) return true;
   if (s.right <= 0 || s.bottom <= 0 || s.left >= s.pageWidth || s.top >= s.pageHeight) return true;
   if ((s.position === "absolute" || s.position === "fixed") && s.clip !== "auto" && s.clip !== "") return true;
-  return /inset\(\s*(50|100)%|circle\(\s*0|polygon\(\s*0px 0px\s*\)/.test(s.clipPath);
+  if (clipPathHides(s.clipPath)) return true;
+  // Outside the outline, or cut off by a box around it that clips what overflows it (TIN-619).
+  return s.inOutline === false;
 }
 
 /**

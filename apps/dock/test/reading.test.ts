@@ -154,9 +154,9 @@ test("the second review's bypasses are held back: any dash, zero-width character
     assert.equal(typed.form!.fields[0]!.value, "(left out as sensitive)", why);
     assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Saved", value: text, kind: "choice" }] } })!.form!.left_out, 1, why);
   }
-  // In a block of page text, 12 digits count within 24 characters, so an article with dates and figures still goes.
-  assert.equal(textSecret("Card 4111 then a1111 b1111 c1111 at the end", true), true);
-  assert.equal(textSecret("In 2025 sales rose 12% to 340 units; in 2026 they reached 512 units across 7 regions and 19 stores.", true), false);
+  // In visible text, a card number is found by what it is (redactNumbers), so an article with dates and figures still goes.
+  assert.equal(redactNumbers("Card 4111 then 1111 b 1111 c-1111 at the end").count, 1);
+  assert.equal(redactNumbers("In 2025 sales rose 12% to 340 units; in 2026 they reached 512 units across 7 regions and 19 stores.").count, 0);
   const held = shapeReading({ ...raw, selection: "Pay", selection_context: { heading: "Payment", text: "Pay to ｄｅ８９ ３７０４ ００４４ ０５３２ ０１３０ ００" } })!;
   assert.deepEqual(held.selection_context, { heading: "Payment", text: `Pay to ${NUMBER_LEFT_OUT}` });
 });
@@ -175,9 +175,13 @@ test("a selection that holds a secret number is not sent, nor where it is: the r
   assert.equal(r.selection_context, null);
   assert.match(readingText(r), /\nSelected: \(selection left out as sensitive\)$/);
   assert.doesNotMatch(JSON.stringify(r), /4111/);
-  for (const selection of ["1.234.567-К", "de89 3704 0044 0532 0130 00"]) assert.equal(shapeReading({ ...raw, selection })!.selection, SELECTION_LEFT_OUT, selection);
-  // An ordinary selection with a few figures goes.
-  assert.equal(shapeReading({ ...raw, selection: "Churn rose 4.2% in March 2026" })!.selection, "Churn rose 4.2% in March 2026");
+  for (const selection of ["1.000.005-К", "de89 3704 0044 0532 0130 00", "4111, 1111, 1111, 1111."]) assert.equal(shapeReading({ ...raw, selection })!.selection, SELECTION_LEFT_OUT, selection);
+  // A selection with more than the number keeps the rest, the number left out (TIN-619).
+  const around = shapeReading({ ...raw, selection: "Pay 4111 1111 1111 1111 today", selection_context: { heading: "Billing", text: "Total due" } })!;
+  assert.equal(around.selection, `Pay ${NUMBER_LEFT_OUT} today`);
+  assert.deepEqual(around.selection_context, { heading: "Billing", text: "Total due" });
+  // An ordinary selection with a few figures goes, and so do a date and a phone number's groups (Grok's P2).
+  for (const selection of ["Churn rose 4.2% in March 2026", "2026-11-04", "1234 5678"]) assert.equal(shapeReading({ ...raw, selection })!.selection, selection);
 });
 
 test("a short number in a field named only Code or Código is held back; a postal, promo or country code is not", () => {
@@ -213,10 +217,15 @@ test("a letter-spaced card number or IBAN in visible text is left out, and only 
   assert.deepEqual(redactNumbers("Send to DE89aaaaaaaa3704aaaaaaaa0044aaaaaaaa0532aaaaaaaa0130aaaaaaaa00 please"), { text: `Send to ${NUMBER_LEFT_OUT} please`, count: 1 });
   // Grouped, with any dash, a RUN, an IBAN with letters.
   for (const [text, out] of [
-    ["Card 4111 1111 1111 1111, exp 12/27", `Card ${NUMBER_LEFT_OUT} exp 12/27`],
+    ["Card 4111 1111 1111 1111, exp 12/27", `Card ${NUMBER_LEFT_OUT}, exp 12/27`],
     ["Card 4111-1111-1111-1111 on file", `Card ${NUMBER_LEFT_OUT} on file`],
-    ["IBAN GB82 WEST 1234 5698 7654 32.", `IBAN ${NUMBER_LEFT_OUT}`],
+    ["Amex 3782 822463 10005 on file", `Amex ${NUMBER_LEFT_OUT} on file`],
+    ["IBAN GB82 WEST 1234 5698 7654 32.", `IBAN ${NUMBER_LEFT_OUT}.`],
+    ["IBAN de89 3704 0044 0532 0130 00 here", `IBAN ${NUMBER_LEFT_OUT} here`],
     ["RUN 12.345.678-5 del titular", `RUN ${NUMBER_LEFT_OUT} del titular`],
+    ["RUT 1.000.005-K", `RUT ${NUMBER_LEFT_OUT}`],
+    ["Card ４１１１ １１１１ １１１１ １１１１.", `Card ${NUMBER_LEFT_OUT}.`],
+    ["Card ٤١١١١١١١١١١١١١١١ x", `Card ${NUMBER_LEFT_OUT} x`],
   ] as const) assert.equal(redactNumbers(text).text, out, text);
   // Ordinary prose with years and figures, dates, phone numbers and lists stays as it is.
   for (const text of [
@@ -225,7 +234,20 @@ test("a letter-spaced card number or IBAN in visible text is left out, and only 
     "Years: 2019, 2020, 2021, 2022 and 2023.",
     "Call +56 9 1234 5678 before 2026-11-04.",
     "Total: $1,234,567.89 in Q3",
+    "RUN 12.345.678-4 is not a valid one",
   ]) assert.deepEqual(redactNumbers(text), { text, count: 0 }, text);
+});
+
+test("Grok's review of the span rule: every card number it leaked is left out, every ordinary figure it swallowed stays (TIN-619)", () => {
+  for (const text of ["4111, 1111, 1111, 1111", "4111 aa 1111 bb 1111 cc 1111", "Pay 4111 aaaa 1111 aaaa 1111 aaaa 1111 today", "4111 then 1111 then 1111 then 1111"]) {
+    const out = redactNumbers(text);
+    assert.equal(out.count, 1, text);
+    assert.doesNotMatch(out.text, /4111|1111/, text);
+  }
+  // In a selection's block, too.
+  const block = shapeReading({ ...raw, selection: "Pay", selection_context: { heading: "Billing", text: "Pay 4111, 1111, 1111, 1111 today" } })!;
+  assert.equal(block.selection_context!.text, `Pay ${NUMBER_LEFT_OUT} today`);
+  for (const text of ["Years: 2019 2020 2021 2022 were fine.", "from 2020-01-01 2020-12-31", "Scores were 12 34 56 78 90 12 today", "2026-11-04", "1234 5678"]) assert.deepEqual(redactNumbers(text), { text, count: 0 }, text);
 });
 
 test("the hub leaves sensitive numbers out of the outlined text and the selection's block, unless the person chose to send them (TIN-617, TIN-619)", () => {
@@ -233,7 +255,7 @@ test("the hub leaves sensitive numbers out of the outlined text and the selectio
   const page = { ...raw, element: { tag: "p", text: card, heading: "Billing" }, selection: "today", selection_context: { heading: "Other", text: "Wire to DE89 3704 0044 0532 0130 00." } };
   const left = shapeReadingCounted(page)!;
   assert.equal(left.reading.element!.text, `Pay ${NUMBER_LEFT_OUT} today`);
-  assert.equal(left.reading.selection_context!.text, `Wire to ${NUMBER_LEFT_OUT}`);
+  assert.equal(left.reading.selection_context!.text, `Wire to ${NUMBER_LEFT_OUT}.`);
   assert.equal(left.withheld, 2);
   assert.doesNotMatch(readingText(left.reading), /4111|DE89/);
   // Marked by the extension as the person's choice: kept, and said to be so.
@@ -270,9 +292,9 @@ test("the hub keeps a sensitive value the person chose to send, leaves out one n
       { label: "Reference", value: LEFT_OUT, kind: "typed", pointed: false },
       { label: "Ingresa tu RUN", value: LEFT_OUT, kind: "typed", pointed: false },
       { label: "Saved card 5555 5555 5555 4444", value: "checked", kind: "choice", pointed: false, sensitive: "included" },
-      { label: "Password", value: CODE_LEFT_OUT, kind: "typed", pointed: false },
-      { label: "Code", value: CODE_LEFT_OUT, kind: "typed", pointed: false },
-      { label: "CVV", value: CODE_LEFT_OUT, kind: "typed", pointed: false },
+      { label: "Password", value: CODE_LEFT_OUT, kind: "typed", pointed: false, credential: true },
+      { label: "Code", value: CODE_LEFT_OUT, kind: "typed", pointed: false, credential: true },
+      { label: "CVV", value: CODE_LEFT_OUT, kind: "typed", pointed: false, credential: true },
       { label: "Notes", value: "Leave at the door", kind: "typed", pointed: false },
       { label: "Address", value: "Av. Siempre Viva 742", kind: "typed", pointed: false },
     ],
@@ -283,6 +305,12 @@ test("the hub keeps a sensitive value the person chose to send, leaves out one n
   assert.doesNotMatch(JSON.stringify(reading), /hunter2|123456|de89|12\.345/);
   assert.match(readingText(reading), /- Card number: 4111 1111 1111 1111 \(sensitive: the person chose to send it\)\n/);
   assert.match(readingText(reading), /- Password: \(left out: password or code\)\n/);
+  // The extension's word that a field is a password or a code holds at the hub, whatever its label says and however it is marked.
+  const flagged = shapeReading({ ...raw, form: { fields: [{ label: "Notes", value: "hunter2", kind: "typed", sensitive: "included", credential: true }] } })!;
+  assert.deepEqual(flagged.form!.fields, [{ label: "Notes", value: CODE_LEFT_OUT, kind: "typed", pointed: false, credential: true }]);
+  // And chooseSensitive never marks such a field as chosen.
+  const chosen = chooseSensitive({ ...raw, form: { fields: [{ label: "Notes", value: CODE_LEFT_OUT, kind: "typed", credential: true, sensitive: true }] } }, true) as { form: { fields: Array<Record<string, unknown>> } };
+  assert.equal(chosen.form.fields[0]!.sensitive, undefined);
 });
 
 test("the log's entry is the site, the time and the size, never a word of the reading (TIN-422)", () => {

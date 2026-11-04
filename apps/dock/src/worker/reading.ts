@@ -50,6 +50,8 @@ export interface FormField {
   pointed: boolean;
   /** A sensitive value the person chose to send (TIN-619): the hub keeps it. */
   sensitive?: "included";
+  /** A password or a code (TIN-619): its value is CODE_LEFT_OUT, and stays so however the field is marked. */
+  credential?: true;
 }
 
 /** What the hub's log keeps of a reading (TIN-422, 13.3): site, time and size, never its address or text. */
@@ -223,27 +225,20 @@ export function secretForm(text: string): string {
 
 /** At most this many digits in a value, whatever separates them: 12 is the shortest card number. */
 const DIGITS_MAX = 11;
-/** In a block of page text, the same, within any stretch this long: a card number split by letters. */
-const DIGITS_SPAN = 24;
 
 /**
- * Whether a text holds what looks like a secret number, whatever field it is in (secretForm first): once
+ * Whether a field's value or label holds what looks like a secret number (secretForm first): once
  * everything but letters and digits is removed, a run of 8 or more digits (a card, an account, an id, a
- * phone number or a date written as digits); 12 or more digits in all, whatever separates them (in a
- * block of page text, `block`, within any 24 characters); a valid IBAN of its country's length, in any
- * case; or a RUT or RUN, with any dash.
+ * phone number or a date written as digits); 12 or more digits in all, whatever separates them; a valid
+ * IBAN of its country's length, in any case; or a RUT or RUN, with any dash. Strict on purpose: a field
+ * holds one value. Visible text uses redactNumbers instead, which validates what it finds.
  */
-export function textSecret(text: string | null | undefined, block = false): boolean {
+export function textSecret(text: string | null | undefined): boolean {
   if (!text) return false;
   const norm = secretForm(text);
   const flat = norm.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
   if (/\d{8}/.test(flat)) return true;
-  if (block) {
-    const digits = [...norm].map((ch, i) => (ch >= "0" && ch <= "9" ? i : -1)).filter((i) => i >= 0);
-    for (let k = DIGITS_MAX; k < digits.length; k++) if (digits[k]! - digits[k - DIGITS_MAX]! < DIGITS_SPAN) return true;
-  } else if ((norm.match(/\d/g)?.length ?? 0) > DIGITS_MAX) {
-    return true;
-  }
+  if ((norm.match(/\d/g)?.length ?? 0) > DIGITS_MAX) return true;
   return holdsIban(flat) || holdsRut(norm);
 }
 
@@ -265,61 +260,151 @@ function holdsRut(norm: string): boolean {
   return bodyDigits >= 7 && bodyDigits <= 9;
 }
 
-/**
- * Whether a run of number-like words in visible text is a sensitive number (TIN-617): 12 or more
- * digits in all, whatever separates them (letters too, so "4111aaaa1111aaaa…" is one), a valid IBAN,
- * or a RUT or RUN. Not the 8-digit rule of a field's value, so dates and phone numbers in prose stay.
- */
-function spanSecret(span: string): boolean {
-  const norm = secretForm(span);
-  if ((norm.match(/\d/g)?.length ?? 0) > DIGITS_MAX) return true;
-  return holdsIban(norm.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase()) || SPAN_RUT.test(norm);
+/** Whether a run of digits passes the Luhn check, as every payment card number does. */
+function luhnValid(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+  }
+  return sum % 10 === 0;
 }
 
-/** A RUT or RUN in prose, with its dash: 12.345.678-5, 1 234 567-K, 12345678-5 (not a phone number's groups). */
-const SPAN_RUT = /(?<![\dA-Za-z])\d{1,2}[\s.]?\d{3}[\s.]?\d{3}\s*-\s*[\dkK](?![\dA-Za-z])/;
+/** The first digits of the card networks' numbers (Visa 4, Mastercard 51–55 and 2221–2720, Amex, Diners, JCB 3, Discover, UnionPay, Maestro 5 and 6): a year such as 2019 or 2020 is none. */
+const CARD_START = /^(4|5|6|3|2(22[1-9]|2[3-9]\d|[3-6]\d\d|7[01]\d|720))/;
 
-/** A word that may sit inside a number: one with a digit, or four capitals, as an IBAN's bank code (GB82 WEST 1234…). */
-const numberWord = (word: string) => /\p{Nd}/u.test(word) || /^[A-Z]{4}$/.test(word);
+/** A RUN or RUT's check character: modulo 11 of its body, weighted 2 to 7 from the right. */
+function rutCheck(body: string): string {
+  let sum = 0;
+  let weight = 2;
+  for (let i = body.length - 1; i >= 0; i--) {
+    sum += Number(body[i]) * weight;
+    weight = weight === 7 ? 2 : weight + 1;
+  }
+  const rest = 11 - (sum % 11);
+  return rest === 11 ? "0" : rest === 10 ? "K" : String(rest);
+}
 
-/** Whether a run of number-like words goes on past this word and the space after it: not after a comma, a semicolon or a colon, a tab, or more than one line break. */
-const joins = (word: string, gap: string) => !/[,;:]$/.test(word) && !gap.includes("\t") && (gap.match(/\n/g)?.length ?? 0) <= 1;
+/** A RUN or RUT in visible text: 7 or 8 digits, in groups split by dots or spaces or none, a dash, its check character. Checked by rutCheck. */
+const TEXT_RUT = /(?<![\dA-Za-z])(\d{1,2})[.\s]?(\d{3})[.\s]?(\d{3})\s*-\s*([\dkK])(?![\dA-Za-z])/g;
+/** Between two groups of a number's digits: separators, or a few other characters (letters a page may put between them). */
+const joinsGroups = (gap: string) => /^[\s,./-]*$/.test(gap) || gap.length <= 6 || (gap.length <= 16 && !/\s/.test(gap));
 
 /**
- * Visible text with each sensitive number in it replaced by NUMBER_LEFT_OUT (TIN-617, TIN-619), and
- * how many. A number is a run of words that each hold a digit, as a card number, an IBAN or a RUN is
- * written, letter-spaced ones included; only that run is replaced, never the rest of the text, so a
- * paragraph with a few years and figures stays as it is.
+ * Visible text as the checks read it, character by character: secretForm's folding for each character of
+ * the text, and where each folded character came from, so a number found in it is cut out of the text
+ * the person sees, and only that number.
+ */
+function folded(text: string): { norm: string; from: number[]; to: number[] } {
+  let norm = "";
+  const from: number[] = [];
+  const to: number[] = [];
+  for (let i = 0; i < text.length; ) {
+    const cp = text.codePointAt(i)!;
+    const size = cp > 0xffff ? 2 : 1;
+    const ch = secretForm(String.fromCodePoint(cp));
+    for (const c of ch) {
+      norm += /^[a-z]$/.test(c) ? c.toUpperCase() : c;
+      from.push(i);
+      to.push(i + size);
+    }
+    i += size;
+  }
+  return { norm, from, to };
+}
+
+/**
+ * Where visible text holds a sensitive number (TIN-617, TIN-619), as [start, end) of the text, each
+ * found by what the number is, not by how many digits there are:
+ * - a payment card: 13 to 19 digits, in groups joined by spaces, commas, dots, slashes, dashes or up to 6
+ *   other characters (16 with no space between, as letters a page put inside a number), starting as the
+ *   card networks' numbers do and passing the Luhn check;
+ * - an IBAN with valid check digits, written in groups or with letters between its digits;
+ * - a RUN or RUT with its dash and a valid check character.
+ * A list of years, dates, scores and phone numbers pass none of these.
+ */
+function sensitiveSpans(text: string): Array<[number, number]> {
+  const { norm, from, to } = folded(text);
+  const spans: Array<[number, number]> = [];
+  const add = (start: number, end: number) => spans.push([from[start]!, to[end - 1]!]);
+  // Cards: runs of digit groups, and in each the groups that make a valid card number.
+  const groups = [...norm.matchAll(/\d+/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, digits: m[0] }));
+  for (let a = 0; a < groups.length; a++) {
+    let digits = "";
+    for (let b = a; b < groups.length; b++) {
+      if (b > a && !joinsGroups(norm.slice(groups[b - 1]!.end, groups[b]!.start))) break;
+      digits += groups[b]!.digits;
+      if (digits.length > 19) break;
+      if (digits.length >= 13 && CARD_START.test(digits) && luhnValid(digits)) {
+        add(groups[a]!.start, groups[b]!.end);
+        a = b;
+        break;
+      }
+    }
+  }
+  // IBANs: from a country code and two digits, the country's length in letters and digits (spaces and dashes skipped),
+  // or in digits only, skipping what joinsGroups lets through (a German IBAN with letters put between its digits).
+  for (const m of norm.matchAll(/[A-Z]{2}(?=[\s-]?\d{2})/g)) {
+    const length = IBAN_LENGTHS[m[0]];
+    if (!length) continue;
+    for (const lettersToo of [true, false]) {
+      let iban = m[0];
+      let at = m.index + 2;
+      let last = at;
+      let gap = "";
+      for (; at < norm.length && iban.length < length; at++) {
+        const c = norm[at]!;
+        const keep = /\d/.test(c) || (lettersToo && iban.length >= 4 && /[A-Z]/.test(c));
+        if (keep) {
+          if (gap && !(lettersToo ? /^[\s-]{1,2}$/.test(gap) : joinsGroups(gap))) break;
+          iban += c;
+          last = at;
+          gap = "";
+        } else {
+          gap += c;
+          if (lettersToo && gap.length > 2) break;
+          if (!lettersToo && gap.length > 16) break;
+        }
+      }
+      if (iban.length === length && ibanValid(iban)) {
+        add(m.index, last + 1);
+        break;
+      }
+    }
+  }
+  for (const m of norm.matchAll(TEXT_RUT)) {
+    if (rutCheck(`${m[1]}${m[2]}${m[3]}`) === m[4]!.toUpperCase()) add(m.index, m.index + m[0].length);
+  }
+  // One span for numbers that overlap.
+  spans.sort((x, y) => x[0] - y[0]);
+  const merged: Array<[number, number]> = [];
+  for (const s of spans) {
+    const prev = merged.at(-1);
+    if (prev && s[0] <= prev[1]) prev[1] = Math.max(prev[1], s[1]);
+    else merged.push([s[0], s[1]]);
+  }
+  return merged;
+}
+
+/**
+ * Visible text with each sensitive number in it replaced by NUMBER_LEFT_OUT (TIN-617, TIN-619), and how
+ * many (sensitiveSpans). Only the number is replaced, never the rest of the text.
  */
 export function redactNumbers(text: string): { text: string; count: number } {
-  const parts = text.split(/(\s+)/);
-  const out: string[] = [];
-  let count = 0;
-  for (let i = 0; i < parts.length; ) {
-    const part = parts[i]!;
-    if (i % 2 === 1 || !/\p{Nd}/u.test(part)) {
-      out.push(part);
-      i++;
-      continue;
-    }
-    let j = i;
-    // Four capitals continue a number only when a word with a digit follows them.
-    while (j + 2 < parts.length && joins(parts[j]!, parts[j + 1]!) && numberWord(parts[j + 2]!)) {
-      if (/\p{Nd}/u.test(parts[j + 2]!)) j += 2;
-      else if (j + 4 < parts.length && joins(parts[j + 2]!, parts[j + 3]!) && /\p{Nd}/u.test(parts[j + 4]!)) j += 4;
-      else break;
-    }
-    const span = parts.slice(i, j + 1).join("");
-    if (spanSecret(span)) {
-      out.push(NUMBER_LEFT_OUT);
-      count++;
-    } else {
-      out.push(span);
-    }
-    i = j + 1;
+  const spans = sensitiveSpans(text);
+  let out = "";
+  let at = 0;
+  for (const [start, end] of spans) {
+    out += text.slice(at, start) + NUMBER_LEFT_OUT;
+    at = end;
   }
-  return { text: out.join(""), count };
+  return { text: out + text.slice(at), count: spans.length };
 }
+
 
 /**
  * "Code" or "código" alone, with a short number in it: a one-time code or a card's code. Not a postal,
@@ -398,17 +483,14 @@ export function shapeReadingCounted(raw: unknown): { reading: PageReading; withh
   const keepSelection = r.selection_sensitive === "included";
   let selectionFound = 0;
   let selection: string | null = null;
-  const selected = clean(typeof r.selection === "string" ? r.selection.slice(0, TEXT_MAX * 4) : null, TEXT_MAX);
-  // A selection that holds what looks like a secret number is not sent, nor where it is: only that there was one.
-  const selectionHeld = !!selected && !keepSelection && textSecret(selected, true);
-  if (selectionHeld) {
-    selection = SELECTION_LEFT_OUT;
-    withheld++;
-  } else if (selected) {
-    if (keepSelection && textSecret(selected, true)) selectionFound++;
-    const taken = words(r.selection, TEXT_MAX, keepSelection);
-    selection = taken.text;
+  // The selection's sensitive numbers are left out as in the outline's text, the rest of it kept (TIN-619); a
+  // selection that was nothing but such a number is not sent, nor where it is: only that there was one.
+  let selectionHeld = false;
+  const taken = words(r.selection, TEXT_MAX, keepSelection);
+  if (taken.text) {
     selectionFound += taken.found;
+    selectionHeld = !keepSelection && taken.found > 0 && !/[\p{L}\p{N}]/u.test(taken.text.replaceAll(NUMBER_LEFT_OUT, ""));
+    selection = selectionHeld ? SELECTION_LEFT_OUT : taken.text;
   }
   let selectionContext: PageReading["selection_context"] = null;
   if (selection && !selectionHeld && isObject(r.selection_context)) {
@@ -448,6 +530,8 @@ export function chooseSensitive(raw: unknown, include: boolean): unknown {
       fields: form.fields.map((f: unknown) => {
         if (!isObject(f)) return f;
         const { sensitive, ...field } = f as Record<string, unknown>;
+        // A password or a code is never marked as the person's choice.
+        if (field.credential === true) return field;
         return sensitive === true || sensitive === "included" ? { ...field, sensitive: include ? "included" : true } : field;
       }),
     };
@@ -506,7 +590,7 @@ function shapeFieldsCounted(candidates: readonly FieldCandidate[], leftOut = 0, 
         leftOut++;
         continue;
       }
-      field = { label: labelHolds ? null : label, value: CODE_LEFT_OUT, kind: "typed", pointed };
+      field = { label: labelHolds ? null : label, value: CODE_LEFT_OUT, kind: "typed", pointed, credential: true };
     } else if (sensitive && c.sensitive !== "included") {
       withheld++;
       if (c.kind === "choice") {
@@ -537,10 +621,12 @@ function shapeFormCounted(raw: unknown): { form: FormReading | null; withheld: n
   const items = Array.isArray(f.fields) ? f.fields : [];
   for (const item of items.slice(0, FIELDS_SCANNED)) {
     if (!isObject(item)) continue;
-    const field = item as { label?: unknown; value?: unknown; pointed?: unknown; kind?: unknown; sensitive?: unknown };
+    const field = item as { label?: unknown; value?: unknown; pointed?: unknown; kind?: unknown; sensitive?: unknown; credential?: unknown };
     if (typeof field.value !== "string") continue;
     const sensitive = field.sensitive === "included" ? "included" : field.sensitive === true ? true : undefined;
-    candidates.push({ kind: field.kind === "choice" ? "choice" : "typed", label: typeof field.label === "string" ? field.label : null, value: field.value, pointed: field.pointed === true, ...(sensitive ? { sensitive } : {}) });
+    // The extension's word that this is a password or a code holds whatever else the field says (an older extension sends none: its labels decide).
+    const credential = field.credential === true;
+    candidates.push({ kind: field.kind === "choice" ? "choice" : "typed", label: typeof field.label === "string" ? field.label : null, value: field.value, pointed: field.pointed === true, ...(sensitive ? { sensitive } : {}), ...(credential ? { credential } : {}) });
   }
   return shapeFieldsCounted(candidates, count(f.left_out), count(f.more) + Math.max(0, items.length - FIELDS_SCANNED));
 }
