@@ -118,10 +118,11 @@ const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply"
 addEventListener("drop", (e) => e.stopImmediatePropagation(), true);
 document.addEventListener("drop", (e) => e.stopPropagation());
 </script>`;
-// A checkout (TIN-571): a chosen shipping option, a ticked box, a select, a typed note, and fields that must never be read.
+// A checkout (TIN-571, TIN-619): a chosen shipping option, a ticked box, a select, a typed note, sensitive numbers,
+// a password, and fields the person cannot see. The form has a margin of its own, where a drop outlines it whole.
 const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>Your order</h2>
 <p id="intro">Orders placed before noon ship the same day.</p>
-<form><fieldset><legend>Shipping method</legend>
+<form id="checkout" style="padding:28px;border:1px solid #ccc"><fieldset><legend>Shipping method</legend>
 <label><input type="radio" name="ship" value="dhl"> DHL Express</label>
 <label><input type="radio" name="ship" value="post" checked> Registered post</label>
 <label for="saved-sel">Saved</label><select id="saved-sel" style="position:absolute;left:-9999px"><option>４１１１１１１１１１１１１１１１</option></select></fieldset>
@@ -145,6 +146,13 @@ customElements.define("cvv-box", class extends HTMLElement {
   }
 });
 </script>`;
+// A form built as Google Forms builds one (TIN-619): each question a card, its title a role=heading that the answer
+// names with aria-labelledby, and the answer in boxes of its own; a question of ARIA radios under a radiogroup.
+const GFORM = `<!doctype html><title>Event sign-up</title><h1>Event sign-up</h1><div role="list">
+<div role="listitem" id="q1" style="padding:20px;margin:12px;border:1px solid #ccc"><div><div role="heading" aria-level="3"><span id="i1">Email</span><span aria-hidden="true"> *</span></div></div><div><div><div aria-hidden="true" style="font-size:12px">Your answer</div><input id="email" type="email" aria-labelledby="i1" value="tomas@example.com" style="width:300px"></div></div></div>
+<div role="listitem" id="q2" style="padding:20px;margin:12px;border:1px solid #ccc"><div><div role="heading" aria-level="3"><span id="i2">Your name</span></div></div><div><div><input type="text" aria-labelledby="i2" value="Tomas Neira" style="width:300px"></div></div></div>
+<div role="listitem" id="q3" style="padding:20px;margin:12px;border:1px solid #ccc"><div><div role="heading" aria-level="3"><span id="i3">T-shirt size</span></div></div><div role="radiogroup" aria-labelledby="i3"><div role="radio" aria-checked="false">S</div><div role="radio" aria-checked="true">M</div><div role="radio" aria-checked="false">L</div></div></div>
+</div>`;
 const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
 // A table, and a paragraph with what innerText reads badly: a formula next to a hidden copy of itself, as Wikipedia has, and images with and without alt text (TIN-422).
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
@@ -154,7 +162,7 @@ const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countr
 <table><tr style="display:none"><th>HIDDEN HEADER</th><th>HIDDEN HEADER</th></tr><tr><td>Row</td><td id="unseen">Plain</td></tr></table>
 <p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
 <p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -332,7 +340,7 @@ try {
     await other.drop("#a");
     assert.equal((await other.buttons()).size, 0, "no card on a Not here site under Never ask");
     assert.match((await latest()).page_text, /SPRING/, "and nothing sent");
-    await cdp("Runtime.evaluate", { expression: "chrome.storage.local.set({ formNoticeAll: false, formNoticeSites: [] })", awaitPromise: true }, swSession);
+    await cdp("Runtime.evaluate", { expression: "chrome.storage.local.set({ readingNoticeAll2: false, readingNoticeSites2: [] })", awaitPromise: true }, swSession);
     const updated = await open("updated.localhost");
     await updated.drop("#a");
     const offered = await until("the card that asks once more", async () => ((await updated.buttons()).size ? [...(await updated.buttons()).keys()].sort() : null), 10_000);
@@ -572,73 +580,200 @@ try {
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("5c. a page that refuses every drag from a later handler, and stops every drop, still takes the agent; dragenter alone moves the listener");
 
-    // 10. A checkout: the reading carries the choices of that part of the form and what was typed in the field
-    // dropped on, never a secret, and the selection with where it is (TIN-571).
+    // 10. A checkout (TIN-571, TIN-619): the outline is what goes. A paragraph sends its text; a field's card (the field with
+    // its label) sends that field; a drop on the form's margin outlines the whole form and sends every field the person can
+    // see. Under Ask per drop, sensitive numbers are left out and "Include them this time" sends the same reading with them;
+    // under Send if it's in the outline they go at once; under Always leave out never. Passwords, codes and fields the
+    // person cannot see never go. The selection follows the same rule.
     const { targetId: checkoutId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/checkout") });
     const { sessionId: checkout } = await cdp("Target.attachToTarget", { targetId: checkoutId, flatten: true });
     await sleep(2500);
     const inCheckout = async (expression) => (await cdp("Runtime.evaluate", { expression, returnByValue: true }, checkout)).result.value;
     const latestReading = async () => (await tool("page__get_reading")).structuredContent;
-    /** Drop on an element (its left part; a selector, or an expression in parentheses), then wait for a reading newer than the one before. */
-    const dropOnCheckout = async (selector) => {
-      const before = (await latestReading())?.reading?.taken_at;
-      const find = selector.startsWith("(") ? selector : `document.querySelector(${JSON.stringify(selector)})`;
-      const point = await inCheckout(`(() => { const r = ${find}.getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`);
-      const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
-      for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data: dragged }, checkout);
-      return until(`the reading of ${selector}`, async () => {
+    /** The "Include them this time" card's buttons (a closed shadow root: DevTools sees through it), by data-apc-include. */
+    const includeButtons = async (sid) => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+      const found = new Map();
+      const walk = (n) => {
+        const a = n.attributes ?? [];
+        const i = a.indexOf("data-apc-include");
+        if (i >= 0) found.set(a[i + 1], n.nodeId);
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      return found;
+    };
+    /** Click a button of the card with real mouse events: "include" or "dismiss". */
+    const clickInclude = async (sid, which) => {
+      const nodeId = await until(`the ${which} button of the sent card`, async () => (await includeButtons(sid)).get(which), 10_000);
+      const q = (await cdp("DOM.getBoxModel", { nodeId }, sid)).model.content;
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2, button: "left", clickCount: 1 }, sid);
+    };
+    /** The sent card's words, once it shows. */
+    const cardText = async (sid) => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+      let text = null;
+      const walk = (n) => {
+        if ((n.attributes ?? []).includes("data-apc-include")) return;
+        if (n.nodeName === "P" && (n.children ?? []).some((c) => /left out\./.test(c.nodeValue ?? ""))) text = n.children.map((c) => c.nodeValue).join("");
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      return text;
+    };
+    /** Wait for a reading newer than the one before. */
+    const nextReading = (what, before) =>
+      until(`the reading of ${what}`, async () => {
         const r = await latestReading();
         return r?.reading?.taken_at && r.reading.taken_at !== before ? r.page_text : null;
       });
+    /** Drop on an element (its left part, or `at` inside its box; a selector, or an expression in parentheses), then wait for the new reading. */
+    const dropOnPage = async (sid, selector, at = null) => {
+      const before = (await latestReading())?.reading?.taken_at;
+      const find = selector.startsWith("(") ? selector : `document.querySelector(${JSON.stringify(selector)})`;
+      const offset = at ? `{ x: r.x + ${at.x}, y: r.y + ${at.y} }` : `{ x: r.x + 10, y: r.y + r.height / 2 }`;
+      const point = (await cdp("Runtime.evaluate", { expression: `(() => { const r = ${find}.getBoundingClientRect(); return ${offset}; })()`, returnByValue: true }, sid)).result.value;
+      const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+      for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data: dragged }, sid);
+      return nextReading(selector, before);
     };
-    const SECRETS = ["4111", "４１１１", "hunter2", "HIDDENTOKEN", "12.345", "de89", "BAITVALUE", "ROLEVALUE", "123\n"];
-    const noSecret = (text) => {
-      for (const secret of SECRETS) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
+    const dropOnCheckout = (selector, at) => dropOnPage(checkout, selector, at);
+    /** Under Ask per drop: dismiss the card a drop left, so the next check starts with none. */
+    const dismiss = async (sid = checkout) => {
+      if ((await includeButtons(sid)).has("dismiss")) await clickInclude(sid, "dismiss");
+      await until("no sent card", async () => (await includeButtons(sid)).size === 0, 5000);
     };
+    /** Change the sensitive-data setting as the person does, with the popup's own radio (TIN-619). */
+    const setSensitive = async (value) => {
+      const { targetId: popupId } = await cdp("Target.createTarget", { url: `chrome-extension://${extensionId}/popup.html` });
+      const { sessionId: popupSession } = await cdp("Target.attachToTarget", { targetId: popupId, flatten: true });
+      await until("the popup's sensitive-data choices", async () => (await cdp("Runtime.evaluate", { expression: "document.querySelectorAll('input[name=sensitive]').length === 3", returnByValue: true }, popupSession)).result.value);
+      await sleep(500);
+      await cdp("Runtime.evaluate", { expression: `document.querySelector('input[name=sensitive][value=${value}]').click()` }, popupSession);
+      await until(`the setting ${value}`, async () => (await cdp("Runtime.evaluate", { expression: "chrome.storage.local.get('sensitive').then((s) => s.sensitive)", awaitPromise: true, returnByValue: true }, popupSession)).result.value === value);
+      await cdp("Target.closeTarget", { targetId: popupId });
+    };
+    const NEVER = ["hunter2", "HIDDENTOKEN", "BAITVALUE", "ROLEVALUE", "123\n"];
+    const SENSITIVE = ["4111", "４１１１", "12.345", "de89"];
+    const noneOf = (text, list) => {
+      for (const secret of list) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
+    };
+    const noSecret = (text) => noneOf(text, [...NEVER, ...SENSITIVE]);
+
+    // A paragraph inside the form: its text, with the selection and where it is, and no field of the form around it.
     await inCheckout(`(() => { const t = document.querySelector("#intro").firstChild; const at = t.textContent.indexOf("before noon"); const r = document.createRange(); r.setStart(t, at); r.setEnd(t, at + "before noon".length); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
-    // On the total: the choices of this small form, not one typed value, and the saved card's number held back.
-    const filled = await dropOnCheckout("#total");
-    assert.match(filled, /Pointed at \(p\): Total: \$42\.00\nForm fields, as filled in on the page:\n- Shipping method: Registered post\n- Insurance: checked\n- Country: Chile\n1 field left out as sensitive\./);
-    assert.match(filled, /Selected: before noon\nThe selection is under the heading: Your order\nThe selection is in: Orders placed before noon ship the same day\./);
-    assert.ok(!filled.includes("Leave at the door"), "no typed value of a field not dropped on");
-    assert.ok(!filled.includes("DHL"), "only the chosen radio");
-    noSecret(filled);
-    // A selection of a card number printed on the page: not sent, only that there was one.
+    const total = await dropOnCheckout("#total");
+    assert.match(total, /Pointed at \(p\): Total: \$42\.00\nSelected: before noon\nThe selection is under the heading: Your order\nThe selection is in: Orders placed before noon ship the same day\.$/);
+    assert.doesNotMatch(total, /Form fields/, "the outline was the paragraph");
+    noSecret(total);
+    // A selection of a card number printed on the page: left out, and the card offers it.
     await inCheckout(`(() => { const label = [...document.querySelectorAll("label")].find((l) => l.textContent.includes("Visa")); const r = document.createRange(); r.selectNodeContents(label.lastChild); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
     const selectedCard = await dropOnCheckout("#total");
     assert.match(selectedCard, /\nSelected: \(selection left out as sensitive\)/);
     noSecret(selectedCard);
+    assert.equal(await until("the sent card", () => cardText(checkout), 10_000), "Sent to your agent. 1 sensitive value left out.");
+    let prior = (await latestReading()).reading.taken_at;
+    await clickInclude(checkout, "include");
+    assert.match(await nextReading("the selection, included", prior), /\nSelected: Visa 4111 1111 1111 1111/);
     await inCheckout(`getSelection().removeAllRanges()`);
-    // On the notes field: its typed value, marked. Typing after the drop sends nothing until the next drop.
-    assert.match(await dropOnCheckout("#notes"), /Pointed at: a form field, marked \(pointed at\) below\.\nForm fields, as filled in on the page:\n- Notes: Leave at the door \(pointed at\)\n- Shipping method: Registered post\n/);
+    // The notes field: its card is its label, so its typed value goes, marked; typing after the drop sends nothing until the next drop.
+    assert.match(await dropOnCheckout("#notes"), /Pointed at \(label\): Notes\nForm fields, as filled in on the page:\n- Notes: Leave at the door \(pointed at\)$/);
     await inCheckout(`(() => { const n = document.querySelector("#notes"); n.value = "Ring twice"; n.dispatchEvent(new Event("input", { bubbles: true })); n.dispatchEvent(new Event("change", { bubbles: true })); })()`);
     await sleep(2000);
     assert.match((await latestReading()).page_text, /- Notes: Leave at the door \(pointed at\)/);
     assert.match(await dropOnCheckout("#notes"), /- Notes: Ring twice \(pointed at\)/);
     assert.equal(await inCheckout(`document.querySelector("#notes").value`), "Ring twice", "the drop typed nothing into the field");
-    // A RUN, a lowercase IBAN and a CVV labelled inside a shadow root, each dropped on: held back.
+    // A RUN and a lowercase IBAN, each dropped on: left out under Ask per drop; Include them this time sends that same reading with it.
     const run = await dropOnCheckout("#run");
-    assert.match(run, /- Ingresa tu RUN: \(left out as sensitive\) \(pointed at\)/);
+    assert.match(run, /- Ingresa tu RUN: \(left out as sensitive\) \(pointed at\)$/);
     noSecret(run);
+    prior = (await latestReading()).reading.taken_at;
+    // What is in the field now is not what goes: the reading was taken at the drop.
+    await inCheckout(`document.querySelector("#run").value = "CHANGED AFTER"`);
+    await clickInclude(checkout, "include");
+    const runIncluded = await nextReading("the RUN, included", prior);
+    assert.match(runIncluded, /- Ingresa tu RUN: 12\.345\.678-5 \(pointed at\) \(sensitive: the person chose to send it\)$/);
+    assert.doesNotMatch(runIncluded, /CHANGED AFTER/);
+    await inCheckout(`document.querySelector("#run").value = "12.345.678-5"`);
     const ref = await dropOnCheckout("#ref");
-    assert.match(ref, /- Reference: \(left out as sensitive\) \(pointed at\)/);
+    assert.match(ref, /- Reference: \(left out as sensitive\) \(pointed at\)$/);
     noSecret(ref);
+    await dismiss();
+    // A CVV labelled inside a shadow root: a code, never sent, and nothing to include.
     const cvv = await dropOnCheckout('(document.querySelector("#cvv").shadowRoot.querySelector("input"))');
-    assert.match(cvv, /- CVV: \(left out as sensitive\) \(pointed at\)/);
+    assert.match(cvv, /- CVV: \(left out: password or code\) \(pointed at\)$/);
     noSecret(cvv);
-    // A field the person can hardly see (opacity 0.02) laid over a paragraph, and a transparent role=textbox reached
-    // through its visible label: left out. The off-screen select with a fullwidth card number was never a choice.
+    await sleep(800);
+    assert.equal((await includeButtons(checkout)).size, 0, "a code is not offered");
+    // A field the person can hardly see (opacity 0.02) laid over a paragraph: the outline is the paragraph, and the field is
+    // never read. A transparent role=textbox reached through its visible label: the label alone, nothing of the field.
     const bait = await dropOnCheckout("#promo");
-    assert.match(bait, /- data: \(left out as sensitive\) \(pointed at\)/);
+    assert.match(bait, /Pointed at \(p\): Promo codes apply at the end\.$/);
     noSecret(bait);
     const role = await dropOnCheckout("#rt-label");
-    assert.match(role, /- Promo note: \(left out as sensitive\) \(pointed at\)/);
+    assert.match(role, /Pointed at \(label\): Promo note$/);
     noSecret(role);
-    assert.doesNotMatch(filled, /Saved/, "an off-screen select is not a choice");
+    // The form outlined whole, by a drop on its margin: every field the person can see, with what was typed in each.
+    // The outline is drawn on the form while the agent is dragged there, and the drop reads that.
+    const margin = { x: 8, y: 8 };
+    const whole = await dropOnCheckout("#checkout", margin);
+    assert.match(whole, /Pointed at \(form\): Shipping method/);
+    assert.match(
+      whole,
+      /Form fields, as filled in on the page:\n- Shipping method: Registered post\n- Insurance: checked\n- Country: Chile\n- Notes: Ring twice\n- Card number: \(left out as sensitive\)\n- Password: \(left out: password or code\)\n- Ingresa tu RUN: \(left out as sensitive\)\n- Reference: \(left out as sensitive\)\n1 field left out as sensitive\./,
+    );
+    assert.match(whole, /Visa \[sensitive number left out\]/, "the card number in the form's own text is left out, and only it");
+    noSecret(whole);
+    assert.match(await until("the sent card", () => cardText(checkout), 10_000), /^Sent to your agent\. \d+ sensitive values left out\.$/);
+    prior = (await latestReading()).reading.taken_at;
+    await clickInclude(checkout, "include");
+    const wholeIncluded = await nextReading("the whole form, included", prior);
+    for (const line of [/- Card number: 4111111111111111 \(sensitive: the person chose to send it\)/, /- Ingresa tu RUN: 12\.345\.678-5 \(sensitive/, /- Reference: de89 3704 0044 0532 0130 00 \(sensitive/, /- Visa 4111 1111 1111 1111: checked \(sensitive/, /Visa 4111 1111 1111 1111/, /- Password: \(left out: password or code\)/]) assert.match(wholeIncluded, line);
+    noneOf(wholeIncluded, NEVER);
+    // Send if it's in the outline: they go at once, no card. Always leave out: never, no card. The popup sets it, for the next drop.
+    await setSensitive("send");
+    const sentAll = await dropOnCheckout("#checkout", margin);
+    assert.match(sentAll, /- Card number: 4111111111111111 \(sensitive: the person chose to send it\)/);
+    noneOf(sentAll, NEVER);
+    await sleep(800);
+    assert.equal((await includeButtons(checkout)).size, 0, "no card under Send if it's in the outline");
+    await setSensitive("never");
+    const neverSent = await dropOnCheckout("#checkout", margin);
+    assert.match(neverSent, /- Card number: \(left out as sensitive\)/);
+    noSecret(neverSent);
+    await sleep(800);
+    assert.equal((await includeButtons(checkout)).size, 0, "no card under Always leave out");
+    await setSensitive("ask");
     await cdp("Target.closeTarget", { targetId: checkoutId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
-    console.log("10. a checkout's choices go along with their labels, a typed value only from the field dropped on, never a secret (RUN, IBAN, shadow CVV, hidden bait), only on the drop; a selection comes with where it is");
+    console.log("10. the outline is what goes: a paragraph, a field's card, a whole form; sensitive numbers by the setting with Include them this time; never a password, code or hidden field; only on the drop");
+
+    // 11. A Google-Forms-like card (TIN-619): a drop on the question's title outlines the whole card and sends the answer typed
+    // in it, and only that answer; the same on the card's margin, on the answer itself, and for a question of ARIA radios.
+    const { targetId: gformId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/gform") });
+    const { sessionId: gform } = await cdp("Target.attachToTarget", { targetId: gformId, flatten: true });
+    await sleep(2500);
+    // While dragged over the title, the outline is on the card.
+    const titleAt = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#i1").getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`, returnByValue: true }, gform)).result.value;
+    const overTitle = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x: titleAt.x, y: titleAt.y, data: overTitle }, gform);
+    assert.match((await cdp("Runtime.evaluate", { expression: `document.querySelector("#q1").style.outline`, returnByValue: true }, gform)).result.value, /solid/, "the card is outlined");
+    prior = (await latestReading())?.reading?.taken_at;
+    await cdp("Input.dispatchDragEvent", { type: "drop", x: titleAt.x, y: titleAt.y, data: overTitle }, gform);
+    const email = await nextReading("the Email question", prior);
+    assert.match(email, /Pointed at \(div, listitem\): Email \*/);
+    assert.match(email, /\nForm fields, as filled in on the page:\n- Email: tomas@example\.com$/);
+    assert.doesNotMatch(email, /Tomas Neira|T-shirt/, "only this card");
+    assert.match(await dropOnPage(gform, "#q1", { x: 4, y: 4 }), /\n- Email: tomas@example\.com$/);
+    assert.match(await dropOnPage(gform, "#email"), /\n- Email: tomas@example\.com \(pointed at\)$/);
+    const size = await dropOnPage(gform, "#i3");
+    assert.match(size, /\n- T-shirt size: M$/);
+    assert.doesNotMatch(size, /tomas@example/);
+    await cdp("Target.closeTarget", { targetId: gformId });
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("11. a Google-Forms-like card: a drop on its title, its margin or its answer outlines the card and sends that answer only");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });

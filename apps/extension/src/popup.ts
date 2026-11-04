@@ -6,7 +6,7 @@
  */
 import { agoLabel, sizeLabel, type ReadingRow } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { ANY_PAGE, grantedAlone, devHubHosts, hubAllowed, isDockPage, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { ANY_PAGE, grantedAlone, devHubHosts, hubAllowed, isDockPage, isSensitive, sensitiveMode, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}) => Object.assign(document.createElement(tag), props);
@@ -74,7 +74,7 @@ async function render(): Promise<void> {
   const { origins = [] } = await chrome.permissions.getAll();
   const anyPage = ANY_PAGE.every((o) => origins.includes(o));
   const alone = origins.filter((o) => !docks.has(o) && !ANY_PAGE.includes(o));
-  const stored = await chrome.storage.local.get(["mode", "sites", "last", "readers"]);
+  const stored = await chrome.storage.local.get(["mode", "sites", "last", "readers", "sensitive"]);
   const mode = (stored.mode as Mode | undefined) ?? "ask";
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
 
@@ -114,6 +114,13 @@ async function render(): Promise<void> {
   const neverAsk = $("never-ask") as HTMLInputElement;
   neverAsk.checked = mode === "never_ask";
   neverAsk.onchange = () => void chrome.storage.local.set({ mode: neverAsk.checked ? "never_ask" : "ask" }).then(render);
+
+  // Sensitive numbers, one choice for every site (TIN-619): the service worker reads it at each drop.
+  const sensitive = sensitiveMode(stored.sensitive);
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="sensitive"]')) {
+    r.checked = r.value === sensitive;
+    r.onchange = () => void chrome.storage.local.set({ sensitive: sensitiveMode(r.value) });
+  }
 
   const rows = [
     ...Object.entries(sites).map(([origin, c]) => item(`${hostOf(origin)} · ${c === "always" ? "always" : c === "sensitive" ? "always ask" : "not here"}`, "Remove", () => void setChoice(origin, null))),

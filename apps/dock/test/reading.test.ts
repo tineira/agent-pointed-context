@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agoLabel, autocompleteSecret, codeSecret, CONTEXT_MAX, SELECTION_LEFT_OUT, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, namesSecret, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel, textSecret } from "../src/worker/reading.ts";
+import { agoLabel, autocompleteCredential, autocompleteSecret, chooseSensitive, CODE_LEFT_OUT, codeSecret, CONTEXT_MAX, SELECTION_LEFT_OUT, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, LEFT_OUT, namesCredential, namesSecret, NUMBER_LEFT_OUT, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, redactNumbers, shapeReading, shapeReadingCounted, sizeLabel, textSecret } from "../src/worker/reading.ts";
 
 const raw = {
   url: "https://en.wikipedia.org/wiki/Churn_rate?session=s3cr3t#History",
@@ -118,9 +118,9 @@ test("a selection elsewhere on the page comes with its heading and block, unless
   assert.equal(shapeReading({ ...raw, selection_context: { heading: "EU-West", text: "x" } })!.selection_context, null);
   assert.equal(shapeReading({ ...raw, selection: "x", selection_context: { heading: " ", text: "" } })!.selection_context, null);
   assert.ok(shapeReading({ ...raw, selection: "x", selection_context: { text: "w".repeat(5000) } })!.selection_context!.text!.length <= CONTEXT_MAX);
-  // A block the person did not drop on that holds a card number or an IBAN is not sent (the review's P3).
+  // A card number or an IBAN in a block the person did not drop on is left out, and only it (the review's P3, TIN-617).
   const held = shapeReading({ ...raw, selection: "Pay to", selection_context: { heading: "Payment", text: "Pay to de89 3704 0044 0532 0130 00 today" } })!;
-  assert.deepEqual(held.selection_context, { heading: "Payment", text: null });
+  assert.deepEqual(held.selection_context, { heading: "Payment", text: `Pay to ${NUMBER_LEFT_OUT} today` });
   assert.doesNotMatch(readingText(held), /de89/);
 });
 
@@ -158,7 +158,7 @@ test("the second review's bypasses are held back: any dash, zero-width character
   assert.equal(textSecret("Card 4111 then a1111 b1111 c1111 at the end", true), true);
   assert.equal(textSecret("In 2025 sales rose 12% to 340 units; in 2026 they reached 512 units across 7 regions and 19 stores.", true), false);
   const held = shapeReading({ ...raw, selection: "Pay", selection_context: { heading: "Payment", text: "Pay to ｄｅ８９ ３７０４ ００４４ ０５３２ ０１３０ ００" } })!;
-  assert.deepEqual(held.selection_context, { heading: "Payment", text: null });
+  assert.deepEqual(held.selection_context, { heading: "Payment", text: `Pay to ${NUMBER_LEFT_OUT}` });
 });
 
 test("the third review's RUN variants are held back: any separators, look-alike K, letters between the groups (TIN-571)", () => {
@@ -185,7 +185,7 @@ test("a short number in a field named only Code or Código is held back; a posta
   assert.equal(codeSecret("123", "Code"), true);
   for (const label of ["Postal code", "Código postal", "Zip code", "Promo code", "Country code", "Código de descuento", "Notes"]) assert.equal(codeSecret("8320000", label), false, label);
   assert.equal(codeSecret("SPRING25", "Code"), false, "not a number");
-  assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Code", value: "123456", kind: "typed", pointed: true }] } })!.form!.fields[0]!.value, "(left out as sensitive)");
+  assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Code", value: "123456", kind: "typed", pointed: true }] } })!.form!.fields[0]!.value, CODE_LEFT_OUT);
   assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Código postal", value: "8320000", kind: "typed", pointed: true }] } })!.form!.fields[0]!.value, "8320000");
 });
 
@@ -199,6 +199,90 @@ test("secrets are named by markup or label, in English, Spanish and Portuguese, 
   for (const label of ["Envío sin costo", "Pan integral", "Shipping", "Business name", "Spin", "Tinted", "Card message", "Notes", "Passenger", "Compass", "Runner", null, ""]) assert.equal(namesSecret("label", label), false, String(label));
   for (const ac of ["cc-number", "cc-csc", "shipping cc-exp", "current-password", "new-password", "one-time-code", "one-time-password"]) assert.equal(autocompleteSecret(ac), true, ac);
   for (const ac of ["email", "shipping street-address", "off", null]) assert.equal(autocompleteSecret(ac), false, String(ac));
+});
+
+test("a password or a code is named apart from a sensitive number: it never goes, whatever the person chose (TIN-619)", () => {
+  for (const name of ["Password", "Contraseña", "PIN", "pass", "pwd", "totp", "mfa_code", "2fa", "otp", "CVV", "cvc2", "Security code", "One-time code"]) assert.equal(namesCredential(name), true, name);
+  for (const name of ["IBAN", "Card number", "Ingresa tu RUN", "Nro. de cuenta", "Email", "Passenger", "Compass"]) assert.equal(namesCredential(name), false, name);
+  for (const ac of ["current-password", "new-password", "one-time-code", "one-time-password", "cc-csc"]) assert.equal(autocompleteCredential(ac), true, ac);
+  for (const ac of ["cc-number", "cc-exp", "email", null]) assert.equal(autocompleteCredential(ac), false, String(ac));
+});
+
+test("a letter-spaced card number or IBAN in visible text is left out, and only that span (TIN-617)", () => {
+  assert.deepEqual(redactNumbers("Pay 4111aaaaaaaa1111aaaaaaaa1111aaaaaaaa1111 today"), { text: `Pay ${NUMBER_LEFT_OUT} today`, count: 1 });
+  assert.deepEqual(redactNumbers("Send to DE89aaaaaaaa3704aaaaaaaa0044aaaaaaaa0532aaaaaaaa0130aaaaaaaa00 please"), { text: `Send to ${NUMBER_LEFT_OUT} please`, count: 1 });
+  // Grouped, with any dash, a RUN, an IBAN with letters.
+  for (const [text, out] of [
+    ["Card 4111 1111 1111 1111, exp 12/27", `Card ${NUMBER_LEFT_OUT} exp 12/27`],
+    ["Card 4111-1111-1111-1111 on file", `Card ${NUMBER_LEFT_OUT} on file`],
+    ["IBAN GB82 WEST 1234 5698 7654 32.", `IBAN ${NUMBER_LEFT_OUT}`],
+    ["RUN 12.345.678-5 del titular", `RUN ${NUMBER_LEFT_OUT} del titular`],
+  ] as const) assert.equal(redactNumbers(text).text, out, text);
+  // Ordinary prose with years and figures, dates, phone numbers and lists stays as it is.
+  for (const text of [
+    "In 2025 sales rose 12% to 340 units; in 2026 they reached 512 units across 7 regions and 19 stores.",
+    "Between 2019 and 2024 revenue grew from 120 to 450 million.",
+    "Years: 2019, 2020, 2021, 2022 and 2023.",
+    "Call +56 9 1234 5678 before 2026-11-04.",
+    "Total: $1,234,567.89 in Q3",
+  ]) assert.deepEqual(redactNumbers(text), { text, count: 0 }, text);
+});
+
+test("the hub leaves sensitive numbers out of the outlined text and the selection's block, unless the person chose to send them (TIN-617, TIN-619)", () => {
+  const card = "Pay 4111aaaaaaaa1111aaaaaaaa1111aaaaaaaa1111 today";
+  const page = { ...raw, element: { tag: "p", text: card, heading: "Billing" }, selection: "today", selection_context: { heading: "Other", text: "Wire to DE89 3704 0044 0532 0130 00." } };
+  const left = shapeReadingCounted(page)!;
+  assert.equal(left.reading.element!.text, `Pay ${NUMBER_LEFT_OUT} today`);
+  assert.equal(left.reading.selection_context!.text, `Wire to ${NUMBER_LEFT_OUT}`);
+  assert.equal(left.withheld, 2);
+  assert.doesNotMatch(readingText(left.reading), /4111|DE89/);
+  // Marked by the extension as the person's choice: kept, and said to be so.
+  const kept = shapeReadingCounted(chooseSensitive(page, true))!;
+  assert.equal(kept.reading.element!.text, card);
+  assert.equal(kept.reading.element!.sensitive, "included");
+  assert.equal(kept.reading.selection_sensitive, "included");
+  assert.equal(kept.reading.selection_context!.text, "Wire to DE89 3704 0044 0532 0130 00.");
+  assert.equal(kept.withheld, 0);
+  // The hub keeps what was marked, again, and a reading the extension marked is the same once the hub shapes it.
+  assert.deepEqual(shapeReading(kept.reading), kept.reading);
+  // A selection that is a card number: left out whole, or sent when the person included it.
+  assert.equal(shapeReading({ ...raw, selection: "4111111111111111" })!.selection, SELECTION_LEFT_OUT);
+  assert.equal(shapeReading({ ...raw, selection: "4111111111111111", selection_sensitive: "included" })!.selection, "4111111111111111");
+});
+
+test("the hub keeps a sensitive value the person chose to send, leaves out one not marked, and never takes a password or a code (TIN-619)", () => {
+  const fields = [
+    { label: "Card number", value: "4111 1111 1111 1111", kind: "typed", sensitive: "included" },
+    { label: "Reference", value: "de89 3704 0044 0532 0130 00", kind: "typed" },
+    { label: "Ingresa tu RUN", value: "12.345.678-5", kind: "typed", sensitive: true },
+    { label: "Saved card 5555 5555 5555 4444", value: "checked", kind: "choice", sensitive: "included" },
+    { label: "Saved card 4111 1111 1111 1111", value: "checked", kind: "choice" },
+    { label: "Password", value: "hunter2", kind: "typed", sensitive: "included" },
+    { label: "Code", value: "123456", kind: "typed", sensitive: "included" },
+    { label: "CVV", value: "123", kind: "typed", sensitive: "included" },
+    { label: "Notes", value: "Leave at the door", kind: "typed" },
+    { label: "Address", value: "Av. Siempre Viva 742", kind: "typed" },
+  ];
+  const { reading, withheld } = shapeReadingCounted({ ...raw, form: { fields } })!;
+  assert.deepEqual(reading.form, {
+    fields: [
+      { label: "Card number", value: "4111 1111 1111 1111", kind: "typed", pointed: false, sensitive: "included" },
+      { label: "Reference", value: LEFT_OUT, kind: "typed", pointed: false },
+      { label: "Ingresa tu RUN", value: LEFT_OUT, kind: "typed", pointed: false },
+      { label: "Saved card 5555 5555 5555 4444", value: "checked", kind: "choice", pointed: false, sensitive: "included" },
+      { label: "Password", value: CODE_LEFT_OUT, kind: "typed", pointed: false },
+      { label: "Code", value: CODE_LEFT_OUT, kind: "typed", pointed: false },
+      { label: "CVV", value: CODE_LEFT_OUT, kind: "typed", pointed: false },
+      { label: "Notes", value: "Leave at the door", kind: "typed", pointed: false },
+      { label: "Address", value: "Av. Siempre Viva 742", kind: "typed", pointed: false },
+    ],
+    left_out: 1,
+    more: 0,
+  });
+  assert.equal(withheld, 3);
+  assert.doesNotMatch(JSON.stringify(reading), /hunter2|123456|de89|12\.345/);
+  assert.match(readingText(reading), /- Card number: 4111 1111 1111 1111 \(sensitive: the person chose to send it\)\n/);
+  assert.match(readingText(reading), /- Password: \(left out: password or code\)\n/);
 });
 
 test("the log's entry is the site, the time and the size, never a word of the reading (TIN-422)", () => {

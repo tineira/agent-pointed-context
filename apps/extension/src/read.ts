@@ -1,10 +1,10 @@
 /**
  * What a reading takes from a page beyond its rendered text (TIN-422, DESIGN.md 13.2): the words behind
- * an image or a formula, a table cell's column header and row, and the form state at the drop point
- * (TIN-571). Typed by what they touch rather than by the DOM, so the tests run them on plain objects.
+ * an image or a formula, a table cell's column header and row, and the form state inside the outline
+ * (TIN-571, TIN-619). Typed by what they touch rather than by the DOM, so the tests run them on plain objects.
  */
 
-import { autocompleteSecret, codeSecret, namesSecret, shapeFields, type FieldCandidate, type FormReading } from "../../dock/src/worker/reading.ts";
+import { autocompleteCredential, autocompleteSecret, CODE_LEFT_OUT, codeSecret, namesCredential, namesSecret, textSecret, type FieldCandidate } from "../../dock/src/worker/reading.ts";
 
 /** Said in an image's place when it has no alternative text, so the agent knows something is missing. */
 export const NO_ALT = "[image with no alt text]";
@@ -83,7 +83,6 @@ export function tableContext<C extends Cell>(table: Table<C>, cell: C, text: (c:
   const row = first && first !== cell && !(isHeader(cell) && isHeader(first)) ? first : undefined;
   return { column: header ? text(header).trim() || null : null, row: row ? text(row).trim() || null : null };
 }
-
 /**
  * A form control as the content script saw it at the drop (TIN-571): native or ARIA, described by
  * plain fields so the tests run formState on plain objects.
@@ -104,27 +103,32 @@ export interface Control {
   checked: boolean;
   /** A text field's value, or the chosen options' text of a select. */
   value: string;
-  /** The control the person dropped on. */
+  /** The control right under the pointer. */
   pointed: boolean;
   /** Whether the person sees it (controlVisible). */
   visible: boolean;
 }
 
-/** Text-like input types whose value may go into a reading; every other type (password, hidden, file, buttons) never does. */
+/** Text-like input types whose value may go into a reading; every other type (hidden, file, buttons) never does, and a password only as CODE_LEFT_OUT. */
 export const TEXT_TYPES = new Set(["", "text", "email", "tel", "url", "search", "number", "date", "time", "datetime-local", "month", "week", "textarea"]);
 
-/** Whether a control's markup says it holds a secret: a password, a card, a one-time code, an account, an id. */
-export function secretControl(c: Pick<Control, "kind" | "type" | "label" | "group" | "name" | "id" | "autocomplete" | "placeholder" | "value">): boolean {
-  if (c.type === "password") return true;
-  if (autocompleteSecret(c.autocomplete)) return true;
-  if (codeSecret(c.value, c.name, c.id, c.placeholder)) return true;
-  return namesSecret("name", c.name, c.id) || namesSecret("label", c.label, c.placeholder, c.kind === "radio" ? c.group : null);
+type ControlWords = Pick<Control, "kind" | "type" | "label" | "group" | "name" | "id" | "autocomplete" | "placeholder" | "value">;
+
+/**
+ * What a control holds, by its markup and its words (TIN-619): "credential" for a password or a
+ * one-time code (a card's security code too), which never goes in any mode; "sensitive" for a card,
+ * account or id number, which goes only as the person chose; null otherwise.
+ */
+export function classify(c: ControlWords): "credential" | "sensitive" | null {
+  const labels = [c.label, c.placeholder, c.kind === "radio" ? c.group : null];
+  if (c.type === "password" || autocompleteCredential(c.autocomplete) || namesCredential(c.name, c.id, ...labels) || codeSecret(c.value, c.name, c.id, ...labels)) return "credential";
+  if (autocompleteSecret(c.autocomplete) || namesSecret("name", c.name, c.id) || namesSecret("label", ...labels) || textSecret(c.value) || textSecret(c.label)) return "sensitive";
+  return null;
 }
 
-/** Whether a control counts toward a wider group's size (pickScope): one formState could say something of. */
-export function countable(c: Pick<Control, "kind" | "type" | "visible">): boolean {
-  if (c.type === "hidden" || !c.visible) return false;
-  return c.kind !== "text" || TEXT_TYPES.has(c.type) || c.type === "password";
+/** Whether a control's markup or words say it holds a secret of either kind. */
+export function secretControl(c: ControlWords): boolean {
+  return classify(c) !== null;
 }
 
 /** What the content script measured of an element, for visuallyHidden. */
@@ -180,43 +184,38 @@ export function controlVisible(nativeChoice: boolean, typed: boolean, self: Seen
   return nativeChoice && !self.ariaHidden && labels.some((l) => !visuallyHidden(l));
 }
 
-/** The most controls a wider group (a form, a role=group) may hold for its choices to go along. */
-export const SCOPE_MAX = 25;
+/** The most fields the content script hands on from one outline; the rest are counted in more. */
+export const FIELDS_SENT = 200;
 
 /**
- * Which ancestor of the drop point gives the choices (TIN-571), nearest first: the control's own group
- * (a fieldset or a radiogroup) whatever its size; without one, the nearest form or role=group, only when
- * it holds at most SCOPE_MAX controls. -1: none, so only the control dropped on (and its own radios).
+ * The form state inside the outline (TIN-571, TIN-619), the control under the pointer first, then in the
+ * page's order: what was typed in each field the person can see, the chosen radio of each group (or the
+ * one under the pointer, chosen or not), every checkbox, a select's chosen options. A control the person
+ * cannot see is never read. A password or a one-time code goes only as CODE_LEFT_OUT; a sensitive value
+ * goes with its value and `sensitive: true`, for the service worker to keep or leave out as the person
+ * chose (chooseSensitive). The filters and caps are shapeFields, which the service worker and the hub run.
  */
-export function pickScope(ancestors: ReadonlyArray<{ kind: "own" | "wider"; controls: number }>): number {
-  const own = ancestors.findIndex((a) => a.kind === "own");
-  if (own >= 0) return own;
-  const wider = ancestors.findIndex((a) => a.kind === "wider");
-  return wider >= 0 && ancestors[wider]!.controls <= SCOPE_MAX ? wider : -1;
-}
-
-/**
- * The form state a reading carries (TIN-571), the pointed control first: the choices (the chosen radio
- * of each group, or the pointed one chosen or not; every checkbox; a select's chosen options) and the
- * typed value of the field dropped on, never of any other. A control the person cannot see is skipped.
- * A choice whose markup or text looks secret is counted in left_out; the typed value of the field dropped
- * on is said as LEFT_OUT then. The filters and caps are shapeFields, which the hub runs again.
- */
-export function formState(controls: readonly Control[]): FormReading | null {
+export function formState(controls: readonly Control[]): { fields: FieldCandidate[]; left_out: number; more: number } | null {
   const ordered = [...controls.filter((c) => c.pointed), ...controls.filter((c) => !c.pointed)];
   const groupsTaken = new Set<string>();
-  const candidates: FieldCandidate[] = [];
+  const fields: FieldCandidate[] = [];
+  let more = 0;
+  const add = (field: FieldCandidate) => {
+    if (fields.length >= FIELDS_SENT) more++;
+    else fields.push(field);
+  };
   for (const c of ordered) {
-    if (c.type === "hidden") continue;
+    if (c.type === "hidden" || !c.visible) continue;
+    const kind = classify(c);
     if (c.kind === "text") {
-      if (!c.pointed || (!TEXT_TYPES.has(c.type) && c.type !== "password")) continue;
-      // A password is said to be there, never read; another empty field says nothing.
-      if (!c.value.trim() && c.type !== "password") continue;
-      // A field dropped on that the person cannot see (a transparent field laid over the page): left out.
-      candidates.push({ kind: "typed", label: c.label ?? c.placeholder ?? c.name, value: c.value || "-", pointed: true, secret: !c.visible || secretControl(c) });
+      if (!TEXT_TYPES.has(c.type) && c.type !== "password") continue;
+      if (!c.value.trim()) continue;
+      const label = c.label ?? c.placeholder ?? c.name;
+      // A password or a code never leaves the page: only that it is there.
+      if (kind === "credential") add({ kind: "typed", label, value: CODE_LEFT_OUT, pointed: c.pointed, credential: true });
+      else add({ kind: "typed", label, value: c.value, pointed: c.pointed, ...(kind === "sensitive" ? { sensitive: true as const } : {}) });
       continue;
     }
-    if (!c.visible) continue;
     if (c.kind === "radio" && !c.checked && !c.pointed) continue;
     if (c.kind === "radio" && c.checked && c.groupKey) {
       if (groupsTaken.has(c.groupKey)) continue;
@@ -225,8 +224,29 @@ export function formState(controls: readonly Control[]): FormReading | null {
     if (c.kind === "select" && !c.value.trim()) continue;
     const label = c.kind === "radio" ? (c.group ?? c.name) : (c.label ?? c.name);
     const value = c.kind === "radio" ? `${c.label ?? (c.value || "an option")}${c.checked ? "" : " (not selected)"}` : c.kind === "checkbox" ? (c.checked ? "checked" : "not checked") : c.value;
-    candidates.push({ kind: "choice", label, value, pointed: c.pointed, secret: secretControl(c) });
+    if (kind === "credential") add({ kind: "choice", label, value: CODE_LEFT_OUT, pointed: c.pointed, credential: true });
+    else add({ kind: "choice", label, value, pointed: c.pointed, ...(kind === "sensitive" ? { sensitive: true as const } : {}) });
   }
-  return shapeFields(candidates);
+  return fields.length || more ? { fields, left_out: 0, more } : null;
 }
 
+/** The most controls a form's card may hold, and the most elements the content script looks through for them. */
+export const CARD_CONTROLS_MAX = 50;
+
+/**
+ * The outline around a form control, or around the label of one (TIN-619): from `start`, the largest
+ * ancestor that holds the same controls and no others (a radio's whole group counts as one), whose text
+ * is not most of the page. On a Google Form that is the question's card, title and answer together.
+ * `controls` gives an element's control keys, or null when there are too many to say; `text` its text
+ * length; `up` its parent, across shadow roots; `top` whether it is the page itself.
+ */
+export function cardOf<E>(start: E, own: ReadonlySet<string>, up: (e: E) => E | null, controls: (e: E) => ReadonlySet<string> | null, text: (e: E) => number, top: (e: E) => boolean, textMax: number): E {
+  let card = start;
+  for (let at = up(start); at && !top(at); at = up(at)) {
+    const keys = controls(at);
+    if (!keys || keys.size !== own.size || [...keys].some((k) => !own.has(k))) break;
+    if (text(at) > textMax) break;
+    card = at;
+  }
+  return card;
+}

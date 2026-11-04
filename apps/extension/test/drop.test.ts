@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -200,9 +200,17 @@ test("a lookup that told nothing is asked again on a later drag, once the servic
   assert.deepEqual(gate.drop(), { now: app });
 });
 
-test("the card says what goes along from a form, and a site that sends without asking asks once more with it (TIN-571)", () => {
-  for (const s of ["consent", "consent_sensitive", "consent_update"] as const) assert.ok(STATUS_TEXT[s].includes(FORM_NOTE), s);
-  assert.match(FORM_NOTE, /choices made in that part of a form and what you typed in the field you dropped on/);
+test("the card says what goes along and where, and a site that sends without asking asks once more with it (TIN-571, TIN-619)", () => {
+  for (const s of ["consent", "consent_sensitive", "consent_update"] as const) {
+    assert.ok(STATUS_TEXT[s].includes(FORM_NOTE), s);
+    assert.match(STATUS_TEXT[s], /APC hub .*kept 10 minutes at most.*agent's provider/, s);
+  }
+  assert.match(FORM_NOTE, /Everything you can see inside the outline goes along, including what you typed there\./);
+  assert.match(FORM_NOTE, /passwords and codes never/);
+  assert.match(STATUS_TEXT.consent_update, /^New: the outline is what goes\./);
+  // The re-ask is a new version: a person who saw TIN-571's notice is asked once more.
+  assert.notEqual(NOTICE_ALL, "formNoticeAll");
+  assert.notEqual(NOTICE_SITES, "formNoticeSites");
   // Always, a site granted by itself and Never ask send without a card: once, they ask with the new words.
   assert.equal(reask(decide("ask", "always", false, false), false), true);
   assert.equal(reask(decide("ask", undefined, false, true), false), true);
@@ -211,4 +219,20 @@ test("the card says what goes along from a form, and a site that sends without a
   assert.equal(reask(decide("ask", "always", false, false), true), false);
   // A drop that asks anyway, or never sends, needs no second card.
   for (const d of [decide("ask", undefined, false, false), decide("ask", "sensitive", false, false), decide("ask", "never", false, false)]) assert.equal(reask(d, false), false, d);
+});
+
+test("the sensitive-data setting: Ask per drop by default, one choice for every site, and Include this time only under Ask (TIN-619)", () => {
+  assert.equal(sensitiveMode(undefined), "ask");
+  assert.equal(sensitiveMode("bogus"), "ask");
+  assert.equal(sensitiveMode("send"), "send");
+  assert.equal(sensitiveMode("never"), "never");
+  assert.equal(includeSensitive("ask", false), false);
+  assert.equal(includeSensitive("ask", true), true);
+  assert.equal(includeSensitive("send", false), true);
+  assert.equal(includeSensitive("never", true), false, "Always leave out offers no button, and refuses one");
+  assert.equal(sentWithout(2), "Sent to your agent. 2 sensitive values left out.");
+  assert.equal(sentWithout(1), "Sent to your agent. 1 sensitive value left out.");
+  assert.match(sensitiveNote(3, "ask"), /^3 sensitive values will be left out; you can include them after sending\.$/);
+  assert.match(sensitiveNote(1, "send"), /go along/);
+  assert.match(sensitiveNote(1, "never"), /left out/);
 });

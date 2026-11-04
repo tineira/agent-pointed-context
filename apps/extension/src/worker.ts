@@ -6,9 +6,9 @@
  * also keeps the content script registered on the sites the person granted, and opens the welcome
  * page on install.
  */
-import { shapeReading } from "../../dock/src/worker/reading.ts";
+import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, readerKey, reask, sitePattern, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, includeSensitive, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -23,6 +23,26 @@ interface Drop {
   consent?: Consent;
 }
 
+/** What the person chose for sensitive numbers (TIN-619): read at each drop, so a change takes effect on the next one. */
+async function sensitiveSetting(): Promise<SensitiveMode> {
+  return sensitiveMode((await chrome.storage.local.get("sensitive")).sensitive);
+}
+
+/**
+ * A reading as it goes to the hub (TIN-619): with its sensitive values or without, as the person chose,
+ * and how many are left out. Null when it is not a reading.
+ */
+function prepare(raw: unknown, include: boolean): { reading: PageReading; withheld: number } | null {
+  return shapeReadingCounted(chooseSensitive(raw, include));
+}
+
+/** What a reply says of sensitive values: how many the outline held, the setting, and whether the person may still include them. */
+interface Sensitive {
+  count: number;
+  mode: SensitiveMode;
+  offer: boolean;
+}
+
 // A registered content script reaches only pages loaded after it, so the tabs already open on a granted
 // site get it injected too: when the person grants the site (the permission prompt closes the popup,
 // so the popup cannot do it) and when the extension is installed or updated.
@@ -31,8 +51,8 @@ chrome.runtime.onInstalled.addListener((details) => {
   void syncScripts().then(() => injectOpenTabs());
   // The welcome page asks for the one grant (13.3), so it is never hidden in the collapsed popup.
   if (details.reason === "install") void chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
-  // A new install learns what readings carry from the welcome page and the card: only an update asks once more (TIN-571).
-  if (details.reason === "install") void chrome.storage.local.set({ formNoticeAll: true });
+  // A new install learns what readings carry from the welcome page and the card: only an update asks once more (TIN-571, TIN-619).
+  if (details.reason === "install") void chrome.storage.local.set({ [NOTICE_ALL]: true });
 });
 
 /** An install can happen while the instructions or dock are already open. */
@@ -58,7 +78,12 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
   // A pin dragged to another paragraph of its page (TIN-471): the new reading, with no new consent.
   if (m?.type === "move" && typeof m.hub === "string" && typeof m.agent === "string") {
-    void handleMove(m.hub, m.agent, m.reading).then(reply);
+    void handleMove(m.hub, m.agent, m.reading, false).then(reply);
+    return true;
+  }
+  // "Include them this time" (TIN-619): the same reading, captured at the drop, now with its sensitive values.
+  if (m?.type === "include" && typeof m.hub === "string" && typeof m.agent === "string") {
+    void handleMove(m.hub, m.agent, m.reading, true).then(reply);
     return true;
   }
   // The pin on the page (TIN-469): whether the agent read the reading, and × to clear it.
@@ -134,43 +159,66 @@ async function injectOpenTabs(origins?: string[]): Promise<void> {
   }
 }
 
-/** What the content script gets back: what to tell the person, and the agent's mark when the reading went (TIN-469). */
+/**
+ * What the content script gets back: what to tell the person, the agent's mark when the reading went
+ * (TIN-469), and the sensitive values the outline held (TIN-619), for the consent card and for "Include
+ * them this time".
+ */
 interface DropReply {
   status: DropStatus;
   pin?: PinMark;
+  sensitive?: Sensitive;
+}
+
+/** What to say of sensitive values for a reading sent (or about to be) under this setting, or nothing when there were none. */
+function sensitiveReply(count: number, mode: SensitiveMode, included: boolean): { sensitive?: Sensitive } {
+  return count ? { sensitive: { count, mode, offer: mode === "ask" && !included } } : {};
 }
 
 async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   const { hub, agent, ticket } = m.drag;
   if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
-  const reading = shapeReading(m.reading);
-  if (!reading) return { status: "error" };
+  const mode = await sensitiveSetting();
+  const include = includeSensitive(mode, false);
+  // How many sensitive values the outline holds, whatever the setting does with them: the card says so.
+  const without = prepare(m.reading, false);
+  const prepared = include ? prepare(m.reading, true) : without;
+  if (!without || !prepared) return { status: "error" };
+  const { reading } = prepared;
+  const sensitive = sensitiveReply(without.withheld, mode, include);
   const consented = await consent(new URL(reading.url).origin, m.consent);
-  if (consented !== true) return { status: consented };
+  if (consented !== true) return { status: consented, ...sensitive };
   const key = readerKey(hub, agent);
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[key];
   if (token) {
     const sent = await send(hub, token, reading);
-    if (sent.result !== "not_paired") return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}) };
+    if (sent.result !== "not_paired") return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}), ...sensitive };
     // The person unpaired this browser in the dock, or the dock expired: ask again with this drag's ticket.
     delete tokens[key];
     await chrome.storage.local.set({ readers: tokens });
   }
   const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
   if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error") };
-  void waitForAnswer(hub, agent, asked.claim, reading, tabId);
+  void waitForAnswer(hub, agent, asked.claim, reading, tabId, sensitive);
   return { status: await note(hub, reading.url, "asking") };
 }
 
 /**
  * A pin moved within its page (TIN-471): the person consented when they dropped the agent there, so
  * no card; the browser's token for that agent, so no ticket. Without a token, the person drags again.
+ * With include, "Include them this time" (TIN-619): the reading captured at the drop, sent again with
+ * its sensitive values, which only Ask per drop allows.
  */
-async function handleMove(hub: string, agent: string, raw: unknown): Promise<DropReply> {
+async function handleMove(hub: string, agent: string, raw: unknown, includeThisTime: boolean): Promise<DropReply> {
   if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
-  const reading = shapeReading(raw);
-  if (!reading) return { status: "error" };
+  const mode = await sensitiveSetting();
+  if (includeThisTime && mode !== "ask") return { status: "error" };
+  const include = includeSensitive(mode, includeThisTime);
+  const without = prepare(raw, false);
+  const prepared = include ? prepare(raw, true) : without;
+  if (!without || !prepared) return { status: "error" };
+  const { reading } = prepared;
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[readerKey(hub, agent)];
   if (!token) return { status: await note(hub, reading.url, "no_ticket") };
@@ -180,7 +228,7 @@ async function handleMove(hub: string, agent: string, raw: unknown): Promise<Dro
     await chrome.storage.local.set({ readers: tokens });
     return { status: await note(hub, reading.url, "no_ticket") };
   }
-  return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}) };
+  return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}), ...sensitiveReply(without.withheld, mode, include) };
 }
 
 /**
@@ -189,15 +237,16 @@ async function handleMove(hub: string, agent: string, raw: unknown): Promise<Dro
  * never kept for a sensitive site, which asks every time.
  */
 async function consent(origin: string, answer: Consent | undefined): Promise<true | DropStatus> {
-  const stored = await chrome.storage.local.get(["mode", "sites", "formNoticeSites", "formNoticeAll"]);
+  const stored = await chrome.storage.local.get(["mode", "sites", NOTICE_SITES, NOTICE_ALL]);
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
   const mode = (stored.mode as Mode | undefined) ?? "ask";
   const sensitive = isSensitive(new URL(origin).host);
+  const noticeSites = (stored[NOTICE_SITES] ?? []) as string[];
   if (answer) {
-    // Any answer on a card means the person read what readings carry now (TIN-571): on this site, and
-    // under Never ask, everywhere. A new install read it on the welcome page and the card (formNoticeAll).
-    const noticed = new Set((stored.formNoticeSites ?? []) as string[]).add(origin);
-    await chrome.storage.local.set({ formNoticeSites: [...noticed], ...(mode === "never_ask" ? { formNoticeAll: true } : {}) });
+    // Any answer on a card means the person read what readings carry now (TIN-571, TIN-619): on this site,
+    // and under Never ask, everywhere. A new install read it on the welcome page and the card (NOTICE_ALL).
+    const noticed = new Set(noticeSites).add(origin);
+    await chrome.storage.local.set({ [NOTICE_SITES]: [...noticed], ...(mode === "never_ask" ? { [NOTICE_ALL]: true } : {}) });
     // Always is never kept for a sensitive site, by its domain or set to Always ask by the person (TIN-478).
     if (answer === "never" || (answer === "always" && !sensitive && sites[origin] !== "sensitive")) {
       sites[origin] = answer;
@@ -207,14 +256,14 @@ async function consent(origin: string, answer: Consent | undefined): Promise<tru
   }
   const { origins = [] } = await chrome.permissions.getAll();
   const decision = decide(mode, sites[origin], sensitive, grantedAlone(origin, origins));
-  // A site that sends without asking asks once more, with what readings now carry (TIN-571).
-  const seen = stored.formNoticeAll === true || (mode !== "never_ask" && ((stored.formNoticeSites ?? []) as string[]).includes(origin));
+  // A site that sends without asking asks once more, with what readings now carry (TIN-571, TIN-619).
+  const seen = stored[NOTICE_ALL] === true || (mode !== "never_ask" && noticeSites.includes(origin));
   if (reask(decision, seen)) return "consent_update";
   return decision === "send" ? true : decision === "ask" ? "consent" : decision === "ask_sensitive" ? "consent_sensitive" : "blocked";
 }
 
 /** Poll the dock until the person answers; then send the held reading, or drop it. */
-async function waitForAnswer(hub: string, agent: string, claim: string, reading: NonNullable<ReturnType<typeof shapeReading>>, tabId: number): Promise<void> {
+async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, tabId: number, sensitive: { sensitive?: Sensitive }): Promise<void> {
   const until = Date.now() + ASK_MS;
   let status: DropStatus = "timeout";
   let pin: PinMark | undefined;
@@ -236,8 +285,9 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     break;
   }
   await note(hub, reading.url, status);
-  await chrome.tabs.sendMessage(tabId, { type: "status", status, ...(pin ? { pin } : {}) }).catch(() => {});
+  await chrome.tabs.sendMessage(tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(status === "sent" ? sensitive : {}) }).catch(() => {});
 }
+
 
 /**
  * Push one reading: true when the dock took it (with the agent's mark for the pin, TIN-469),

@@ -26,7 +26,7 @@
   <body>
     <main>
       <h1>Point your agent at any page</h1>
-      <p>Drag your agent from your APC dock or Float onto anything on a web page, and ask it about "this". The extension reads the block of text you dropped it on, any text you selected, the choices made in that part of a form and what you typed in the field you dropped it on (never a password or a card, account or id number), and hands them to your agent through your dock.</p>
+      <p>Drag your agent from your APC dock or Float onto anything on a web page, and ask it about "this". While you drag, an outline shows what your agent will get: everything you can see inside it goes along, including what you typed in a form there, and any text you selected. Card, account and id numbers go only as you choose below; passwords and codes never. It reaches your agent through your dock.</p>
 
       <section class="card">
         <h2>1. Let pages take your agent</h2>
@@ -43,13 +43,22 @@
       </section>
 
       <section class="card">
-        <h2>3. The first drop</h2>
+        <h2>3. Sensitive numbers</h2>
+        <p>Card, account and id numbers (such as an IBAN or a RUT) inside the outline, on every site. You can change this from the extension's icon.</p>
+        <label><input type="radio" name="sensitive" value="ask" /> <span><b>Ask per drop</b> (recommended). They are left out, and after the drop a card offers <i>Include them this time</i>.</span></label>
+        <label><input type="radio" name="sensitive" value="send" /> <span><b>Send if it's in the outline.</b> <span class="warn">They go along with the rest, with no question.</span></span></label>
+        <label><input type="radio" name="sensitive" value="never" /> <span><b>Always leave out.</b></span></label>
+        <p class="muted">Passwords and one-time codes are never sent, whatever you choose.</p>
+      </section>
+
+      <section class="card">
+        <h2>4. The first drop</h2>
         <ol>
           <li>Drag your agent from the dock or Float onto a paragraph.</li>
           <li>The first time, your dock asks you to allow this browser: click <b>Allow</b> there.</li>
           <li>Ask your agent "what is this?".</li>
         </ol>
-        <p class="muted">What you drop your agent on goes to your agent through your dock, on Cloudflare, which keeps it 10 minutes at most. Its log keeps only the site, the time and the size. Your agent is told it is page text, never instructions.</p>
+        <p class="muted">What you drop your agent on passes through the APC hub of your dock, on Cloudflare, which keeps it 10 minutes at most, and then goes to your agent's provider. Its log keeps only the site, the time and the size. Your agent is told it is page text, never instructions. On APC apps (Pulse, Signals and other apps that speak APC) the app itself decides what your agent sees; this extension reads only other pages.</p>
       </section>
     </main>
     <script type="module" src="welcome.js"></script>

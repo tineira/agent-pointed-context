@@ -279,14 +279,49 @@ export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" 
 export const connectLabel = (host: string) => `Connect an agent on ${host}`;
 
 /** Where the text goes (13.5), said before anything is sent. */
-const PASSES_THROUGH = "It passes through your dock, on Cloudflare, and is kept 10 minutes at most.";
-/** What goes along from a form (TIN-571), said before anything is sent. */
-export const FORM_NOTE = "With the text go the choices made in that part of a form and what you typed in the field you dropped on, never a password or a card, account or id number.";
+const PASSES_THROUGH = "It passes through the APC hub of your dock, on Cloudflare (kept 10 minutes at most), and then to your agent's provider.";
+/** What goes along (TIN-571, TIN-619), said before anything is sent. */
+export const FORM_NOTE = "Everything you can see inside the outline goes along, including what you typed there. Sensitive numbers (card, account, id) go only as your setting in the APC extension says; passwords and codes never.";
+
+/**
+ * What the person chose for sensitive numbers, once for every site (TIN-619): "ask" leaves them out and
+ * offers "Include them this time" after the drop (the default); "send" sends what is in the outline;
+ * "never" always leaves them out. Passwords and one-time codes never go, whatever this says.
+ */
+export type SensitiveMode = "ask" | "send" | "never";
+export const SENSITIVE_MODES: readonly SensitiveMode[] = ["ask", "send", "never"];
+export const sensitiveMode = (value: unknown): SensitiveMode => (value === "send" || value === "never" ? value : "ask");
+
+/** Whether a reading goes with its sensitive values: by the setting, or "Include them this time" under Ask per drop. */
+export function includeSensitive(mode: SensitiveMode, includeThisTime: boolean): boolean {
+  return mode === "send" || (mode === "ask" && includeThisTime);
+}
+
+/** "1 sensitive value", "3 sensitive values". */
+export const sensitiveCount = (n: number) => (n === 1 ? "1 sensitive value" : `${n} sensitive values`);
+
+/** What the consent card adds when the outline holds sensitive values, by the setting. */
+export function sensitiveNote(n: number, mode: SensitiveMode): string {
+  if (mode === "send") return `${sensitiveCount(n)} in the outline go along, as your setting says.`;
+  if (mode === "never") return `${sensitiveCount(n)} will be left out, as your setting says.`;
+  return `${sensitiveCount(n)} will be left out; you can include them after sending.`;
+}
+
+/** The card after a drop under Ask per drop, when values were left out. */
+export const sentWithout = (n: number) => `Sent to your agent. ${sensitiveCount(n)} left out.`;
+export const INCLUDE_LABEL = "Include them this time";
+
+/**
+ * The storage keys that say the person has seen what readings carry now (TIN-571; version 2 since
+ * TIN-619, "the outline is what goes"): a new version asks once more on sites that send without asking.
+ */
+export const NOTICE_SITES = "readingNoticeSites2";
+export const NOTICE_ALL = "readingNoticeAll2";
 
 /**
  * Whether a drop that would be sent without a question (Always, a site granted by itself, Never ask)
- * asks once more, because the person has not seen what readings now carry (TIN-571). The answer is
- * kept as on any card, and the site's setting stays.
+ * asks once more, because the person has not seen what readings now carry (TIN-571, TIN-619). The answer
+ * is kept as on any card, and the site's setting stays.
  */
 export function reask(decision: Decision, seen: boolean): boolean {
   return decision === "send" && !seen;
@@ -302,7 +337,7 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   error: "Could not reach your dock: nothing was sent",
   consent: `Send this to your agent? ${FORM_NOTE} ${PASSES_THROUGH}`,
   consent_sensitive: `This site is set to ask every time. Send this to your agent? ${FORM_NOTE} ${PASSES_THROUGH}`,
-  consent_update: `New: page readings carry more. ${FORM_NOTE} Send this to your agent? ${PASSES_THROUGH} This asks once: your setting for this site stays unless you choose Not here.`,
+  consent_update: `New: the outline is what goes. ${FORM_NOTE} Send this to your agent? ${PASSES_THROUGH} This asks once: your setting for this site stays unless you choose Not here.`,
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
 };
