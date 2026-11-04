@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import { generateDataset } from "../../demo/src/model/seed.ts";
 
 installWorkersStandIn();

@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { toolError, toolResult } from "@apc/server";
+import { toolError, toolResult } from "@tineira/apc-server";
 import { z } from "zod";
 import { FIGURE_KEYS } from "../model/figures.ts";
 import { PLANS, REGIONS, type Dataset } from "../model/seed.ts";

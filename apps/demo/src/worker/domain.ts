@@ -3,7 +3,7 @@
  * no transport. The Durable Object stores rows and calls these; tests call
  * them directly.
  */
-import { parseParams, parseTarget, type FocusPayload, type FocusParams, type FocusRow, type FocusTarget, type ViewPayload } from "@apc/protocol";
+import { parseParams, parseTarget, type FocusPayload, type FocusParams, type FocusRow, type FocusTarget, type ViewPayload } from "@tineira/apc-protocol";
 import { FIGURE_KEYS, figureSpec, type Scope } from "../model/figures.ts";
 import { MONTHS, PLANS, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 

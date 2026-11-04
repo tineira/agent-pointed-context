@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PACKAGES, checkManifest, checkVersions, distTargets, rewriteDeclaration, standardVersionOf } from "../lib/packages.mjs";
 
-const at = (version) => PACKAGES.map((n) => ({ name: `@apc/${n}`, version }));
+const at = (version) => PACKAGES.map((n) => ({ name: `@tineira/apc-${n}`, version }));
 const repo = (path) => new URL(`../../${path}`, import.meta.url);
 
 test("the four packages share one version, a 0.x patch of the standard's", () => {
@@ -13,7 +13,7 @@ test("the four packages share one version, a 0.x patch of the standard's", () =>
   assert.equal(checkVersions({ manifests: at("0.6.9"), standard: "0.7.0" }).ok, false);
   assert.equal(checkVersions({ manifests: at("0.8.0"), standard: "0.7.0" }).ok, false);
   assert.equal(checkVersions({ manifests: at("1.0.0"), standard: "1.0.0" }).ok, false, "1.0 waits for the published standard");
-  const split = [...at("0.7.0").slice(1), { name: "@apc/protocol", version: "0.7.1" }];
+  const split = [...at("0.7.0").slice(1), { name: "@tineira/apc-protocol", version: "0.7.1" }];
   assert.match(checkVersions({ manifests: split, standard: "0.7.0" }).problems.join(), /do not share one version/);
   assert.equal(checkVersions({ manifests: at("0.7.0"), standard: null }).ok, false);
 });
@@ -38,7 +38,7 @@ test("the repo as it is: versions agree, and every manifest is fit to publish", 
 test("a manifest that would publish wrong is caught", () => {
   const good = JSON.parse(readFileSync(repo("packages/server/package.json"), "utf8"));
   assert.deepEqual(checkManifest(good), []);
-  assert.match(checkManifest({ ...good, dependencies: { "@apc/protocol": "workspace:*" } }).join(), /workspace:\^/);
+  assert.match(checkManifest({ ...good, dependencies: { "@tineira/apc-protocol": "workspace:*" } }).join(), /workspace:\^/);
   assert.match(checkManifest({ ...good, publishConfig: { ...good.publishConfig, tag: "latest" } }).join(), /tag is not next/);
   assert.match(checkManifest({ ...good, publishConfig: { ...good.publishConfig, exports: { ".": "./src/index.ts" } } }).join(), /not in dist/);
   assert.match(checkManifest({ ...good, files: ["dist"] }).join(), /README\.md/);
@@ -49,6 +49,6 @@ test("declarations import .js, not the .ts the sources import", () => {
   assert.equal(rewriteDeclaration('export * from "./core.ts";\nexport type * from "./types.ts";'), 'export * from "./core.js";\nexport type * from "./types.js";');
   assert.equal(rewriteDeclaration('import type { ApcKv } from "./kv.ts";'), 'import type { ApcKv } from "./kv.js";');
   assert.equal(rewriteDeclaration('let x: import("../a/b.ts").T;'), 'let x: import("../a/b.js").T;');
-  assert.equal(rewriteDeclaration('import { z } from "zod";\nimport { a } from "@apc/protocol";'), 'import { z } from "zod";\nimport { a } from "@apc/protocol";', "packages untouched");
+  assert.equal(rewriteDeclaration('import { z } from "zod";\nimport { a } from "@tineira/apc-protocol";'), 'import { z } from "zod";\nimport { a } from "@tineira/apc-protocol";', "packages untouched");
   assert.equal(rewriteDeclaration('const s = "see ./x.ts";'), 'const s = "see ./x.ts";', "only specifiers");
 });

@@ -1,9 +1,9 @@
 /**
- * The standard pin badge (TIN-482, `<apc-pin>` from @apc/web) in React, with Pulse's own logos:
+ * The standard pin badge (TIN-482, `<apc-pin>` from @tineira/apc-web) in React, with Pulse's own logos:
  * AgentIcon is portalled into the badge's icon host. Where the badge goes (className, style) stays
  * Pulse's: pin-badges.tsx floats it over its target.
  */
-import { definePinBadge, type ApcPinElement } from "@apc/web";
+import { definePinBadge, type ApcPinElement } from "@tineira/apc-web";
 import { createElement, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { AgentIcon } from "./agent-icon.tsx";

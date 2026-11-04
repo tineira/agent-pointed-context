@@ -1,4 +1,4 @@
-import { APC_AGENT_CLIENT_META, type ApcProfile } from "@apc/protocol";
+import { APC_AGENT_CLIENT_META, type ApcProfile } from "@tineira/apc-protocol";
 
 /**
  * The Direct profile's server parts (APC 0.4), for an app's Durable Object: a grant per agent with its

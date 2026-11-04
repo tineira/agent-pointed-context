@@ -1,5 +1,5 @@
 // Builds the published packages (TIN-612): ESM JavaScript and .d.ts in packages/<name>/dist, with tsc in
-// build mode (tsconfig.build.json; the others reference @apc/protocol's). The apps and the tests keep using
+// build mode (tsconfig.build.json; the others reference @tineira/apc-protocol's). The apps and the tests keep using
 // the TypeScript sources (package.json "exports"); only what pnpm publishes points at dist ("publishConfig").
 //   node scripts/build-packages.mjs
 import { spawnSync } from "node:child_process";
@@ -29,4 +29,4 @@ for (const name of PACKAGES) {
     else if (file.endsWith(".d.ts")) writeFileSync(file, rewriteDeclaration(readFileSync(file, "utf8")));
   }
 }
-console.log(`build-packages: built ${PACKAGES.map((n) => `@apc/${n}`).join(", ")} into packages/*/dist`);
+console.log(`build-packages: built ${PACKAGES.map((n) => `@tineira/apc-${n}`).join(", ")} into packages/*/dist`);

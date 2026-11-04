@@ -2,14 +2,14 @@
  * One visitor's Signals (TIN-384): a Durable Object holding the seed of their demo world (the posts are
  * rebuilt from it), its grants, the view, the pins and the page's WebSocket. Agents come both ways
  * (APC_PROFILES, TIN-578): Direct, with a grant and MCP URL the person makes on the page (the Direct
- * profile from @apc/server and @apc/web), and Dock, where a dock's hub pairs after the person says yes
+ * profile from @tineira/apc-server and @tineira/apc-web), and Dock, where a dock's hub pairs after the person says yes
  * here and in the dock, and reads with the grant Signals made for it. The same agent on both shows as
  * one (apc_link).
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ApcProfile, FocusRow } from "@apc/protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@apc/server";
+import type { ApcProfile, FocusRow } from "@tineira/apc-protocol";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { generateDataset } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -452,7 +452,7 @@ export class Feed extends DurableObject<Env> {
       import("@modelcontextprotocol/sdk/server/mcp.js"),
       import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
       import("@modelcontextprotocol/sdk/validation/cfworker"),
-      import("@apc/server"),
+      import("@tineira/apc-server"),
       import("zod"),
     ]);
     const posts = this.posts();

@@ -1,12 +1,12 @@
-# @apc/conformance
+# @tineira/apc-conformance
 
 Checks an app against the Agent Pointed Context (APC) standard: live over HTTP from a terminal (`apc-conformance`), or the whole suite in your own tests with a small adapter for your page. Node 22.15+. Docs: https://apc.tineira.com/docs
 
 ## A live app, from a terminal
 
 ```sh
-npx @apc/conformance@next https://your.app
-npx @apc/conformance@next https://your.app --grant https://your.app/mcp/<…>/<secret> --revoked <the MCP URL of a grant you revoked> --json
+npx @tineira/apc-conformance@next https://your.app
+npx @tineira/apc-conformance@next https://your.app --grant https://your.app/mcp/<…>/<secret> --revoked <the MCP URL of a grant you revoked> --json
 ```
 
 It reads `https://your.app/.well-known/apc.json` (its shape, its origin, its profiles, its standard) and, with `--grant` (the MCP URL of an agent connected directly), talks to the grant as an agent does: `initialize`, `tools/list` (the core tools and their arguments), `get_current_view` (the view and focus in the core's format, `attention` and `then` the same in the structured result and the text), `wait_for_focus({ timeout_s: 1 })` (it times out at 1 s, or ends at once when no page is open, with a note and no `then`) and an unknown grant answering 404. With `--revoked` it checks the revoked answer (403 `{ error: "revoked", revoked_by, revoked_at }` to every method, POST, GET and DELETE).
@@ -19,7 +19,7 @@ What needs the person's page cannot run over HTTP, and is reported as `SKIP`: a 
 
 ```ts
 import { test } from "node:test";
-import { apcConformance } from "@apc/conformance";
+import { apcConformance } from "@tineira/apc-conformance";
 
 for (const check of apcConformance({
   name: "My app",
@@ -31,6 +31,6 @@ for (const check of apcConformance({
 })) test(check.name, check.run);
 ```
 
-`runConformance(adapter)` runs them all and returns a report; `httpConformance` / `runHttpConformance` are the HTTP checks as a library. `@apc/conformance/workers` runs a Cloudflare Durable Object on Node's SQLite with fake pages, so the suite can run against a Worker with no network.
+`runConformance(adapter)` runs them all and returns a report; `httpConformance` / `runHttpConformance` are the HTTP checks as a library. `@tineira/apc-conformance/workers` runs a Cloudflare Durable Object on Node's SQLite with fake pages, so the suite can run against a Worker with no network.
 
 Source and changelog: https://github.com/tineira/agent-pointed-context. MIT.

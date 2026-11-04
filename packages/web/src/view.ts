@@ -1,4 +1,4 @@
-import type { FocusParams } from "@apc/protocol";
+import type { FocusParams } from "@tineira/apc-protocol";
 
 export interface ReportedView {
   screen: string;

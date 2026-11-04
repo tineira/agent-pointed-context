@@ -3,8 +3,8 @@
  * first, on its own page: may this agent read Pulse, and how much? On yes, Pulse makes a grant and
  * hands it to the dock's hub; the dock then asks too, and the agent reads Pulse only after both.
  */
-import type { AgentDrag } from "@apc/web";
-import type { FocusTarget } from "@apc/protocol";
+import type { AgentDrag } from "@tineira/apc-web";
+import type { FocusTarget } from "@tineira/apc-protocol";
 import { useRef, useState } from "react";
 import { REGIONS, type Region } from "../model/seed.ts";
 import type { Api } from "./api.ts";

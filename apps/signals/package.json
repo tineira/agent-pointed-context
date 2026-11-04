@@ -10,9 +10,9 @@
     "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
-    "@apc/protocol": "workspace:*",
-    "@apc/server": "workspace:*",
-    "@apc/web": "workspace:*",
+    "@tineira/apc-protocol": "workspace:*",
+    "@tineira/apc-server": "workspace:*",
+    "@tineira/apc-web": "workspace:*",
     "@cfworker/json-schema": "4.1.1",
     "@modelcontextprotocol/sdk": "1.32.1",
     "hono": "4.13.13",
@@ -21,7 +21,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@apc/conformance": "workspace:*",
+    "@tineira/apc-conformance": "workspace:*",
     "@cloudflare/vite-plugin": "1.64.0",
     "@cloudflare/workers-types": "5.20261012.1",
     "@types/react": "19.3.0",

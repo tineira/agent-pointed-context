@@ -1,12 +1,12 @@
 /**
  * Revoke from the app (APC 0.2, TIN-577), end to end in one process: the real hub (hub.ts) and the real
- * Pulse sandbox (apps/demo), each on Node's SQLite (@apc/conformance/workers), with fetch routed
+ * Pulse sandbox (apps/demo), each on Node's SQLite (@tineira/apc-conformance/workers), with fetch routed
  * between them by origin and nothing else reachable. The person pairs a dock agent with Pulse,
  * revokes it in Pulse's agent bar while the hub is down, and the hub learns it on its next call.
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import { generateDataset } from "../../demo/src/model/seed.ts";
 import { LIMITS } from "../src/worker/trust.ts";
 

@@ -2,7 +2,7 @@
  * What the in-process suite (`index.ts`) and the HTTP checks (`http.ts`) share: the error a check
  * throws, how a JSON-RPC reply is read off Streamable HTTP, and the shapes of the core's view and focus.
  */
-import { parseParams, parseTarget, type FocusTarget } from "@apc/protocol";
+import { parseParams, parseTarget, type FocusTarget } from "@tineira/apc-protocol";
 
 export class ConformanceError extends Error {}
 

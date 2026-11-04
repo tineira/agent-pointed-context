@@ -10,8 +10,8 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@apc/protocol";
-import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@apc/server";
+import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
+import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";

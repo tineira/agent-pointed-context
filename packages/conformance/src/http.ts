@@ -1,5 +1,5 @@
 /**
- * The conformance checks that run over plain HTTP against a live app (what `npx @apc/conformance` runs):
+ * The conformance checks that run over plain HTTP against a live app (what `npx @tineira/apc-conformance` runs):
  * no adapter, only the app's origin and, if the person has them, the MCP URL of a live Direct grant and
  * of one they revoked. It reads `{origin}/.well-known/apc.json` and talks JSON-RPC to the grant the way
  * an agent does. What only the person's page can do (drop a pin, open or close the page, see presence,
@@ -21,7 +21,7 @@ import {
   isRevokedAnswer,
   parseApcManifest,
   type ApcManifest,
-} from "@apc/protocol";
+} from "@tineira/apc-protocol";
 import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, rpcBody, text, type ToolCallResult } from "./shared.ts";
 
 export interface HttpConformanceOptions {
@@ -286,7 +286,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       async run() {
         if (!manifest) return "apc.json did not parse";
         expect(compareStandard(manifest.standard, "0.5.0") >= 0, `standard is ${manifest.standard}: apc.json exists since 0.5.0`);
-        expect(compareStandard(manifest.standard, APC_STANDARD_VERSION) <= 0, `standard is ${manifest.standard}, newer than the ${APC_STANDARD_VERSION} these checks know: update @apc/conformance`);
+        expect(compareStandard(manifest.standard, APC_STANDARD_VERSION) <= 0, `standard is ${manifest.standard}, newer than the ${APC_STANDARD_VERSION} these checks know: update @tineira/apc-conformance`);
       },
     },
     {

@@ -1,5 +1,5 @@
-/** The standard pin badge (TIN-482, `<apc-pin>` from @apc/web) in React: the icon is the agent's mark from the dock. */
-import { definePinBadge, type ApcPinElement } from "@apc/web";
+/** The standard pin badge (TIN-482, `<apc-pin>` from @tineira/apc-web) in React: the icon is the agent's mark from the dock. */
+import { definePinBadge, type ApcPinElement } from "@tineira/apc-web";
 import { createElement, useEffect, useRef } from "react";
 
 definePinBadge();

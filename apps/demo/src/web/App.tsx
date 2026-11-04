@@ -1,5 +1,5 @@
-import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, loadApcProfiles, markState, mergePins, type DockUnsupported } from "@apc/web";
+import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@tineira/apc-protocol";
+import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, loadApcProfiles, markState, mergePins, type DockUnsupported } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";

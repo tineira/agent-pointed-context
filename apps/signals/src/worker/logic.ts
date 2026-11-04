@@ -3,8 +3,8 @@
  * and what the agent reads. The posts come from Pulse's model (model/market.ts) for the visitor's
  * seed. No Workers APIs here, so the tests run it.
  */
-import type { FocusPayload, FocusRow, FocusTarget, ViewPayload } from "@apc/protocol";
-import { canonicalTarget, parseTarget } from "@apc/protocol";
+import type { FocusPayload, FocusRow, FocusTarget, ViewPayload } from "@tineira/apc-protocol";
+import { canonicalTarget, parseTarget } from "@tineira/apc-protocol";
 import { MONTHS } from "../../../demo/src/model/seed.ts";
 import { POST_PARTS, type Post } from "../../../demo/src/model/market.ts";
 

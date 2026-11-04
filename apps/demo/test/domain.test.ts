@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { FocusRow } from "@apc/protocol";
+import type { FocusRow } from "@tineira/apc-protocol";
 import { generateDataset } from "../src/model/seed.ts";
 import { checkPin, customerAnswer, figureAnswer, listCustomers, resolveFocus, sanitizeView, trimView, type Grant } from "../src/worker/domain.ts";
 

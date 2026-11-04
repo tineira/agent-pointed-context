@@ -1,14 +1,14 @@
 /**
  * A dock agent dropped on a Direct-only app (APC 0.5): Signals deployed with APC_PROFILES="direct", in
  * process. Its Worker serves an apc.json without the Dock profile, its feed refuses to pair with a dock,
- * and its page, through @apc/web's enablePinning with the profiles and connect page from that apc.json,
+ * and its page, through @tineira/apc-web's enablePinning with the profiles and connect page from that apc.json,
  * answers the drop with how to connect directly, never by doing nothing. The page is a DOM just big
  * enough for enablePinning (there is no browser in `node --test`).
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import { APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, type ApcManifest } from "@apc/protocol";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
+import { APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, type ApcManifest } from "@tineira/apc-protocol";
 
 installWorkersStandIn();
 const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);

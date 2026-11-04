@@ -4,8 +4,8 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import { APC_JSON_PATH } from "@apc/protocol";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
+import { APC_JSON_PATH } from "@tineira/apc-protocol";
 
 installWorkersStandIn();
 const { Sandbox } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);

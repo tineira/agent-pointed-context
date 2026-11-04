@@ -1,10 +1,10 @@
-name: Publish @apc/* to npm
+name: Publish @tineira/apc-* to npm
 
-# The four packages (@apc/protocol, @apc/server, @apc/web, @apc/conformance) go to npm as 0.x pre-releases on the
+# The four packages (@tineira/apc-protocol, @tineira/apc-server, @tineira/apc-web, @tineira/apc-conformance) go to npm as 0.x pre-releases on the
 # `next` dist-tag (TIN-612), never `latest` before the standard is 1.0. A tag `apc-v<version>` publishes that version
 # (the four package.json versions, which scripts/check-packages.mjs holds to APC_STANDARD_VERSION); running it by hand
 # (workflow_dispatch) is a dry run that publishes nothing. Publishing needs the repository secret NPM_TOKEN (an npm
-# automation or granular token with publish rights on the @apc scope); provenance comes from GitHub's OIDC token.
+# automation or granular token with publish rights on the @tineira scope); provenance comes from GitHub's OIDC token.
 
 on:
   push:
@@ -34,7 +34,7 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "$NPM_TOKEN" ]; then
-            echo "::error title=NPM_TOKEN is missing::The repository secret NPM_TOKEN is not set, so nothing can be published. Add an npm token with publish rights on the @apc scope as NPM_TOKEN (Settings > Secrets and variables > Actions), then re-run this workflow or push the tag again."
+            echo "::error title=NPM_TOKEN is missing::The repository secret NPM_TOKEN is not set, so nothing can be published. Add an npm token with publish rights on the @tineira scope as NPM_TOKEN (Settings > Secrets and variables > Actions), then re-run this workflow or push the tag again."
             exit 1
           fi
       - uses: actions/checkout@v4

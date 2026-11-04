@@ -1,4 +1,4 @@
-import type { PresenceEvent } from "@apc/protocol";
+import type { PresenceEvent } from "@tineira/apc-protocol";
 
 export const PRESENCE_MAX_TARGETS = 20;
 

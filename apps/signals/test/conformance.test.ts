@@ -1,15 +1,15 @@
 /**
  * Signals against the APC conformance suite (APC 0.2, TIN-577). Signals offers the Dock profile only:
  * every grant is one it handed a dock's hub at pairing. Its Durable Object runs for real on Node's
- * SQLite (@apc/conformance/workers); the hub's side of pairing is a stand-in, so nothing leaves the
+ * SQLite (@tineira/apc-conformance/workers); the hub's side of pairing is a stand-in, so nothing leaves the
  * process.
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { apcConformance, type ApcAppAdapter } from "@apc/conformance";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@apc/protocol";
-import { barCanCollapse, createTapPin, type BarAgent } from "@apc/web";
+import { apcConformance, type ApcAppAdapter } from "@tineira/apc-conformance";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
+import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { generateDataset } from "../../demo/src/model/seed.ts";
 import { buildMarket } from "../../demo/src/model/market.ts";
 
@@ -103,7 +103,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       pin: async (grantId, target) => (await feed.pin(grantId, target, true)).ok,
       takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceEvent),
       revoke: async (grantId) => (await feed.revokeGrant(grantId)).ok,
-      // The page on a phone (APC 0.6), modelled with @apc/web's own pieces: the bar's collapse rule on mobile and
+      // The page on a phone (APC 0.6), modelled with @tineira/apc-web's own pieces: the bar's collapse rule on mobile and
       // the tap-to-pin controller `enablePinning` runs, which pins through the feed like the page's onPin does.
       // The real page, at 375x812 with a touch pointer, is scripts/mobile-e2e.mjs.
       mobile: {

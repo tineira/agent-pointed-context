@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { apcGuide, registerApcPrompts } from "@apc/server";
+import { apcGuide, registerApcPrompts } from "@tineira/apc-server";
 import { PULSE_GUIDE } from "../src/worker/guide.ts";
 
 // The pulse-agent skill documents V1: its drift test is apps/v1/test/guide.test.ts (TIN-604).

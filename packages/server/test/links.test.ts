@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { APC_AGENT_CLIENT_META, APC_LINK_TTL_S } from "@apc/protocol";
+import { APC_AGENT_CLIENT_META, APC_LINK_TTL_S } from "@tineira/apc-protocol";
 import { ApcLinks, attachApcLink, cleanAgentName, directMcpUrl, initializeOf, linkClient, memoryKv, newDirectGrant, parseProfiles, profilesProblem, sqlKv, toolResult, type LinkGrant } from "../src/index.ts";
 
 function world(now = { t: 1_000_000 }) {

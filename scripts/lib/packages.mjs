@@ -1,4 +1,4 @@
-// The published packages (@apc/protocol, @apc/server, @apc/web, @apc/conformance, TIN-612): what must hold
+// The published packages (@tineira/apc-protocol, @tineira/apc-server, @tineira/apc-web, @tineira/apc-conformance, TIN-612): what must hold
 // before they go to npm. Pure logic; scripts/check-packages.mjs and scripts/build-packages.mjs feed it the files.
 
 /** The packages published to npm, in build order (protocol first: the others import it). */
@@ -53,6 +53,7 @@ export function checkManifest(manifest) {
   const problems = [];
   const name = manifest.name ?? "?";
   const pc = manifest.publishConfig ?? {};
+  if (!/^@tineira\/apc-[a-z]+$/.test(name)) problems.push(`${name}: not an @tineira/apc-* name (the @apc scope on npm is someone else's)`);
   if (manifest.private) problems.push(`${name} is private`);
   if (manifest.license !== "MIT") problems.push(`${name}: license is not MIT`);
   if (pc.access !== "public") problems.push(`${name}: publishConfig.access is not public`);
@@ -60,11 +61,11 @@ export function checkManifest(manifest) {
   if (!pc.exports || typeof pc.exports !== "object") problems.push(`${name}: no publishConfig.exports`);
   for (const target of distTargets(manifest)) if (!target.startsWith("./dist/")) problems.push(`${name}: ${target} is not in dist/`);
   for (const f of ["dist", "README.md", "LICENSE"]) if (!manifest.files?.includes(f)) problems.push(`${name}: files leaves out ${f}`);
-  if (!manifest.repository?.url || manifest.repository?.directory !== `packages/${name.replace("@apc/", "")}`) problems.push(`${name}: repository names no url and directory`);
+  if (!manifest.repository?.url || manifest.repository?.directory !== `packages/${name.replace("@tineira/apc-", "")}`) problems.push(`${name}: repository names no url and directory`);
   if (!manifest.engines?.node) problems.push(`${name}: no engines.node`);
   if (manifest.sideEffects !== false) problems.push(`${name}: sideEffects is not false`);
   for (const [dep, spec] of Object.entries({ ...manifest.dependencies, ...manifest.peerDependencies })) {
-    if (dep.startsWith("@apc/") && spec !== "workspace:^") problems.push(`${name}: ${dep} is ${spec}, not workspace:^ (published as a caret range)`);
+    if (dep.startsWith("@tineira/apc-") && spec !== "workspace:^") problems.push(`${name}: ${dep} is ${spec}, not workspace:^ (published as a caret range)`);
   }
   return problems;
 }

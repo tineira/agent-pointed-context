@@ -6,8 +6,8 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import type { ApcProfile } from "@apc/protocol";
-import { apcJsonResponse, apcManifest, profilesRefusal } from "@apc/server";
+import type { ApcProfile } from "@tineira/apc-protocol";
+import { apcJsonResponse, apcManifest, profilesRefusal } from "@tineira/apc-server";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { SANDBOX_TTL_MS, servedProfiles, type Env } from "./sandbox.ts";
 

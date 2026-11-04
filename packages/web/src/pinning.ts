@@ -1,4 +1,4 @@
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@apc/protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
 
 const profileLoads = new Map<string, Promise<ApcRole[] | null>>();
 

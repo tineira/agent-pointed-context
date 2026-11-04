@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { APC_STANDARD_VERSION, revokedAnswer } from "@apc/protocol";
+import { APC_STANDARD_VERSION, revokedAnswer } from "@tineira/apc-protocol";
 import { HttpConformanceUsageError, IN_PROCESS_ONLY, redactGrantUrl, runHttpConformance, type HttpConformanceOptions } from "../src/index.ts";
 
 const ORIGIN = "https://app.example";

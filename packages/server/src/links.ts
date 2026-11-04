@@ -10,14 +10,14 @@ import {
   type ApcLinkRefusal,
   type ApcLinkRefused,
   type ApcProfile,
-} from "@apc/protocol";
+} from "@tineira/apc-protocol";
 import { z } from "zod";
 import { toolResult, type ToolResult } from "./envelope.ts";
 import type { ApcKv } from "./kv.ts";
 import { secretHash } from "./revoke.ts";
 
 /**
- * `apc_link` (APC 0.4, `core.ts` in @apc/protocol): one agent connected to the same app both ways
+ * `apc_link` (APC 0.4, `core.ts` in @tineira/apc-protocol): one agent connected to the same app both ways
  * (its own MCP URL and through a dock's hub) shown as one agent. The app tells `ApcLinks` when a
  * connection arrives and asks it, around every tool result, whether to carry an offer; the tool
  * `apc_link` redeems a code. It keeps its state in an `ApcKv`: which grants are linked, each grant's

@@ -3,7 +3,7 @@
  * focus so the agent reads it through the hub, and taking an app's own loop keys off its results.
  * No Workers APIs here, so the tests run it.
  */
-import type { FocusPayload } from "@apc/protocol";
+import type { FocusPayload } from "@tineira/apc-protocol";
 
 /**
  * Where a focus or a view came from. An app the hub has not verified (TIN-580) is named by its host,

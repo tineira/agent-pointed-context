@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { FocusPayload } from "@apc/protocol";
-import { THEN_NOTE, WAIT_TIMED_OUT_NOTE, attachThen, registerApcTools, thenBytes, type ToolResult } from "@apc/server";
+import type { FocusPayload } from "@tineira/apc-protocol";
+import { THEN_NOTE, WAIT_TIMED_OUT_NOTE, attachThen, registerApcTools, thenBytes, type ToolResult } from "@tineira/apc-server";
 import { attendance, loopHinted } from "../src/worker/page.ts";
 
 const focus: FocusPayload = {

@@ -1,5 +1,5 @@
 {
-  "name": "@apc/conformance",
+  "name": "@tineira/apc-conformance",
   "version": "0.7.0",
   "description": "Agent Pointed Context (APC) conformance: checks an app against the standard, in process with an adapter, or live over HTTP with the apc-conformance command.",
   "keywords": ["apc", "agent-pointed-context", "mcp", "model-context-protocol", "ai-agents", "conformance", "testing"],
@@ -29,6 +29,6 @@
     "bin": { "apc-conformance": "./dist/cli.js" }
   },
   "dependencies": {
-    "@apc/protocol": "workspace:^"
+    "@tineira/apc-protocol": "workspace:^"
   }
 }

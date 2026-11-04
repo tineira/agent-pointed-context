@@ -3,7 +3,7 @@
  * agent, did it connect, did a pin reach it, how did it read the pin, and did
  * it follow the pin's next call. No content, only what the log already holds.
  */
-import { GUIDE_PROMPT } from "@apc/server";
+import { GUIDE_PROMPT } from "@tineira/apc-server";
 import type { Grant } from "./domain.ts";
 
 export interface LoggedEvent {

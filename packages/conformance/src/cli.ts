@@ -2,7 +2,7 @@
 /**
  * `apc-conformance`: the HTTP conformance checks (`http.ts`) against a live app, from a terminal.
  *
- *   npx @apc/conformance@next https://pulse.example --grant https://pulse.example/mcp/<sid>/<secret>
+ *   npx @tineira/apc-conformance@next https://pulse.example --grant https://pulse.example/mcp/<sid>/<secret>
  *
  * PASS, FAIL or SKIP per check; exit 1 on any FAIL, 2 on a usage error; `--json` for the report as JSON.
  */
@@ -29,7 +29,7 @@ a redirect, caps every answer's size and times out every request. A grant URL is
 with its last segment replaced by <secret>.
 
 The checks that need the person's page (a pin dropped, the page opened or closed, presence, Revoke pressed, a
-phone's touch, apc_link) are reported as SKIP: run apcConformance(adapter) from @apc/conformance in the app's
+phone's touch, apc_link) are reported as SKIP: run apcConformance(adapter) from @tineira/apc-conformance in the app's
 own tests for those.
 
 Exit status: 0 when nothing failed, 1 when a check failed, 2 on a usage error.`;

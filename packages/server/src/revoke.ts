@@ -1,8 +1,8 @@
-import { REVOKED_HTTP_STATUS, revokedAnswer } from "@apc/protocol";
+import { REVOKED_HTTP_STATUS, revokedAnswer } from "@tineira/apc-protocol";
 import type { ToolResult } from "./envelope.ts";
 
 /**
- * Revoke from the app (APC 0.2, `RevokedAnswer` in @apc/protocol): what a revoked grant's MCP URL
+ * Revoke from the app (APC 0.2, `RevokedAnswer` in @tineira/apc-protocol): what a revoked grant's MCP URL
  * answers to every request, whatever the method. `host` is the app's own host, as the person knows it.
  */
 export function revokedResponse(host: string, revokedAt: string): Response {

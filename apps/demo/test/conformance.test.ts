@@ -1,16 +1,16 @@
 /**
  * Pulse against the APC conformance suite (APC 0.2, TIN-577), on both profiles: Direct (a grant made in
  * Pulse, the agent on its own MCP URL) and Dock (a grant handed to a dock's hub at pairing). The sandbox
- * runs for real, on Node's SQLite (@apc/conformance/workers); the MCP calls go through its own fetch, as
+ * runs for real, on Node's SQLite (@tineira/apc-conformance/workers); the MCP calls go through its own fetch, as
  * an agent's or a hub's do. No network: the hub's side of pairing is a stand-in here (the dock's own
  * tests run the real hub against this sandbox).
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { apcConformance, runConformance, type ApcAppAdapter } from "@apc/conformance";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@apc/protocol";
-import { barCanCollapse, createTapPin, type BarAgent } from "@apc/web";
+import { apcConformance, runConformance, type ApcAppAdapter } from "@tineira/apc-conformance";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
+import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { generateDataset, LAST_MONTH } from "../src/model/seed.ts";
 
 installWorkersStandIn();
@@ -105,7 +105,7 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       pin: async (grantId, target) => (await sandbox.pin(grantId, target)).ok,
       takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceEvent),
       revoke: async (grantId) => (options.revoke === false ? true : (await sandbox.revokeGrant(grantId)).ok),
-      // The page on a phone (APC 0.6), modelled with @apc/web's own pieces: the bar's collapse rule on mobile and
+      // The page on a phone (APC 0.6), modelled with @tineira/apc-web's own pieces: the bar's collapse rule on mobile and
       // the tap-to-pin controller `enablePinning` runs, which pins through the sandbox like the page's onPin does.
       // The real page, at 375x812 with a touch pointer, is scripts/mobile-e2e.mjs.
       mobile: {

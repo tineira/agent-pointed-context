@@ -1,17 +1,17 @@
-# @apc/protocol
+# @tineira/apc-protocol
 
 The contract an app and an agent share in Agent Pointed Context: wire types, the target grammar, the version of the standard (`APC_STANDARD_VERSION`) and the core. Its changes are in [CHANGELOG.md](CHANGELOG.md). No dependencies, no Node imports: it runs in the browser, on Workers and on Node. Docs: https://apc.tineira.com/docs
 
 ## Install
 
 ```sh
-npm i @apc/protocol@next
+npm i @tineira/apc-protocol@next
 ```
 
 Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.7.x ships APC 0.7).
 
 ```ts
-import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@apc/protocol";
+import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@tineira/apc-protocol";
 
 // Mark something in your page that the person can point an agent at:
 const attrs = focusAttrs({ kind: "customer", id: "cus_0042" }); // { "data-focus": "customer:cus_0042" }
@@ -41,11 +41,11 @@ What every APC app implements, whichever way agents reach it ([`src/core.ts`](sr
 What belongs to a profile, not to the core:
 
 - **Direct** (the agent connects to the app's own MCP URL): a grant per agent, its secret URL, the list where the person makes and names agents.
-- **Dock** (the agent connects once, to a hub): the drop (`application/x-apc-agent`, the handle and the ticket), consent in the app (checked by the app's server, never its page alone: 0.7, `DockConsent` in `@apc/server`), `POST {hub}/apc/pair` (the hub reads the app's `apc.json` first), `POST {hub}/apc/confirm` on every drop, and `POST {app}/apc/revoke`, the hub giving a grant back.
+- **Dock** (the agent connects once, to a hub): the drop (`application/x-apc-agent`, the handle and the ticket), consent in the app (checked by the app's server, never its page alone: 0.7, `DockConsent` in `@tineira/apc-server`), `POST {hub}/apc/pair` (the hub reads the app's `apc.json` first), `POST {hub}/apc/confirm` on every drop, and `POST {app}/apc/revoke`, the hub giving a grant back.
 
 Whatever it offers, an app publishes `apc.json` (below).
 
-An app offers one profile or both. Pulse (`apps/demo`) and Signals (`apps/signals`) offer both, declared in `APC_PROFILES` in their `wrangler.jsonc`; the Direct profile's parts are packaged in `@apc/server` (`direct.ts`) and `@apc/web` (`<apc-direct-agents>`).
+An app offers one profile or both. Pulse (`apps/demo`) and Signals (`apps/signals`) offer both, declared in `APC_PROFILES` in their `wrangler.jsonc`; the Direct profile's parts are packaged in `@tineira/apc-server` (`direct.ts`) and `@tineira/apc-web` (`<apc-direct-agents>`).
 
 ### Mobile (0.6)
 
@@ -54,7 +54,7 @@ On a phone there is no dock window, browser extension or desktop pet to drag an 
 - **shows its agents in the page**, each with its mark visible and usable for pinning. The Dock profile's rule that the agent bar may collapse does not apply there, and the bar is never collapsed or hidden; it stays reachable while the page scrolls without covering content the person needs;
 - **lets a finger pin**, with no mouse drag (phone browsers do no HTML5 drag and drop): touching the agent's mark and then a target ("tap to pin", with a clear state and a way to cancel), or dragging the mark with a finger by pointer events. The pin is the same `FocusTarget` as a mouse drag's. Unpin and Revoke work by touch, with finger-sized targets.
 
-`@apc/web` does both (`<apc-agents>`, `enablePinning`). `APC_MOBILE_VIEWPORT` (375 x 812) is the reference viewport; `@apc/conformance` checks it through the adapter's `page.mobile`.
+`@tineira/apc-web` does both (`<apc-agents>`, `enablePinning`). `APC_MOBILE_VIEWPORT` (375 x 812) is the reference viewport; `@tineira/apc-conformance` checks it through the adapter's `page.mobile`.
 
 ### `apc_link` (0.4)
 
@@ -62,6 +62,6 @@ An app that offers both profiles shows the same agent on both paths as one ([`sr
 
 ### `apc.json` (0.5)
 
-Every APC origin says what it is at `GET {origin}/.well-known/apc.json` ([`src/manifest.ts`](src/manifest.ts)): its `name`, the `standard` it implements, its `origin` (exactly the one it is served from), its `profiles` (`"direct"`, `"dock"` or both; `"hub"` alone for a dock), `mcp.path` (where its MCP URLs live) and, with Direct, `direct.connect` (its page where the person connects an agent directly). `@apc/server` builds an app's (`apcManifest`, `apcJsonResponse`). A hub reads it before it pairs and refuses an app whose file is missing, invalid, names another origin, lists no `"dock"` or does not cover the MCP URL; a dock agent dropped on a Direct-only app is answered with how to connect directly (`directOnlyNote`), in the page and in the browser extension.
+Every APC origin says what it is at `GET {origin}/.well-known/apc.json` ([`src/manifest.ts`](src/manifest.ts)): its `name`, the `standard` it implements, its `origin` (exactly the one it is served from), its `profiles` (`"direct"`, `"dock"` or both; `"hub"` alone for a dock), `mcp.path` (where its MCP URLs live) and, with Direct, `direct.connect` (its page where the person connects an agent directly). `@tineira/apc-server` builds an app's (`apcManifest`, `apcJsonResponse`). A hub reads it before it pairs and refuses an app whose file is missing, invalid, names another origin, lists no `"dock"` or does not cover the MCP URL; a dock agent dropped on a Direct-only app is answered with how to connect directly (`directOnlyNote`), in the page and in the browser extension.
 
-To check an app against the core, run [`@apc/conformance`](../conformance) on its MCP endpoint (see the root README), or `npx @apc/conformance@next <app-origin>` against a live app.
+To check an app against the core, run [`@tineira/apc-conformance`](../conformance) on its MCP endpoint (see the root README), or `npx @tineira/apc-conformance@next <app-origin>` against a live app.

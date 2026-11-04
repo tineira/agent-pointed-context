@@ -2,7 +2,7 @@
  * The extension's pure parts (TIN-421, DESIGN.md 13): which docks it talks to, what it calls this
  * browser, and how it keeps one reader token per dock and agent. No chrome.* APIs here, so the tests run it.
  */
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest } from "@apc/protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest } from "@tineira/apc-protocol";
 
 /** An APC app that connects agents only directly (APC 0.5): what the extension tells a person who drops a dock agent on it. */
 export interface DirectOnly {
@@ -89,7 +89,7 @@ export const LOOKUP_KEEP_UNKNOWN_MS = 30_000;
 
 /**
  * What the extension does with a dock agent's drag over an APC app, on one page (APC 0.5). A page that
- * answers drops itself (APC_DROPS_ATTR, set by @apc/web) is left alone. Otherwise the app's apc.json is
+ * answers drops itself (APC_DROPS_ATTR, set by @tineira/apc-web) is left alone. Otherwise the app's apc.json is
  * looked up on the first drag, and the drop is taken while the app may be Direct-only: once its file says
  * so, and while the lookup is still on its way, so a quick first drop is never lost. A drop taken during
  * the lookup is answered when the lookup comes back, or handed back to the page if the app takes dock

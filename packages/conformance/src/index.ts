@@ -1,6 +1,6 @@
 /**
  * The APC conformance suite (APC 0.2, TIN-577; `apc_link` since 0.3, TIN-578): checks that an app
- * implements the core of the standard (`core.ts` in @apc/protocol), on either profile, through its MCP
+ * implements the core of the standard (`core.ts` in @tineira/apc-protocol), on either profile, through its MCP
  * endpoint, the way an agent or a dock's hub reaches it, and, for an app that offers both profiles,
  * `apc_link` (give `link` in the adapter). What happens in the person's page (the view they report, the pin they drop,
  * the presence the app shows them, Revoke in the agent bar) comes through a small adapter the app
@@ -40,7 +40,7 @@ import {
   type ApcProfile,
   type FocusTarget,
   type PresenceEvent,
-} from "@apc/protocol";
+} from "@tineira/apc-protocol";
 import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, rpcBody, text, type ToolCallResult } from "./shared.ts";
 
 export { ConformanceError } from "./shared.ts";
@@ -81,7 +81,7 @@ export interface ApcLinkAdapter {
 /**
  * The person's page on a phone (APC 0.6): a viewport of `APC_MOBILE_VIEWPORT` with a touch pointer and no
  * mouse. Optional in the adapter; with it the suite runs the mobile checks. An app's own test can model
- * the page with the pieces of @apc/web (the bar's collapse rule, tap to pin); the real thing is a browser
+ * the page with the pieces of @tineira/apc-web (the bar's collapse rule, tap to pin); the real thing is a browser
  * with touch emulation (`scripts/mobile-e2e.mjs` does that for Pulse and Signals).
  */
 export interface ApcMobilePage {
