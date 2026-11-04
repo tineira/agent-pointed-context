@@ -155,6 +155,17 @@ test("the suite catches an apc.json that leaves out a profile the app serves, na
   await assert.rejects(checkOf((await pulse("direct", { apcJson: async () => Response.json({ error: "not_found" }, { status: 404 }) })).app).run(), /HTTP 404/);
 });
 
+test("Pulse's page, its own checks and its apc.json agree on the profiles it serves, from one source", async () => {
+  for (const env of [DEPLOY, { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct" }, { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "dock" }, { APC_PROFILES: "direct,dock" }, { APC_PROFILES: "direct" }]) {
+    const { sandbox } = await pulse("direct", { env });
+    const file = await (await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), env)).json();
+    assert.deepEqual((await sandbox.state()).profiles, file.profiles, JSON.stringify(env));
+  }
+  // Without the standard's deploy Pulse pairs with no dock, so neither says it does.
+  const { sandbox } = await pulse("direct", { env: { APC_PROFILES: "direct,dock" } });
+  assert.deepEqual((await sandbox.state()).profiles, ["direct"]);
+});
+
 test("the suite catches an app whose Revoke does nothing", async () => {
   const { app } = await pulse("direct", { revoke: false });
   const check = apcConformance(app).find((c) => c.name.includes("revoke from the app"))!;

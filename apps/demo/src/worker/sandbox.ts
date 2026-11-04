@@ -18,6 +18,14 @@ import { productOf, sameProduct } from "../model/products.ts";
 import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
+
+/**
+ * The profiles Pulse serves (APC 0.5): the one source for its apc.json, its page (state.profiles) and its
+ * own checks. What APC_PROFILES declares, with Dock only on the standard's deploy (APC_V2), where it pairs with a dock's hub.
+ */
+export function servedProfiles(env: { APC_PROFILES?: string; APC_V2?: string }): ApcProfile[] {
+  return parseProfiles(env.APC_PROFILES).filter((p) => p !== "dock" || env.APC_V2 === "1");
+}
 const SERVER_VERSION = "0.2.0";
 /** wait_for_focus ceiling on this host (TIN-95 measurement in DESIGN.md). WAIT_CEILING_S in .dev.vars overrides it for a local probe. */
 export const WAIT_CEILING_S = 50;
@@ -126,7 +134,7 @@ export class Sandbox extends DurableObject<Env> {
 
   /** Whether Pulse offers this profile (APC_PROFILES). */
   private offers(profile: ApcProfile): boolean {
-    return parseProfiles(this.env.APC_PROFILES).includes(profile);
+    return servedProfiles(this.env).includes(profile);
   }
   /** The path each live grant came by: Dock when a dock's hub holds it, Direct otherwise. */
   private linkGrants(): Array<{ id: string; path: ApcProfile }> {
@@ -320,7 +328,7 @@ export class Sandbox extends DurableObject<Env> {
       // APC v2 (TIN-382): on Pulse's v2 deploy, which dock agents are which grants.
       v2: this.env.APC_V2 === "1",
       // The profiles Pulse offers (APC 0.4), and which Direct and Dock grants are one agent: [direct, dock].
-      profiles: parseProfiles(this.env.APC_PROFILES),
+      profiles: servedProfiles(this.env),
       links: this.links.links(),
       // The docks Pulse pairs with, by host, for the page to name (TIN-402).
       hubs: this.env.APC_V2 === "1" ? (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean).map((h) => new URL(h).host) : [],

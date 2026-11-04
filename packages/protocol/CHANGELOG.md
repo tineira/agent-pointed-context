@@ -21,7 +21,7 @@ Discovery with `apc.json`, and a clear answer to a drop an app cannot take (TIN-
 
 ### A drop an app cannot take
 
-- **A dock agent dropped on an app that offers only Direct is answered, never lost.** The app (with `@apc/web`: `enablePinning({ profiles, direct: { name, connect }, onDockUnsupported })`) takes the drop anywhere on the page and tells the person that it connects agents directly, with its connect page, in the words of `directOnlyNote(name)`. It never pairs or pins such a drop. While it takes native drops, `enablePinning` sets `data-apc-native-drops` on the root element; the browser extension answers a Direct-only app (by its `apc.json`) that does not, the same way.
+- **A dock agent dropped on an app that offers only Direct is answered, never lost.** The app (with `@apc/web`: `enablePinning({ profiles, direct: { name, connect }, onDockUnsupported })`) takes the drop anywhere on the page and tells the person that it connects agents directly, with its connect page, in the words of `directOnlyNote(name)`. It never pairs or pins such a drop. While it takes native drops, `enablePinning` sets `data-apc-native-drops` on the root element; the browser extension answers a Direct-only app (by its `apc.json`) that does not, in its own words (the domain first).
 
 ### Conformance
 

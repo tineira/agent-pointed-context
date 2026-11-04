@@ -2,14 +2,25 @@
  * The extension's pure parts (TIN-421, DESIGN.md 13): which docks it talks to, what it calls this
  * browser, and how it keeps one reader token per dock and agent. No chrome.* APIs here, so the tests run it.
  */
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, directOnlyNote, parseApcManifest } from "@apc/protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest } from "@apc/protocol";
 
 /** An APC app that connects agents only directly (APC 0.5): what the extension tells a person who drops a dock agent on it. */
 export interface DirectOnly {
+  /** What the page calls itself in its apc.json: its own word, never vouched for. */
   name: string;
+  /** The page's host: what the card puts first, as the dock names an app it does not know. */
+  host: string;
   /** The app's page where the person connects an agent directly, on its own origin. */
   connect: string | null;
   message: string;
+}
+
+/**
+ * The extension's words on a Direct-only app. They come from the extension, so they lend it no
+ * authority: the domain first, and the name only as what the page says it is.
+ */
+export function directOnlyCardText(name: string, host: string): string {
+  return `This page says it is "${name}" (${host}). It connects agents directly, not through a dock: connect your agent to it on its own URL, then drag its mark from the agent bar there.`;
 }
 
 /**
@@ -22,17 +33,29 @@ export function directOnlyAnswer(raw: unknown, origin: string): DirectOnly | nul
   if (!parsed.ok) return null;
   const m = parsed.manifest;
   if (m.profiles.includes("dock") || m.profiles.includes("hub")) return null;
-  return { name: m.name, connect: m.direct?.connect ?? null, message: directOnlyNote(m.name) };
+  const host = new URL(origin).host;
+  return { name: m.name, host, connect: m.direct?.connect ?? null, message: directOnlyCardText(m.name, host) };
+}
+
+/**
+ * A page's apc.json as the extension read it: the answer, and whether the file was read at all. `read`
+ * is false when nothing could be told (no file, an error, no answer): a guess the service worker keeps
+ * only briefly. A file read and understood, Direct-only or not, is a real answer.
+ */
+export interface DirectOnlyLookup {
+  directOnly: DirectOnly | null;
+  read: boolean;
 }
 
 /**
  * Read a page's apc.json from its own origin (APC 0.5), for the answer to a drop on a Direct-only app:
- * no cookies, no redirect, 3 s and APC_JSON_MAX_BYTES at most. Anything that goes wrong is null.
+ * no cookies, no redirect, 3 s and APC_JSON_MAX_BYTES at most.
  */
-export async function lookUpDirectOnly(origin: string, fetcher: typeof fetch = fetch): Promise<DirectOnly | null> {
+export async function lookUpDirectOnly(origin: string, fetcher: typeof fetch = fetch): Promise<DirectOnlyLookup> {
+  const unknown = { directOnly: null, read: false };
   try {
     const r = await fetcher(`${origin}${APC_JSON_PATH}`, { credentials: "omit", redirect: "error", signal: AbortSignal.timeout(3000), headers: { accept: "application/json" } });
-    if (!r.ok || !r.body) return null;
+    if (!r.ok || !r.body) return unknown;
     // Read up to the cap, never the whole of whatever a page serves there.
     const reader = r.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -43,7 +66,7 @@ export async function lookUpDirectOnly(origin: string, fetcher: typeof fetch = f
       size += value.byteLength;
       if (size > APC_JSON_MAX_BYTES) {
         void reader.cancel().catch(() => {});
-        return null;
+        return unknown;
       }
       chunks.push(value);
     }
@@ -53,10 +76,53 @@ export async function lookUpDirectOnly(origin: string, fetcher: typeof fetch = f
       all.set(c, at);
       at += c.byteLength;
     }
-    return directOnlyAnswer(JSON.parse(new TextDecoder().decode(all)), origin);
+    const raw = JSON.parse(new TextDecoder().decode(all)) as unknown;
+    return { directOnly: directOnlyAnswer(raw, origin), read: parseApcManifest(raw, origin).ok };
   } catch {
-    return null;
+    return unknown;
   }
+}
+
+/** How long the service worker keeps what a page's apc.json said: a real answer, and a lookup that told nothing. */
+export const LOOKUP_KEEP_MS = 5 * 60_000;
+export const LOOKUP_KEEP_UNKNOWN_MS = 30_000;
+
+/**
+ * What the extension does with a dock agent's drag over an APC app, on one page (APC 0.5). The app's
+ * apc.json is read once, on the first drag. A page that answers drops itself (APC_DROPS_ATTR, set by
+ * @apc/web) is left alone. Otherwise the drop is taken while the app may be Direct-only: once its file
+ * says so, and while the lookup is still on its way, so a quick first drop is never lost; a drop taken
+ * during the lookup is answered when the lookup comes back, or let go if the app turns out to take dock
+ * agents.
+ */
+export function directOnlyGate(lookUp: () => Promise<DirectOnly | null>, pageAnswers: () => boolean) {
+  let pending: Promise<DirectOnly | null> | null = null;
+  let known: DirectOnly | null | undefined;
+  const start = () =>
+    (pending ??= lookUp()
+      .catch(() => null)
+      .then((answer) => (known = answer)));
+  return {
+    /** The agent is dragged over the page: start reading its file. */
+    start(): void {
+      void start();
+    },
+    /** dragover: whether the extension takes the drop (the browser refuses it otherwise). */
+    accepts(): boolean {
+      void start();
+      return !pageAnswers() && known !== null;
+    },
+    /**
+     * drop: `now` when the answer is known (the extension answers, and keeps the page's own handlers from
+     * answering too), `later` while the lookup is on its way, or null to stand back.
+     */
+    drop(): { now: DirectOnly } | { later: Promise<DirectOnly | null> } | null {
+      if (pageAnswers()) return null;
+      if (known) return { now: known };
+      if (known === null) return null;
+      return { later: start() };
+    },
+  };
 }
 
 /** The docks this extension sends readings to. A drag naming any other hub is refused: a page could forge one. */
@@ -193,7 +259,7 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "blocked" | "not_here";
 
 /** The link on the card for a Direct-only app. */
-export const connectLabel = (name: string) => `Connect an agent to ${name}`;
+export const connectLabel = (host: string) => `Connect an agent on ${host}`;
 
 /** Where the text goes (13.5), said before anything is sent. */
 const PASSES_THROUGH = "It passes through your dock, on Cloudflare, and is kept 10 minutes at most.";

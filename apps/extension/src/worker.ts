@@ -8,7 +8,7 @@
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, lookUpDirectOnly, readerKey, sitePattern, type Consent, type DirectOnly, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, readerKey, sitePattern, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -71,18 +71,24 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
 });
 
-/** What each APC app's apc.json said, per origin, for five minutes (memory only: the service worker comes and goes). */
-const apcApps = new Map<string, { at: number; answer: Promise<DirectOnly | null> }>();
+/**
+ * What each APC app's apc.json said, per origin (memory only: the service worker comes and goes): a
+ * file read and understood for five minutes, a lookup that told nothing (no file, an error, no answer)
+ * for 30 s, so a page that was briefly unreachable is asked again soon.
+ */
+const apcApps = new Map<string, { at: number; keep: number; lookup: Promise<DirectOnlyLookup> }>();
 
-/** The answer for a Direct-only app on the tab's origin, or null (it offers Dock, or has no apc.json): read from that origin only. */
+/** The answer for a Direct-only app on the tab's origin, or null (it offers Dock, or no answer): read from that origin only. */
 async function directOnlyOf(url: string | undefined): Promise<DirectOnly | null> {
   const site = sitePattern(url);
   if (!site) return null;
   const kept = apcApps.get(site.origin);
-  if (kept && Date.now() - kept.at < 5 * 60_000) return kept.answer;
-  const answer = lookUpDirectOnly(site.origin);
-  apcApps.set(site.origin, { at: Date.now(), answer });
-  return answer;
+  if (kept && Date.now() - kept.at < kept.keep) return (await kept.lookup).directOnly;
+  const entry = { at: Date.now(), keep: LOOKUP_KEEP_MS, lookup: lookUpDirectOnly(site.origin) };
+  apcApps.set(site.origin, entry);
+  const result = await entry.lookup;
+  if (!result.read) entry.keep = LOOKUP_KEEP_UNKNOWN_MS;
+  return result.directOnly;
 }
 
 /** The pin's state or ×, at the dock, with this browser's token for that agent. */

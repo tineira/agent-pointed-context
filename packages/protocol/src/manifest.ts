@@ -132,9 +132,10 @@ export function declaresMcpUrl(manifest: ApcManifest, mcpUrl: string): boolean {
 }
 
 /**
- * What a person is told when they drop an agent from their dock on an app that connects agents only
- * directly (its `apc.json` lists no `"dock"`): the drop is answered, never lost. The same words in the
- * app's page (`@apc/web`) and in the browser extension.
+ * What an app tells a person who drops an agent from their dock on it when it connects agents only
+ * directly (its `apc.json` lists no `"dock"`): the drop is answered, never lost. These are the app's
+ * own words, on its own page (`@apc/web`); the browser extension, which speaks for itself, puts the
+ * domain first and the name only as what the page says it is.
  */
 export function directOnlyNote(name: string): string {
   return `${name} connects agents directly, not through a dock. Connect your agent to ${name} on its own URL, then drag its mark from the agent bar there.`;

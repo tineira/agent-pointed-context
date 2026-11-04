@@ -136,8 +136,18 @@ test("a dock agent dropped on a Direct-only app is answered with how to connect 
   // Off any target the drop is answered too.
   under = null;
   assert.equal(dropFromDock(), true);
-  assert.ok(body.find("data-apc-dock-unsupported"));
-  body.find("data-apc-dock-unsupported")!.remove();
+  const first = body.find("data-apc-dock-unsupported");
+  assert.ok(first);
+  // Dropped again: the note is replaced, never stacked, and the new one keeps its full 20 s.
+  t.mock.timers.tick(15_000);
+  dropFromDock();
+  const notes = body.children.filter((c) => c.attrs.has("data-apc-dock-unsupported"));
+  assert.equal(notes.length, 1, "one note");
+  assert.notEqual(notes[0], first, "the newer one");
+  t.mock.timers.tick(15_000);
+  assert.ok(body.find("data-apc-dock-unsupported"), "the old note's timer does not take the new one away");
+  t.mock.timers.tick(5_000);
+  assert.equal(body.find("data-apc-dock-unsupported"), undefined);
   stop();
   assert.equal(root.hasAttribute(APC_DROPS_ATTR), false);
 });

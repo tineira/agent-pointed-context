@@ -43,15 +43,22 @@ export interface DockUnsupported {
   target: FocusTarget | null;
   name: string;
   connect: string | null;
-  /** `directOnlyNote(name)`: the same words as the browser extension's. */
+  /** `directOnlyNote(name)`: the app's own words, on its own page. */
   message: string;
 }
 
 /**
  * The default answer to a dock agent dropped on a Direct-only app: a note at the bottom of the page
- * with the words, a link to the app's connect page, and ×. It stays 20 s, or until closed.
+ * with the words, a link to the app's connect page, and ×. It stays 20 s, or until closed. A new drop
+ * replaces it: never a stack of notes.
  */
+let shownNote: { box: HTMLElement; timer: ReturnType<typeof setTimeout> } | null = null;
 export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
+  if (shownNote) {
+    clearTimeout(shownNote.timer);
+    shownNote.box.remove();
+    shownNote = null;
+  }
   const box = document.createElement("div");
   box.setAttribute("role", "status");
   box.setAttribute("data-apc-dock-unsupported", "");
@@ -72,10 +79,17 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
   close.setAttribute("aria-label", "Close");
   close.textContent = "×";
   Object.assign(close.style, { position: "absolute", top: "4px", right: "6px", background: "none", border: "0", color: "#ccc", font: "16px system-ui, sans-serif", cursor: "pointer" });
-  close.addEventListener("click", () => box.remove());
+  const remove = () => {
+    box.remove();
+    if (shownNote?.box === box) {
+      clearTimeout(shownNote.timer);
+      shownNote = null;
+    }
+  };
+  close.addEventListener("click", remove);
   box.appendChild(close);
   document.body.appendChild(box);
-  setTimeout(() => box.remove(), 20_000);
+  shownNote = { box, timer: setTimeout(remove, 20_000) };
   return box;
 }
 
