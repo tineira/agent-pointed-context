@@ -1,8 +1,9 @@
 /**
- * Apps the hub does not know (TIN-580, DESIGN.md section 15): what makes an app verified or not, and
- * every limit the hub holds an unverified app to. A verified app is one in APP_ORIGINS; anything else
- * may pair only while OPEN_PAIRING is on (off in every deploy today), always as unverified. Pure, so
- * the tests run it.
+ * Apps the hub does not know (TIN-580 and TIN-581, DESIGN.md sections 15 and 18): what makes an app
+ * verified or not, every limit the hub holds an unverified app to, and the words of the warning the
+ * person approves before one pairs. A verified app is one in APP_ORIGINS; anything else pairs as
+ * unverified, only after the person approves that warning in the dock, and not at all while the
+ * operator's kill switch (UNVERIFIED_PAIRING=closed) is on. Pure, so the tests run it.
  */
 import { parseTarget, type FocusPayload } from "@apc/protocol";
 import type { AppTool } from "./app-client.ts";
@@ -28,6 +29,8 @@ export const LIMITS = {
   waitGraceMs: 15_000,
   /** The app pairings one dock holds at most, pending and paired, across its agents. */
   pairings: 20,
+  /** A pending pairing nobody decides goes after this long, and frees its place (TIN-581). */
+  pendingMs: 10 * 60_000,
   /** What the hub keeps of an unverified app's tools and views. */
   unverifiedTools: 32,
   unverifiedDescription: 1_024,
@@ -78,7 +81,16 @@ export function isBlocked(origin: string, blocked: readonly string[]): boolean {
   return blocked.map(blockedHost).some((b) => !!b && (host === b || host.endsWith(`.${b}`)));
 }
 
-const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+/**
+ * The operator's kill switch (TIN-581): UNVERIFIED_PAIRING set to "closed" closes the dock to every app
+ * outside APP_ORIGINS again, in an emergency. Unset, or any other value, leaves it open: an unverified
+ * app pairs after the person approves the warning.
+ */
+export function unverifiedOpen(value: string | undefined): boolean {
+  return (value ?? "").trim().toLowerCase() !== "closed";
+}
+
+const IPV4 =/^\d{1,3}(\.\d{1,3}){3}$/;
 
 export type AppVerdict = { ok: true; verified: boolean } | { ok: false; error: "app_not_allowed" | "app_blocked" | "https_required" };
 
@@ -202,4 +214,42 @@ export function untrustedResult<A>(result: { content?: Array<{ type: string; tex
     ...(result.structuredContent ? { result: result.structuredContent } : { text: texts }),
   };
   return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, ...(result.isError ? { isError: true } : {}) };
+}
+
+/** The badge the dock puts on every unverified app: on its requests, its line in an agent's apps, and where an agent points (TIN-581). */
+export const NOT_VERIFIED = "Not verified";
+/** What the person risks by approving one. */
+export const UNVERIFIED_RISK = "Your agent will read whatever this app tells it, and that could lead your agent to move data out of your other apps.";
+
+/** The warning's words for one request, in the order the dock shows them. */
+export interface UnverifiedWarning {
+  /** The app's domain (its host, with a port if any): first and big, the only name the dock gives it. */
+  domain: string;
+  badge: string;
+  /** What the app calls itself, marked as the app's own word; null when it gave no usable name. */
+  declared: string | null;
+  /** Who would read it. */
+  ask: string;
+  risk: string;
+  /** Deny first and the default (it has the focus); Approve is the deliberate choice. */
+  actions: ReadonlyArray<{ action: "deny" | "approve_unverified"; label: string; default: boolean }>;
+}
+
+/**
+ * The warning the dock shows before an unverified app pairs (TIN-581), in the dock and never in the
+ * app's page, once per domain per dock. One source of the words for the dock, its agent pages, Float
+ * and the pets, so the tests read what the person reads.
+ */
+export function unverifiedWarning(domain: string, declared: string | null, agent: string): UnverifiedWarning {
+  return {
+    domain,
+    badge: NOT_VERIFIED,
+    declared: declared ? `It calls itself “${declared}”: that is what the app says about itself, and the dock has not checked it.` : null,
+    ask: `This app wants to be read by ${agent}. The dock has not verified who runs it.`,
+    risk: UNVERIFIED_RISK,
+    actions: [
+      { action: "deny", label: "Deny", default: true },
+      { action: "approve_unverified", label: "Approve", default: false },
+    ],
+  };
 }

@@ -19,6 +19,7 @@ import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
+import { NotVerified, UnverifiedRequest } from "./unverified.tsx";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -234,7 +235,7 @@ export function HubDock() {
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
-  const decide = (pid: string, action: "approve" | "deny" | "unpair") => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
+  const decide = (pid: string, action: Decision) => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
   const dragProps = (a: DockAgent) => ({
     draggable: true,
     title: a.client_name ? `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)` : `Drag ${a.name} into your agent's chat: it pastes the prompt that connects it`,
@@ -271,7 +272,13 @@ export function HubDock() {
     void fetchTicket(agentId);
   }
 
-  const requests = pending.map(({ agent, pairing }) => (
+  const requests = pending.map(({ agent, pairing }) =>
+    pairing.app.unverified ? (
+      // An app outside APP_ORIGINS (TIN-581): the warning, in the dock, the first time its domain asks here.
+      <section key={pairing.id} className="request unverified">
+        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} decide={(action) => decide(pairing.id, action)} />
+      </section>
+    ) : (
     <section key={pairing.id} className="request">
       <p>
         {pairing.kind === "reader" ? (
@@ -293,9 +300,18 @@ export function HubDock() {
         </button>
       </div>
     </section>
-    ));
+    ),
+  );
 
-  const floatRequests = pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name, agentId: agent.id }));
+  const floatRequests: FloatRequest[] = pending.map(({ agent, pairing }) => ({
+    id: pairing.id,
+    kind: pairing.kind,
+    app: pairing.app.name,
+    host: host(pairing.app.origin),
+    agent: agent.name,
+    agentId: agent.id,
+    ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
+  }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
 
   // The APC dock for Windows' pets (TIN-479): one agent, and its pairing requests; with no agent, the hint.
@@ -340,7 +356,7 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
-          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app }))}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning }))}
           decide={decide}
           refresh={refresh}
           back={back}
@@ -371,7 +387,14 @@ export function HubDock() {
                 <span className="tile-where">
                   {a.focus ? (
                     <>
-                      → {a.focus.app.name}: {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
+                      → {a.focus.app.name}
+                      {a.focus.app.unverified && (
+                        <>
+                          {" "}
+                          <NotVerified />
+                        </>
+                      )}
+                      : {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
                     </>
                   ) : !connected ? (
                     "not connected yet: drag me into your agent's chat"
@@ -456,14 +479,19 @@ interface FloatRequest {
   host: string;
   agent: string;
   agentId: string;
+  /** An app outside APP_ORIGINS (TIN-581): what it calls itself, and whether this request shows the warning. */
+  unverified?: { declared: string | null; warning: boolean };
 }
+
+/** What the person answers a request with; "approve_unverified" is only the warning's Approve (TIN-581). */
+type Decision = "approve" | "approve_unverified" | "deny" | "unpair";
 
 interface FloatProps {
   agents: DockAgent[];
   onUsed: () => void;
   /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
   requests: FloatRequest[];
-  decide: (id: string, action: "approve" | "deny") => void;
+  decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   children: (button: ReactNode) => ReactNode;
 }
@@ -645,7 +673,7 @@ function Float(props: FloatProps) {
 function FloatAgents(props: {
   agents: DockAgent[];
   requests: FloatRequest[];
-  decide: (id: string, action: "approve" | "deny") => void;
+  decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
   notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
@@ -675,7 +703,13 @@ function FloatAgents(props: {
   if (props.requests.length > 0)
     return (
       <div className="float float-requests">
-        {props.requests.map((r) => (
+        {props.requests.map((r) =>
+          r.unverified ? (
+            // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
+            <div key={r.id} className="float-request unverified" tabIndex={-1}>
+              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} decide={(action) => props.decide(r.id, action)} compact />
+            </div>
+          ) : (
           <div key={r.id} className="float-request" tabIndex={-1} autoFocus={props.notice?.focus && r === props.requests[0]}>
             <p>
               {r.kind === "reader" ? (
@@ -697,7 +731,8 @@ function FloatAgents(props: {
               </button>
             </div>
           </div>
-        ))}
+          ),
+        )}
       </div>
     );
   if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;

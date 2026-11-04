@@ -96,6 +96,16 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .apps button { font-size: 11px; padding: 1px 6px; }
 .muted { color: var(--muted); }
 .warn { color: #c0392b; }
+/* Apps outside APP_ORIGINS (TIN-581): the badge everywhere the dock names one, and the warning before one pairs. */
+.not-verified { display: inline-block; padding: 0 6px; border: 1px solid #c0392b; border-radius: 999px; color: #c0392b; font: 600 11px/1.6 system-ui, sans-serif; letter-spacing: 0.02em; vertical-align: 1px; white-space: nowrap; }
+.request.unverified, .float-request.unverified { border-color: #c0392b; }
+.unverified-warning { display: flex; flex-direction: column; gap: 8px; }
+.unverified-warning p { margin: 0; color: var(--fg); }
+.unverified-warning .unverified-domain { font-size: 22px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.unverified-warning .unverified-declared { color: var(--muted); font-size: 12px; }
+.unverified-warning .unverified-risk { font-weight: 600; }
+.unverified-warning.compact { gap: 6px; }
+.unverified-warning.compact .unverified-domain { font-size: 17px; }
 .compat { margin: 0; padding-left: 52px; font: 11px ui-monospace, monospace; color: var(--muted); }
 
 /* The dock as an installed app (TIN-392): compact, the agent's logo large, the apps underneath. */

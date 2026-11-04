@@ -12,6 +12,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { DockAgent } from "./agent-page.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
+import { UnverifiedRequest, type UnverifiedAction } from "./unverified.tsx";
 
 const params = new URLSearchParams(location.search);
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -49,13 +50,15 @@ export interface PetRequest {
   app: string;
   host: string;
   agent: string;
+  /** An app outside APP_ORIGINS (TIN-581): what it calls itself, and whether this request shows the warning. */
+  unverified?: { declared: string | null; warning: boolean };
 }
 
 /** One agent's pet, and the bubble of its pairing requests while any waits. */
 export function PetView(props: {
   agent: DockAgent;
   requests: PetRequest[];
-  decide: (id: string, action: "approve" | "deny") => void;
+  decide: (id: string, action: UnverifiedAction) => void;
   startDrag: (e: DragEvent) => void;
   endDrag: () => void;
 }) {
@@ -77,7 +80,13 @@ export function PetView(props: {
   const where = side ? `${side.left ? "pet-left" : "pet-right"} ${side.up ? "pet-up" : "pet-down"}` : "pet-measuring";
   const requests = asking ? (
     <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
-      {props.requests.map((r) => (
+      {props.requests.map((r) =>
+        r.unverified ? (
+          // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
+          <div key={r.id} className="pet-request unverified">
+            <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} decide={(action) => props.decide(r.id, action)} compact />
+          </div>
+        ) : (
         <div key={r.id} className="pet-request">
           <p>
             {r.kind === "reader" ? (
@@ -99,7 +108,8 @@ export function PetView(props: {
             </button>
           </div>
         </div>
-      ))}
+        ),
+      )}
     </div>
   ) : null;
   return (

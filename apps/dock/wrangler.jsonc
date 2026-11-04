@@ -20,8 +20,11 @@
   // READER_ORIGINS: the APC browser extensions that may send page readings (TIN-421): the unpacked build (its id comes from the key
   // in apps/extension/manifest.json); add the store ids once published.
   // APP_ORIGINS are the verified apps (TIN-580). BLOCKED_APPS: comma-separated domains we block (a domain covers its subdomains): never
-  // paired or called, and a pairing with one shows as blocked. OPEN_PAIRING is not set: only verified apps pair until the dock warns first.
-  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com,https://signals.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj", "BLOCKED_APPS": "" },
+  // paired or called, and a pairing with one shows as blocked.
+  // UNVERIFIED_PAIRING (TIN-581): "open" lets any other APC app pair, as unverified, once the person approves the warning in the dock.
+  // The kill switch, for emergencies: set it to "closed" and deploy. No new unverified app pairs, and every unverified pairing is held
+  // as blocked (never called) until it is "open" again. Unset means open.
+  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com,https://signals.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj", "BLOCKED_APPS": "", "UNVERIFIED_PAIRING": "open" },
   // Agent sessions, in Pulse v1's dataset and shape, marked "dock" (TIN-416). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
   "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],
