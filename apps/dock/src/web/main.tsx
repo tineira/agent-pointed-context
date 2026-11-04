@@ -39,7 +39,7 @@ if (matchMedia("(display-mode: standalone)").matches) {
 }
 
 const path = location.pathname;
-if (path === "/") document.title = "Agent Pointed Context: one agent across your apps";
+if (path === "/") document.title = "Agent Pointed Context: point your AI agent at what you see";
 if (path === "/extension" || path === "/extension/") document.title = "Add the APC browser extension";
 // /docs: the standard's docs (TIN-611); each page sets its own title.
 createRoot(document.getElementById("root")!).render(
