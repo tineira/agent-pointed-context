@@ -4,7 +4,7 @@ import { Landing } from "./landing.tsx";
 import { ExtensionInstall } from "./extension.tsx";
 import "./dock.css";
 
-// /: the landing of the APC standard (TIN-420; the Worker sends a visitor who has a dock on to /dock). /dock: the dock
+// /: the landing of the APC standard (TIN-420; always, even for a visitor who has a dock: it offers "Open your dock", TIN-610). /dock: the dock
 // with its hub (TIN-382).
 // Installable (TIN-392): the service worker, and a compact window the first time the installed app opens.
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);

@@ -1,7 +1,7 @@
 /**
  * The dock's Worker (TIN-382): the dock page's API (owner only, by cookie), the public pairing
  * endpoint apps call server to server, and each agent's MCP URL (the secret in it is the agent's).
- * The page is static assets: the landing of the APC standard at / (TIN-420) and the hub dock at /dock. /v1 belongs to V1
+ * The page is static assets: the landing of the APC standard at / (TIN-420; always, whoever asks, TIN-610) and the hub dock at /dock. /v1 belongs to V1
  * (apc-demo, by zone routes); if a request for it still gets here, it is sent on or refused, never the dock page (TIN-605).
  */
 import { Hono } from "hono";
@@ -45,6 +45,18 @@ function session(cookie: string | undefined): { did: string; owner: string } | n
   const m = cookie?.match(/^([0-9a-f]{32})\.([0-9a-f]{32})$/);
   return m ? { did: m[1]!, owner: m[2]! } : null;
 }
+
+/** Whether the cookie holds a dock that is still live (its owner secret matches). */
+async function ownsDock(env: Env, cookie: string | undefined): Promise<boolean> {
+  const current = session(cookie);
+  return !!current && (await stubFor(env, current.did).isOwner(current.owner));
+}
+
+/**
+ * Whether this visitor already has a dock, for the landing's "Open your dock" (TIN-610). A yes or no and
+ * nothing else: no id and no secret. Never cached, since the answer depends on the cookie.
+ */
+app.get("/api/dock/mine", async (c) => c.json({ has_dock: await ownsDock(c.env, getCookie(c, COOKIE)) }, 200, { "cache-control": "no-store", vary: "cookie" }));
 
 /** Public uptime probe without opening a dock. */
 app.get("/api/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
@@ -227,10 +239,14 @@ app.all("/apc/*", (c) => c.json({ error: "not_found" }, 404));
 /** V1 lives at /v1/ on this host, served by another Worker. A request that reaches this one anyway is not the dock's. */
 app.all("/v1", (c) => c.redirect(`/v1/${new URL(c.req.url).search}`, 302));
 app.all("/v1/*", (c) => c.json({ error: "not_found" }, 404));
-/** The landing, or straight to the dock for a visitor who has one (TIN-420), keeping the query (?start_over=1). */
+/**
+ * The landing is always the root (TIN-610): a visitor with a dock sees it too, and its "Open your dock" button
+ * (GET /api/dock/mine) leads on. The one redirect left is ?start_over=1, the link from another site's Start over
+ * dialog (TIN-412), which the dock page answers: a visitor who has a dock goes to /dock?start_over=1.
+ */
 app.get("/", async (c) => {
-  const current = session(getCookie(c, COOKIE));
-  if (current && (await stubFor(c.env, current.did).isOwner(current.owner))) return c.redirect(`/dock${new URL(c.req.url).search}`, 302);
+  const url = new URL(c.req.url);
+  if (url.searchParams.has("start_over") && (await ownsDock(c.env, getCookie(c, COOKIE)))) return c.redirect(`/dock${url.search}`, 302);
   return c.env.ASSETS.fetch(c.req.raw);
 });
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
