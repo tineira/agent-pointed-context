@@ -21,7 +21,8 @@
       li span { overflow-wrap: anywhere; }
       .readings { max-height: 160px; overflow-y: auto; }
       label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
-      input[type="checkbox"] { margin-top: 3px; accent-color: var(--accent); }
+      input[type="checkbox"], input[type="radio"] { margin-top: 3px; accent-color: var(--accent); }
+      .choices { display: grid; gap: 4px; margin: 6px 0; }
     </style>
   </head>
   <body>
@@ -36,6 +37,16 @@
       <section>
         <h2>When to ask</h2>
         <label><input type="checkbox" id="never-ask" /> <span><b>Never ask.</b> <span class="warn">Every drop is sent at once, on any site, even the ones set to ask every time.</span></span></label>
+      </section>
+      <section>
+        <h2>Sensitive numbers</h2>
+        <p class="muted">Everything you can see inside the outline goes to your agent, including what you typed there. Card, account and id numbers, on every site:</p>
+        <div class="choices">
+          <label><input type="radio" name="sensitive" value="ask" /> <span><b>Ask per drop.</b> Left out; after the drop, <i>Include them this time</i> sends them.</span></label>
+          <label><input type="radio" name="sensitive" value="send" /> <span><b>Send if it's in the outline.</b> <span class="warn">They go along, with no question.</span></span></label>
+          <label><input type="radio" name="sensitive" value="never" /> <span><b>Always leave out.</b></span></label>
+        </div>
+        <p class="muted">Passwords and codes never go.</p>
       </section>
       <section>
         <h2>Your sites</h2>

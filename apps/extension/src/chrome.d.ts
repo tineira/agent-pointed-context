@@ -24,6 +24,12 @@ declare namespace chrome {
       set(items: Record<string, unknown>): Promise<void>;
       remove(keys: string | string[]): Promise<void>;
     };
+    /** In memory only, for the browser session: never written to disk. */
+    const session: {
+      get(keys?: string | string[] | null): Promise<Record<string, unknown>>;
+      set(items: Record<string, unknown>): Promise<void>;
+      remove(keys: string | string[]): Promise<void>;
+    };
   }
   namespace permissions {
     interface Permissions {

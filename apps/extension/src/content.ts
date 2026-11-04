@@ -11,19 +11,21 @@
  * paragraph (TIN-469, 13.6), showing whether the agent read it.
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
-import { CONTEXT_MAX, type FormReading } from "../../dock/src/worker/reading.ts";
-import { connectLabel, directOnlyGate, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState } from "./drop.ts";
-import { altText, controlVisible, countable, formState, pickScope, tableContext, type Control, type Seen } from "./read.ts";
+import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
+import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { altText, ANYWHERE, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, intersect, OPACITY_MIN, showsIn, tableContext, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
 const FIELDS = "input,textarea,select,option,[contenteditable=''],[contenteditable='true']";
-/** What renders as something other than its words (TIN-422): innerText gives glyphs for these, or nothing. */
-const REPLACED = "img,math,svg";
 const TEXT_MAX = 2048;
 const HEADER_MAX = 200;
 /** A box of text bigger than this is most of the page, not what the person pointed at. */
 const BOX_MAX = 4000;
+/** A form's card (a question, a field with its label) holds at most this much text (cardOf). */
+const CARD_TEXT_MAX = 1200;
+/** The most elements the content script looks through for a card's controls. */
+const ELEMENTS_SCANNED = 5000;
 
 /**
  * An APC app (Pulse, Signals): a page with APC targets (data-focus), the agent bar (apc-agents) or
@@ -68,8 +70,8 @@ interface Target {
 }
 
 function listen(): void {
-  /** The last drop's place: its pin may come later, once the person allowed this browser in the dock. */
-  let pending: Target | null = null;
+  /** Each drop's place, by its id: its pin and its "Include them this time" may come later, once the person allowed this browser in the dock. */
+  const pending = new Map<string, { target: Target; x: number; y: number }>();
   let lit: HTMLElement | null = null;
   let litOutline = "";
   // A copy left from before the extension was reloaded or updated has lost its extension: it stands
@@ -99,7 +101,8 @@ function listen(): void {
     e.preventDefault();
     // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
-    light(blockAt(e.clientX, e.clientY) as HTMLElement | null);
+    // The outline is what goes (TIN-619): the same element is read on the drop.
+    light(scopeAt(e.clientX, e.clientY) as HTMLElement | null);
     keepLast();
   };
   // Whichever handler answers last wins, and a page's own can come after this one and refuse every
@@ -136,23 +139,30 @@ function listen(): void {
     });
   };
 
-  /** Any other page's drop: read what the person pointed at, then send it. The page's own handlers still see the drop. */
-  const onPageDrop = (e: DragEvent) => {
+  /**
+   * Any other page's drop: read what was outlined, then send it. The page's own handlers still see the
+   * drop. The reading is taken once, here, under an id: the service worker keeps it by that id, and
+   * "Include them this time" names the id, never another drop's reading.
+   */
+  const onPageDrop = (e: DragEvent, outlined: Element | null) => {
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
     if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock");
-    const reading = readAt(e.clientX, e.clientY);
-    const target: Target = { anchor: blockAt(e.clientX, e.clientY), x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
-    pending = target;
+    // The page took away what was outlined: what is under the pointer now is not what the person saw outlined, so nothing goes.
+    if (outlined && !outlined.isConnected) return say("outline_changed");
+    const reading = readAt(e.clientX, e.clientY, outlined);
+    const id = crypto.randomUUID();
+    const target: Target = { anchor: outlined, x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
+    pending.set(id, { target, x: e.clientX, y: e.clientY });
     const send = (consent?: Consent) =>
       chrome.runtime
-        .sendMessage<{ status: DropStatus; pin?: PinMark }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
+        .sendMessage<Reply>({ type: "drop", id, drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
         .then((r) => {
           const status = r?.status ?? "error";
-          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send);
-          say(status);
-          if (status === "sent" && r?.pin) pin(target, r.pin);
+          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send, r?.sensitive);
+          if (status !== "asking") pending.delete(id);
+          sent(r ?? { status }, target, e.clientX, e.clientY);
         })
         .catch(() => say("error"));
     void send();
@@ -176,34 +186,187 @@ function listen(): void {
   window.addEventListener(
     "drop",
     (e) => {
+      // What was outlined when the agent was let go is what is read (TIN-619).
+      const outlined = lit;
       light(null);
+      scopeCache = null;
       if (!e.isTrusted || !carriesAgent(e)) return;
       if (apcApp()) onAppDrop(e);
-      else onPageDrop(e);
+      else onPageDrop(e, outlined);
     },
     true,
   );
   window.addEventListener("dragleave", (e) => {
     if (!e.relatedTarget) light(null);
   });
-  window.addEventListener("dragend", () => light(null));
+  window.addEventListener("dragend", () => {
+    light(null);
+    scopeCache = null;
+  });
   // The service worker's later word, once the person answered in the dock.
   chrome.runtime.onMessage.addListener((m) => {
-    const msg = m as { type?: string; status?: DropStatus; pin?: PinMark };
+    const msg = m as Reply & { type?: string };
     if (msg.type !== "status" || !msg.status || !(msg.status in STATUS_TEXT)) return;
-    say(msg.status);
-    if (msg.status === "sent" && msg.pin && pending) pin(pending, msg.pin);
+    // The drop this word is about, by its id: never whichever drop came last.
+    const drop = msg.id ? pending.get(msg.id) : undefined;
+    if (!drop) return say(msg.status);
+    pending.delete(msg.id!);
+    sent(msg, drop.target, drop.x, drop.y);
   });
 }
 
-/** The page's element at a point, under the extension's own pins, which can sit right where the person drops. */
-function elementAt(x: number, y: number): Element | null {
-  return document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
+/** The service worker's answer to a drop, a moved pin or "Include them this time". */
+interface Reply {
+  status: DropStatus;
+  pin?: PinMark;
+  /** The sensitive values the outline held (TIN-619): how many, the setting, and whether the person may still include them. */
+  sensitive?: { count: number; mode: SensitiveMode; offer: boolean };
+  /** The drop it is about (its reading's id). */
+  id?: string;
 }
 
-/** The nearest block of text at a point, or null (a margin, a form field). */
-function blockAt(x: number, y: number): Element | null {
-  return blockOf(elementAt(x, y));
+/**
+ * After a reading went (or did not): the note, the pin, and under Ask per drop, when sensitive values
+ * were left out, the card that offers to send that drop's reading with them (TIN-619): it names the
+ * drop's id, and the service worker sends the reading it kept for that id.
+ */
+function sent(r: Reply, target: Target, x: number, y: number): void {
+  if (r.status === "sent" && r.sensitive?.offer && r.id) {
+    offerInclude(r.sensitive.count, x, y, () =>
+      chrome.runtime
+        .sendMessage<Reply>({ type: "include", id: r.id })
+        .then((again) => {
+          say(again?.status ?? "error");
+          if (again?.status === "sent" && again.pin) pin(target, again.pin);
+        })
+        .catch(() => say("error")),
+    );
+  } else {
+    say(r.status);
+  }
+  if (r.status === "sent" && r.pin) pin(target, r.pin);
+}
+
+/** The page's element at a point, under the extension's own pins and cards, which can sit right where the person drops. */
+function elementAt(x: number, y: number): Element | null {
+  return document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && ("apcPin" in el.dataset || "apcCard" in el.dataset))) ?? null;
+}
+
+/** The host of one of the extension's cards and notes: never what a drop or the outline lands on. */
+function cardHost(): HTMLDivElement {
+  const host = document.createElement("div");
+  host.dataset.apcCard = "";
+  return host;
+}
+
+/** The last scope found while dragging, by the element under the pointer: dragover comes many times a second. */
+let scopeCache: { under: Element | null; scope: Element | null } | null = null;
+
+/** What the outline covers at a point (scopeOf), as the person drags. */
+function scopeAt(x: number, y: number): Element | null {
+  const under = deepElementAt(x, y);
+  if (scopeCache?.under === under && (!scopeCache.scope || scopeCache.scope.isConnected)) return scopeCache.scope;
+  const scope = scopeOf(under, elementAt(x, y));
+  scopeCache = { under, scope };
+  return scope;
+}
+
+/**
+ * What the outline covers, and so what a reading reads (TIN-619): on a form control, its card (the
+ * largest box around it that holds no other control: a field with its label, a Google Form's question);
+ * on the label, legend or title of a control (a label's control, a legend's fieldset, or a control that
+ * names it in aria-labelledby), that control's card; otherwise the nearest block of text, which may be a
+ * whole form when the drop lands on its margin. Null on a margin of the page or in a field one edits
+ * as rich text. `deep` is the element at the point inside open shadow roots, `under` at the document's level.
+ */
+function scopeOf(deep: Element | null, under: Element | null): Element | null {
+  if (!deep) return null;
+  if (deep.closest("[contenteditable=''],[contenteditable='true']")) return null;
+  const control = deep.closest(CONTROLS);
+  if (control) return controlCard(control);
+  const block = blockOf(deep) ?? (under && under !== deep ? blockOf(under) : null);
+  if (!block) return null;
+  return labelCard(block) ?? block;
+}
+
+/** Each control's key for a card: a radio stands for its whole group, any other control for itself. */
+const keyIds = new WeakMap<Element, number>();
+let keyCount = 0;
+function keyOf(c: Element): string {
+  const id = (e: Element) => {
+    let n = keyIds.get(e);
+    if (n === undefined) keyIds.set(e, (n = ++keyCount));
+    return n;
+  };
+  if (c instanceof HTMLInputElement && c.type === "radio" && c.name) return `radio:${c.name}`;
+  const group = c.getAttribute("role") === "radio" ? c.closest("[role=radiogroup]") : null;
+  return group ? `group:${id(group)}` : `el:${id(c)}`;
+}
+
+/**
+ * The controls in an element, its open shadow roots included (not hidden inputs), or null when there
+ * are more than max of them or the element holds more than elementsMax elements.
+ */
+function controlsIn(el: Element, max: number, elementsMax = Infinity): Element[] | null {
+  if (el.getElementsByTagName("*").length > elementsMax) return null;
+  const out: Element[] = [];
+  const take = (c: Element) => {
+    if (c instanceof HTMLInputElement && c.type === "hidden") return true;
+    out.push(c);
+    return out.length <= max;
+  };
+  const visit = (root: Element | ShadowRoot): boolean => {
+    for (const c of root.querySelectorAll(CONTROLS)) if (!take(c)) return false;
+    for (const e of root.querySelectorAll("*")) if (e.shadowRoot && !visit(e.shadowRoot)) return false;
+    return true;
+  };
+  if (el.matches(CONTROLS) && !take(el)) return null;
+  if (el.shadowRoot && !visit(el.shadowRoot)) return null;
+  return visit(el) ? out : null;
+}
+
+/** An element's control keys, or null when it holds too many controls or elements to be a card. */
+function controlKeys(el: Element): Set<string> | null {
+  const found = controlsIn(el, CARD_CONTROLS_MAX, ELEMENTS_SCANNED);
+  return found ? new Set(found.map(keyOf)) : null;
+}
+
+/** An element's parent, across shadow roots. */
+const parentOf = (e: Element): Element | null => e.parentElement ?? ((e.getRootNode() as ShadowRoot).host ?? null);
+const isPage = (e: Element) => e === document.body || e === document.documentElement;
+const cardText = (e: Element) => readable(e, CARD_TEXT_MAX + 1).trim().length;
+
+/** The card around a control (cardOf). */
+function controlCard(control: Element): Element {
+  return cardOf(control, new Set([keyOf(control)]), parentOf, controlKeys, cardText, isPage, CARD_TEXT_MAX);
+}
+
+/**
+ * The card of the control a block of text labels, or null when it labels none, holds controls itself,
+ * or sits with other controls: a label's control, a legend's fieldset, or the controls that name it (or
+ * an element in it) in aria-labelledby, as a Google Form's answer names its question's title.
+ */
+function labelCard(block: Element): Element | null {
+  // A block that holds a control (a label around its field) is its own scope: null from controlsIn means at least one.
+  if (controlsIn(block, 0) === null) return null;
+  const targets: Element[] = [];
+  const label = block.closest("label");
+  if (label?.control) targets.push(label.control);
+  const legend = block.closest("legend");
+  if (legend?.parentElement instanceof HTMLFieldSetElement) targets.push(legend.parentElement);
+  const root = block.getRootNode() as Document | ShadowRoot;
+  const ids = [block, ...block.querySelectorAll("[id]")].slice(0, 50).map((e) => e.id).filter(Boolean);
+  for (const id of ids) targets.push(...root.querySelectorAll(`[aria-labelledby~="${CSS.escape(id)}"]`));
+  if (!targets.length) return null;
+  const own = new Set<string>();
+  for (const t of targets) for (const c of controlsIn(t, CARD_CONTROLS_MAX) ?? []) own.add(keyOf(c));
+  if (!own.size) return null;
+  let common: Element | null = block;
+  while (common && !targets.every((t) => common!.contains(t))) common = common.parentElement;
+  if (!common || isPage(common)) return null;
+  const keys = controlKeys(common);
+  if (!keys || keys.size !== own.size || [...keys].some((k) => !own.has(k)) || cardText(common) > CARD_TEXT_MAX) return null;
+  return cardOf(common, own, parentOf, controlKeys, cardText, isPage, CARD_TEXT_MAX);
 }
 
 /** The nearest block of text around an element, or null (a form field, or a box that is most of the page). */
@@ -231,15 +394,35 @@ function rendered(el: Element): boolean {
   return style.visibility === "visible" && (!el.parentElement || rendered(el.parentElement));
 }
 
+/** Elements whose text is not page text: a form's values go as fields (formIn), scripts and templates never. */
+const NOT_TEXT = "select,textarea,option,datalist,input,script,style,noscript,template";
+
+/** An element's box in the viewport. */
+const boxOf = (el: Element): Rect => el.getBoundingClientRect();
+
+/** What clips an element: the boxes around it, across shadow roots, that clip what overflows them (overflow other than visible). */
+function clipOf(el: Element): Rect {
+  let clip = ANYWHERE;
+  for (let at = parentOf(el); at && at !== document.documentElement; at = parentOf(at)) {
+    const style = getComputedStyle(at);
+    if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = intersect(clip, boxOf(at));
+  }
+  return clip;
+}
+
+/** Where what an outline shows can be: inside the outlined element's box, cut to what clips it. */
+const outlineBox = (scope: Element): Rect => intersect(boxOf(scope), clipOf(scope));
+
 /**
- * An element's text as the person reads it, with images and formulas giving their alternative text in
- * place (TIN-422). Stops soon after max characters. Without any of those it is simply innerText; with
- * them it walks what is rendered, since a formula often sits next to a hidden copy of itself.
+ * An element's text as the person sees it (TIN-422, TIN-619), with images and formulas giving their
+ * alternative text in place. Stops soon after max characters. It walks what is rendered, not innerText,
+ * which gives text nobody can see: text in an element (or under ancestors) under 0.1 opacity, through
+ * `opacity` or `filter: opacity()`; in a transparent colour; clipped away (`clip`, `clip-path`); or outside
+ * the element's own box, or cut off by a box around it that clips what overflows it. A formula often
+ * sits next to a hidden copy of itself.
  */
 function readable(el: Element, max: number): string {
-  // innerText gives a hidden element's text too, and a table's header row can be hidden.
   if (!rendered(el)) return "";
-  if (!el.matches(REPLACED) && !el.querySelector(REPLACED)) return (el as HTMLElement).innerText ?? el.textContent ?? "";
   const parts: string[] = [];
   let size = 0;
   /** The last alternative text, until words follow it: Wikipedia clips a formula's MathML out of sight beside an image of it, with the same text. */
@@ -249,53 +432,93 @@ function readable(el: Element, max: number): string {
     size += text.length;
     if (text.trim()) lastAlt = null;
   };
-  const walk = (e: Element) => {
-    if (size > max || !rendered(e)) return;
+  const range = document.createRange();
+  /** Whether a text node draws anything inside the clip. */
+  /**
+   * What of a text node shows inside the clip (Grok's review on #132): all of it when every line box is
+   * inside; otherwise word by word (and the spaces between kept words), each kept only when its own box
+   * shows inside, so a paragraph wrapped past an overflow box gives only the lines the person sees.
+   */
+  const visiblePart = (node: Text, clip: Rect): string => {
+    range.selectNodeContents(node);
+    const rects = [...range.getClientRects()].filter((r) => r.width > 0 || r.height > 0);
+    if (!rects.some((r) => showsIn(r, clip))) return "";
+    if (rects.every((r) => within(r, clip))) return node.data;
+    let out = "";
+    let pending = "";
+    for (const m of node.data.matchAll(/\s+|\S+/g)) {
+      if (/^\s/.test(m[0])) {
+        pending = m[0];
+        continue;
+      }
+      range.setStart(node, m.index);
+      range.setEnd(node, m.index + m[0].length);
+      if ([...range.getClientRects()].some((r) => showsIn(r, clip))) {
+        out += (out ? pending : "") + m[0];
+      }
+      pending = "";
+    }
+    return out;
+  };
+  const parent = parentOf(el);
+  const walk = (e: Element, opacity: number, clip: Rect) => {
+    if (size > max || !rendered(e) || e.matches(NOT_TEXT)) return;
+    const style = getComputedStyle(e);
+    const seen = opacity * Number(style.opacity) * filterOpacity(style.filter);
+    if (seen < OPACITY_MIN || clipPathHides(style.clipPath)) return;
+    if ((style.position === "absolute" || style.position === "fixed") && style.clip !== "auto" && style.clip !== "") return;
     const alt = altText(e);
     if (alt !== null) {
-      if (alt !== lastAlt) add(alt);
+      if (alt !== lastAlt && showsIn(boxOf(e), clip)) add(alt);
       lastAlt = alt;
       return;
     }
-    const apart = e.tagName === "BR" || !getComputedStyle(e).display.startsWith("inline");
+    const inner = style.overflowX !== "visible" || style.overflowY !== "visible" ? intersect(clip, boxOf(e)) : clip;
+    const inked = Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)) >= OPACITY_MIN;
+    const apart = e.tagName === "BR" || !style.display.startsWith("inline");
     if (apart) add(" ");
     for (const node of e.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) add(node.textContent ?? "");
-      else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element);
+      if (size > max) break;
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent ?? "";
+        if (!text.trim()) add(text);
+        else if (inked) add(visiblePart(node as Text, inner));
+      } else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element, seen, inner);
     }
     if (apart) add(" ");
   };
-  walk(el);
+  walk(el, parent ? effectiveOpacity(parent) : 1, intersect(boxOf(el), clipOf(el)));
   return parts.join("");
 }
 
+
 /**
- * What the person pointed at: the block's text, the heading above it and its place in a table, or only
- * the page; their selection, with where it is when that is elsewhere; and the form state there (TIN-571).
- * Taken only here, on a drop or a moved pin: nothing is read while the person fills a form.
+ * What the person pointed at (TIN-619): what the outline covered (scope), its text, the heading above it
+ * and its place in a table, or only the page; their selection, with where it is when that is elsewhere;
+ * and every control the person can see inside the outline (formIn). Taken only here, on a drop or a
+ * moved pin: nothing is read while the person fills a form.
  */
-function readAt(x: number, y: number) {
-  const under = elementAt(x, y);
-  const block = blockOf(under);
+function readAt(x: number, y: number, scope: Element | null) {
   const selection = String(getSelection() ?? "").slice(0, TEXT_MAX);
-  const cell = block?.closest<HTMLTableCellElement>("td,th");
+  const cell = scope?.closest<HTMLTableCellElement>("td,th");
   const table = cell?.closest("table");
   return {
     url: location.href,
     title: document.title,
-    element: block
+    element: scope
       ? {
-          tag: block.tagName.toLowerCase(),
-          role: block.getAttribute("role"),
-          name: block.getAttribute("aria-label") || (block as HTMLElement).title || null,
-          text: readable(block, TEXT_MAX).slice(0, TEXT_MAX),
-          heading: headingBefore(block),
+          tag: scope.tagName.toLowerCase(),
+          role: scope.getAttribute("role"),
+          name: scope.getAttribute("aria-label") || (scope as HTMLElement).title || null,
+          // A little past the cap, so a number cut at the end is still seen whole and left out.
+          text: readable(scope, TEXT_MAX).slice(0, TEXT_MAX + 64),
+          heading: headingBefore(scope),
           ...(cell && table ? tableContext(table, cell, (c) => readable(c, HEADER_MAX).slice(0, HEADER_MAX)) : {}),
         }
       : null,
     selection: selection || null,
-    selection_context: selection ? selectionContext(block, selection) : null,
-    form: formAt(x, y),
+    selection_context: selection ? selectionContext(scope, selection) : null,
+    form: formIn(scope, x, y),
   };
 }
 
@@ -313,7 +536,7 @@ function selectionContext(pointed: Element | null, selection: string): { heading
   if (pointed && block && (block === pointed || pointed.contains(block))) return null;
   const heading = headingBefore(block ?? at);
   const fold = (s: string) => s.replace(/\s+/g, " ").trim();
-  const words = block ? fold(readable(block, CONTEXT_MAX)).slice(0, CONTEXT_MAX) : "";
+  const words = block ? fold(readable(block, CONTEXT_MAX)).slice(0, CONTEXT_MAX + 64) : "";
   // The whole block selected: its text is the selection already.
   const text = words && words !== fold(selection) ? words : null;
   return heading || text ? { heading, text } : null;
@@ -321,11 +544,7 @@ function selectionContext(pointed: Element | null, selection: string): { heading
 
 /** Form controls, native and ARIA. A hidden input matches too, and is dropped when described. */
 const CONTROLS = "input,select,textarea,[role=radio],[role=checkbox],[role=switch]";
-/** A control's own group, whose choices go along whatever its size. */
-const OWN_GROUP = "fieldset,[role=radiogroup]";
-/** A wider group, whose choices go along only when it is small (pickScope). */
-const WIDER_GROUP = "form,[role=group]";
-/** The most controls looked at around one drop. */
+/** The most controls read inside one outline. */
 const CONTROLS_SCANNED = 300;
 
 /**
@@ -343,51 +562,28 @@ function deepElementAt(x: number, y: number): Element | null {
 }
 
 /**
- * The form state at a drop (TIN-571): the control dropped on (or the one its label names), and the
- * choices of its own group: its fieldset or radiogroup, or else its form or role=group when that holds
- * at most SCOPE_MAX controls (pickScope), or else only its own radios. Typed values go only for the
- * control dropped on (formState). Without a control, the group the drop landed in.
+ * The form state inside the outline (TIN-619): every control in it, its open shadow roots too, the one
+ * under the pointer (or the one its label names) marked; formState keeps those the person can see, inside
+ * the outlined box and not cut off by a box around them.
  */
-function formAt(x: number, y: number): FormReading | null {
+function formIn(scope: Element | null, x: number, y: number) {
+  if (!scope) return null;
   const under = deepElementAt(x, y);
-  if (!under) return null;
-  const label = under.closest("label");
-  const pointed = under.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
-  const from = pointed ?? under;
-  const ancestors: Array<{ el: Element; kind: "own" | "wider"; controls: number }> = [];
-  for (let el = from.parentElement; el; el = el.parentElement) {
-    if (el.matches(OWN_GROUP)) ancestors.push({ el, kind: "own", controls: 0 });
-    // Only controls the reading could say something of count: not hidden inputs, buttons or ones the person cannot see.
-    else if (el.matches(WIDER_GROUP)) ancestors.push({ el, kind: "wider", controls: countControls(el) });
-  }
-  const scope = ancestors[pickScope(ancestors)]?.el ?? null;
-  const found = scope ? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED) : [];
-  // No group around it: the control's own radios still give which one is chosen.
-  if (!scope && pointed instanceof HTMLInputElement && pointed.type === "radio" && pointed.name) {
-    const root = pointed.form ?? pointed.getRootNode();
-    if (root instanceof HTMLFormElement || root instanceof Document || root instanceof ShadowRoot) {
-      for (const r of root.querySelectorAll<HTMLInputElement>("input[type=radio]")) if (r.name === pointed.name && r.form === pointed.form && found.length < CONTROLS_SCANNED) found.push(r);
-    }
-  }
-  if (pointed && !found.includes(pointed)) found.unshift(pointed);
-  const controls = found.map((el) => describe(el, el === pointed)).filter((c): c is Control => c !== null);
+  const label = under?.closest("label");
+  const pointed = under?.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
+  const found = controlsIn(scope, CONTROLS_SCANNED) ?? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED);
+  const outline = outlineBox(scope);
+  const controls = found.map((el) => describe(el, el === pointed, outline)).filter((c): c is Control => c !== null);
   return formState(controls);
 }
 
-/** How many controls in a group the reading could say something of (countable); past CONTROLS_SCANNED in all, too many. */
-function countControls(group: Element): number {
-  const all = group.querySelectorAll(CONTROLS);
-  if (all.length > CONTROLS_SCANNED) return Infinity;
-  return [...all].filter((el) => {
-    const c = describe(el, false);
-    return !!c && countable(c);
-  }).length;
-}
-
-/** An element's opacity times its ancestors', across shadow roots. */
+/** An element's opacity times its ancestors', across shadow roots, `filter: opacity()` included. */
 function effectiveOpacity(el: Element): number {
   let opacity = 1;
-  for (let at: Element | null = el; at && opacity > 0; at = at.parentElement ?? ((at.getRootNode() as ShadowRoot).host ?? null)) opacity *= Number(getComputedStyle(at).opacity);
+  for (let at: Element | null = el; at && opacity > 0; at = parentOf(at)) {
+    const style = getComputedStyle(at);
+    opacity *= Number(style.opacity) * filterOpacity(style.filter);
+  }
   return opacity;
 }
 
@@ -400,8 +596,8 @@ function alpha(color: string): number {
   return m[1]!.endsWith("%") ? Number(m[1]!.slice(0, -1)) / 100 : Number(m[1]);
 }
 
-/** What visuallyHidden needs of an element. */
-function seenOf(el: Element): Seen {
+/** What visuallyHidden needs of an element; with an outline, whether its box shows inside it, cut to what clips it. */
+function seenOf(el: Element, outline?: Rect): Seen {
   const style = getComputedStyle(el);
   const box = el.getBoundingClientRect();
   const page = document.documentElement;
@@ -421,18 +617,19 @@ function seenOf(el: Element): Seen {
     clip: style.clip,
     clipPath: style.clipPath,
     ariaHidden: !!el.closest('[aria-hidden="true"]'),
+    ...(outline ? { inOutline: showsIn(box, intersect(outline, clipOf(el))) } : {}),
   };
 }
 
 /** A control as formState takes it, or null: a hidden input, or not a control. */
-function describe(el: Element, pointed: boolean): Control | null {
+function describe(el: Element, pointed: boolean, outline: Rect): Control | null {
   if (el instanceof HTMLInputElement && el.type === "hidden") return null;
   const labels = "labels" in el ? [...((el as HTMLInputElement).labels ?? [])] : [];
   const nativeChoice = el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox");
   const typed = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !nativeChoice);
   // A choice is seen through a label the person sees; a typed field only by itself.
   // Only a native radio or checkbox may be seen through its label (custom widgets); anything else must be seen itself.
-  const visible = controlVisible(nativeChoice, typed, seenOf(el), nativeChoice ? labels.map(seenOf) : []);
+  const visible = controlVisible(nativeChoice, typed, seenOf(el, outline), nativeChoice ? labels.map((l) => seenOf(l, outline)) : []);
   const attr = (name: string) => el.getAttribute(name);
   const base = { label: labelOf(el, labels), group: null, groupKey: null, name: attr("name"), id: el.id || null, autocomplete: attr("autocomplete"), placeholder: attr("placeholder"), checked: false, value: "", pointed, visible };
   if (el instanceof HTMLInputElement) {
@@ -470,7 +667,7 @@ function labelOf(el: Element, labels: Element[]): string | null {
 
 /** A radio group's label: its fieldset's legend, or its group's own label. */
 function groupLabel(el: Element): string | null {
-  const group = el.closest(`${OWN_GROUP},[role=group]`);
+  const group = el.closest("fieldset,[role=radiogroup],[role=group]");
   if (!group) return null;
   const legend = group instanceof HTMLFieldSetElement ? group.querySelector(":scope > legend") : null;
   return (legend ? textWithout(legend) : "") || labelOf(group, []);
@@ -487,32 +684,39 @@ function textWithout(el: Element): string {
   return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-/** The nearest h1 to h3 before an element in the document, or its own text when it is one. */
+/** The nearest h1 to h3 before an element in the document, or its own text when it is one: its text as the person sees it (readable), never innerText. */
 function headingBefore(el: Element): string | null {
   let found: Element | null = null;
   for (const h of document.querySelectorAll("h1,h2,h3")) {
     if (h === el || h.contains(el) || h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) found = h;
     else break;
   }
-  return found ? ((found as HTMLElement).innerText ?? found.textContent ?? "").trim().slice(0, 200) || null : null;
+  return found ? readable(found, 200).replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
 }
 
 /**
  * The consent card (13.3), where the agent was dropped, in a closed shadow root. Its buttons take
  * trusted clicks only. A sensitive site gets Send and Not now, never Always.
  */
-function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void): void {
-  const host = document.createElement("div");
+function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void, sensitive?: Reply["sensitive"]): void {
+  const host = cardHost();
   const root = host.attachShadow({ mode: "closed" });
   const card = document.createElement("div");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-label", "APC");
   const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
-  const top = Math.max(8, Math.min(y + 12, innerHeight - 240));
+  const top = Math.max(8, Math.min(y + 12, innerHeight - 280));
   card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
   const text = document.createElement("p");
   text.style.cssText = "margin:0 0 10px";
   text.textContent = STATUS_TEXT[status];
+  // What happens to the sensitive values in this outline, by the person's setting (TIN-619).
+  if (sensitive?.count) {
+    const note = document.createElement("b");
+    note.dataset.apcSensitive = String(sensitive.count);
+    note.textContent = ` ${sensitiveNote(sensitive.count, sensitive.mode)}`;
+    text.append(note);
+  }
   const row = document.createElement("div");
   row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
   const choices: Array<[Consent | null, string]> = status === "consent_sensitive" ? [["once", "Send"], [null, "Not now"]] : [["once", "Just this once"], ["always", "Always on this site"], ["never", "Not here"]];
@@ -537,6 +741,56 @@ function ask(status: "consent" | "consent_sensitive" | "consent_update", x: numb
   setTimeout(close, 45_000);
 }
 
+/** The card that offers sensitive values left out, at most one at a time. */
+let includeCard: (() => void) | null = null;
+
+/**
+ * After a drop under Ask per drop that left sensitive values out (TIN-619): where the agent was dropped,
+ * in a closed shadow root, "Sent to your agent. N sensitive values left out." with "Include them this
+ * time", which sends the same reading, taken at the drop, with them. Trusted clicks only.
+ */
+function offerInclude(count: number, x: number, y: number, include: () => void): void {
+  includeCard?.();
+  const host = cardHost();
+  const root = host.attachShadow({ mode: "closed" });
+  const card = document.createElement("div");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-label", "APC");
+  const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
+  const top = Math.max(8, Math.min(y + 12, innerHeight - 140));
+  card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
+  const text = document.createElement("p");
+  text.style.cssText = "margin:0 0 10px";
+  text.setAttribute("role", "status");
+  text.textContent = sentWithout(count);
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
+  let timer = 0;
+  const close = () => {
+    clearTimeout(timer);
+    host.remove();
+    if (includeCard === close) includeCard = null;
+  };
+  for (const [what, label] of [["include", INCLUDE_LABEL], ["dismiss", "Close"]] as const) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.dataset.apcInclude = what;
+    b.style.cssText = `font:inherit;padding:5px 10px;border-radius:7px;cursor:pointer;border:1px solid ${what === "include" ? "#d4733a" : "#555"};background:${what === "include" ? "#d4733a" : "transparent"};color:#fff`;
+    b.addEventListener("click", (ev) => {
+      if (!ev.isTrusted) return;
+      close();
+      if (what === "include") include();
+    });
+    row.append(b);
+  }
+  card.append(text, row);
+  root.append(card);
+  document.documentElement.append(host);
+  includeCard = close;
+  timer = window.setTimeout(close, 30_000);
+}
+
 /**
  * The answer to a dock agent dropped on a Direct-only APC app (APC 0.5), where it was dropped, in a
  * closed shadow root: the app connects agents directly, with a link to its connect page (from its
@@ -546,7 +800,7 @@ let directOnlyCard: (() => void) | null = null;
 function answerDirectOnly(app: DirectOnly, x: number, y: number): void {
   // A new drop replaces the card: never a stack of them.
   directOnlyCard?.();
-  const host = document.createElement("div");
+  const host = cardHost();
   const root = host.attachShadow({ mode: "closed" });
   const card = document.createElement("div");
   card.setAttribute("role", "status");
@@ -701,17 +955,21 @@ function pin(target: Target, mark: PinMark): void {
     remove();
     void chrome.runtime.sendMessage({ type: "pin_clear", hub: target.hub, agent: target.agent }).catch(() => {});
   });
-  moveWith(markEl, badge, place, (x, y) => {
-    // A paragraph of this page: send its reading with the browser's token, no new consent (TIN-471).
-    const anchor = blockAt(x, y);
+  moveWith(markEl, badge, place, (x, y, outlined) => {
+    // What was outlined on this page: send its reading with the browser's token, no new consent (TIN-471, TIN-619).
+    // Taken away by the page before the release: nothing goes, and the pin goes back.
+    if (outlined && !outlined.isConnected) {
+      say("outline_changed");
+      return false;
+    }
+    const anchor = outlined;
     if (!anchor || anchor === target.anchor) return false;
-    const reading = readAt(x, y);
+    const reading = readAt(x, y, anchor);
+    const id = crypto.randomUUID();
+    const moved: Target = { anchor, x: x + scrollX, y: y + scrollY, hub: target.hub, agent: target.agent };
     void chrome.runtime
-      .sendMessage<{ status: DropStatus; pin?: PinMark }>({ type: "move", hub: target.hub, agent: target.agent, reading })
-      .then((r) => {
-        if (r?.status === "sent" && r.pin) pin({ anchor, x: x + scrollX, y: y + scrollY, hub: target.hub, agent: target.agent }, r.pin);
-        else say(r?.status ?? "error");
-      })
+      .sendMessage<Reply>({ type: "move", id, hub: target.hub, agent: target.agent, reading })
+      .then((r) => sent(r ?? { status: "error" }, moved, x, y))
       .catch(() => say("error"));
     return true;
   });
@@ -721,11 +979,11 @@ function pin(target: Target, mark: PinMark): void {
 }
 
 /**
- * Drag a pin by its mark (TIN-471): past a few pixels it follows the pointer and outlines the paragraph
- * under it. On release, drop(x, y) says whether it took the place (the pin is then drawn there anew);
- * if not, or on Esc, the pin goes back. A trusted pointer only.
+ * Drag a pin by its mark (TIN-471): past a few pixels it follows the pointer and outlines what a drop
+ * there would read (scopeAt). On release, drop(x, y, outlined) says whether it took the place (the pin
+ * is then drawn there anew); if not, or on Esc, the pin goes back. A trusted pointer only.
  */
-function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, drop: (x: number, y: number) => boolean): void {
+function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, drop: (x: number, y: number, outlined: Element | null) => boolean): void {
   // The browser's own drag (of the logo image, or of selected text) would cancel the pointer: none.
   handle.addEventListener("dragstart", (e) => e.preventDefault());
   handle.addEventListener("pointerdown", (down) => {
@@ -758,11 +1016,13 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
       badge.classList.add("moving");
       badge.style.left = `${Math.round(e.pageX - 14)}px`;
       badge.style.top = `${Math.round(e.pageY - 14)}px`;
-      light(blockAt(e.clientX, e.clientY) as HTMLElement | null);
+      light(scopeAt(e.clientX, e.clientY) as HTMLElement | null);
     };
     const onUp = (e: PointerEvent) => {
+      const outlined = lit;
       end();
-      if (moving && e.isTrusted && drop(e.clientX, e.clientY)) return;
+      scopeCache = null;
+      if (moving && e.isTrusted && drop(e.clientX, e.clientY, outlined)) return;
       back();
     };
     const onCancel = () => {
@@ -783,7 +1043,7 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
 
 /** A short note in the page's corner, in its own shadow root so the page's styles cannot touch it. */
 function say(status: DropStatus): void {
-  const host = document.createElement("div");
+  const host = cardHost();
   const root = host.attachShadow({ mode: "closed" });
   const note = document.createElement("div");
   note.textContent = STATUS_TEXT[status];

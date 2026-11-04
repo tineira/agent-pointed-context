@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -200,9 +200,17 @@ test("a lookup that told nothing is asked again on a later drag, once the servic
   assert.deepEqual(gate.drop(), { now: app });
 });
 
-test("the card says what goes along from a form, and a site that sends without asking asks once more with it (TIN-571)", () => {
-  for (const s of ["consent", "consent_sensitive", "consent_update"] as const) assert.ok(STATUS_TEXT[s].includes(FORM_NOTE), s);
-  assert.match(FORM_NOTE, /choices made in that part of a form and what you typed in the field you dropped on/);
+test("the card says what goes along and where, and a site that sends without asking asks once more with it (TIN-571, TIN-619)", () => {
+  for (const s of ["consent", "consent_sensitive", "consent_update"] as const) {
+    assert.ok(STATUS_TEXT[s].includes(FORM_NOTE), s);
+    assert.match(STATUS_TEXT[s], /APC hub .*kept 10 minutes at most.*agent's provider/, s);
+  }
+  assert.match(FORM_NOTE, /Everything you can see inside the outline goes along, including what you typed there\./);
+  assert.match(FORM_NOTE, /passwords and codes never/);
+  assert.match(STATUS_TEXT.consent_update, /^New: the outline is what goes\./);
+  // The re-ask is a new version: a person who saw TIN-571's notice is asked once more.
+  assert.notEqual(NOTICE_ALL, "formNoticeAll");
+  assert.notEqual(NOTICE_SITES, "formNoticeSites");
   // Always, a site granted by itself and Never ask send without a card: once, they ask with the new words.
   assert.equal(reask(decide("ask", "always", false, false), false), true);
   assert.equal(reask(decide("ask", undefined, false, true), false), true);
@@ -211,4 +219,48 @@ test("the card says what goes along from a form, and a site that sends without a
   assert.equal(reask(decide("ask", "always", false, false), true), false);
   // A drop that asks anyway, or never sends, needs no second card.
   for (const d of [decide("ask", undefined, false, false), decide("ask", "sensitive", false, false), decide("ask", "never", false, false)]) assert.equal(reask(d, false), false, d);
+});
+
+test("the sensitive-data setting: Ask per drop by default, one choice for every site, and Include this time only under Ask (TIN-619)", () => {
+  assert.equal(sensitiveMode(undefined), "ask");
+  assert.equal(sensitiveMode("bogus"), "ask");
+  assert.equal(sensitiveMode("send"), "send");
+  assert.equal(sensitiveMode("never"), "never");
+  assert.equal(includeSensitive("ask", false), false);
+  assert.equal(includeSensitive("ask", true), true);
+  assert.equal(includeSensitive("send", false), true);
+  assert.equal(includeSensitive("never", true), false, "Always leave out offers no button, and refuses one");
+  assert.equal(sentWithout(2), "Sent to your agent. 2 sensitive values left out.");
+  assert.equal(sentWithout(1), "Sent to your agent. 1 sensitive value left out.");
+  assert.match(sensitiveNote(3, "ask"), /^3 sensitive values will be left out; you can include them after sending\.$/);
+  assert.match(sensitiveNote(1, "send"), /go along/);
+  assert.match(sensitiveNote(1, "never"), /left out/);
+});
+
+test("Include them this time sends only the reading kept for that drop, once its consent was given; a later drop never takes its place (TIN-619, Grok's review)", () => {
+  const first = "0b8f6a52-1f6e-4c3a-9d2b-1a2b3c4d5e6f";
+  const second = "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
+  const entry = (raw: string, consented: boolean, at: number): Held => ({ raw, hub: "https://apc.tineira.com", agent: "a1", consented, at });
+  let held: Record<string, Held> = {};
+  // The first drop: consented on its card, then held while the browser waits for the dock's Allow.
+  held = holdReading(held, first, entry("first drop: card 4111 1111 1111 1111", false, 1000), 1000);
+  assert.equal(heldForInclude(held, first, 1500), null, "not before its consent");
+  held = holdReading(held, first, entry("first drop: card 4111 1111 1111 1111", true, 1000), 1600);
+  // The second drop, waiting on its own consent card.
+  held = holdReading(held, second, entry("second drop: IBAN DE89 3704 0044 0532 0130 00", false, 2000), 2000);
+  // Allow comes; Include on the first sends the first drop's reading, never the second's.
+  assert.equal(heldForInclude(held, first, 3000)?.raw, "first drop: card 4111 1111 1111 1111");
+  assert.equal(heldForInclude(held, second, 3000), null, "the second drop's consent is not given");
+  // Unknown ids, ids that are not a drop's, and readings kept too long give nothing.
+  assert.equal(heldForInclude(held, "nope", 3000), null);
+  assert.equal(heldForInclude(held, first, 1000 + HELD_MS + 1), null);
+  assert.equal(readingId(first), first);
+  for (const bad of ["", "x".repeat(36), 42, null, "../held"]) assert.equal(readingId(bad), null, String(bad));
+  // At most HELD_MAX are kept, the newest.
+  let many: Record<string, Held> = {};
+  const idOf = (i: number) => `${String(i).padStart(8, "0")}-0000-4000-8000-000000000000`;
+  for (let i = 0; i < HELD_MAX + 5; i++) many = holdReading(many, idOf(i), entry(`r${i}`, true, 5000 + i), 5000 + i);
+  assert.equal(Object.keys(many).length, HELD_MAX);
+  assert.ok(heldForInclude(many, idOf(HELD_MAX + 4), 5100));
+  assert.equal(heldForInclude(many, idOf(0), 5100), null);
 });
