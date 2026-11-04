@@ -1,6 +1,6 @@
 /**
  * Where V1 lives on its host (TIN-604): apc.tineira.com/v1. The page, its API, the MCP URLs and every
- * link V1 hands out are under it. vite.config.ts (base) and wrangler.jsonc (assets.base_path) match.
+ * link V1 hands out are under it. vite.config.ts puts the page and its files under v1/ in the assets directory to match.
  */
 export const BASE = "/v1";
 

@@ -7,11 +7,13 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    // The page and its assets live under /v1 (Vite base "/v1/"). Anything outside /v1 reaches the Worker:
-    // / redirects to /v1/, the rest is a 404.
-    "base_path": "/v1",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/v1/api", "/v1/api/*", "/v1/mcp", "/v1/mcp/*", "/v1/apc", "/v1/apc/*", "/v1/.well-known", "/v1/.well-known/*"]
+    // The page and its files sit under v1/ in the assets directory (vite.config.ts), so /v1/favicon.svg is
+    // the file v1/favicon.svg and nothing is served outside /v1. A request that matches no file reaches the
+    // Worker (not_found_handling stays "none", the default): / and /v1 redirect to /v1/, an app route under
+    // /v1/ gets v1/index.html from the Worker, the rest is a 404. No base_path: it is not available on every
+    // account (code 100343 on the first deploy).
+    "binding": "ASSETS",
+    "run_worker_first": ["/v1", "/v1/api", "/v1/api/*", "/v1/mcp", "/v1/mcp/*", "/v1/apc", "/v1/apc/*", "/v1/.well-known", "/v1/.well-known/*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }]
