@@ -70,6 +70,23 @@ const request = async (what, url, init) => {
   }
 };
 
+/**
+ * A freshly started dev server answers its first calls to each route slowly or with vite's 500 page while it loads the
+ * Worker (TIN-583: the first run after a start timed out waiting for the reader request). The extension asks for a reader
+ * once per drop and does not retry, so before the first drop each route the extension calls is asked until it answers JSON.
+ * These calls carry no token and no extension origin: the dock refuses them, which is all a warm-up needs.
+ */
+async function warmUp() {
+  for (const path of ["/apc/reader", "/apc/reader/status", "/apc/reading", "/apc/reading/log", "/apc/reading/log/clear"]) {
+    await until(`the dock answers ${path}`, async () => {
+      const r = await fetch(DOCK + path, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => null);
+      const text = (await r?.text().catch(() => "")) ?? "";
+      return r && !text.trimStart().startsWith("<");
+    }, 60_000);
+  }
+}
+if (!PROD) await warmUp();
+
 // ---- the dock: one dock, its agent connected ----
 let cookie = "";
 const api = async (path, body) => {
@@ -179,6 +196,8 @@ const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 const profile = mkdtempSync(join(tmpdir(), "apc-e2e-"));
 const browser = spawn(EXE, ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
 const out = browser.stdio[3];
+// Once the browser closed at the end, a late write gets EPIPE: nothing to do then.
+out.on("error", () => {});
 /** Exceptions and console errors of the pages a step watches (Runtime.enable), shown when it fails. */
 const pageErrors = [];
 let buf = "";
@@ -677,9 +696,13 @@ try {
       return nextReading(selector, before);
     };
     const dropOnCheckout = (selector, at) => dropOnPage(checkout, selector, at);
-    /** Under Ask per drop: dismiss the card a drop left, so the next check starts with none. */
+    /**
+     * Under Ask per drop: dismiss the card a drop that left something out shows, so the next check starts with none.
+     * The reading reaches the dock before the service worker answers the page and the card shows: wait for the card
+     * itself (TIN-583: dismissing too early left it up, and it stood on the next drop's check).
+     */
     const dismiss = async (sid = checkout) => {
-      if ((await includeButtons(sid)).has("dismiss")) await clickInclude(sid, "dismiss");
+      await clickInclude(sid, "dismiss");
       await until("no sent card", async () => (await includeButtons(sid)).size === 0, 5000);
     };
     /** Change the sensitive-data setting as the person does, with the popup's own radio (TIN-619). */
@@ -848,13 +871,21 @@ try {
     // 8. Open dock and Float from the extension's popup (TIN-473). The browser gets this dock's cookie, so
     // /dock is this dock with its Float button (no first run gates it, TIN-489; no world to choose, TIN-621).
     await cdp("Storage.setCookies", { cookies: [{ name: cookie.split("=")[0], value: cookie.slice(cookie.indexOf("=") + 1), url: DOCK, path: "/", secure: DOCK.startsWith("https:") }] });
+    /**
+     * Click an element with real mouse events, as a person does: scrolled into view first. A mouse event outside the
+     * viewport reaches nothing, so a button below the fold (the popup's Clear, in a tab as tall as the window) would take
+     * no click at all (TIN-583): the point is checked to be inside the viewport.
+     */
     const clickIn = async (sid, selector) => {
       const { root } = await cdp("DOM.getDocument", { depth: 0 }, sid);
       const { nodeId } = await cdp("DOM.querySelector", { nodeId: root.nodeId, selector }, sid);
       assert.ok(nodeId, `${selector} on the page`);
+      await cdp("DOM.scrollIntoViewIfNeeded", { nodeId }, sid);
       const q = (await cdp("DOM.getBoxModel", { nodeId }, sid)).model.border;
       const x = (q[0] + q[4]) / 2;
       const y = (q[1] + q[5]) / 2;
+      const { cssLayoutViewport: v } = await cdp("Page.getLayoutMetrics", {}, sid);
+      assert.ok(x >= 0 && y >= 0 && x < v.clientWidth && y < v.clientHeight, `${selector} is in view to click (${Math.round(x)}, ${Math.round(y)} in ${v.clientWidth}×${v.clientHeight})`);
       for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 }, sid);
     };
     const popupClick = async (selector) => {
@@ -880,13 +911,30 @@ try {
       return ask;
     }, 30_000);
     // The prompt stays until Float opens, so a click Chrome refused can be made again, as a person would.
-    const floating = async () => (await cdp("Runtime.evaluate", { expression: "!!window.documentPictureInPicture?.window", returnByValue: true }, dockSession)).result.value;
+    const floating = async () => (await cdp("Runtime.evaluate", { expression: "!!window.documentPictureInPicture?.window", returnByValue: true }, dockSession).catch(() => null))?.result.value === true;
+    // What the page saw of each try (TIN-583): the clicks on the prompt and what requestWindow answered, printed if Float never opens.
+    // Kept in sessionStorage, which outlives the reload above; installed again on every try, since a reload drops the hooks.
+    const FLOAT_LOG = `(() => {
+      if (window.__apcFloatLog) return;
+      const log = (e) => { const all = JSON.parse(sessionStorage.getItem("apc-e2e-float") ?? "[]"); all.push(Math.round(performance.now()) + " " + e); sessionStorage.setItem("apc-e2e-float", JSON.stringify(all)); };
+      window.__apcFloatLog = log;
+      log("page " + location.search + ", visible " + document.visibilityState + ", focused " + document.hasFocus());
+      addEventListener("click", (e) => log("click on " + (e.target.closest?.("[data-float-ask]") ? "the prompt" : e.target.tagName) + ", trusted " + e.isTrusted + ", activation " + navigator.userActivation?.isActive), true);
+      const pip = window.documentPictureInPicture;
+      if (!pip) return log("no documentPictureInPicture");
+      const ask = pip.requestWindow.bind(pip);
+      pip.requestWindow = (o) => { log("requestWindow"); return ask(o).then((w) => (log("requestWindow opened"), w), (e) => { log("requestWindow refused: " + e.name + " " + e.message); throw e; }); };
+    })()`;
+    const floatLog = async () => (await cdp("Runtime.evaluate", { expression: `sessionStorage.getItem("apc-e2e-float")`, returnByValue: true }, dockSession).catch(() => null))?.result.value ?? "(the page could not say)";
     for (let attempt = 0; attempt < 3 && !(await floating()); attempt++) {
       await floatPrompt();
+      await cdp("Runtime.evaluate", { expression: FLOAT_LOG }, dockSession);
+      // A person clicks in the window in front; the dock's tab is brought there, as Open dock does.
+      await cdp("Page.bringToFront", {}, dockSession);
       await clickIn(dockSession, "[data-float-ask]");
       await until("the Float window", floating, 6_000).catch(() => {});
     }
-    assert.ok(await floating(), "the Float window opened");
+    assert.ok(await floating(), `the Float window opened (the page saw: ${await floatLog()})`);
     assert.equal((await cdp("Runtime.evaluate", { expression: "location.search", returnByValue: true }, dockSession)).result.value, "", "the prompt goes once Float is open");
     console.log("8. Open dock opens the dock; Float opens it ready, and one click floats the agents");
 
@@ -937,7 +985,9 @@ try {
     assert.match(await popupList(), /gone/, "a replaced reading says it is gone");
     await clickIn(listSession, "#clear-readings");
     await until("the list cleared at the dock", async () => (await api(`${base}/state`)).agents[0].readings.length === 0);
-    await until("the list cleared in the popup", async () => /Each page you send/.test(await popupList()));
+    await until("the list cleared in the popup", async () => /Each page you send/.test(await popupList())).catch(async (e) => {
+      throw new Error(`${e.message} (the popup shows: ${JSON.stringify(await popupList())})`);
+    });
     assert.equal((await tool("page__get_reading")).isError, true);
     await cdp("Target.closeTarget", { targetId: listId });
     console.log("9. a table cell and a formula read whole; the popup and the dock list readings, and Clear empties both");
@@ -969,10 +1019,19 @@ try {
   }
 } finally {
   if (!held) await api(`${base}/reset`, {}).catch(() => {});
-  browser.kill();
+  // Chrome's child processes hold the profile's files for a while after the browser goes, and on Windows that made the
+  // removal fail with EPERM (TIN-583). Close the browser as a person would, wait for it to exit, then retry the removal
+  // for a few seconds; a folder still held after that is left with a note, and the run's result stands.
+  const exited = new Promise((r) => (browser.exitCode !== null ? r() : browser.once("exit", r)));
+  await Promise.race([cdp("Browser.close").catch(() => {}), sleep(5000)]);
+  if (!(await Promise.race([exited.then(() => true), sleep(10_000).then(() => false)]))) browser.kill();
   server.close();
-  await sleep(1000);
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
-  if (PROD || CONSENT) rmSync(EXT, { recursive: true, force: true, maxRetries: 5 });
+  for (const dir of [profile, ...(PROD || CONSENT ? [EXT] : [])]) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+    } catch (e) {
+      console.warn(`could not remove ${dir} (${e.code ?? e.message}); delete it by hand`);
+    }
+  }
   process.exit(failed ? 1 : 0);
 }
