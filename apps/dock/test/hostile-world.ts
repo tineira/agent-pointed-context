@@ -135,10 +135,17 @@ export async function world(t: TestContext, env: Json = {}) {
   const callHub = (name: string, args: Json = {}) => rpcHub("tools/call", { name, arguments: args });
   const listHub = async () => (await rpcHub("tools/list")).tools as Array<{ name: string; description: string; annotations?: Json }>;
 
+  /** The person drops an agent on Pulse and allows it there: Pulse asks first (consent in the app, TIN-606), the Allow sends the nonce back. */
+  const dropOnPulse = async (drag: { agent: string; ticket: string }) => {
+    const drop = { hub: DOCK, ...drag, target: { kind: "customer", id: customers[0]!.id } };
+    const asked = await pulse.pairHub(SID, PULSE, drop);
+    assert.equal(asked.error, "consent_required");
+    return pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent });
+  };
   /** The person drops the agent on Pulse, allows it there and in the dock. */
   const pairPulse = async () => {
     const { ticket } = await hub.ticket(first.id);
-    const paired = await pulse.pairHub(SID, PULSE, { hub: DOCK, agent: first.id, ticket, target: { kind: "customer", id: customers[0]!.id } });
+    const paired = await dropOnPulse({ agent: first.id, ticket });
     assert.equal(paired.ok, true, `pairing Pulse: ${paired.error}`);
     const pending = (await agent()).pairings.find((p: Json) => p.status === "pending" && (p.app as Json).origin === PULSE);
     assert.equal(pending.warning, undefined, "a verified app's request carries no warning");
@@ -156,7 +163,7 @@ export async function world(t: TestContext, env: Json = {}) {
   };
   const pairingOf = async (origin: string) => (await agent()).pairings.find((p: { app: { origin: string } }) => p.app.origin === origin);
 
-  return { hub, hubRoom, hubEnv, pulse, pulseRoom, customers, apps, hits, state, agent, rpcHub, callHub, listHub, pairPulse, pairApp, pairingOf };
+  return { hub, hubRoom, hubEnv, pulse, pulseRoom, customers, apps, hits, state, agent, rpcHub, callHub, listHub, dropOnPulse, pairPulse, pairApp, pairingOf };
 }
 
 /** Shorter time limits for one test. */

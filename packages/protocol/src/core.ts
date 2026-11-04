@@ -10,6 +10,11 @@
  *   app gave it. Receiving the drop (`application/x-apc-agent`, the handle and the ticket), consent
  *   in the app, pairing (`POST {hub}/apc/pair`), the check on every drop (`POST {hub}/apc/confirm`)
  *   and the hub giving a grant back (`POST {app}/apc/revoke`) are the profile's, not the core's.
+ *   Consent in the app is the app's server's to check (APC 0.6), never the page's alone: the server makes
+ *   a grant for a dock agent it holds none for only on a request that proves the person allowed it on the
+ *   app's page just now (the reference apps: a single-use nonce the page shows its consent with,
+ *   `DockConsent` in @apc/server), whatever the page last loaded. A page that missed a revoke must not
+ *   pair without asking.
  *
  * The core is the same on both, and per grant: the hub is one more holder of a grant.
  *
@@ -85,7 +90,8 @@ export interface WaitNoFocus {
  * - From then on every request to the grant's MCP URL, whatever the method, is answered with HTTP
  *   `REVOKED_HTTP_STATUS` (403) and a `RevokedAnswer` body. A call already running when the grant is
  *   revoked ends as a tool error whose `error` is `"revoked"`, with no app data. An unknown or
- *   expired grant stays 404, so the holder can tell "taken back" from "gone".
+ *   expired grant stays 404, so the holder can tell "taken back" from "gone". Whether a grant was
+ *   revoked is told by the grant itself (its secret), never by an id a later grant may reuse (0.6).
  * - A revoked grant never works again. To let the agent back, the person makes a new grant: a new
  *   MCP URL (Direct), or a new drop, with consent in the app and in the dock (Dock).
  * - A hub that gets a `RevokedAnswer` marks that pairing revoked ("Revoked by <app host>"), stops

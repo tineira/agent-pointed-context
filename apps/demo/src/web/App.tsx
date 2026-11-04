@@ -191,16 +191,17 @@ function Sandbox({ sid }: { sid: string }) {
         acceptNativeDrops: v2,
         // A grant id: the bridge dock (TIN-370). An agent from a hub dock is never resolved here; it goes below.
         resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
-        // An agent from a hub dock (TIN-389): one paired here pins through the server, which checks with the
-        // dock that the pairing still stands; one not paired, or no longer, asks the person (hub-consent.tsx).
+        // An agent from a hub dock (TIN-389): every drop goes to the server, which decides (TIN-606). One paired
+        // here pins, once the dock says the pairing still stands; one not paired, or no longer, comes back
+        // consent_required with a nonce, and the person is asked (hub-consent.tsx), never on this page's word.
         onUnknownAgent: hubMode
           ? async (drag, target) => {
-              const paired = stateRef.current?.hub_links?.some((l) => l.hub === drag.hub && l.agent === drag.agent);
-              if (!paired) return setPendingDrop({ drag, target, at: Date.now() });
               const r = await api.hubPair({ hub: drag.hub, agent: drag.agent, ticket: drag.ticket, region: null, target });
-              if (r.ok) setNotice(`Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".`);
-              else if (r.error === "not_paired") setPendingDrop({ drag, target, at: Date.now() });
-              else setNotice(`Not pinned: ${r.error}`);
+              if (r.error === "consent_required" && r.consent) {
+                void refresh();
+                return setPendingDrop({ drag, target, at: Date.now(), consent: r.consent });
+              }
+              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned: ${r.error}`);
               setTimeout(() => setNotice(null), 4000);
               void refresh();
             }

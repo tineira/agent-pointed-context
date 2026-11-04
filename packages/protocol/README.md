@@ -16,12 +16,12 @@ What every APC app implements, whichever way agents reach it ([`src/core.ts`](sr
 | `apc.json` | Serves `/.well-known/apc.json` from its own origin: what it is and which profiles it offers (below). |
 | `apc_link` | Only with both profiles: the same agent on both paths shown as one, with a one-time code; it grants nothing (below). |
 | Mobile (0.6) | On a phone or any touch viewport (`APC_MOBILE_MEDIA`) shows its agents in its own page, on both profiles (below). |
-| Revoke from the app | Revoke on every agent in the agent bar. At once, in the app alone (it calls nobody): the grant's MCP URL answers 403 with `RevokedAnswer` from then on, a call already running ends the same way, and the grant never works again. |
+| Revoke from the app | Revoke on every agent in the agent bar. At once, in the app alone (it calls nobody): the grant's MCP URL answers 403 with `RevokedAnswer` from then on, a call already running ends the same way (told by the grant's secret, never an id a later grant may reuse, 0.7), and the grant never works again. |
 
 What belongs to a profile, not to the core:
 
 - **Direct** (the agent connects to the app's own MCP URL): a grant per agent, its secret URL, the list where the person makes and names agents.
-- **Dock** (the agent connects once, to a hub): the drop (`application/x-apc-agent`, the handle and the ticket), consent in the app, `POST {hub}/apc/pair` (the hub reads the app's `apc.json` first), `POST {hub}/apc/confirm` on every drop, and `POST {app}/apc/revoke`, the hub giving a grant back.
+- **Dock** (the agent connects once, to a hub): the drop (`application/x-apc-agent`, the handle and the ticket), consent in the app (checked by the app's server, never its page alone: 0.7, `DockConsent` in `@apc/server`), `POST {hub}/apc/pair` (the hub reads the app's `apc.json` first), `POST {hub}/apc/confirm` on every drop, and `POST {app}/apc/revoke`, the hub giving a grant back.
 
 Whatever it offers, an app publishes `apc.json` (below).
 

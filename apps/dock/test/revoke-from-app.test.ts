@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
 import { generateDataset } from "../../demo/src/model/seed.ts";
+import { LIMITS } from "../src/worker/trust.ts";
 
 installWorkersStandIn();
 const { Hub } = await import(new URL("../src/worker/hub.ts", import.meta.url).href);
@@ -29,12 +30,17 @@ async function world(t: TestContext) {
   await pulse.init(SEED);
   const customers = generateDataset(SEED).customers;
 
-  const net = { hubDown: false, toHub: 0 };
+  const net = { hubDown: false, toHub: 0, toPulse: 0, pulseDelayMs: 0 };
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
-    if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
+    if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) {
+      net.toPulse++;
+      // Pulse slow to answer, for one test.
+      if (net.pulseDelayMs) await new Promise((resolve) => setTimeout(resolve, net.pulseDelayMs));
+      return pulse.fetch(request);
+    }
     if (url.origin === PULSE && url.pathname === "/apc/revoke") {
       const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
       const r = await pulse.revokeHubGrant(secret);
@@ -65,10 +71,20 @@ async function world(t: TestContext) {
     return (await response.json()).result;
   };
 
-  /** The person drops the agent from the dock on a customer in Pulse and says yes in Pulse; then yes in the dock. */
-  const dropAndAllow = async (customer: string) => {
+  /**
+   * The person drops the agent from the dock on a customer in Pulse. Pulse's page sends every drop to its server, whatever
+   * it last loaded; for an agent Pulse holds no grant for, the server answers consent_required with a nonce (TIN-606).
+   */
+  const drop = async (customer: string, o: { consent?: string } = {}) => {
     const { ticket } = await hub.ticket(first.id);
-    const paired = await pulse.pairHub(SID, PULSE, { hub: DOCK, agent: first.id, ticket, target: { kind: "customer", id: customer } });
+    const body = { hub: DOCK, agent: first.id, ticket, target: { kind: "customer", id: customer } };
+    return { body, answer: await pulse.pairHub(SID, PULSE, { ...body, ...o }) };
+  };
+  /** The drop asks the person in Pulse, they say yes (the nonce goes back), and then yes in the dock. */
+  const dropAndAllow = async (customer: string) => {
+    const { body, answer: asked } = await drop(customer);
+    assert.equal(asked.error, "consent_required", "Pulse asks the person first");
+    const paired = await pulse.pairHub(SID, PULSE, { ...body, consent: asked.consent });
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     assert.equal(paired.status, "pending", "the dock still has to say yes");
     const pending = (await agent()).pairings.find((p: { status: string }) => p.status === "pending");
@@ -76,7 +92,7 @@ async function world(t: TestContext) {
     return paired.grant_id as string;
   };
 
-  return { hub, pulse, pulseRoom, net, agent, callHub, dropAndAllow, customers };
+  return { hub, pulse, pulseRoom, net, agent, callHub, drop, dropAndAllow, customers };
 }
 
 test("a dock agent revoked in Pulse cannot read Pulse, even with the hub down, and the dock says Pulse revoked it", async (t) => {
@@ -192,4 +208,98 @@ test("a pin the hub took before the revoke is not handed over by a later wait", 
   assert.equal(JSON.stringify(waited).includes(customers[0]!.id), false);
   assert.equal((await agent()).pairings[0].status, "revoked");
   assert.equal((await agent()).focus, null);
+});
+
+// ---- Follow-ups from the review of #116 (TIN-606) ----
+
+test("a page that missed the revoke cannot pair without asking: Pulse's server asks for consent, and only the nonce it gave pairs", async (t) => {
+  const { hub, pulse, net, agent, drop, dropAndAllow, customers } = await world(t);
+  const grantId = await dropAndAllow(customers[0]!.id);
+  net.hubDown = true;
+  await pulse.revokeGrant(grantId);
+  net.hubDown = false;
+
+  // The page still shows the agent as linked (it missed the update) and sends the drop as a pin: the server decides.
+  const calls = net.toHub;
+  const { body, answer } = await drop(customers[1]!.id);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.error, "consent_required");
+  assert.match(answer.consent, /^cn_[0-9a-f]{32}$/);
+  assert.equal(net.toHub, calls, "nothing reached the dock: no grant was made, no pairing asked for");
+  assert.equal((await pulse.state()).grants.length, 0);
+
+  // Only the nonce Pulse gave for this dock and agent pairs, once.
+  for (const consent of [undefined, `cn_${"0".repeat(32)}`, "not-a-nonce"]) {
+    assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent })).error, "consent_required", String(consent));
+  }
+  const other = await pulse.pairHub(SID, PULSE, { ...body, agent: "ag_00000000" });
+  assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent: other.consent })).error, "consent_required", "another agent's nonce");
+  assert.equal(net.toHub, calls, "still nothing sent to the dock");
+  const asked = await pulse.pairHub(SID, PULSE, body);
+  const paired = await pulse.pairHub(SID, PULSE, { ...body, consent: asked.consent });
+  assert.equal(paired.ok, true, paired.error);
+  assert.equal(paired.status, "pending", "and the dock asks too");
+  // Linked again, a drop pins without consent: the dock confirms the pairing instead.
+  const { ticket } = await hub.ticket((await agent()).id);
+  assert.equal((await pulse.pairHub(SID, PULSE, { ...body, ticket })).ok, true);
+});
+
+test("the dock forgot a pairing Pulse still links: the drop drops the grant and asks for consent, with the ticket still good", async (t) => {
+  const { hub, pulse, agent, drop, dropAndAllow, customers } = await world(t);
+  const grantId = await dropAndAllow(customers[0]!.id);
+  // Unpaired in the dock while Pulse did not hear of it (as if the give-back had failed).
+  hub.ctx.storage.sql.exec("delete from pairings where id = ?", (await agent()).pairings[0].id);
+  const { body, answer } = await drop(customers[1]!.id);
+  assert.equal(answer.error, "consent_required");
+  assert.equal((await pulse.state()).grants.some((g: { id: string }) => g.id === grantId), false, "the old grant went");
+  const paired = await pulse.pairHub(SID, PULSE, { ...body, consent: answer.consent });
+  assert.equal(paired.ok, true, `the same ticket pairs after the person's yes: ${paired.error}`);
+});
+
+test("a drop after a revoke in Pulse, before the hub heard of it, replaces the stale line and keeps the app's id: no pulse2", async (t) => {
+  const { hub, pulse, net, agent, callHub, dropAndAllow, customers } = await world(t);
+  const grantId = await dropAndAllow(customers[0]!.id);
+  net.hubDown = true;
+  await pulse.revokeGrant(grantId);
+  net.hubDown = false;
+  // No call reached Pulse since: the hub still holds the line as paired.
+  assert.equal(hub.ctx.storage.sql.exec("select status from pairings").toArray()[0].status, "paired");
+
+  await dropAndAllow(customers[1]!.id);
+  const lines = (await agent()).pairings.map((p: { status: string; app: { id: string } }) => [p.app.id, p.status]);
+  assert.deepEqual(lines, [["pulse", "paired"]], "one line, the new pairing, under Pulse's own id");
+  const view = await callHub("get_current_view");
+  assert.equal(view.structuredContent.focus.id, customers[1]!.id);
+  assert.equal((await callHub("pulse__list_customers", { limit: 1 })).isError, undefined);
+});
+
+test("a second pairing with the same app whose first line still answers keeps both lines", async (t) => {
+  const { hub, pulse, agent, dropAndAllow, customers } = await world(t);
+  await dropAndAllow(customers[0]!.id);
+  // Another live grant of the same origin for the same agent (as a second Pulse sandbox of the person's would give).
+  const other = await pulse.addAgentGrant();
+  const { ticket } = await hub.ticket((await agent()).id);
+  const asked = await hub.pair({ ticket, agent: (await agent()).id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${SID}/${other.secret}` });
+  assert.equal(asked.ok, true, asked.error);
+  assert.deepEqual((await agent()).pairings.map((p: { status: string; app: { id: string } }) => [p.app.id, p.status]), [["pulse", "paired"], ["pulse2", "pending"]]);
+});
+
+test("a wait with an unread pin asks only the pin's app, and a slow app delays the pin by LIMITS.pinLookMs at most", async (t) => {
+  const { net, agent, callHub, dropAndAllow, customers } = await world(t);
+  await dropAndAllow(customers[0]!.id);
+  // The hub takes the pin on a relayed call (it rides as attention); the agent has not read it.
+  await callHub("call_app_tool", { app: "pulse", tool: "list_customers", args: { limit: 1 } });
+  assert.equal((await agent()).focus.seen, false);
+  const saved = LIMITS.pinLookMs;
+  LIMITS.pinLookMs = 300;
+  t.after(() => (LIMITS.pinLookMs = saved));
+  net.pulseDelayMs = 3_000;
+  const calls = net.toPulse;
+  const started = Date.now();
+  const waited = await callHub("wait_for_focus", { timeout_s: 20 });
+  const took = Date.now() - started;
+  net.pulseDelayMs = 0;
+  assert.ok(took < 1_500, `the pin came after ${took} ms, not after Pulse's 3 s or the 6 s look`);
+  assert.equal(waited.structuredContent.focus.id, customers[0]!.id, "Pulse did not answer in time: its pin (ids only) is handed over");
+  assert.equal(net.toPulse - calls, 1, "one quick look, at the pin's app");
 });

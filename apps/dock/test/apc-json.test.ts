@@ -64,7 +64,10 @@ async function world(t: TestContext, env: Json = {}) {
   /** The person drops the agent on Pulse and allows it there: Pulse makes a grant and asks the hub to pair it. */
   const dropOnPulse = async () => {
     const { ticket } = await hub.ticket(agent.id);
-    return (await pulse.pairHub(SID, PULSE, { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } })) as { ok: boolean; error?: string };
+    const drop = { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } };
+    // Pulse asks the person first (consent in the app, TIN-606); their Allow sends the nonce back.
+    const asked = await pulse.pairHub(SID, PULSE, drop);
+    return (await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent })) as { ok: boolean; error?: string };
   };
   /** An app outside APP_ORIGINS asks to pair (as unverified: the person approves the warning in the dock before it pairs, TIN-581). */
   const shopPairs = async (mcpUrl = `${SHOP}/mcp/${"c".repeat(32)}`) => {

@@ -4,6 +4,13 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
 
+## 0.7.0 (draft, 2026-11-04)
+
+Consent in the app, checked by the app's server, and revoke told by the grant itself (TIN-606). In `packages/protocol/src/core.ts`, `packages/server/src/consent.ts` and DESIGN.md section 14.
+
+- **Consent in the app is the app's server's to check (the Dock profile).** An app makes a grant for a dock agent it holds no grant for only on a request that proves the person allowed it on the app's page just now, whatever the page last loaded: a page that missed a revoke, or a pairing the dock forgot, must not pair without asking. The reference apps send every dock drop to their server; for an agent with no grant it answers `consent_required` (`CONSENT_REQUIRED`) with a nonce, the page shows its consent with it, and the Allow sends it back. `DockConsent` in `@apc/server` gives and takes the nonce: 128 random bits, once, for the same dock and agent, within `DOCK_CONSENT_TTL_MS` (two minutes). The drag's ticket is not spent until the app calls `POST {hub}/apc/pair`. One drop of an agent is answered at a time: a second request for the same dock and agent while the first waits on the hub answers `pairing_in_progress` and changes nothing, and the new grant is linked to the agent only once the hub took it. Nothing changes between the app and the hub.
+- **Whether a grant was revoked is told by the grant itself** (its secret, and the hash the app keeps of it), never by a grant id a later grant may reuse: a call running when its grant was revoked ends `revoked` even if a new grant took the id, and a later grant with a revoked one's id that is given back ends its running call as an unknown grant, not as revoked.
+
 ## 0.6.0 (draft, 2026-11-04)
 
 On mobile, every app shows the agent in its page (TIN-608). In `packages/protocol/src/core.ts`, `packages/web`, `packages/conformance` and DESIGN.md section 19.

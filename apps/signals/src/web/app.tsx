@@ -36,7 +36,8 @@ interface FeedState {
   profiles: ApcProfile[];
   grants: GrantState[];
 }
-type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget };
+/** A dock agent to ask about; `consent` is the nonce the server asked with, sent back with the Allow (TIN-606). */
+type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget; consent: string };
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
@@ -158,12 +159,12 @@ function Feed({ sid }: { sid: string }) {
           setConnectOpen(true);
           say(answer.message);
         },
+        // Every dock drop goes to the server, which decides (TIN-606): an agent with no grant here comes back
+        // consent_required with a nonce, and the person is asked, never on this page's last-loaded state.
         onUnknownAgent: async (drag, target) => {
-          const paired = stateRef.current?.grants.some((g) => g.hub === drag.hub && g.agent === drag.agent);
-          if (!paired) return setPending({ drag, target });
-          const r = await call<{ ok: boolean; error?: string; grant_id?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
-          if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
-          else if (r.error === "not_paired") setPending({ drag, target });
+          const r = await call<{ ok: boolean; error?: string; grant_id?: string; consent?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
+          if (r.error === "consent_required" && r.consent) setPending({ drag, target, consent: r.consent });
+          else if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
           else say(`Not pinned: ${r.error}`);
           refresh();
         },
@@ -412,8 +413,8 @@ function Feed({ sid }: { sid: string }) {
           onDone={async (allow) => {
             setPending(null);
             if (!allow) return;
-            const r = await call<{ ok: boolean; error?: string }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target });
-            say(r.ok ? `Paired with the dock at ${new URL(pending.drag.hub).host}. Allow it there too, then ask your agent about "this".` : `Not paired: ${r.error === "ticket_expired" ? "the drag is too old (60 s); drag the agent from the dock again" : r.error}`);
+            const r = await call<{ ok: boolean; error?: string }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target, consent: pending.consent });
+            say(r.ok ? `Paired with the dock at ${new URL(pending.drag.hub).host}. Allow it there too, then ask your agent about "this".` : `Not paired: ${r.error === "ticket_expired" || r.error === "consent_required" ? "the drag is too old; drag the agent from the dock again" : r.error}`);
             refresh();
           }}
         />

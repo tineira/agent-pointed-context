@@ -21,6 +21,8 @@ export const LIMITS = {
   listMs: 10_000,
   callMs: 20_000,
   lookMs: 6_000,
+  /** The look a wait_for_focus takes at the app of an unread pin before it hands the pin over (TIN-606): short, since the pin is ready. */
+  pinLookMs: 2_000,
   revokeMs: 10_000,
   /** Reading an app's apc.json at pairing (APC 0.5), and how long the hub trusts the copy it read before it reads the file again. */
   apcJsonMs: 5_000,

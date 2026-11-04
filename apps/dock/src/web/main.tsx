@@ -7,7 +7,18 @@ import "./dock.css";
 // /: the landing of the APC standard (TIN-420; always, even for a visitor who has a dock: it offers "Open your dock", TIN-610). /dock: the dock
 // with its hub (TIN-382).
 // Installable (TIN-392): the service worker, and a compact window the first time the installed app opens.
-if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+// A dock page left open asks for a new service worker whenever it comes back into view (TIN-609): a deploy that
+// changes sw.js reaches it then, and the new worker reloads it onto the new code (public/sw.js).
+if ("serviceWorker" in navigator) {
+  void navigator.serviceWorker
+    .register("/sw.js")
+    .then((registration) => {
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") void registration.update().catch(() => undefined);
+      });
+    })
+    .catch(() => undefined);
+}
 if (matchMedia("(display-mode: standalone)").matches) {
   try {
     if (!localStorage.getItem("apc-dock-sized")) {

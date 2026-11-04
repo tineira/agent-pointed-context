@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ApcProfile, FocusRow } from "@apc/protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@apc/server";
 import { generateDataset } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -69,6 +69,8 @@ export class Feed extends DurableObject<Env> {
   private waiting = new Set<string>();
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
   private links!: ApcLinks;
+  /** Consent in the app, checked here (APC 0.6): the nonce the page shows its consent with. */
+  private consent!: DockConsent;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -107,6 +109,7 @@ export class Feed extends DurableObject<Env> {
       }
     }
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Signals", grants: () => this.grants().map((g) => ({ id: g.id, path: pathOf(g) })) });
+    this.consent = new DockConsent(sqlKv(this.sql));
   }
 
   /** Whether Signals offers this profile (APC_PROFILES). */
@@ -282,31 +285,39 @@ export class Feed extends DurableObject<Env> {
   }
 
   /**
-   * The person dropped an agent from a dock here and said yes (DESIGN.md 12.1, as in Pulse's v2):
-   * a grant for it, handed to the dock's hub server to server with the drag's ticket, and the pin.
+   * The person dropped an agent from a dock here (DESIGN.md 12.1, as in Pulse's v2): a grant for it,
+   * handed to the dock's hub server to server with the drag's ticket, and the pin. An agent Signals holds
+   * no grant for gets one only with the person's yes on this page, checked here (APC 0.6, TIN-606): the
+   * answer is `consent_required` with a nonce, and only a request that brings the nonce back pairs.
    */
-  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string }> {
+  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string }> {
     if (!this.offers("dock")) return { ok: false, error: "not_available" };
-    const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; target?: unknown } | null;
+    const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; target?: unknown; consent?: unknown } | null;
     const hub = typeof b?.hub === "string" ? b.hub : "";
     const allowed = (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
     if (!allowed.includes(hub) && !(dev() && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
     if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
-    const linked = this.grants().find((g) => g.hub === hub && g.agent === b.agent);
+    const agent = b.agent;
+    /** The person has not said yes here for this agent: the page asks, with this nonce. */
+    const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
+    const linked = this.grants().find((g) => g.hub === hub && g.agent === agent);
     if (linked) {
       // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
-      const check = await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent: b.agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
+      const check = await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
       if (!check.ok) {
-        if (check.error === "not_paired") await this.revoke(linked.secret);
-        return { ok: false, error: check.error ?? "hub_refused" };
+        if (check.error !== "not_paired") return { ok: false, error: check.error ?? "hub_refused" };
+        // The ticket is still good: the person can say yes here and pair at once.
+        await this.revoke(linked.secret);
+        return askFirst();
       }
       this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent?.icon }]), linked.id);
       return { ...(await this.pin(linked.id, b.target)), grant_id: linked.id };
     }
-    const id = `g_${randomHex(4)}`;
-    const secret = randomHex(16);
-    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, ?, ?)", id, secret, hub, b.agent, new Date().toISOString());
-    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent: b.agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
+    // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
+    if (!this.consent.take(b.consent, hub, agent)) return askFirst();
+    const { id, secret, created_at } = newDirectGrant();
+    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, ?, ?)", id, secret, hub, agent, created_at);
+    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };
@@ -355,11 +366,13 @@ export class Feed extends DurableObject<Env> {
     return { ok: true };
   }
 
-  private revokedAt(by: { grantId: string } | { hash: string }): string | null {
-    const row = "grantId" in by
-      ? this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where grant_id = ?", by.grantId).toArray()[0]
-      : this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where secret_hash = ?", by.hash).toArray()[0];
-    return row?.revoked_at ?? null;
+  /** When the grant with this secret was revoked here, or null: by the secret's hash only, never a grant id a later grant may reuse (TIN-606). */
+  private revokedAt(hash: string): string | null {
+    return this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where secret_hash = ?", hash).toArray()[0]?.revoked_at ?? null;
+  }
+  /** The grant with this secret is still live: this grant, never a later one that took its id. */
+  private holds(secret: string): boolean {
+    return this.sql.exec("select 1 from grants where secret = ?", secret).toArray().length > 0;
   }
 
   // ---- fetch: the page's WebSocket and the hub's MCP endpoint ----
@@ -386,11 +399,13 @@ export class Feed extends DurableObject<Env> {
 
   private async mcp(request: Request, secret: string, origin: string): Promise<Response> {
     if (!(await this.alive())) return Response.json({ error: "expired" }, { status: 404 });
+    // The secret's hash, before the grant is looked up: what says whether this grant was revoked, now and during its calls.
+    const hash = await secretHash(secret);
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant) {
       // Revoked in the app (APC 0.2): 403 with the answer, whatever the method (checked before the
       // method), so the dock's hub can say who revoked it.
-      const revokedAt = this.revokedAt({ hash: await secretHash(secret) });
+      const revokedAt = this.revokedAt(hash);
       if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
       return Response.json({ error: "unknown_grant" }, { status: 404 });
     }
@@ -425,7 +440,7 @@ export class Feed extends DurableObject<Env> {
         jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
       },
     );
-    this.instrument(server, grant.id, posts, origin);
+    this.instrument(server, grant, hash, posts, origin);
     registerApcTools(server, {
       readView: async () => viewPayload(this.storedView(), origin),
       readFocus: async () => focusPayload(this.focusRow(grant.id), posts, origin),
@@ -437,7 +452,7 @@ export class Feed extends DurableObject<Env> {
         this.broadcast();
       },
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
-      pageOpen: async () => (this.grants().some((g) => g.id === grant.id) ? this.pageOpen() : false),
+      pageOpen: async () => (this.holds(grant.secret) ? this.pageOpen() : false),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: WAIT_CEILING_S,
     });
@@ -488,11 +503,13 @@ export class Feed extends DurableObject<Env> {
    * envelope while the grant's pin is unread, then while the person's page is open (not on a wait that
    * came back empty, which ends the loop), and presence on the page after each successful call.
    */
-  private instrument(server: McpServer, grantId: string, posts: Post[], origin: string): void {
+  private instrument(server: McpServer, grant: Grant, hash: string, posts: Post[], origin: string): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+    const grantId = grant.id;
+    // By the grant's secret and its hash, never its id, which a later grant may reuse (TIN-606).
     const cut = (): ToolResult | null => {
-      if (this.grants().some((g) => g.id === grantId)) return null;
-      const revokedAt = this.revokedAt({ grantId });
+      if (this.holds(grant.secret)) return null;
+      const revokedAt = this.revokedAt(hash);
       return revokedAt ? revokedToolResult(new URL(origin).host, revokedAt) : toolError("unknown_grant", "This grant no longer exists.");
     };
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>

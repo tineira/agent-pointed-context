@@ -159,6 +159,8 @@ export class Hub extends DurableObject<Env> {
   private busyUntil = new Map<string, number>();
   /** Waits in flight that a page reading ends (memory only): agent id to their wake-ups. */
   private readingWaiters = new Map<string, Set<() => void>>();
+  /** Work still running after the request that started it answered: grants given back (memory only, see `later`). */
+  private running = new Set<Promise<void>>();
 
   /** True when a reading for the agent arrives within ms, false when ms pass. */
   private nextReading(agentId: string, ms: number): Promise<boolean> {
@@ -412,8 +414,12 @@ export class Hub extends DurableObject<Env> {
    * A pending pairing nobody decided within LIMITS.pendingMs (10 minutes) goes, as a deny would, and
    * frees its place under the cap (TIN-581). The app gets its grant back, so a later drop there asks
    * again. Run by the alarm, and before anything that counts or decides pending pairings.
+   *
+   * Every change is made here, synchronously; the grants to give back are returned, for the alarm to
+   * await and for a request to give back after it answered (`later`, TIN-609): the dock's state and an
+   * app's /apc/pair never wait on another app's /apc/revoke.
    */
-  private async expirePending(): Promise<void> {
+  private expirePending(): Pairing[] {
     // An approval whose introduction never finished within LIMITS.approvingMs (the object was evicted mid-way) is
     // settled: paired if nothing holds it and its approval stands, its tools read on first use; dropped otherwise.
     // Every change below happens in one synchronous block; only then are grants given back (Fix check 4 on #120).
@@ -435,7 +441,33 @@ export class Hub extends DurableObject<Env> {
     }
     if (stale.length) this.broadcast();
     giveBack.push(...stale.filter(givesBack));
-    if (giveBack.length) await Promise.allSettled(giveBack.map((p) => revokeGrant(p.mcp_url, transport(p))));
+    return giveBack;
+  }
+  /** Give these grants back to their apps; settles when every app answered or timed out. */
+  private giveBack(pairings: Pairing[]): Promise<unknown> {
+    return pairings.length ? Promise.allSettled(pairings.map((p) => revokeGrant(p.mcp_url, transport(p)))) : Promise.resolve();
+  }
+  /**
+   * Work that runs after the request that started it has answered (TIN-609): giving grants back from
+   * pending expiry. The object lives on while it runs (ctx.waitUntil, where the runtime has it); `idle()`
+   * waits for it.
+   */
+  private later(work: Promise<unknown>): void {
+    const running: Promise<void> = work.then(
+      () => void this.running.delete(running),
+      () => void this.running.delete(running),
+    );
+    this.running.add(running);
+    (this.ctx as { waitUntil?: (promise: Promise<unknown>) => void }).waitUntil?.(running);
+  }
+  /** Resolves once the work started with `later` has ended, including work it started meanwhile. */
+  async idle(): Promise<void> {
+    while (this.running.size) await Promise.all([...this.running]);
+  }
+  /** Pending expiry before a request: its changes now, its give-backs after the request answered. */
+  private expireNow(): void {
+    const giveBack = this.expirePending();
+    if (giveBack.length) this.later(this.giveBack(giveBack));
   }
   private async alive(): Promise<boolean> {
     if (!this.meta("owner")) return false;
@@ -455,7 +487,7 @@ export class Hub extends DurableObject<Env> {
   async alarm(): Promise<void> {
     this.expireReadings();
     if (Number(this.meta("expires_at") ?? 0) <= Date.now()) return this.wipe();
-    await this.expirePending();
+    await this.giveBack(this.expirePending());
     this.broadcast();
     await this.arm();
   }
@@ -543,7 +575,7 @@ export class Hub extends DurableObject<Env> {
   }
 
   async state(origin: string) {
-    await this.expirePending();
+    this.expireNow();
     const did = this.meta("did");
     const blocked = this.blocked();
     // The demo world's seed (TIN-393): the dock opens every app on it, so they show the same market and
@@ -658,7 +690,7 @@ export class Hub extends DurableObject<Env> {
       return { ok: true };
     }
     // A pending pairing left undecided too long is gone, as if denied (TIN-581).
-    await this.expirePending();
+    this.expireNow();
     const p = this.pairings().find((x) => x.id === pairingId);
     if (!p) return { ok: false, error: "unknown_pairing" };
     const approving = action === "approve" || action === "approve_unverified";
@@ -699,6 +731,10 @@ export class Hub extends DurableObject<Env> {
       // Denied meanwhile (or the app answered 404 and the row went): nothing to pair.
       if (!now || this.stored(p.id) === null) return takeBack("unknown_pairing");
       if (now.status === "revoked") return takeBack(REVOKED_ERROR);
+      // Settled already (TIN-609): the alarm, or a state(), pair() or decide() meanwhile, found this approval past
+      // LIMITS.approvingMs and paired it, with its approval standing. It is paired, so this Approve succeeded; its
+      // approval stays. Held since (blocklist, kill switch), it is paired but not called: say so, take nothing back.
+      if (this.stored(p.id) === "paired") return now.status === "blocked" ? { ok: false, error: "app_blocked" } : { ok: true };
       // Paired only if nothing holds it now and its approval still stands (Fix check 1 on #120); a blocked or
       // kill-switched row, or one whose domain lost its approval meanwhile, goes instead and is never stored paired.
       // Synchronous to the end: settleNow decides and writes, and only the give-back is awaited.
@@ -894,14 +930,19 @@ export class Hub extends DurableObject<Env> {
     const verdict = appVerdict(origin, b.mcp_url, { allowed: envList(this.env.APP_ORIGINS), blocked: this.blocked(), open: this.unverifiedOpen(), dev: dev() });
     if (!verdict.ok) return { ok: false, error: verdict.error };
     // A pending pairing nobody decided in time frees its place before this one is counted (TIN-581).
-    await this.expirePending();
+    this.expireNow();
     if (!this.agent(t.agent_id)) return { ok: false, error: "ticket_expired" };
     // What can be refused without a request is refused first (and checked again after it, below).
     const early = this.pairingRoom(t.agent_id, origin, verdict.verified);
     if (early) return { ok: false, error: early };
+    // The same agent asks again from an app it is paired with, with another grant (TIN-606): the app dropped its
+    // link, most likely because the person revoked the agent there, and the hub has not heard yet. The hub asks
+    // that pairing now, while the file below is read: a revoked one is marked (and replaced below, its line and
+    // its app id going to the new pairing), a gone one goes. One that still answers stays, beside the new one.
+    const stale = this.pairings(t.agent_id, "paired").filter((p) => p.app_origin === origin && p.mcp_url !== b.mcp_url);
     // The app says what it is in its own apc.json, from its own origin (APC 0.5): it must offer the Dock
     // profile and declare where its MCP URLs live, so a URL the domain did not declare never pairs.
-    const read = await this.manifestFor(origin, verdict.verified);
+    const [read] = await Promise.all([this.manifestFor(origin, verdict.verified), ...stale.map((p) => this.lookAt(p))]);
     if (!read.ok) return { ok: false, error: read.error };
     // With no file and no copy (a verified app whose file is out of reach), the path guard still holds:
     // the MCP URL must lie under the default path, APC_DEFAULT_MCP_PATH, and pass the same checks. Only the
@@ -1150,15 +1191,16 @@ export class Hub extends DurableObject<Env> {
   /** Ask every paired app what the person sees and where they pointed: the hub's quick look. */
   private async look(agentId: string): Promise<void> {
     this.forgetBlocked();
-    await Promise.all(
-      this.pairings(agentId, "paired").map(async (p) => {
-        try {
-          this.take(p, await callAppTool(p.mcp_url, "get_current_view", {}, LIMITS.lookMs, transport(p)), "view");
-        } catch (error) {
-          this.failed(p, error);
-        }
-      }),
-    );
+    await Promise.all(this.pairings(agentId, "paired").map((p) => this.lookAt(p)));
+  }
+
+  /** The quick look at one paired app, within ms: what it answers is taken, a revoked or gone grant is marked (failed). */
+  private async lookAt(p: Pairing, ms = LIMITS.lookMs): Promise<void> {
+    try {
+      this.take(p, await callAppTool(p.mcp_url, "get_current_view", {}, ms, transport(p)), "view");
+    } catch (error) {
+      this.failed(p, error);
+    }
   }
 
   /**
@@ -1397,9 +1439,14 @@ export class Hub extends DurableObject<Env> {
         this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
         return toolResult({ focus: this.render(agentId, row), timed_out: false });
       };
-      // A pin the hub took but has not handed over yet: ask its apps first, since one may have revoked
-      // the grant since (APC 0.2); a revoked pairing's pin goes before it could be delivered.
-      if (this.unread(agentId)) await this.look(agentId);
+      // A pin the hub took but has not handed over yet: ask its app first, since it may have revoked the grant
+      // since (APC 0.2); a revoked pairing's pin goes before it could be delivered. Only the pin's own app, and
+      // within LIMITS.pinLookMs or the wait's own timeout, whichever is shorter (TIN-606): a slow app delays the
+      // pin by that much at most. One that does not answer in time keeps its pin, target ids only, as § 14 says
+      // of an app that revoked and cannot be reached.
+      const unread = this.unread(agentId);
+      const holder = unread ? this.pairings(agentId, "paired").find((p) => p.id === unread.pairing_id) : undefined;
+      if (holder) await this.lookAt(holder, Math.min(LIMITS.pinLookMs, ((t as number | undefined) ?? WAIT_DEFAULT_S) * 1000));
       const ready = deliver();
       if (ready) return ready;
       const timeoutS = (t as number | undefined) ?? WAIT_DEFAULT_S;
