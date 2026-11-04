@@ -148,7 +148,8 @@ app.post("/api/s/:sid/grants/restricted", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { region?: string };
   const region = (REGIONS as readonly string[]).includes(body.region ?? "") ? (body.region as Region) : "latam";
   const result = await rpc(c.env, c.var.sid, (s) => s.tryAddRestricted(region));
-  return c.json(result, result.ok ? 200 : 400);
+  // The grant itself on success (what clients and the mobile e2e read), { ok: false, error } at the cap.
+  return result.ok ? c.json(result.grant) : c.json({ ok: false, error: result.error }, 400);
 });
 app.post("/api/s/:sid/grants/:id/name", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
@@ -177,7 +178,7 @@ app.post("/api/s/:sid/hub/pair", async (c) => {
 app.post("/api/s/:sid/grants/agent", async (c) => {
   if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
   const result = await rpc(c.env, c.var.sid, (s) => s.tryAddAgent(), 1);
-  return c.json(result, result.ok ? 200 : 400);
+  return result.ok ? c.json(result.grant) : c.json({ ok: false, error: result.error }, 400);
 });
 /** apc_link (APC 0.4): the person unlinks an agent shown as one; both grants stay. */
 app.post("/api/s/:sid/grants/:id/unlink", async (c) => {

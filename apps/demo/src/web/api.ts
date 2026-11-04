@@ -66,8 +66,8 @@ export function createApi(sid: string) {
     revoke: (grantId: string) => post<{ ok: boolean; error?: string }>(`/grants/${grantId}/revoke`, {}),
     /** apc_link (APC 0.4): show a linked agent as two again; both grants stay. */
     unlink: (grantId: string) => post<{ ok: boolean }>(`/grants/${grantId}/unlink`, {}),
-    addRestricted: (region: Region) => post<{ ok: boolean; error?: string; grant?: GrantState }>("/grants/restricted", { region }),
-    addAgent: () => post<{ ok: boolean; error?: string; grant?: GrantState }>("/grants/agent", {}),
+    addRestricted: (region: Region) => post<GrantState & { ok?: boolean; error?: string }>("/grants/restricted", { region }),
+    addAgent: () => post<GrantState & { ok?: boolean; error?: string }>("/grants/agent", {}),
     reset: () => post<{ ok: boolean }>("/reset", {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
     /** A dock agent's drop (TIN-382). Without `consent` the server pairs only an agent it holds a grant for; otherwise it answers consent_required with the nonce the consent sends back (TIN-606). */

@@ -34,6 +34,7 @@ test("a typo in APC_PROFILES serves no agent path, and does not turn on both", a
     assert.equal(response.status, 503, path);
     const body = (await response.json()) as { error: string; message: string };
     assert.equal(body.error, "profiles_misconfigured");
+    assert.equal(response.headers.get("access-control-allow-origin"), "*", "apc.json is read cross-origin, so the refusal must be too");
     assert.match(body.message, /"dirct"/);
   }
   assert.equal(errors.length, 3, "each refusal is logged");

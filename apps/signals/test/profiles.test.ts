@@ -28,6 +28,7 @@ test("a typo in APC_PROFILES serves no agent path, and does not turn on both", a
     const response = await worker.fetch(new Request(`${ORIGIN}${path}`, { method: path === "/apc/revoke" ? "POST" : "GET" }), typo);
     assert.equal(response.status, 503, path);
     assert.equal(((await response.json()) as { error: string }).error, "profiles_misconfigured");
+    assert.equal(response.headers.get("access-control-allow-origin"), "*", "apc.json is read cross-origin, so the refusal must be too");
   }
   assert.equal(errors.length, 3, "each refusal is logged");
   assert.match(errors[0]!, /^Signals refuses its agent paths: APC_PROFILES has "dirct"/);

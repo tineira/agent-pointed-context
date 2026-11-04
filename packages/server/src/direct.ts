@@ -43,7 +43,7 @@ export function profilesRefusal(raw: string | null | undefined, appName: string)
   const problem = profilesProblem(raw);
   if (!problem) return null;
   console.error(`${appName} refuses its agent paths: ${problem}`);
-  return Response.json({ error: "profiles_misconfigured", message: problem }, { status: 503, headers: { "cache-control": "no-store" } });
+  return Response.json({ error: "profiles_misconfigured", message: problem }, { status: 503, headers: { "cache-control": "no-store", "access-control-allow-origin": "*" } });
 }
 
 function randomHex(bytes: number): string {

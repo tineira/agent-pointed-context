@@ -186,14 +186,20 @@ export function AgentCard(props: {
   );
 }
 
+/** The server holds at most 20 Direct agents (MAX_DIRECT_GRANTS); the page says so before it refuses. */
+export const DIRECT_FULL = "Pulse holds 20 agents on their own URLs. Revoke one (⊘ in the bar) to add another.";
+export const directFull = (state: SandboxState): boolean => {
+  const dockGrants = new Set((state.hub_links ?? []).map((l) => l.grant_id));
+  return state.grants.filter((g) => !dockGrants.has(g.id)).length >= 20;
+};
+
 export function AddAgentButtons(props: { api: Api; state: SandboxState; onChanged: () => void }) {
   const hasRestricted = props.state.grants.some((g) => g.regions);
-  // The server holds at most 20 Direct agents (MAX_DIRECT_GRANTS); the buttons say so before it refuses.
-  const dockGrants = new Set((props.state.hub_links ?? []).map((l) => l.grant_id));
-  const full = props.state.grants.filter((g) => !dockGrants.has(g.id)).length >= 20;
-  const fullTitle = full ? "Pulse holds 20 agents on their own URLs. Revoke one first." : undefined;
+  const full = directFull(props.state);
+  const fullTitle = full ? DIRECT_FULL : undefined;
   return (
     <div className="flex flex-wrap gap-2">
+      {full && <p className="hint w-full" role="status">{DIRECT_FULL}</p>}
       <button
         type="button"
         disabled={full}

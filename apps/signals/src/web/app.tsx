@@ -184,8 +184,10 @@ function Feed({ sid }: { sid: string }) {
 
   const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
   const advertisers = [...new Set(posts.map((p) => p.author))].map((a) => ({ author: a, n: posts.filter((p) => p.author === a).length }));
-  // The bar's entry for a linked agent is both its grants: its pin comes off both.
-  const unpin = (id: string) => {
+  // An in-feed badge's × unpins only its own grant; the bar's merged entry for a linked agent is both
+  // its grants, so its × takes the pin off both.
+  const unpinGrant = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
+  const unpinEntry = (id: string) => {
     const partner = state.grants.find((g) => g.id === id)?.linked_with;
     void Promise.all([id, ...(partner ? [partner] : [])].map((gid) => call(`${base}/unpin`, { grant_id: gid }))).then(refresh);
   };
@@ -264,7 +266,7 @@ function Feed({ sid }: { sid: string }) {
         refresh();
       });
   };
-  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpin} onRevoke={revoke} onUnlink={unlink} />;
+  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpinEntry} onRevoke={revoke} onUnlink={unlink} />;
   return (
     <Shell
       mobile={
@@ -359,25 +361,25 @@ function Feed({ sid }: { sid: string }) {
                 <span className="muted">
                   @{b.handle} · {MONTH_NAME[Number(p.month.slice(5)) - 1]} {st.day}
                 </span>
-                <Pins grants={pinsOn(p.id, null)} onUnpin={unpin} />
+                <Pins grants={pinsOn(p.id, null)} onUnpin={unpinGrant} />
               </div>
               <p className="post-text" {...focusAttrs({ kind: "post", id: p.id, part: "text" })}>
                 {parts[0]}
                 {p.kind === "our_ad" && (
                   <span className="code" {...focusAttrs({ kind: "post", id: p.id, part: "code" })}>
                     {p.code}
-                    <Pins grants={pinsOn(p.id, "code")} onUnpin={unpin} />
+                    <Pins grants={pinsOn(p.id, "code")} onUnpin={unpinGrant} />
                   </span>
                 )}
                 {parts[1]}
-                <Pins grants={pinsOn(p.id, "text")} onUnpin={unpin} />
+                <Pins grants={pinsOn(p.id, "text")} onUnpin={unpinGrant} />
               </p>
               <a className="creative" href={`https://${b.domain}`} onClick={(e) => e.preventDefault()} {...focusAttrs({ kind: "post", id: p.id, part: "offer" })}>
                 <div className="creative-art" style={{ background: `linear-gradient(135deg, ${b.color}, ${b.color}cc 55%, #0b0e13)` }}>
                   <span className="creative-kicker">{p.kind === "competitor_offer" ? `Switch to ${p.author}` : "Pulse"}</span>
                   <span className="creative-headline">{p.offer}</span>
                   <span className="creative-cta">{b.cta}</span>
-                  <Pins grants={pinsOn(p.id, "offer")} onUnpin={unpin} />
+                  <Pins grants={pinsOn(p.id, "offer")} onUnpin={unpinGrant} />
                 </div>
                 <div className="creative-meta">
                   <span className="muted">{b.domain}</span>
@@ -395,7 +397,7 @@ function Feed({ sid }: { sid: string }) {
                     Targeting {p.audience.region ? `teams in ${REGION_NAME[p.audience.region]}` : "everyone"} · {p.channel} · {monthLabel(p.month)}
                   </span>
                 )}
-                <Pins grants={pinsOn(p.id, "audience")} onUnpin={unpin} />
+                <Pins grants={pinsOn(p.id, "audience")} onUnpin={unpinGrant} />
               </div>
               <div className="engagement" aria-label="Engagement">
                 <span title="Replies">

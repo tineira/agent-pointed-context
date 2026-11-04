@@ -5,7 +5,7 @@ import { mrrCsv } from "../user-side/mrr.ts";
 import { displayNames } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { mcpUrl, type Api, type CompatRow, type SandboxState } from "./api.ts";
-import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
+import { AddAgentButtons, AgentCard, ConnectPanel, DIRECT_FULL, directFull } from "./connect.tsx";
 import { DirectAgents } from "./direct-agents.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { DockHint } from "./dock-only.tsx";
@@ -301,6 +301,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
               props.onChanged();
             }}
           />
+          {directFull(state) && <p className="hint" role="status">{DIRECT_FULL}</p>}
           <p className="hint">To cut an agent, use ⊘ next to its mark in the bar at the top.</p>
         </section>
       )}
