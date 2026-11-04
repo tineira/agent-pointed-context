@@ -18,6 +18,8 @@ import { productOf, sameProduct } from "../model/products.ts";
 import { sessionPoint } from "./sessions.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
+/** The most Direct agents one sandbox holds, as in Signals (TIN-607). Dock-paired grants have their own cap in the hub. */
+export const MAX_DIRECT_GRANTS = 20;
 
 /**
  * The profiles Pulse serves (APC 0.5): the one source for its apc.json, its page (state.profiles) and its
@@ -129,7 +131,8 @@ export class Sandbox extends DurableObject<Env> {
     this.consent = new DockConsent(sqlKv(this.sql));
     // A deploy without the Direct profile takes agents only from a dock (TIN-402): a grant with no
     // dock link is a leftover from before (the old default agent), and goes with its pins (TIN-410).
-    if (this.env.APC_V2 === "1" && !this.offers("direct")) {
+    // Not when APC_PROFILES is wrong and nothing is offered: a typo must not delete the person's agents.
+    if (this.env.APC_V2 === "1" && servedProfiles(this.env).length > 0 && !this.offers("direct")) {
       this.sql.exec("delete from agent_focus where grant_id in (select id from grants where id not in (select grant_id from hub_links))");
       this.sql.exec("delete from grants where id not in (select grant_id from hub_links)");
     }
@@ -431,11 +434,27 @@ export class Sandbox extends DurableObject<Env> {
       return { ok: true };
     }
     // A new URL is a direct agent: only where Pulse offers the Direct profile.
-    if (!this.offers("direct")) return { ok: false };
+    if (!this.offers("direct") || this.directFull()) return { ok: false };
     this.sql.exec("update grants set conflict = null where id = ?", grantId);
     const fresh = await this.addAgentGrant();
     this.log("conflict_split", grantId, { client_name: g.conflict.client_name, new_grant: fresh.id });
     return { ok: true, grant: fresh };
+  }
+
+  /** Whether the person already has MAX_DIRECT_GRANTS Direct grants (Signals' cap, TIN-607): the page offers no more. */
+  private directFull(): boolean {
+    return this.linkGrants().filter((x) => x.path === "direct").length >= MAX_DIRECT_GRANTS;
+  }
+
+  /** The Add buttons' way in: a new Direct agent, or `too_many` at the cap. */
+  async tryAddAgent(): Promise<{ ok: boolean; error?: "too_many"; grant?: Grant }> {
+    return this.directFull() ? { ok: false, error: "too_many" } : { ok: true, grant: await this.addAgentGrant() };
+  }
+
+  /** The restricted button's way in: the region's agent (made once), or `too_many` at the cap when it would be a new one. */
+  async tryAddRestricted(region: Region): Promise<{ ok: boolean; error?: "too_many"; grant?: Grant }> {
+    const exists = this.grants().some((g) => g.regions?.length === 1 && g.regions[0] === region);
+    return !exists && this.directFull() ? { ok: false, error: "too_many" } : { ok: true, grant: await this.addRestrictedGrant(region) };
   }
 
   /** Another agent with full access: one URL and one mark per client, so each client's behaviour is measured apart. */

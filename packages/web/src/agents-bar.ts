@@ -57,8 +57,20 @@ export type AgentBarEvent = "apc-open" | "apc-unpin" | "apc-warning" | "apc-revo
 /** How long the first click on ⊘ waits for the second before it lets go. */
 export const REVOKE_CONFIRM_MS = 4000;
 
+/**
+ * The one pin a bar entry shows for an agent linked across both paths (apc_link), which holds two
+ * grants and so up to two pins: neither hidden. One pin is itself; two read "A and B" (the same
+ * target once), unread until both are read, and "here" only when both targets are on screen (so the
+ * dot still opens the one that is not). No pin at all is null.
+ */
+export function mergePins<P extends { label: string; seen: boolean; here: boolean }>(pins: ReadonlyArray<P | null | undefined>): P | null {
+  const some = pins.filter((p): p is P => !!p);
+  if (some.length < 2) return some[0] ?? null;
+  return { ...some[0]!, label: [...new Set(some.map((p) => p.label))].join(" and "), seen: some.every((p) => p.seen), here: some.every((p) => p.here) };
+}
+
 /** The hint that offers the dock to a Direct user, and where it leads. */
-export const DOCK_HINT = { text: "Use this agent across apps with the dock", url: "https://apc.tineira.com" } as const;
+export const DOCK_HINT = { text: "Use this agent across apps with the dock", url: "https://apc.tineira.com/dock" } as const;
 const COLLAPSED_KEY = "apc-agents.collapsed";
 const HINT_KEY = "apc-agents.dock-hint";
 

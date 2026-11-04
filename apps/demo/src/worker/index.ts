@@ -7,7 +7,7 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ApcProfile } from "@apc/protocol";
-import { apcJsonResponse, apcManifest } from "@apc/server";
+import { apcJsonResponse, apcManifest, profilesRefusal } from "@apc/server";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { SANDBOX_TTL_MS, servedProfiles, type Env } from "./sandbox.ts";
 
@@ -18,6 +18,12 @@ type Stub = DurableObjectStub<import("./sandbox.ts").Sandbox>;
 type Vars = { sid: string; owner: string };
 
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+// A typo in APC_PROFILES serves no agent path at all, with the reason in the log and in the answer
+// (never both profiles by default). Registered first: Hono runs middleware in registration order.
+app.use("/mcp/*", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Pulse") ?? next());
+app.use("/apc/*", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Pulse") ?? next());
+app.use("/.well-known/apc.json", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Pulse") ?? next());
 
 function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -141,7 +147,9 @@ app.post("/api/s/:sid/grants/restricted", async (c) => {
   if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
   const body = (await c.req.json().catch(() => ({}))) as { region?: string };
   const region = (REGIONS as readonly string[]).includes(body.region ?? "") ? (body.region as Region) : "latam";
-  return c.json(await rpc(c.env, c.var.sid, (s) => s.addRestrictedGrant(region)));
+  const result = await rpc(c.env, c.var.sid, (s) => s.tryAddRestricted(region));
+  // The grant itself on success (what clients and the mobile e2e read), { ok: false, error } at the cap.
+  return result.ok ? c.json(result.grant) : c.json({ ok: false, error: result.error }, 400);
 });
 app.post("/api/s/:sid/grants/:id/name", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
@@ -169,7 +177,8 @@ app.post("/api/s/:sid/hub/pair", async (c) => {
 /** A new direct agent (the Direct profile, APC_PROFILES): its own grant and MCP URL. */
 app.post("/api/s/:sid/grants/agent", async (c) => {
   if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
-  return c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant(), 1));
+  const result = await rpc(c.env, c.var.sid, (s) => s.tryAddAgent(), 1);
+  return result.ok ? c.json(result.grant) : c.json({ ok: false, error: result.error }, 400);
 });
 /** apc_link (APC 0.4): the person unlinks an agent shown as one; both grants stay. */
 app.post("/api/s/:sid/grants/:id/unlink", async (c) => {

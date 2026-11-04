@@ -12,12 +12,38 @@ export const PROFILES: readonly ApcProfile[] = ["direct", "dock"];
 
 /**
  * The profiles an app offers, declared in one place (Pulse and Signals: `APC_PROFILES` in their
- * wrangler.jsonc, e.g. "direct,dock"). Unknown words are ignored; nothing valid means both.
+ * wrangler.jsonc, e.g. "direct,dock"). Unset or blank means both, the default of an app that does not
+ * choose. A value that is set must be right: one unknown word ("dirct") fails closed to no profile
+ * at all, never to both, so a typo cannot open a path the owner meant to keep shut. Case and spaces
+ * do not matter; an empty segment ("direct,") is ignored. `profilesProblem` says what is wrong.
  */
 export function parseProfiles(raw: string | null | undefined): ApcProfile[] {
-  const words = (raw ?? "").split(",").map((w) => w.trim().toLowerCase());
-  const found = PROFILES.filter((p) => words.includes(p));
-  return found.length ? found : [...PROFILES];
+  if (raw == null || raw.trim() === "") return [...PROFILES];
+  if (profilesProblem(raw)) return [];
+  const words = raw.split(",").map((w) => w.trim().toLowerCase());
+  return PROFILES.filter((p) => words.includes(p));
+}
+
+/** Why `APC_PROFILES` offers no profile (an unknown word, or only separators), for an app's log and its refusal; null when it is fine or unset. */
+export function profilesProblem(raw: string | null | undefined): string | null {
+  if (raw == null || raw.trim() === "") return null;
+  const words = raw.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean);
+  const takes = PROFILES.map((p) => `"${p}"`).join(" and/or ");
+  const unknown = words.filter((w) => !(PROFILES as readonly string[]).includes(w));
+  if (unknown.length) return `APC_PROFILES has ${unknown.map((w) => JSON.stringify(w)).join(", ")}; it takes ${takes}. No agent path is served until it is fixed.`;
+  if (!words.length) return `APC_PROFILES is only separators; it takes ${takes}. No agent path is served until it is fixed.`;
+  return null;
+}
+
+/**
+ * What an app answers on its agent paths (MCP, `apc.json`, pairing, revoke) when `APC_PROFILES` is wrong:
+ * a 503 with the reason, and the same reason in its log. Null when the value is fine or unset.
+ */
+export function profilesRefusal(raw: string | null | undefined, appName: string): Response | null {
+  const problem = profilesProblem(raw);
+  if (!problem) return null;
+  console.error(`${appName} refuses its agent paths: ${problem}`);
+  return Response.json({ error: "profiles_misconfigured", message: problem }, { status: 503, headers: { "cache-control": "no-store", "access-control-allow-origin": "*" } });
 }
 
 function randomHex(bytes: number): string {

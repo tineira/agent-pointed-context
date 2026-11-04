@@ -6,7 +6,7 @@
  * Direct profile's list from @apc/web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, loadApcProfiles, type AgentDrag, type BarAgent } from "@apc/web";
+import { createViewReporter, enablePinning, loadApcProfiles, mergePins, type AgentDrag, type BarAgent } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
@@ -184,7 +184,13 @@ function Feed({ sid }: { sid: string }) {
 
   const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
   const advertisers = [...new Set(posts.map((p) => p.author))].map((a) => ({ author: a, n: posts.filter((p) => p.author === a).length }));
-  const unpin = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
+  // An in-feed badge's × unpins only its own grant; the bar's merged entry for a linked agent is both
+  // its grants, so its × takes the pin off both.
+  const unpinGrant = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
+  const unpinEntry = (id: string) => {
+    const partner = state.grants.find((g) => g.id === id)?.linked_with;
+    void Promise.all([id, ...(partner ? [partner] : [])].map((gid) => call(`${base}/unpin`, { grant_id: gid }))).then(refresh);
+  };
   // The standard agent bar (TIN-394): the agents here, the path each came by, their state, and where
   // each points. An agent linked across both paths (apc_link) is one entry, under its Direct grant.
   const onScreen = (postId: string) => shown.some((p) => p.id === postId);
@@ -198,7 +204,8 @@ function Feed({ sid }: { sid: string }) {
         name: g.name,
         icon: g.icon ?? other?.icon ?? null,
         state: !connected ? "off" : g.waiting || other?.waiting ? "waiting" : "idle",
-        pin: g.pin?.id ? { label: `${g.pin.id}${g.pin.part ? ` ${g.pin.part}` : ""}`, seen: !!g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at, here: onScreen(g.pin.id) } : null,
+        // A linked agent holds two grants, so up to two pins: the bar shows both (TIN-607).
+        pin: mergePins([g, other].map((x) => (x?.pin?.id ? { label: `${x.pin.id}${x.pin.part ? ` ${x.pin.part}` : ""}`, seen: !!x.pin.seen_at && x.pin.seen_at >= x.pin.pinned_at, here: onScreen(x.pin.id) } : null))),
         paths: other ? ["direct", "dock"] : [g.path],
       };
     });
@@ -237,7 +244,10 @@ function Feed({ sid }: { sid: string }) {
   );
   const unlink = (id: string) => void call(`${base}/grants/${id}/unlink`, {}).then(refresh);
   const openPin = (id: string) => {
-    const postId = state.grants.find((g) => g.id === id)?.pin?.id;
+    // A linked agent has two grants and maybe two pins: open the one not on this page, else the first.
+    const mine = state.grants.find((g) => g.id === id);
+    const held = [mine, state.grants.find((g) => g.id === mine?.linked_with)].filter((g) => g?.pin?.id);
+    const postId = (held.find((g) => !onScreen(g!.pin!.id!)) ?? held[0])?.pin?.id;
     if (!postId) return;
     setKind("");
     setMonth("");
@@ -256,7 +266,7 @@ function Feed({ sid }: { sid: string }) {
         refresh();
       });
   };
-  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpin} onRevoke={revoke} onUnlink={unlink} />;
+  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpinEntry} onRevoke={revoke} onUnlink={unlink} />;
   return (
     <Shell
       mobile={
@@ -351,25 +361,25 @@ function Feed({ sid }: { sid: string }) {
                 <span className="muted">
                   @{b.handle} · {MONTH_NAME[Number(p.month.slice(5)) - 1]} {st.day}
                 </span>
-                <Pins grants={pinsOn(p.id, null)} onUnpin={unpin} />
+                <Pins grants={pinsOn(p.id, null)} onUnpin={unpinGrant} />
               </div>
               <p className="post-text" {...focusAttrs({ kind: "post", id: p.id, part: "text" })}>
                 {parts[0]}
                 {p.kind === "our_ad" && (
                   <span className="code" {...focusAttrs({ kind: "post", id: p.id, part: "code" })}>
                     {p.code}
-                    <Pins grants={pinsOn(p.id, "code")} onUnpin={unpin} />
+                    <Pins grants={pinsOn(p.id, "code")} onUnpin={unpinGrant} />
                   </span>
                 )}
                 {parts[1]}
-                <Pins grants={pinsOn(p.id, "text")} onUnpin={unpin} />
+                <Pins grants={pinsOn(p.id, "text")} onUnpin={unpinGrant} />
               </p>
               <a className="creative" href={`https://${b.domain}`} onClick={(e) => e.preventDefault()} {...focusAttrs({ kind: "post", id: p.id, part: "offer" })}>
                 <div className="creative-art" style={{ background: `linear-gradient(135deg, ${b.color}, ${b.color}cc 55%, #0b0e13)` }}>
                   <span className="creative-kicker">{p.kind === "competitor_offer" ? `Switch to ${p.author}` : "Pulse"}</span>
                   <span className="creative-headline">{p.offer}</span>
                   <span className="creative-cta">{b.cta}</span>
-                  <Pins grants={pinsOn(p.id, "offer")} onUnpin={unpin} />
+                  <Pins grants={pinsOn(p.id, "offer")} onUnpin={unpinGrant} />
                 </div>
                 <div className="creative-meta">
                   <span className="muted">{b.domain}</span>
@@ -387,7 +397,7 @@ function Feed({ sid }: { sid: string }) {
                     Targeting {p.audience.region ? `teams in ${REGION_NAME[p.audience.region]}` : "everyone"} · {p.channel} · {monthLabel(p.month)}
                   </span>
                 )}
-                <Pins grants={pinsOn(p.id, "audience")} onUnpin={unpin} />
+                <Pins grants={pinsOn(p.id, "audience")} onUnpin={unpinGrant} />
               </div>
               <div className="engagement" aria-label="Engagement">
                 <span title="Replies">

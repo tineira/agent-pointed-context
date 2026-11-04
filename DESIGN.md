@@ -602,6 +602,7 @@ Every way a code could be abused, and what closes it:
 | Using it late | `expired` after `expires_in` |
 | Sending it back on the connection that got it, or on another of the same path (two Direct grants merging) | `same_connection`, `same_path` |
 | Another agent on the other path (another client, or one that connected after the offer) | the code is bound to the connections offered it: `not_offered` |
+| A sibling of the same client (another window of the same agent product, on the opposite path) redeeming the code | **not closed, by design** (TIN-607): "the same client" is the MCP client's name, not a process, and the app cannot tell two windows of one product apart. Any sibling that was a candidate when the code was offered may redeem it, so the entry can group the wrong sibling. It needs the code, which only the offered connection receives; nothing is granted, and the person can unlink |
 | Linking an agent that is already linked, to steal its entry | `already_linked` |
 | A code from another app or another person's sandbox | codes live in one app's sandbox: `unknown_code` |
 | Getting access through a link | linking grants nothing: no grant, trim or pin changes |

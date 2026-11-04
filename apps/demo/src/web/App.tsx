@@ -1,5 +1,5 @@
 import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, loadApcProfiles, markState, type DockUnsupported } from "@apc/web";
+import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, loadApcProfiles, markState, mergePins, type DockUnsupported } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
@@ -282,7 +282,8 @@ function Sandbox({ sid }: { sid: string }) {
         client_icon: g.client_icon ?? other?.client_icon ?? null,
         icon: g.client_icon,
         state: motion,
-        pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin), here: onScreen.has(g.id) } : null,
+        // A linked agent holds two grants, so up to two pins: the bar shows both (TIN-607).
+        pin: mergePins([g, other].map((x) => (x?.pin ? { label: pinLabel(x.pin), seen: isSeen(x.pin), here: onScreen.has(x.id) } : null))),
         warning: activeConflict(g) ? `${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.` : null,
         restricted: !!g.regions,
         paths: partner ? ["direct", "dock"] : dockGrants.has(g.id) ? ["dock"] : ["direct"],
@@ -327,10 +328,12 @@ function Sandbox({ sid }: { sid: string }) {
             <AgentBar
               agents={barAgents}
               onOpen={(id) => {
-                const pin = state.grants.find((g) => g.id === id)?.pin;
+                // A linked agent has two grants and maybe two pins: open the one not on this page, else the first.
+                const held = [id, partners.get(id)].flatMap((gid) => state.grants.filter((g) => g.id === gid && g.pin));
+                const pin = (held.find((g) => !onScreen.has(g.id)) ?? held[0])?.pin;
                 if (pin) openPin(pin);
               }}
-              onUnpin={(id) => void api.unpin(id)}
+              onUnpin={(id) => void Promise.all([id, partners.get(id)].flatMap((gid) => (gid ? [api.unpin(gid)] : [])))}
               onWarning={() => nav("agents")}
               onUnlink={(id) => void api.unlink(id).then(() => refresh())}
               onRevoke={(id) => {

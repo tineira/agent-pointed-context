@@ -186,13 +186,25 @@ export function AgentCard(props: {
   );
 }
 
+/** The server holds at most 20 Direct agents (MAX_DIRECT_GRANTS); the page says so before it refuses. */
+export const DIRECT_FULL = "Pulse holds 20 agents on their own URLs. Revoke one (⊘ in the bar) to add another.";
+export const directFull = (state: SandboxState): boolean => {
+  const dockGrants = new Set((state.hub_links ?? []).map((l) => l.grant_id));
+  return state.grants.filter((g) => !dockGrants.has(g.id)).length >= 20;
+};
+
 export function AddAgentButtons(props: { api: Api; state: SandboxState; onChanged: () => void }) {
   const hasRestricted = props.state.grants.some((g) => g.regions);
+  const full = directFull(props.state);
+  const fullTitle = full ? DIRECT_FULL : undefined;
   return (
     <div className="flex flex-wrap gap-2">
+      {full && <p className="hint w-full" role="status">{DIRECT_FULL}</p>}
       <button
         type="button"
-        className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
+        disabled={full}
+        title={fullTitle}
+        className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament disabled:cursor-not-allowed disabled:opacity-50"
         onClick={async () => {
           await props.api.addAgent();
           props.onChanged();
@@ -203,7 +215,9 @@ export function AddAgentButtons(props: { api: Api; state: SandboxState; onChange
       {!hasRestricted && (
         <button
           type="button"
-          className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
+          disabled={full}
+          title={fullTitle}
+          className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament disabled:cursor-not-allowed disabled:opacity-50"
           onClick={async () => {
             await props.api.addRestricted("latam");
             props.onChanged();
