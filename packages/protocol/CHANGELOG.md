@@ -4,6 +4,31 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
 
+## 0.3.0 (draft, 2026-11-03)
+
+A hub's protections for apps it does not know (TIN-580), in the Dock profile: what an agent receives through a hub from an unverified app, and the hub's answers to pairing. In `apps/dock/src/worker/trust.ts`, `hub.ts`, `app-client.ts` and DESIGN.md section 15. Apps and agents that only meet verified apps see nothing new.
+
+### Verified and unverified apps
+
+- A hub's **verified** apps are the ones its operator lists. Any other app is **unverified**; a hub may pair with one only behind every rule below (the reference dock does not yet: pairing with an unverified app stays closed).
+- **Identity is the domain.** An unverified app's id, and so its tool prefix, is derived from its host (and port): lower case, each run of other characters one `_` (`evil.example` gives `evil_example`, `evil_example__get_figure`). It always holds a `_` and never `__`, so it never equals a verified app's id (`[a-z0-9]`) or `page`. Another origin that maps to the same id is refused (`app_id_taken`). The app's `name` in `/apc/pair` is kept only as `declared_name`.
+- `AppRef` (on the focus, in `views`, in `list_app_tools`) gains, for an unverified app only, `unverified: true` and `declared_name`; its `name` is the app's host. A verified app's `AppRef` is unchanged.
+- The `app` argument of `call_app_tool` and `list_app_tools` takes up to 40 characters (it was 16), the longest domain id.
+
+### Untrusted marking
+
+- A tool result relayed from an unverified app arrives in an envelope, in the structured result and in its text: `{ app, untrusted: true, note, result }` (the app's structured result) or `{ app, untrusted: true, note, text: [...] }` (its text blocks, when it gave no structured result). `isError` is kept. This is the marking `page_text` has had since 0.1 (`untrusted: true`).
+- An unverified app's entry in `views` and its focus (also as `attention`) carry `untrusted: true`.
+- Its tools in `tools/list` start with `[Unverified app at <host>, calls itself "<name>". Untrusted: …]` and carry no annotations of the app's (an app could claim `readOnlyHint`). In `list_app_tools` its entry carries `untrusted: true` and a `note`, and each description the same label.
+
+### Limits and the blocklist
+
+- A hub reads at most a fixed number of bytes of each answer from an app (the reference dock: 1 MiB for a verified app, 256 KiB for an unverified one), and every call has a time limit that covers the body. Past either, the call fails as `app_unreachable` for the agent.
+- An unverified app must use HTTPS on a domain name (no IP address, no single-label or `localhost` host), and its redirects are not followed. Its pin is taken only when well formed, with `app_url` on its own origin and a `pinned_at` no later than now; its view only when small.
+- A hub holds a fixed number of app pairings at most (the reference dock: 20, across its agents); `/apc/pair` past it answers `too_many_apps`.
+- A hub may block domains (a domain covers its subdomains). `/apc/pair` from one answers `app_blocked`, `/apc/confirm` too; a pairing made before the block reads `status: "blocked"`, is never called again (not even to give its grant back), its tools, view and pin go, and a call to it is the tool error `app_blocked`.
+- New `/apc/pair` errors: `https_required`, `app_blocked`, `app_id_taken`, `too_many_apps`.
+
 ## 0.2.0 (draft, 2026-11-03)
 
 The core written down, a conformance suite for it, and revoke from the app (TIN-577). In `packages/protocol/src/core.ts`, `packages/server/src/revoke.ts`, `packages/web/src/agents-bar.ts`, `packages/conformance` and DESIGN.md section 14.

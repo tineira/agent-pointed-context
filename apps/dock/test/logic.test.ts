@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appAllowed, appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, hubFocus, newest, readsPin } from "../src/worker/logic.ts";
+import { appIdFor, combineAttendance, detachKeys, errorOf, focusLabel, hubFocus, newest, readsPin } from "../src/worker/logic.ts";
+import { appVerdict } from "../src/worker/trust.ts";
 
 test("an app's id: short, from its name, numbered on a collision (TIN-382)", () => {
   assert.equal(appIdFor("Pulse", new Set()), "pulse");
@@ -50,13 +51,21 @@ test("attendance across apps: any page open, none known, or closed", () => {
 
 test("the hub pairs only with allowed app origins, and the MCP URL must be on that origin", () => {
   const allowed = ["https://pulse.apc.tineira.com"];
-  assert.ok(appAllowed("https://pulse.apc.tineira.com", "https://pulse.apc.tineira.com/mcp/a/b", allowed, false));
-  assert.equal(appAllowed("https://pulse.apc.tineira.com", "https://evil.example/mcp", allowed, false), false, "URL on another origin");
-  assert.equal(appAllowed("https://evil.example", "https://evil.example/mcp", allowed, false), false);
-  assert.equal(appAllowed("http://localhost:5199", "http://localhost:5199/mcp/a/b", allowed, false), false, "localhost only in dev");
-  assert.ok(appAllowed("http://localhost:5199", "http://localhost:5199/mcp/a/b", allowed, true));
-  assert.equal(appAllowed("https://pulse.apc.tineira.com", "https://u:p@pulse.apc.tineira.com/mcp", allowed, false), false);
-  assert.equal(appAllowed("https://pulse.apc.tineira.com", "not a url", allowed, false), false);
+  const ok = (origin: string, url: string, dev = false) => appVerdict(origin, url, { allowed, blocked: [], open: false, dev }).ok;
+  assert.ok(ok("https://pulse.apc.tineira.com", "https://pulse.apc.tineira.com/mcp/a/b"));
+  assert.equal(ok("https://pulse.apc.tineira.com", "https://evil.example/mcp"), false, "URL on another origin");
+  assert.equal(ok("https://evil.example", "https://evil.example/mcp"), false);
+  assert.equal(ok("http://localhost:5199", "http://localhost:5199/mcp/a/b"), false, "localhost only in dev");
+  assert.ok(ok("http://localhost:5199", "http://localhost:5199/mcp/a/b", true));
+  assert.equal(ok("https://pulse.apc.tineira.com", "https://u:p@pulse.apc.tineira.com/mcp"), false);
+  assert.equal(ok("https://pulse.apc.tineira.com", "not a url"), false);
+});
+
+test("a focus from an unverified app is marked untrusted; a verified app's is not (TIN-580)", () => {
+  const focus = { kind: "post", id: "p1", part: null, params: null, app_url: "https://evil.example/p1", pinned_at: "2026-10-25T10:00:00.000Z", next: "get_post", next_args: {} };
+  assert.equal(hubFocus(focus, { id: "evil_example", name: "evil.example", origin: "https://evil.example", unverified: true }).untrusted, true);
+  assert.equal(hubFocus(focus, { id: "evil_example", name: "evil.example", origin: "https://evil.example", unverified: true }, true).untrusted, true);
+  assert.equal("untrusted" in hubFocus(focus, { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" }), false);
 });
 
 test("an agent's call reads the pin only when it is the call the focus names (TIN-419)", () => {
