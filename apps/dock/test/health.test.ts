@@ -32,3 +32,16 @@ test("health is public, uncached and reads no bindings or env vars", async () =>
     assert.deepEqual(await response.json(), { ok: true });
   }
 });
+
+test("a request for /v1 that reaches the dock is sent on or refused, never the dock page (TIN-605)", async () => {
+  const env = new Proxy({}, { get(_target, key) { assert.fail(`Unexpected env access: ${String(key)}`); } });
+  for (const [path, location] of [["/v1", "/v1/"], ["/v1?ref=paper", "/v1/?ref=paper"]] as const) {
+    const response = await app.request(`https://example.com${path}`, {}, env);
+    assert.equal(response.status, 302, path);
+    assert.equal(response.headers.get("location"), location, path);
+  }
+  for (const path of ["/v1/", "/v1/overview", "/v1/api/health"]) {
+    const response = await app.request(`https://example.com${path}`, {}, env);
+    assert.equal(response.status, 404, path);
+  }
+});

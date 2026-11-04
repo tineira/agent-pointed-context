@@ -1,12 +1,11 @@
 import { createRoot } from "react-dom/client";
-import { Dock as BridgeDock } from "./bridge.tsx";
 import { HubDock } from "./hub.tsx";
 import { Landing } from "./landing.tsx";
 import { ExtensionInstall } from "./extension.tsx";
 import "./dock.css";
 
-// /: the APC v2 landing (TIN-420; the Worker sends a visitor who has a dock on to /dock). /dock: the dock
-// with its hub (TIN-382). /bridge: the TIN-370 dock, fed by an opener on apc.tineira.com.
+// /: the landing of the APC standard (TIN-420; the Worker sends a visitor who has a dock on to /dock). /dock: the dock
+// with its hub (TIN-382).
 // Installable (TIN-392): the service worker, and a compact window the first time the installed app opens.
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
 if (matchMedia("(display-mode: standalone)").matches) {
@@ -23,4 +22,4 @@ if (matchMedia("(display-mode: standalone)").matches) {
 const path = location.pathname;
 if (path === "/") document.title = "Agent Pointed Context: one agent across your apps";
 if (path === "/extension" || path === "/extension/") document.title = "Add the APC browser extension";
-createRoot(document.getElementById("root")!).render(path === "/extension" || path === "/extension/" ? <ExtensionInstall /> : path.startsWith("/bridge") ? <BridgeDock /> : path === "/" ? <Landing /> : <HubDock />);
+createRoot(document.getElementById("root")!).render(path === "/extension" || path === "/extension/" ? <ExtensionInstall /> : path === "/" ? <Landing /> : <HubDock />);

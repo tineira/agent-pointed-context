@@ -1,14 +1,14 @@
 /**
- * Start over (TIN-411): wipe this site's demo data after a confirm, to test from zero. Each APC v2
+ * Start over (TIN-411): wipe this site's demo data after a confirm, to test from zero. Each APC
  * site can only wipe its own (its cookie is its own, and httpOnly), so the dialog says which other
  * sites to start over in too, and that the agent keeps the dock's server until the person removes it.
- * Shared by the dock, Pulse's v2 deploy and Signals; styled with system colors so it fits all three.
+ * Shared by the dock, Pulse and Signals; styled with system colors so it fits all three.
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { askToDisconnectPrompt } from "./qr.tsx";
 
-/** The APC v2 sites, by name and address: what the dialog tells the person to wipe too. */
-export const V2_SITES = [
+/** The APC sites, by name and address: what the dialog tells the person to wipe too. */
+export const APC_SITES = [
   { name: "Agent dock", host: "apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock" },
   { name: "Pulse", host: "pulse.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5199/agents" : "https://pulse.apc.tineira.com/agents" },
   { name: "Signals", host: "signals.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.apc.tineira.com/" },
@@ -39,16 +39,16 @@ const trigger: CSSProperties = { font: "inherit", fontSize: 13, padding: "5px 12
 const danger: CSSProperties = { ...button, background: "#c0392b", borderColor: "#c0392b", color: "#fff" };
 
 /**
- * A "Start over" link and its confirm dialog. site: this site's name in V2_SITES. wipes: what goes.
+ * A "Start over" link and its confirm dialog. site: this site's name in APC_SITES. wipes: what goes.
  * reset: the server call that deletes this site's data and cookie; then the page clears its own
  * storage (and service worker, caches) and reloads from the top.
  */
-export function StartOver(props: { site: (typeof V2_SITES)[number]["name"]; wipes: string[]; reset: () => Promise<unknown>; className?: string }) {
+export function StartOver(props: { site: (typeof APC_SITES)[number]["name"]; wipes: string[]; reset: () => Promise<unknown>; className?: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const disconnect = askToDisconnectPrompt("APC", V2_SITES[0].host);
-  const others = V2_SITES.filter((s) => s.name !== props.site);
+  const disconnect = askToDisconnectPrompt("APC", APC_SITES[0].host);
+  const others = APC_SITES.filter((s) => s.name !== props.site);
   useEffect(() => {
     if (!asked) return;
     asked = false;

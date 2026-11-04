@@ -18,6 +18,12 @@ const STEPS = [
   { title: "Point", text: "Drag your agent from the dock onto a bar, a customer, a headline. Ask about \"this\". Point somewhere else in another app, and ask how the two connect." },
 ];
 
+const DIRECT_STEPS = [
+  { title: "The app gives you a connection", text: "An app that speaks the standard shows an MCP address of its own for your agent. Nothing sits between the two." },
+  { title: "Add it to your agent", text: "Paste that one address into your agent, as you would any remote MCP server. Each app you want your agent to read gets its own." },
+  { title: "Point", text: "In the app, drag your agent's mark onto a chart, a row or a paragraph and ask about \"this\". The app answers your agent directly with just what you pointed at, and the content never passes through us." },
+];
+
 function Cta(props: { big?: boolean }) {
   return (
     <a className={`landing-cta${props.big ? " big" : ""}`} href={DOCK} onClick={(e) => {
@@ -92,7 +98,7 @@ export function Landing() {
               <b>Connect once</b>
             </div>
             <p>Dock: one connection in your agent, to your agent dock. Drag it onto any app you paired and it follows your focus from app to app.</p>
-            <div className="row small">
+            <div className="row">
               <Cta />
             </div>
           </div>
@@ -101,8 +107,8 @@ export function Landing() {
               <b>Connect app by app</b>
             </div>
             <p>Direct: each app gives your agent its own connection. The content goes from the app to your agent and never passes through us.</p>
-            <div className="row small">
-              <a href={`${REPO}/blob/main/DESIGN.md`}>How Direct works</a>
+            <div className="row">
+              <a className="landing-cta" href="#direct">See how Direct works</a>
             </div>
           </div>
         </div>
@@ -121,6 +127,24 @@ export function Landing() {
             </li>
           ))}
         </ol>
+      </section>
+
+      <section id="direct">
+        <h2>How Connect app by app works</h2>
+        <ol className="landing-steps">
+          {DIRECT_STEPS.map((s, i) => (
+            <li key={s.title}>
+              <span className="landing-n">{i + 1}</span>
+              <div>
+                <b>{s.title}</b>
+                <p>{s.text}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="muted small-note">
+          The details are in the <a href={`${REPO}/blob/main/DESIGN.md`}>design record</a>. The demo apps below pair through the dock for now; a demo app that takes Direct agents is coming.
+        </p>
       </section>
 
       <section>

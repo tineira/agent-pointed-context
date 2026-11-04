@@ -75,7 +75,7 @@ jobs:
   # is part of V1. Needs the repository secrets CLOUDFLARE_API_TOKEN (Edit Cloudflare Workers template) and
   # CLOUDFLARE_ACCOUNT_ID.
   deploy:
-    name: Deploy apc.tineira.com
+    name: Deploy V1 (apc.tineira.com/v1)
     needs: [check, changes]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.v1 == 'true'
     runs-on: ubuntu-latest

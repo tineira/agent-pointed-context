@@ -11,9 +11,32 @@ export function hubAllowed(origin: string, dev: boolean): boolean {
   return HUB_ORIGINS.includes(origin) || (dev && /^http:\/\/localhost:\d{1,5}$/.test(origin));
 }
 
-/** The match patterns of the docks themselves: the extension never takes drops there. */
+/**
+ * The paths of a dock's host that are the dock itself: the landing, the dock window and the install page.
+ * The host is shared with V1 (apc.tineira.com/v1/), which is an ordinary page to the extension.
+ */
+const DOCK_PATHS = ["/", "/?*", "/dock*", "/extension*"];
+
+/** The match patterns of the docks themselves: the extension never takes drops there. Under a dev build, any localhost page. */
 export function hubPatterns(dev: boolean): string[] {
-  return [...HUB_ORIGINS.map((o) => `${o}/*`), ...(dev ? ["http://localhost/*"] : [])];
+  return [...HUB_ORIGINS.flatMap((o) => DOCK_PATHS.map((p) => `${o}${p}`)), ...(dev ? ["http://localhost/*"] : [])];
+}
+
+/** Whether a page is a dock's own: a path of a dock's host that is not V1 (or anything else sharing the host). */
+export function isDockPage(url: string | undefined, dev: boolean): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    if (dev && u.protocol === "http:" && u.hostname === "localhost") return true;
+    return HUB_ORIGINS.includes(u.origin) && (u.pathname === "/" || /^\/(dock|extension)/.test(u.pathname));
+  } catch {
+    return false;
+  }
+}
+
+/** The granted host patterns that are a dock's whole host in a dev build: the extension never takes drops there either. */
+export function devHubHosts(dev: boolean): string[] {
+  return dev ? ["http://localhost/*"] : [];
 }
 
 /** "Chrome on Windows": how the dock names this browser when it asks the person. */

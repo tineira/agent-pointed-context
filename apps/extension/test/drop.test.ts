@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, decide, grantedAlone, hubAllowed, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
+import { browserLabel, decide, grantedAlone, hubAllowed, isDockPage, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -9,8 +9,16 @@ test("the extension talks only to known docks; a dev build also to a local one (
   assert.equal(hubAllowed("http://localhost:5173", true), true);
   assert.equal(hubAllowed("http://localhost.evil.example:80", true), false);
   assert.equal(hubAllowed("http://127.0.0.1:8080", true), false);
-  assert.deepEqual(hubPatterns(false), ["https://apc.tineira.com/*"]);
   assert.ok(hubPatterns(true).includes("http://localhost/*"));
+});
+
+test("the dock is its own paths of apc.tineira.com, never V1 under /v1/", () => {
+  assert.deepEqual(hubPatterns(false), ["https://apc.tineira.com/", "https://apc.tineira.com/?*", "https://apc.tineira.com/dock*", "https://apc.tineira.com/extension*"]);
+  assert.equal(hubPatterns(false).some((p) => p.endsWith("/*")), false, "no pattern covers the whole host");
+  for (const url of ["https://apc.tineira.com/", "https://apc.tineira.com/?x=1", "https://apc.tineira.com/dock", "https://apc.tineira.com/dock/agents/ag_1", "https://apc.tineira.com/extension"]) assert.equal(isDockPage(url, false), true, url);
+  for (const url of ["https://apc.tineira.com/v1", "https://apc.tineira.com/v1/", "https://apc.tineira.com/v1/overview?x=1", "https://pulse.apc.tineira.com/", "https://evil.example/dock", undefined, "not a url"]) assert.equal(isDockPage(url, false), false, String(url));
+  assert.equal(isDockPage("http://localhost:5200/anything", false), false);
+  assert.equal(isDockPage("http://localhost:5200/anything", true), true);
 });
 
 test("the dock names this browser by product and system", () => {

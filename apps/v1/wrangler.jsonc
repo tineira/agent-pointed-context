@@ -28,12 +28,10 @@
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
   // apc.tineira.com itself is the APC standard's dock (Worker apc-dock, a Custom Domain, TIN-605). This Worker keeps only
   // /v1 on that host through zone routes. Cloudflare runs a route's Worker before the Custom Domain Worker of the same
-  // hostname (https://developers.cloudflare.com/workers/configuration/routing/custom-domains/). Two patterns, so that
-  // /v10 and the like stay with the dock.
-  "routes": [
-    { "pattern": "apc.tineira.com/v1", "zone_name": "tineira.com" },
-    { "pattern": "apc.tineira.com/v1/*", "zone_name": "tineira.com" }
-  ],
+  // hostname (https://developers.cloudflare.com/workers/configuration/routing/custom-domains/). One pattern with a
+  // wildcard: a pattern without one does not match a URL that has a query string (/v1?x=1). It also takes /v10 and
+  // /v1anything, which V1's Worker answers with a 404 (nothing else on this host starts with /v1).
+  "routes": [{ "pattern": "apc.tineira.com/v1*", "zone_name": "tineira.com" }],
   "workers_dev": true,
   "observability": { "enabled": true }
 }

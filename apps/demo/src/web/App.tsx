@@ -7,7 +7,6 @@ import { AgentIcon } from "./agent-icon.tsx";
 import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
-import { useDockBridge } from "./dock-bridge.ts";
 import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
@@ -250,19 +249,6 @@ function Sandbox({ sid }: { sid: string }) {
       now: Date.now(),
     });
   };
-  // APC v2 (TIN-370): a dock window opened from here shows these agents and drags them back.
-  useDockBridge(
-    v2 && !hubMode,
-    state?.grants.map((g) => ({
-      handle: g.id,
-      name: names.get(g.id) ?? g.label,
-      client_name: g.client_name,
-      client_ua: g.client_ua,
-      client_icon: g.client_icon,
-      motion: motionOf(g.id),
-      pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin) } : null,
-    })) ?? null,
-  );
 
   if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   // The standard agent bar's agents (TIN-394), on Pulse's v2 deploy.

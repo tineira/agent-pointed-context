@@ -1,6 +1,6 @@
 /**
  * The agent dock with its attention hub (TIN-382). The person's agents connect once, to the dock's
- * MCP URL. Dragging one onto an APC app (Pulse under APC v2) pairs them after a yes on the app's
+ * MCP URL. Dragging one onto an APC app (Pulse) pairs them after a yes on the app's
  * page and a yes here; from then on the agent follows the person's pointer across every paired app.
  *
  * Each agent's drag carries its public handle, this hub's origin and a single-use ticket (60 s),

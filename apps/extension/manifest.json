@@ -16,7 +16,7 @@
   ],
   "content_scripts": [
     {
-      "matches": ["https://apc.tineira.com/*"],
+      "matches": ["https://apc.tineira.com/", "https://apc.tineira.com/?*", "https://apc.tineira.com/dock*", "https://apc.tineira.com/extension*"],
       "js": ["dock-presence.js"],
       "run_at": "document_idle"
     }
