@@ -6,7 +6,7 @@
  * Direct profile's list from @apc/web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, type AgentDrag, type BarAgent } from "@apc/web";
+import { createViewReporter, enablePinning, loadApcProfiles, type AgentDrag, type BarAgent } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
@@ -149,6 +149,15 @@ function Feed({ sid }: { sid: string }) {
         acceptNativeDrops: true,
         // Every drop goes through the server, which checks with the dock that a pairing still stands (TIN-389).
         resolveAgent: () => null,
+        // APC 0.5: a Signals that offers only Direct answers a dock agent's drop with how to connect directly,
+        // and opens its Connect panel. Its profiles come from its own apc.json, so a drop before the page's
+        // state has loaded is answered right too (held until the file is read).
+        profiles: () => loadApcProfiles(),
+        direct: { name: "Signals", connect: `${location.origin}/?connect` },
+        onDockUnsupported: (answer) => {
+          setConnectOpen(true);
+          say(answer.message);
+        },
         onUnknownAgent: async (drag, target) => {
           const paired = stateRef.current?.grants.some((g) => g.hub === drag.hub && g.agent === drag.agent);
           if (!paired) return setPending({ drag, target });

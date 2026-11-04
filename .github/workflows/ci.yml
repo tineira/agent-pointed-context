@@ -126,14 +126,8 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --dir apps/dock build
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: apps/dock
-          packageManager: pnpm
-          command: deploy
+      # The apps first, then the dock: the dock reads an app's apc.json before it pairs it (APC 0.5, TIN-579),
+      # so a new file must be served before a dock that asks for it.
       - run: pnpm --dir apps/demo build
       - uses: cloudflare/wrangler-action@v3
         with:
@@ -148,5 +142,13 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/signals
+          packageManager: pnpm
+          command: deploy
+      - run: pnpm --dir apps/dock build
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/dock
           packageManager: pnpm
           command: deploy

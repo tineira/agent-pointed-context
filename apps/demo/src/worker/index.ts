@@ -7,9 +7,9 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ApcProfile } from "@apc/protocol";
-import { parseProfiles } from "@apc/server";
+import { apcJsonResponse, apcManifest } from "@apc/server";
 import { REGIONS, type Region } from "../model/seed.ts";
-import { SANDBOX_TTL_MS, type Env } from "./sandbox.ts";
+import { SANDBOX_TTL_MS, servedProfiles, type Env } from "./sandbox.ts";
 
 export { Sandbox } from "./sandbox.ts";
 
@@ -23,8 +23,8 @@ function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 const stubFor = (env: Env, sid: string): Stub => env.SANDBOX.get(env.SANDBOX.idFromName(sid));
-/** The profiles Pulse offers, from APC_PROFILES (the one place they are declared). */
-const offers = (env: Env, profile: ApcProfile): boolean => parseProfiles(env.APC_PROFILES).includes(profile);
+/** The profiles Pulse serves (servedProfiles: APC_PROFILES, with Dock only on the standard's deploy), the same the sandbox and the page use. */
+const offers = (env: Env, profile: ApcProfile): boolean => servedProfiles(env).includes(profile);
 
 /**
  * Call a sandbox, retrying a retryable failure with a fresh stub (a stub is
@@ -213,6 +213,12 @@ app.all("/mcp/:sid/:secret", async (c) => {
   if (!(await allowed(c.env.SANDBOX_CALLS, `s:${sid}`))) return tooMany(c);
   return stubFor(c.env, sid).fetch(c.req.raw);
 });
+
+/**
+ * What Pulse is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles it
+ * serves, where its MCP URLs live, and its Agents screen, where the person connects an agent directly.
+ */
+app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Pulse", origin: new URL(c.req.url).origin, profiles: servedProfiles(c.env), connect: "/agents" })));
 
 /** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));

@@ -8,12 +8,13 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { apcConformance, type ApcAppAdapter } from "@apc/conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import type { FocusTarget, PresenceEvent } from "@apc/protocol";
+import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@apc/protocol";
 import { generateDataset } from "../../demo/src/model/seed.ts";
 import { buildMarket } from "../../demo/src/model/market.ts";
 
 installWorkersStandIn();
 const { Feed } = await import(new URL("../src/worker/feed.ts", import.meta.url).href);
+const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
 
 const ORIGIN = "https://signals.test";
 const HUB = "https://dock.test";
@@ -66,7 +67,8 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
   const app: ApcAppAdapter = {
     name: "Signals",
     profile,
-    fetch: (request) => feed.fetch(request),
+    // The MCP endpoint is the feed's; apc.json is the Worker's, for the whole origin (APC 0.5).
+    fetch: (request) => (new URL(request.url).pathname === APC_JSON_PATH ? worker.fetch(request, options.env ?? DEPLOY) : feed.fetch(request)),
     connect: () => connectOn(profile),
     ...(options.link
       ? {

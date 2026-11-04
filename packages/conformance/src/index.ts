@@ -4,7 +4,9 @@
  * endpoint, the way an agent or a dock's hub reaches it, and, for an app that offers both profiles,
  * `apc_link` (give `link` in the adapter). What happens in the person's page (the view they report, the pin they drop,
  * the presence the app shows them, Revoke in the agent bar) comes through a small adapter the app
- * provides, since only the app knows its page.
+ * provides, since only the app knows its page. Since 0.5 it also reads the app's `apc.json`
+ * (`GET {origin}/.well-known/apc.json`, through the adapter's `fetch`): its shape, its origin, the
+ * standard, and that its profiles and `mcp.path` match what the app serves.
  *
  * Framework-free: `apcConformance(app)` returns named checks that throw `ConformanceError`, for any
  * test runner (`for (const c of apcConformance(app)) test(c.name, c.run)` under `node --test`), and
@@ -12,6 +14,9 @@
  */
 import {
   APC_AGENT_CLIENT_META,
+  APC_JSON_MAX_BYTES,
+  APC_JSON_PATH,
+  APC_STANDARD_VERSION,
   APC_LINK_KEY,
   APC_LINK_TOOL,
   APC_LINK_TTL_S,
@@ -20,7 +25,10 @@ import {
   REVOKED_ERROR,
   REVOKED_HTTP_STATUS,
   canonicalTarget,
+  compareStandard,
+  declaresMcpUrl,
   isRevokedAnswer,
+  parseApcManifest,
   parseParams,
   parseTarget,
   type ApcLinkRefusal,
@@ -215,6 +223,32 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
   const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (${app.profile}): ${name}`, run });
 
   return [
+    check("serves apc.json from its own origin, naming the profiles it serves and where its MCP URLs live", async () => {
+      const { mcpUrl } = await app.connect();
+      const origin = new URL(mcpUrl).origin;
+      const request = new Request(`${origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
+      const response = await (app.fetch ? app.fetch(request) : fetch(request));
+      expect(response.status === 200, `GET ${APC_JSON_PATH}: HTTP ${response.status}, expected 200`);
+      expect((response.headers.get("content-type") ?? "").includes("application/json"), `${APC_JSON_PATH} is not served as application/json`);
+      const text = await response.text();
+      expect(new TextEncoder().encode(text).length <= APC_JSON_MAX_BYTES, `${APC_JSON_PATH} is over ${APC_JSON_MAX_BYTES} bytes`);
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new ConformanceError(`${APC_JSON_PATH} is not JSON`);
+      }
+      const parsed = parseApcManifest(body, origin);
+      expect(parsed.ok, `${APC_JSON_PATH}: ${parsed.ok ? "" : `${parsed.error}, ${parsed.detail}`}`);
+      const m = parsed.manifest;
+      expect(compareStandard(m.standard, "0.5.0") >= 0 && compareStandard(m.standard, APC_STANDARD_VERSION) <= 0, `standard is ${m.standard}: apc.json exists since 0.5.0, and this suite checks up to ${APC_STANDARD_VERSION}`);
+      expect(!m.profiles.includes("hub"), "an app's profiles are direct, dock or both, never hub");
+      expect(m.profiles.includes(app.profile), `profiles ${JSON.stringify(m.profiles)} leave out ${app.profile}, which the app serves`);
+      if (app.link) expect(m.profiles.includes("direct") && m.profiles.includes("dock"), `profiles ${JSON.stringify(m.profiles)}: an app that links both paths offers both`);
+      expect(declaresMcpUrl(m, mcpUrl), `the grant's MCP URL is not under ${origin}${m.mcp.path} (mcp.path)`);
+      if (m.profiles.includes("direct")) expect(m.direct && new URL(m.direct.connect).origin === origin, "direct.connect is the app's own page");
+    }),
+
     check("lists the core tools, with their arguments", async () => {
       const { mcpUrl } = await app.connect();
       const listed = (await result(app, mcpUrl, "tools/list")) as { tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }> };

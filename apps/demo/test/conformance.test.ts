@@ -9,11 +9,12 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { apcConformance, runConformance, type ApcAppAdapter } from "@apc/conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import type { FocusTarget, PresenceEvent } from "@apc/protocol";
+import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@apc/protocol";
 import { generateDataset, LAST_MONTH } from "../src/model/seed.ts";
 
 installWorkersStandIn();
 const { Sandbox } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);
+const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
 
 const ORIGIN = "https://pulse.test";
 const HUB = "https://dock.test";
@@ -38,7 +39,7 @@ function standInHub(t: TestContext | null): { calls: string[] } {
 const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
 
 /** Pulse as the suite sees it: its MCP endpoint, and the page through the sandbox's own methods. */
-async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean } = {}) {
+async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response> } = {}) {
   const room = durableObjectRoom();
   const sandbox = new Sandbox(room.ctx, options.env ?? DEPLOY);
   await sandbox.init(SEED);
@@ -66,7 +67,8 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   const app: ApcAppAdapter = {
     name: "Pulse",
     profile,
-    fetch: (request) => sandbox.fetch(request),
+    // The MCP endpoint is the sandbox's; apc.json is the Worker's, for the whole origin (APC 0.5).
+    fetch: (request) => (new URL(request.url).pathname === APC_JSON_PATH ? options.apcJson?.(request) ?? worker.fetch(request, options.env ?? DEPLOY) : sandbox.fetch(request)),
     connect: () => connectOn(profile),
     // apc_link (APC 0.4): Pulse's deploy offers both profiles.
     ...(options.link
@@ -139,6 +141,29 @@ test("a link code is never written to the sandbox's log or kept in clear", async
   const everything = (await sandbox.eventsJsonl()) + JSON.stringify(room.db.prepare("select * from apc_kv").all());
   for (const code of codes) assert.equal(everything.includes(code), false, "only its hash is kept, and the log hides it");
   assert.match(await sandbox.eventsJsonl(), /"type":"linked"/);
+});
+
+test("the suite catches an apc.json that leaves out a profile the app serves, names another origin, or another MCP path", async () => {
+  const served = (manifest: Record<string, unknown>) => async () => Response.json(manifest);
+  const base = { name: "Pulse", standard: "0.5.0", origin: ORIGIN, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/agents` } };
+  const checkOf = (app: ApcAppAdapter) => apcConformance(app).find((c) => c.name.includes("apc.json"))!;
+  await assert.rejects(checkOf((await pulse("dock", { apcJson: served({ ...base, profiles: ["direct"] }) })).app).run(), /leave out dock/);
+  await assert.rejects(checkOf((await pulse("direct", { link: true, apcJson: served({ ...base, profiles: ["direct"] }) })).app).run(), /offers both/);
+  await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, origin: "https://pulse.example" }) })).app).run(), /apc_json_wrong_origin/);
+  await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, mcp: { path: "/agents/" } }) })).app).run(), /mcp\.path/);
+  await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, standard: "9.0.0" }) })).app).run(), /standard is 9\.0\.0/);
+  await assert.rejects(checkOf((await pulse("direct", { apcJson: async () => Response.json({ error: "not_found" }, { status: 404 }) })).app).run(), /HTTP 404/);
+});
+
+test("Pulse's page, its own checks and its apc.json agree on the profiles it serves, from one source", async () => {
+  for (const env of [DEPLOY, { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct" }, { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "dock" }, { APC_PROFILES: "direct,dock" }, { APC_PROFILES: "direct" }]) {
+    const { sandbox } = await pulse("direct", { env });
+    const file = await (await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), env)).json();
+    assert.deepEqual((await sandbox.state()).profiles, file.profiles, JSON.stringify(env));
+  }
+  // Without the standard's deploy Pulse pairs with no dock, so neither says it does.
+  const { sandbox } = await pulse("direct", { env: { APC_PROFILES: "direct,dock" } });
+  assert.deepEqual((await sandbox.state()).profiles, ["direct"]);
 });
 
 test("the suite catches an app whose Revoke does nothing", async () => {

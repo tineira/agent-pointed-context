@@ -12,6 +12,8 @@ import { generateDataset } from "../../demo/src/model/seed.ts";
 installWorkersStandIn();
 const { Hub } = await import(new URL("../src/worker/hub.ts", import.meta.url).href);
 const { Sandbox } = await import(new URL("../../demo/src/worker/sandbox.ts", import.meta.url).href);
+/** Pulse's Worker, for the apc.json it serves at /.well-known/apc.json (APC 0.5): the hub reads it when Pulse pairs. */
+const { default: pulseWorker } = await import(new URL("../../demo/src/worker/index.ts", import.meta.url).href);
 
 const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
@@ -31,6 +33,7 @@ async function world(t: TestContext) {
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
+    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
     if (url.origin === PULSE && url.pathname === "/apc/revoke") {
       const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);

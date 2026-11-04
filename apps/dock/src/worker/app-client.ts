@@ -3,7 +3,7 @@
  * HTTP, no session (APC apps are stateless). The app's grant is the secret in its MCP URL, kept by
  * the hub only.
  */
-import { APC_AGENT_CLIENT_META } from "@apc/protocol";
+import { APC_AGENT_CLIENT_META, APC_JSON_MAX_BYTES, APC_JSON_PATH } from "@apc/protocol";
 import { LIMITS } from "./trust.ts";
 
 export interface AppToolResult {
@@ -197,6 +197,58 @@ export async function revokeGrant(mcpUrl: string, transport: AppTransport = STRI
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+/** An app's apc.json as the hub read it: the parsed JSON, or why there is none, in the hub's own words. */
+export type ApcJsonRead = { ok: true; body: unknown } | { ok: false; error: "apc_json_missing" | "apc_json_redirected" | "apc_json_unreachable" | "apc_json_invalid"; reason: string };
+
+/**
+ * Read `GET {origin}/.well-known/apc.json` (APC 0.5) under the transport rules of every other call
+ * (TIN-580): a time limit that covers the body and a byte cap (APC_JSON_MAX_BYTES). Stricter than the
+ * other calls, no redirect is followed for any app, verified too: the file is the origin's own or none.
+ * A 4xx is `missing`; a redirect is `redirected`, an answer from the origin like a 4xx, verified app or
+ * not; only no answer, a time limit or a 5xx is `unreachable`; too large or not JSON is `invalid`.
+ * The transport is kept for the call's shape; every app is read the same way.
+ */
+export async function readApcJson(origin: string, _transport: AppTransport = STRICT): Promise<ApcJsonRead> {
+  const signal = AbortSignal.timeout(LIMITS.apcJsonMs);
+  const ends = deadline(signal, "apc.json", LIMITS.apcJsonMs);
+  let response: Response;
+  try {
+    response = await Promise.race([
+      fetch(`${origin}${APC_JSON_PATH}`, {
+        headers: { accept: "application/json", "user-agent": "apc-hub/0.1" },
+        signal,
+        // Never followed, for any app: the file must be the origin's own, and a redirect's target is not.
+        redirect: "manual",
+      }),
+      ends,
+    ]);
+  } catch (error) {
+    return { ok: false, error: "apc_json_unreachable", reason: failureReason(error) };
+  }
+  // A redirect (3xx, or the opaque answer some runtimes give for one) is the origin answering, with no
+  // file of its own: refused for every app, never the "unreachable" that lets a verified app pair on its last copy.
+  if ((response.status >= 300 && response.status < 400) || (response as { type?: string }).type === "opaqueredirect" || response.status === 0) {
+    response.body?.cancel().catch(() => {});
+    return { ok: false, error: "apc_json_redirected", reason: `apc.json: a redirect (HTTP ${response.status})` };
+  }
+  if (!response.ok) {
+    response.body?.cancel().catch(() => {});
+    return { ok: false, error: response.status >= 500 ? "apc_json_unreachable" : "apc_json_missing", reason: `apc.json: HTTP ${response.status}` };
+  }
+  let text: string;
+  try {
+    text = await readCapped(response, APC_JSON_MAX_BYTES, ends, "apc.json");
+  } catch (error) {
+    const tooLarge = error instanceof AppCallError && error.code === "too_large";
+    return { ok: false, error: tooLarge ? "apc_json_invalid" : "apc_json_unreachable", reason: failureReason(error) };
+  }
+  try {
+    return { ok: true, body: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false, error: "apc_json_invalid", reason: "apc.json: not JSON" };
   }
 }
 

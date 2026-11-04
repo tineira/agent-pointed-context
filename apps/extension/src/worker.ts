@@ -8,7 +8,7 @@
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, readerKey, sitePattern, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -64,7 +64,35 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     void pinCall(m.type === "pin_state" ? "state" : "clear", m.hub, m.agent).then(reply);
     return true;
   }
+  // An APC app the agent is dragged over (APC 0.5): whether it connects agents only directly, from its apc.json.
+  if (m?.type === "apc_json") {
+    void directOnlyOf(sender.tab.url).then(reply);
+    return true;
+  }
 });
+
+/**
+ * What each APC app's apc.json said, per origin (memory only: the service worker comes and goes): a
+ * file read and understood for five minutes, a lookup that told nothing (no file, an error, no answer)
+ * for 30 s, so a page that was briefly unreachable is asked again soon.
+ */
+const apcApps = new Map<string, { at: number; keep: number; lookup: Promise<DirectOnlyLookup> }>();
+
+/**
+ * What the tab's origin says about itself: the answer for a Direct-only app (or null), and whether its
+ * file was read at all, so the page asks again later when it was not. Read from that origin only.
+ */
+async function directOnlyOf(url: string | undefined): Promise<DirectOnlyLookup> {
+  const site = sitePattern(url);
+  if (!site) return { directOnly: null, read: false };
+  const kept = apcApps.get(site.origin);
+  if (kept && Date.now() - kept.at < kept.keep) return kept.lookup;
+  const entry = { at: Date.now(), keep: LOOKUP_KEEP_MS, lookup: lookUpDirectOnly(site.origin) };
+  apcApps.set(site.origin, entry);
+  const result = await entry.lookup;
+  if (!result.read) entry.keep = LOOKUP_KEEP_UNKNOWN_MS;
+  return result;
+}
 
 /** The pin's state or ×, at the dock, with this browser's token for that agent. */
 async function pinCall(what: "state" | "clear", hub: string, agent: string): Promise<Record<string, unknown> | null> {

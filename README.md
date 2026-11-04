@@ -48,8 +48,8 @@ The packages are TypeScript sources in this workspace (not on npm yet). They are
 | Package | What it gives you |
 |---|---|
 | [`@apc/protocol`](packages/protocol) | wire types, the target grammar (kinds, parts, key-only params), `data-focus` attributes |
-| [`@apc/server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent`; the Direct profile (`newDirectGrant`, `directMcpUrl`, `initializeOf`, `parseProfiles`) and `apc_link` (`ApcLinks`, `registerApcLinkTool`, `sqlKv`) |
-| [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`), `flashTargets` for presence, `createViewReporter`, the agent bar `<apc-agents>` with Revoke, paths, Unlink and the dock hint, and the Direct agent list `<apc-direct-agents>` with the connect instructions (`connectPrompt`) |
+| [`@apc/server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent`; the Direct profile (`newDirectGrant`, `directMcpUrl`, `initializeOf`, `parseProfiles`), `apc_link` (`ApcLinks`, `registerApcLinkTool`, `sqlKv`) and `apc.json` (`apcManifest`, `apcJsonResponse`) |
+| [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`; on a Direct-only app, the answer to a dock agent's drop), `flashTargets` for presence, `createViewReporter`, the agent bar `<apc-agents>` with Revoke, paths, Unlink and the dock hint, and the Direct agent list `<apc-direct-agents>` with the connect instructions (`connectPrompt`) |
 | [`@apc/conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint |
 
 On the server, register the two APC tools next to your own and attach the envelope to every result while a pin is unread:
@@ -98,6 +98,18 @@ for (const check of apcConformance({
 ```
 
 Pulse and Signals run it on both profiles in `pnpm test` with no network ([`apps/demo/test/conformance.test.ts`](apps/demo/test/conformance.test.ts), [`apps/signals/test/conformance.test.ts`](apps/signals/test/conformance.test.ts)); `@apc/conformance/workers` runs a Cloudflare Durable Object on Node for that. An app that offers both profiles also gives the adapter `link` (`connect(path)`, `agents()`, `unlink`), and the suite checks `apc_link`: the same agent on both paths is offered a code once per session, the code links them, an expired, reused, same-path or other-client code is refused, and Revoke on a linked agent cuts both grants.
+
+**Publish `apc.json`.** Every APC app says what it is at `/.well-known/apc.json` on its own origin (APC 0.5): its name, the standard it implements, its origin, the profiles it offers, where its MCP URLs live and, with Direct, the page where the person connects an agent. A dock reads it before it pairs your app, and refuses the pairing when it is missing, names another origin, does not list `"dock"` or does not cover the MCP URL you sent; the conformance suite checks it too. With `@apc/server` it is one route:
+
+```ts
+import { apcJsonResponse, apcManifest, parseProfiles } from "@apc/server";
+
+app.get("/.well-known/apc.json", (c) =>
+  apcJsonResponse(apcManifest({ name: "My app", origin: new URL(c.req.url).origin, profiles: parseProfiles(c.env.APC_PROFILES), connect: "/connect" })),
+);
+```
+
+If your app offers only Direct, still take a dock agent's drop so the person learns how to connect instead of nothing happening: pass `profiles: () => loadApcProfiles()` (your own apc.json) and `direct: { name, connect }` to `enablePinning`, and it answers such a drop (holding one made before the file is read) with a note and your connect link, or calls your `onDockUnsupported`. The browser extension gives the same answer on a Direct-only app that does not.
 
 To offer the Direct profile (each agent on its own MCP URL), your Durable Object makes grants with `newDirectGrant()` in its own table, answers `initialize` with `ApcLinks.arrived(grant, linkClient(initializeOf(body), path))`, and wraps its tools so a result carries `attachApcLink(result, await links.offer(grant, tool))`; the page shows `<apc-direct-agents>` (make, name, URL and prompt to copy) and passes each agent's `paths` to `<apc-agents>`. Declare your profiles in one place (`APC_PROFILES="direct,dock"` in Pulse's and Signals' `wrangler.jsonc`). Signals is the small example ([`apps/signals/src/worker/feed.ts`](apps/signals/src/worker/feed.ts)).
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, decide, grantedAlone, hubAllowed, isDockPage, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -79,4 +79,122 @@ test("a pin is unread, read once the agent read it, and stale once a newer drop 
   assert.equal(pinState("t1", "t1", true), "read");
   assert.equal(pinState("t1", "t2", true), "stale");
   assert.equal(pinState("t1", null, false), "stale", "cleared or expired at the dock");
+});
+
+test("a dock agent dropped on a Direct-only APC app gets the answer from its apc.json; an app with Dock gets none (APC 0.5)", async () => {
+  const origin = "https://signals.example";
+  const signals = (profiles: string[], over: Record<string, unknown> = {}) => ({ name: "Signals", standard: "0.5.0", origin, profiles, mcp: { path: "/mcp/" }, direct: { connect: `${origin}/?connect` }, ...over });
+  assert.deepEqual(directOnlyAnswer(signals(["direct"]), origin), {
+    name: "Signals",
+    host: "signals.example",
+    connect: `${origin}/?connect`,
+    message: 'This page says it is "Signals" (signals.example). It connects agents directly, not through a dock: connect your agent to it on its own URL, then drag its mark from the agent bar there.',
+  });
+  // The card lends no authority to the name the page chose: the domain first, the name as the page's word.
+  const spoof = directOnlyAnswer(signals(["direct"], { name: "Your bank" }), origin)!;
+  assert.match(spoof.message, /^This page says it is "Your bank" \(signals\.example\)\./);
+  assert.equal(connectLabel(spoof.host), "Connect an agent on signals.example");
+  assert.equal(directOnlyAnswer(signals(["direct", "dock"]), origin), null, "an app that offers Dock answers its own drops");
+  assert.equal(directOnlyAnswer(signals(["dock"]), origin), null);
+  assert.equal(directOnlyAnswer(signals(["direct"]), "https://other.example"), null, "a file that names another origin is not this app's");
+  assert.equal(directOnlyAnswer(signals(["direct"], { direct: { connect: "https://phish.example/connect" } }), origin), null, "a connect page off its origin is never linked");
+  assert.equal(directOnlyAnswer({ name: "x" }, origin), null);
+
+  const asked: Array<[string, RequestInit | undefined]> = [];
+  const serve = (body: string, status = 200) =>
+    (async (url: string | URL | Request, init?: RequestInit) => {
+      asked.push([String(url), init]);
+      return new Response(body, { status, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+  const direct = await lookUpDirectOnly(origin, serve(JSON.stringify(signals(["direct"]))));
+  assert.deepEqual([direct.directOnly?.connect, direct.read], [`${origin}/?connect`, true]);
+  assert.equal(asked[0]![0], `${origin}/.well-known/apc.json`, "read from the page's own origin");
+  assert.equal(asked[0]![1]?.credentials, "omit", "no cookies");
+  assert.equal(asked[0]![1]?.redirect, "error", "no redirect");
+  assert.deepEqual(await lookUpDirectOnly(origin, serve(JSON.stringify(signals(["direct", "dock"])))), { directOnly: null, read: true }, "a real answer: the app takes dock agents");
+  // Nothing could be told: the service worker keeps these only briefly (LOOKUP_KEEP_UNKNOWN_MS), never for five minutes.
+  const unknown = { directOnly: null, read: false };
+  assert.deepEqual(await lookUpDirectOnly(origin, serve("not found", 404)), unknown);
+  assert.deepEqual(await lookUpDirectOnly(origin, serve("<html>")), unknown);
+  assert.deepEqual(await lookUpDirectOnly(origin, serve(JSON.stringify({ ...signals(["direct"]), pad: "x".repeat(20_000) }))), unknown, "too large");
+  const offline = (async () => {
+    throw new TypeError("offline");
+  }) as typeof fetch;
+  assert.deepEqual(await lookUpDirectOnly(origin, offline), unknown);
+  assert.ok(LOOKUP_KEEP_UNKNOWN_MS <= 30_000 && LOOKUP_KEEP_MS === 5 * 60_000);
+});
+
+test("a drop on an APC app while its apc.json is still being read is taken, and answered when the file comes back (APC 0.5)", async () => {
+  const app: DirectOnly = { name: "Signals", host: "signals.example", connect: "https://signals.example/?connect", message: "…" };
+  /** A lookup the test answers when it likes: the service worker's reply, still on its way. */
+  const deferred = () => {
+    let resolve!: (v: DirectOnlyLookup) => void;
+    let calls = 0;
+    const promise = new Promise<DirectOnlyLookup>((r) => (resolve = r));
+    return { lookUp: () => (calls++, promise), resolve, calls: () => calls };
+  };
+
+  // In flight, then Direct-only: the first dragover already takes the drop, the drop waits for the answer.
+  const slow = deferred();
+  let pageAnswers = false;
+  const gate = directOnlyGate(slow.lookUp, () => pageAnswers);
+  assert.equal(gate.accepts(), true, "dragover takes the drop while the file is on its way: the browser does not refuse it");
+  const dropped = gate.drop();
+  assert.ok(dropped && "later" in dropped, "a drop during the lookup is held, not lost");
+  slow.resolve({ directOnly: app, read: true });
+  assert.equal(await (dropped as { later: Promise<DirectOnly | null> }).later, app, "and answered when the file comes back");
+  assert.deepEqual(gate.drop(), { now: app }, "the next drop is answered at once");
+  assert.equal(gate.accepts(), true);
+  assert.equal(slow.calls(), 1, "the file is read once per page");
+  pageAnswers = true;
+  assert.equal(gate.accepts(), false, "a page that answers drops itself (data-apc-native-drops) is never taken from");
+  assert.equal(gate.drop(), null);
+
+  // In flight, then an app that takes dock agents: the held drop goes back to the page, and later drags are not taken.
+  const dock = deferred();
+  const gate2 = directOnlyGate(dock.lookUp, () => false);
+  const held = gate2.drop();
+  assert.ok(held && "later" in held);
+  dock.resolve({ directOnly: null, read: true });
+  assert.equal(await (held as { later: Promise<DirectOnly | null> }).later, null, "nothing to answer: the drop is the page's");
+  assert.equal(gate2.accepts(), false);
+  assert.equal(gate2.drop(), null);
+  assert.equal(dock.calls(), 1, "a real answer holds for the page");
+
+  // A page with the marker is never taken from, even before its file is read.
+  const gate3 = directOnlyGate(deferred().lookUp, () => true);
+  assert.equal(gate3.accepts(), false);
+  assert.equal(gate3.drop(), null);
+
+  // A lookup that fails counts as no answer.
+  const gate4 = directOnlyGate(() => Promise.reject(new Error("the service worker went away")), () => false);
+  const failed = gate4.drop();
+  assert.equal(await (failed as { later: Promise<DirectOnly | null> }).later, null);
+  assert.equal(gate4.accepts(), false);
+});
+
+test("a lookup that told nothing is asked again on a later drag, once the service worker's short negative cache has run out (APC 0.5)", async () => {
+  const app: DirectOnly = { name: "Signals", host: "signals.example", connect: "https://signals.example/?connect", message: "…" };
+  let clock = 1_000_000;
+  const replies: DirectOnlyLookup[] = [{ directOnly: null, read: false }, { directOnly: app, read: true }];
+  let calls = 0;
+  const gate = directOnlyGate(async () => replies[calls++]!, () => false, () => clock);
+  gate.start();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls, 1);
+  // Told nothing (the file was briefly unreachable): stand back, and do not ask again on every dragover.
+  assert.equal(gate.accepts(), false);
+  assert.equal(gate.drop(), null);
+  clock += LOOKUP_KEEP_UNKNOWN_MS - 1;
+  gate.start();
+  assert.equal(gate.accepts(), false);
+  assert.equal(calls, 1, "not before the service worker's negative cache runs out");
+  // A later drag, past it: asked again, and this time the file says Direct-only.
+  clock += 1;
+  gate.start();
+  assert.equal(calls, 2);
+  assert.equal(gate.accepts(), true, "taken while the new lookup is on its way");
+  const dropped = gate.drop();
+  assert.equal(await (dropped as { later: Promise<DirectOnly | null> }).later, app);
+  assert.deepEqual(gate.drop(), { now: app });
 });

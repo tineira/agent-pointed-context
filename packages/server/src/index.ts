@@ -6,3 +6,4 @@ export * from "./revoke.ts";
 export * from "./kv.ts";
 export * from "./direct.ts";
 export * from "./links.ts";
+export * from "./apc-json.ts";
