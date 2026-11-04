@@ -115,8 +115,19 @@ jobs:
           mv ./*-setup.exe "$versioned"
           gh release view dock-desktop -R "$repo" > /dev/null 2>&1 || gh release create dock-desktop -R "$repo" --prerelease --target "$GITHUB_SHA" --title "APC dock for Windows (latest build)" --notes "The APC dock for Windows, built from main."
 
-          # A build older than what latest.json announces publishes nothing.
-          published=$(gh release download dock-desktop -R "$repo" -p latest.json -O - 2>/dev/null | jq -r '.version // empty' || true)
+          # A build older than what latest.json announces publishes nothing. Only a release without
+          # latest.json announces nothing (TIN-616): a failed listing, download or read fails the job,
+          # so an older build never takes latest.json, APCDockSetup.exe and the prune for its own.
+          published=""
+          gh release view dock-desktop -R "$repo" --json assets --jq '.assets[].name' > assets-before.txt \
+            || { echo "::error::Could not list the release's assets: not publishing."; exit 1; }
+          if grep -qxF latest.json assets-before.txt; then
+            gh release download dock-desktop -R "$repo" -p latest.json -O published.json \
+              || { echo "::error::Could not download latest.json: not publishing."; exit 1; }
+            published=$(jq -er '.version' published.json) \
+              || { echo "::error::Could not read a version from latest.json: not publishing."; exit 1; }
+            [[ "$published" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::latest.json announces '$published', not a version: not publishing."; exit 1; }
+          fi
           if [[ -n "$published" && "$(printf '%s\n%s\n' "$published" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]]; then
             echo "latest.json already announces $published, newer than $VERSION: nothing to publish."
             exit 0
