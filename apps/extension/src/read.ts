@@ -175,6 +175,8 @@ export interface Rect {
 export const ANYWHERE: Rect = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
 export const intersect = (a: Rect, b: Rect): Rect => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
 /** Whether a box shows inside a clip by more than a pixel each way: the person can see some of it. */
+/** Whether a box lies wholly inside a clip, give or take a pixel: nothing of it is cut off. */
+export const within = (box: Rect, clip: Rect): boolean => box.left >= clip.left - 1 && box.top >= clip.top - 1 && box.right <= clip.right + 1 && box.bottom <= clip.bottom + 1;
 export const showsIn = (box: Rect, clip: Rect): boolean => {
   const i = intersect(box, clip);
   return i.right - i.left > 1 && i.bottom - i.top > 1;

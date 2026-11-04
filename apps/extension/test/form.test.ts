@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { chooseSensitive, CODE_LEFT_OUT, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, LEFT_OUT, NUMBER_LEFT_OUT, readingText, shapeReading, shapeReadingCounted } from "../../dock/src/worker/reading.ts";
 import { includeSensitive, type SensitiveMode } from "../src/drop.ts";
-import { ANYWHERE, cardOf, classify, controlVisible, FIELDS_SENT, filterOpacity, formState, showsIn, visuallyHidden, type Control, type Seen } from "../src/read.ts";
+import { ANYWHERE, cardOf, classify, controlVisible, FIELDS_SENT, filterOpacity, formState, showsIn, visuallyHidden, within, type Control, type Seen } from "../src/read.ts";
 
 const shown: Seen = { checkVisible: true, opacity: 1, textAlpha: 1, width: 200, height: 24, left: 10, top: 10, right: 210, bottom: 34, pageWidth: 1200, pageHeight: 900, position: "static", clip: "auto", clipPath: "none", ariaHidden: false };
 
@@ -194,6 +194,11 @@ test("what the outline shows is its box cut to what clips it, and filter: opacit
   assert.equal(showsIn({ left: 10, top: 40, right: 210, bottom: 64 }, { left: 0, top: 10, right: 400, bottom: 30 }), false);
   assert.equal(showsIn({ left: 10, top: 10, right: 210, bottom: 34 }, ANYWHERE), true);
   assert.equal(showsIn({ left: 10, top: 10, right: 11, bottom: 34 }, outline), false, "1 px wide");
+  // A wrapped paragraph in a 20 px overflow box: line 1 lies within it, line 2 only partly shows, so the text node is read word by word.
+  const box20 = { left: 0, top: 0, right: 400, bottom: 20 };
+  assert.equal(within({ left: 0, top: 0, right: 380, bottom: 20 }, box20), true);
+  assert.equal(within({ left: 0, top: 20, right: 380, bottom: 40 }, box20), false);
+  assert.equal(showsIn({ left: 0, top: 20, right: 380, bottom: 40 }, box20), false, "line 2 is cut off");
   assert.equal(filterOpacity("none"), 1);
   assert.equal(filterOpacity("opacity(0)"), 0);
   assert.equal(filterOpacity("blur(2px) opacity(50%)"), 0.5);

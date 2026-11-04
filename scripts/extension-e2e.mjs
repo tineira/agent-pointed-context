@@ -122,7 +122,7 @@ document.addEventListener("drop", (e) => e.stopPropagation());
 </script>`;
 // A checkout (TIN-571, TIN-619): a chosen shipping option, a ticked box, a select, a typed note, sensitive numbers,
 // a password, and fields the person cannot see. The form has a margin of its own, where a drop outlines it whole.
-const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>Your order</h2>
+const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>Your order<span style="opacity:0">HEADSECRET</span></h2>
 <p id="intro">Orders placed before noon ship the same day.</p>
 <form id="checkout" style="padding:28px;border:1px solid #ccc"><fieldset><legend>Shipping method</legend>
 <label><input type="radio" name="ship" value="dhl"> DHL Express</label>
@@ -144,6 +144,9 @@ const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>You
 <input id="below" name="below" value="BELOWVALUE" style="position:absolute;left:20px;top:2400px">
 <p id="total">Total: $42.00</p></form>
 <p id="gone">This paragraph goes away while the agent is dragged over it.</p>
+<p id="wrapped" style="width:420px;height:20px;line-height:20px;overflow:hidden;white-space:pre-line;margin:0">FIRSTLINE shows in the box
+SECONDLINE card 4111 1111 1111 1111 is cut off
+THIRDLINE is cut off too</p>
 <cvv-box id="cvv" style="display:block;width:200px"></cvv-box>
 <script>
 customElements.define("cvv-box", class extends HTMLElement {
@@ -690,7 +693,7 @@ try {
       await cdp("Target.closeTarget", { targetId: popupId });
     };
     // Never in any reading: a password, hidden inputs and fields, text nobody can see, and what a box clips away or the outline leaves out.
-    const NEVER = ["hunter2", "HIDDENTOKEN", "BAITVALUE", "ROLEVALUE", "123\n", "SPANSECRET", "FILTERSECRET", "INKLESS", "CLIPPEDVALUE", "BELOWVALUE", "Clipped"];
+    const NEVER = ["hunter2", "HIDDENTOKEN", "BAITVALUE", "ROLEVALUE", "123\n", "SPANSECRET", "FILTERSECRET", "INKLESS", "CLIPPEDVALUE", "BELOWVALUE", "Clipped", "HEADSECRET", "SECONDLINE", "THIRDLINE"];
     const SENSITIVE = ["4111", "４１１１", "12.345", "de89"];
     const noneOf = (text, list) => {
       for (const secret of list) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
@@ -750,6 +753,14 @@ try {
     const role = await dropOnCheckout("#rt-label");
     assert.match(role, /Pointed at \(label\): Promo note$/);
     noSecret(role);
+    // A paragraph wrapped past its 20 px overflow box, its card number on line 2: only line 1 goes, under any setting (Grok's fix check).
+    // The heading above it has a span at opacity 0, which never goes either.
+    await setSensitive("send");
+    const wrapped = await dropOnCheckout("#wrapped", { x: 10, y: 10 });
+    assert.match(wrapped, /Pointed at \(p\): FIRSTLINE shows in the box$/);
+    assert.match(wrapped, /Under the heading: Your order\n/);
+    noSecret(wrapped);
+    await setSensitive("ask");
     // A page that takes away what was outlined before the drop: nothing is read in its place, and nothing is sent (Grok's review).
     const gonePoint = await inCheckout(`(() => { const r = document.querySelector("#gone").getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`);
     const goneDrag = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };

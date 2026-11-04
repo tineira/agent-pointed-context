@@ -13,7 +13,7 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
-import { altText, ANYWHERE, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, intersect, OPACITY_MIN, showsIn, tableContext, type Control, type Rect, type Seen } from "./read.ts";
+import { altText, ANYWHERE, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, intersect, OPACITY_MIN, showsIn, tableContext, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
@@ -434,9 +434,31 @@ function readable(el: Element, max: number): string {
   };
   const range = document.createRange();
   /** Whether a text node draws anything inside the clip. */
-  const shows = (node: Text, clip: Rect) => {
+  /**
+   * What of a text node shows inside the clip (Grok's review on #132): all of it when every line box is
+   * inside; otherwise word by word (and the spaces between kept words), each kept only when its own box
+   * shows inside, so a paragraph wrapped past an overflow box gives only the lines the person sees.
+   */
+  const visiblePart = (node: Text, clip: Rect): string => {
     range.selectNodeContents(node);
-    return [...range.getClientRects()].some((r) => showsIn(r, clip));
+    const rects = [...range.getClientRects()].filter((r) => r.width > 0 || r.height > 0);
+    if (!rects.some((r) => showsIn(r, clip))) return "";
+    if (rects.every((r) => within(r, clip))) return node.data;
+    let out = "";
+    let pending = "";
+    for (const m of node.data.matchAll(/\s+|\S+/g)) {
+      if (/^\s/.test(m[0])) {
+        pending = m[0];
+        continue;
+      }
+      range.setStart(node, m.index);
+      range.setEnd(node, m.index + m[0].length);
+      if ([...range.getClientRects()].some((r) => showsIn(r, clip))) {
+        out += (out ? pending : "") + m[0];
+      }
+      pending = "";
+    }
+    return out;
   };
   const parent = parentOf(el);
   const walk = (e: Element, opacity: number, clip: Rect) => {
@@ -460,7 +482,7 @@ function readable(el: Element, max: number): string {
       if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent ?? "";
         if (!text.trim()) add(text);
-        else if (inked && shows(node as Text, inner)) add(text);
+        else if (inked) add(visiblePart(node as Text, inner));
       } else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element, seen, inner);
     }
     if (apart) add(" ");
@@ -662,14 +684,14 @@ function textWithout(el: Element): string {
   return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-/** The nearest h1 to h3 before an element in the document, or its own text when it is one. */
+/** The nearest h1 to h3 before an element in the document, or its own text when it is one: its text as the person sees it (readable), never innerText. */
 function headingBefore(el: Element): string | null {
   let found: Element | null = null;
   for (const h of document.querySelectorAll("h1,h2,h3")) {
     if (h === el || h.contains(el) || h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) found = h;
     else break;
   }
-  return found ? ((found as HTMLElement).innerText ?? found.textContent ?? "").trim().slice(0, 200) || null : null;
+  return found ? readable(found, 200).replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
 }
 
 /**
