@@ -17,13 +17,13 @@ import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } fr
 import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
-import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
+import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
 import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
 import { buttonsOff, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
-const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
+const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "where your agents point"];
 
 /**
  * Draw an agent's icon (an <svg> or an <img> from AgentIcon) as a 64 px PNG data URI: the agent's
@@ -105,7 +105,6 @@ export function HubDock() {
     return () => clearTimeout(id);
   }, [notice]);
   const [shown, setShown] = useState<Set<string>>(new Set());
-  const [world, setWorld] = useState(false);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
@@ -472,29 +471,18 @@ export function HubDock() {
           );
         })}
       </ul>
-      <Setup agents={state.agents} seed={state.seed} progress={state.onboarding} keepAtHand={<div className="row">{controls}</div>} />
-      <nav className="launch" aria-label="Apps">
-        {APPS.map((app) => (
-          <OpenApp key={app.name} app={app} seed={state.seed} />
-        ))}
-      </nav>
+      <Setup agents={state.agents} progress={state.onboarding} keepAtHand={<div className="row">{controls}</div>} />
       <div className="row small footer">
         <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
           Add an agent
         </button>
         {controls}
-        <button type="button" title={`World ${state.seed}: the seed every app opens on`} onClick={() => setWorld(true)}>Change world</button>
         <details className="dock-menu">
           <summary>Menu</summary>
           <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
         </details>
       </div>
-      <Downloads seed={state.seed} />
-      {world && <World seed={state.seed} onDone={() => setWorld(false)} onWorld={async (seed) => {
-        const result = await call<{ ok: boolean }>(`${base}/world`, { seed });
-        if (!result.ok) throw new Error("Could not change world");
-        refresh();
-      }} />}
+      <Downloads />
     </main>
   );
   return (

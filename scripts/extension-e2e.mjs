@@ -652,10 +652,9 @@ try {
     await cdp("Target.closeTarget", { targetId: other.targetId });
     console.log("7. on a site the person did not grant, a drop sends nothing");
 
-    // 8. Open dock and Float from the extension's popup (TIN-473). The browser gets this dock's cookie,
-    // and the dock leaves its first run, so /dock is this dock with its Float button.
+    // 8. Open dock and Float from the extension's popup (TIN-473). The browser gets this dock's cookie, so
+    // /dock is this dock with its Float button (no first run gates it, TIN-489; no world to choose, TIN-621).
     await cdp("Storage.setCookies", { cookies: [{ name: cookie.split("=")[0], value: cookie.slice(cookie.indexOf("=") + 1), url: DOCK, path: "/", secure: DOCK.startsWith("https:") }] });
-    await api(`${base}/world`, { seed: 7 });
     const clickIn = async (sid, selector) => {
       const { root } = await cdp("DOM.getDocument", { depth: 0 }, sid);
       const { nodeId } = await cdp("DOM.querySelector", { nodeId: root.nodeId, selector }, sid);

@@ -49,9 +49,8 @@ function bounded(): Promise<string> {
 }
 
 async function resumeOrOpen(deadline: number, stop: AbortSignal): Promise<string> {
-  // A dock opens Pulse's v2 deploy with ?seed= (TIN-393); apc.tineira.com ignores it.
-  const seed = Number(new URLSearchParams(location.search).get("seed"));
-  const body = Number.isInteger(seed) && seed > 0 ? { seed } : {};
+  // Every sandbox shows the demo's one world (TIN-621): the ?seed= of old dock links means nothing now.
+  const body = {};
   for (let attempt = 1; ; attempt++) {
     // Never a request once the open is given up: it could set the cookie to a sandbox no page holds,
     // after another tab, let in by the released lock, opened the one its page uses (TIN-490).

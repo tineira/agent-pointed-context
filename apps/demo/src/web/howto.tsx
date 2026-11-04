@@ -401,7 +401,7 @@ function ExamplesTopic(ctx: Ctx) {
                   <>
                     <span>It stands in for your billing export: one row per customer and month, keyed by the same customer id Pulse uses. Your browser makes it; Pulse's server has no revenue data at all.</span>
                     <div>
-                      <DownloadCsv seed={ctx.state.seed} />
+                      <DownloadCsv />
                     </div>
                   </>
                 ),

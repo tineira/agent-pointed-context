@@ -10,8 +10,7 @@ import { apcConformance, type ApcAppAdapter } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
-import { generateDataset } from "../../demo/src/model/seed.ts";
-import { buildMarket } from "../../demo/src/model/market.ts";
+import { demoMarket } from "../../demo/src/model/demo-world.ts";
 
 installWorkersStandIn();
 const { Feed } = await import(new URL("../src/worker/feed.ts", import.meta.url).href);
@@ -20,7 +19,6 @@ const { default: worker } = await import(new URL("../src/worker/index.ts", impor
 const ORIGIN = "https://signals.test";
 const HUB = "https://dock.test";
 const SID = "7".repeat(32);
-const SEED = 4242;
 
 function standInHub(t: TestContext | null): { calls: string[] } {
   const calls: string[] = [];
@@ -41,8 +39,8 @@ const DEPLOY = { HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
 async function signals(profile: "direct" | "dock" = "dock", options: { link?: boolean; env?: Record<string, string> } = {}) {
   const room = durableObjectRoom();
   const feed = new Feed(room.ctx, options.env ?? DEPLOY);
-  await feed.init(SEED);
-  const posts = buildMarket(generateDataset(SEED)).posts;
+  await feed.init();
+  const posts = demoMarket().posts;
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "post", id: posts[0]!.id, part: null, params: null },
     { kind: "post", id: posts[1]!.id, part: "offer", params: null },
@@ -144,7 +142,7 @@ test("a feed from before Direct gets a grants table that takes Direct agents, an
   room.db.exec("alter table grants add column client_icon text");
   room.db.exec(`insert into grants (id, secret, hub, agent, created_at) values ('g_old', '${"a".repeat(32)}', '${HUB}', 'ag_1', '2026-11-01T00:00:00.000Z')`);
   const feed = new Feed(room.ctx, DEPLOY);
-  await feed.init(SEED);
+  await feed.init();
   const made = await feed.addDirectGrant();
   assert.equal(made.ok, true);
   const { grants } = (await feed.state()) as { grants: Array<{ id: string; path: string; secret: string | null }> };
@@ -165,7 +163,7 @@ test("the grants-table rebuild survives a stop after the copy table was made (a 
   room.db.exec(NEW_GRANTS); // the earlier start made it, then stopped before the copy finished
   room.db.exec(`insert into grants_direct (id, secret, created_at) values ('g_half', '${"b".repeat(32)}', '2026-11-01T00:00:00.000Z')`);
   const feed = new Feed(room.ctx, DEPLOY);
-  await feed.init(SEED);
+  await feed.init();
   const { grants } = (await feed.state()) as { grants: Array<{ id: string; path: string }> };
   assert.deepEqual(grants.map((g) => [g.id, g.path]), [["g_old", "dock"]], "the real grants are kept; the half copy is not");
   assert.equal((await feed.addDirectGrant()).ok, true, "and the table takes a Direct agent now");
@@ -177,7 +175,7 @@ test("the grants-table rebuild survives a stop after the old table was dropped (
   room.db.exec(NEW_GRANTS);
   room.db.exec(`insert into grants_direct (id, secret, hub, agent, created_at) values ('g_old', '${"a".repeat(32)}', '${HUB}', 'ag_1', '2026-11-01T00:00:00.000Z')`);
   const feed = new Feed(room.ctx, DEPLOY);
-  await feed.init(SEED);
+  await feed.init();
   const { grants } = (await feed.state()) as { grants: Array<{ id: string; path: string }> };
   assert.deepEqual(grants.map((g) => [g.id, g.path]), [["g_old", "dock"]], "the dock grant was not lost");
   assert.equal((await feed.addDirectGrant()).ok, true);
@@ -224,7 +222,7 @@ test("Signals makes a grant for a dock agent only with the nonce its consent was
   assert.deepEqual(await feed.revokeGrant(grantId), { ok: true });
   // The page missed the revoke and sends the drop as a pin: the server asks for consent; nothing reaches the dock.
   const calls = hub.calls.length;
-  const drop = { hub: HUB, agent: "ag_1", ticket: `${"d".repeat(32)}.${"1".repeat(16)}`, target: { kind: "post", id: buildMarket(generateDataset(SEED)).posts[0]!.id } };
+  const drop = { hub: HUB, agent: "ag_1", ticket: `${"d".repeat(32)}.${"1".repeat(16)}`, target: { kind: "post", id: demoMarket().posts[0]!.id } };
   const asked = await feed.pairHub(SID, ORIGIN, drop);
   assert.equal(asked.error, "consent_required");
   assert.match(asked.consent, /^cn_[0-9a-f]{32}$/);
@@ -257,7 +255,7 @@ test("a double-clicked Allow in Signals pairs once: the second request changes n
     if (url === `${HUB}/apc/confirm`) return Response.json({ ok: false, error: "not_paired" });
     throw new Error(`no network in this test: ${url}`);
   });
-  const drop = { hub: HUB, agent: "ag_7", ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: buildMarket(generateDataset(SEED)).posts[0]!.id } };
+  const drop = { hub: HUB, agent: "ag_7", ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: demoMarket().posts[0]!.id } };
   const { consent } = await feed.pairHub(SID, ORIGIN, drop);
   const first = feed.pairHub(SID, ORIGIN, { ...drop, consent });
   await asked;

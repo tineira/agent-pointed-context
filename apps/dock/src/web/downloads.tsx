@@ -1,4 +1,4 @@
-import { APPS, appUrl, CopyRow, DESKTOP, DESKTOP_SHELL, DOCK_DESKTOP } from "./setup.tsx";
+import { DESKTOP, DESKTOP_SHELL, DOCK_DESKTOP } from "./setup.tsx";
 import { downloadPlatform } from "./download-platform.ts";
 import { ExtensionOutdatedNotice, useExtensionInstalled, useExtensionOutdated } from "./extension.tsx";
 
@@ -23,7 +23,7 @@ function BrowserLogos() {
 }
 
 /** Permanent offers below the dock controls, separate from checklist completion. */
-export function Downloads({ seed }: { seed: number }) {
+export function Downloads() {
   const installed = useExtensionInstalled();
   const { outdated } = useExtensionOutdated();
   const extensionLabel = outdated ? "Extension out of date" : installed ? "Extension installed ✓" : "Browser extension";
@@ -45,10 +45,6 @@ export function Downloads({ seed }: { seed: number }) {
       </a>
     </nav>
     <ExtensionOutdatedNotice />
-    {platform.pulse && pulse && <div className="download-world">
-      <p>In Pulse for Windows, paste this world link:</p>
-      <CopyRow text={appUrl(APPS[0]!, seed)} label="Copy world link" />
-    </div>}
     {platform.later && <p className="download-note">Windows apps available · Mac and Linux later</p>}
   </section>;
 }

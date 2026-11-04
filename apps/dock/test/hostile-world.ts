@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import type { TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { generateDataset } from "../../demo/src/model/seed.ts";
+import { demoDataset } from "../../demo/src/model/demo-world.ts";
 import { LIMITS } from "../src/worker/trust.ts";
 
 installWorkersStandIn();
@@ -21,7 +21,6 @@ export const DOCK = "https://dock.test";
 export const PULSE = "https://pulse.test";
 const DID = "a".repeat(32);
 export const SID = "b".repeat(32);
-const SEED = 77;
 
 export type Json = Record<string, unknown>;
 type Answer = Response | Promise<Response> | null | undefined;
@@ -92,8 +91,8 @@ export async function world(t: TestContext, env: Json = {}) {
   await hub.init(DID);
   const pulseRoom = durableObjectRoom();
   const pulse = new Sandbox(pulseRoom.ctx, { APC_V2: "1", HUB_ORIGINS: DOCK });
-  await pulse.init(SEED);
-  const customers = generateDataset(SEED).customers;
+  await pulse.init();
+  const customers = demoDataset().customers;
   const apps = new Map<string, FakeApp>();
   /** Requests per origin, whatever they asked. */
   const hits = new Map<string, number>();

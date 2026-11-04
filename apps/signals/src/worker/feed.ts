@@ -1,6 +1,6 @@
 /**
- * One visitor's Signals (TIN-384): a Durable Object holding the seed of their demo world (the posts are
- * rebuilt from it), its grants, the view, the pins and the page's WebSocket. Agents come both ways
+ * One visitor's Signals (TIN-384): a Durable Object holding, for the demo's one world (the posts are
+ * the same for everyone, TIN-621), the visitor's grants, the view, the pins and the page's WebSocket. Agents come both ways
  * (APC_PROFILES, TIN-578): Direct, with a grant and MCP URL the person makes on the page (the Direct
  * profile from @tineira/apc-server and @tineira/apc-web), and Dock, where a dock's hub pairs after the person says yes
  * here and in the dock, and reads with the grant Signals made for it. The same agent on both shows as
@@ -10,8 +10,8 @@ import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ApcProfile, FocusRow } from "@tineira/apc-protocol";
 import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
-import { generateDataset } from "../../../demo/src/model/seed.ts";
-import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
+import type { Post } from "../../../demo/src/model/market.ts";
+import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { checkPin, focusPayload, samePin, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
@@ -64,7 +64,6 @@ interface Grant {
 
 export class Feed extends DurableObject<Env> {
   private sql: SqlStorage;
-  private cached: { seed: number; posts: Post[] } | null = null;
   /** Grants with a wait_for_focus in flight, for the agent bar's floating mark (memory only). */
   private waiting = new Set<string>();
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
@@ -131,10 +130,9 @@ export class Feed extends DurableObject<Env> {
   private setMeta(key: string, value: string): void {
     this.sql.exec("insert into meta (key, value) values (?, ?) on conflict(key) do update set value = excluded.value", key, value);
   }
+  /** The demo's one world (TIN-621). A feed made before it kept a seed of its own; it is ignored. */
   private posts(): Post[] {
-    const seed = Number(this.meta("seed"));
-    if (this.cached?.seed !== seed) this.cached = { seed, posts: buildMarket(generateDataset(seed)).posts };
-    return this.cached.posts;
+    return demoMarket().posts;
   }
   private grants(): Grant[] {
     return this.sql.exec<Record<string, string | null>>("select * from grants order by created_at, id").toArray() as unknown as Grant[];
@@ -184,18 +182,16 @@ export class Feed extends DurableObject<Env> {
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "expired");
     await this.ctx.storage.deleteAll();
-    this.cached = null;
     this.migrate();
   }
 
   // ---- owner RPC ----
 
-  async init(seed: number): Promise<{ owner: string }> {
+  async init(): Promise<{ owner: string }> {
     const existing = this.meta("owner");
     if (existing) return { owner: existing };
     const owner = randomHex(16);
     this.setMeta("owner", owner);
-    this.setMeta("seed", String(seed));
     await this.touch();
     return { owner };
   }
@@ -206,19 +202,9 @@ export class Feed extends DurableObject<Env> {
     return true;
   }
 
-  /** Follow the world the dock opened Signals on: a new seed is a new market, so the pins go. */
-  async useSeed(seed: number): Promise<void> {
-    if (Number(this.meta("seed")) === seed) return;
-    this.setMeta("seed", String(seed));
-    this.sql.exec("delete from agent_focus");
-    this.sql.exec("delete from view_state");
-    this.broadcast();
-  }
-
   async state() {
     let n = 0;
     return {
-      seed: Number(this.meta("seed")),
       profiles: parseProfiles(this.env.APC_PROFILES),
       grants: this.grants().map((g) => {
         const path = pathOf(g);

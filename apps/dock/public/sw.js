@@ -8,7 +8,7 @@
 // the dock's own pages hear the change of controller and reload themselves (sw-reload.ts). The worker
 // never navigates a client: a navigation's fetch waits for the worker to finish activating, so awaiting
 // one in activate would hold every fetch of the origin, V1's at /v1 included.
-const VERSION = "2026-11-04.tin-609";
+const VERSION = "2026-11-04.tin-621";
 
 /** V1 (apps/v1, the paper's demo) shares this host; this worker never answers its navigations. */
 const isV1 = (url) => {

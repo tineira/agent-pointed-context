@@ -1,7 +1,7 @@
 /**
  * Signals' pure parts (TIN-384): its one screen, its one kind of target (a post, or a part of it),
- * and what the agent reads. The posts come from Pulse's model (model/market.ts) for the visitor's
- * seed. No Workers APIs here, so the tests run it.
+ * and what the agent reads. The posts come from Pulse's model (model/market.ts), in the demo's one
+ * world (demo-world.ts). No Workers APIs here, so the tests run it.
  */
 import type { FocusPayload, FocusRow, FocusTarget, ViewPayload } from "@tineira/apc-protocol";
 import { canonicalTarget, parseTarget } from "@tineira/apc-protocol";

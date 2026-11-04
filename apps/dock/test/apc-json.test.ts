@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import { APC_JSON_PATH, APC_STANDARD_VERSION, parseApcManifest } from "@tineira/apc-protocol";
-import { generateDataset } from "../../demo/src/model/seed.ts";
+import { demoDataset } from "../../demo/src/model/demo-world.ts";
 import { LIMITS } from "../src/worker/trust.ts";
 
 installWorkersStandIn();
@@ -22,7 +22,6 @@ const PULSE = "https://pulse.test";
 const SHOP = "https://shop.example";
 const DID = "e".repeat(32);
 const SID = "f".repeat(32);
-const SEED = 33;
 const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock" };
 
 type Json = Record<string, unknown>;
@@ -33,8 +32,8 @@ async function world(t: TestContext, env: Json = {}) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, ...env });
   await hub.init(DID);
   const pulse = new Sandbox(durableObjectRoom().ctx, { ...PULSE_ENV, HUB_ORIGINS: DOCK });
-  await pulse.init(SEED);
-  const customers = generateDataset(SEED).customers;
+  await pulse.init();
+  const customers = demoDataset().customers;
   /** Each origin's apc.json, when a test replaces what it serves; Pulse's Worker otherwise. */
   const apcJson = new Map<string, Serve>();
   /** apc.json reads per origin, and every request the hub made with how it asked. */

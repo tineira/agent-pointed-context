@@ -562,27 +562,13 @@ export class Hub extends DurableObject<Env> {
     return { id: a.id };
   }
 
-  /**
-   * The person's world (TIN-403): the seed every app opens on, chosen or kept in the dock's first run
-   * or with Change world. Choosing it ends the first run.
-   */
-  async setWorld(seed: unknown): Promise<{ ok: boolean; error?: string }> {
-    if (typeof seed !== "number" || !Number.isInteger(seed) || seed < 0 || seed >= 2 ** 32) return { ok: false, error: "invalid_seed" };
-    this.setMeta("seed", String(seed));
-    this.setMeta("setup_done", new Date().toISOString());
-    this.broadcast();
-    return { ok: true };
-  }
-
   async state(origin: string) {
     this.expireNow();
     const did = this.meta("did");
     const blocked = this.blocked();
-    // The demo world's seed (TIN-393): the dock opens every app on it, so they show the same market and
-    // customers without knowing each other. A dock made before it gets one now.
-    if (!this.meta("seed")) this.setMeta("seed", String(crypto.getRandomValues(new Uint32Array(1))[0]));
+    // No demo world here any more (TIN-621): the demo apps show one world to everyone and open on their own.
+    // A dock made before keeps a "seed" in its metadata that nothing reads.
     return {
-      seed: Number(this.meta("seed")),
       // Kept for older dock clients; the checklist no longer gates the dock on this flag.
       setup_done: !!this.meta("setup_done") || this.sql.exec("select 1 from pairings limit 1").toArray().length > 0,
       onboarding: this.onboarding(),

@@ -37,20 +37,20 @@ async function allowed(limiter: RateLimit | undefined, key: string): Promise<boo
 }
 
 /**
- * Resume the visitor's feed (following the seed of the world their dock opened it on), or open one: for
- * that seed, or, for someone who came to connect an agent directly (no dock), a world of its own.
+ * Resume the visitor's feed, or open one. Every feed shows the demo's one world (TIN-621): a `seed` in
+ * the body, which docks and old links sent, is ignored.
  */
 app.post("/api/session", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
-  const seed = typeof body.seed === "number" && Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 32 ? body.seed : null;
+  // The body is read and dropped: the page still sends one, and an unread body leaves the connection in a state
+  // the local runtime answers the next request on with "fetch failed" (TIN-621, mobile-e2e).
+  await c.req.text().catch(() => "");
   const current = session(getCookie(c, COOKIE));
   if (current && (await stubFor(c.env, current.sid).isOwner(current.owner))) {
-    if (seed !== null) await stubFor(c.env, current.sid).useSeed(seed);
     return c.json({ sid: current.sid, created: false });
   }
   if (!(await allowed(c.env.NEW_FEED, `ip:${c.req.header("cf-connecting-ip") ?? "unknown"}`))) return c.json({ error: "rate_limited" }, 429);
   const sid = randomHex(16);
-  const { owner } = await stubFor(c.env, sid).init(seed ?? crypto.getRandomValues(new Uint32Array(1))[0]!);
+  const { owner } = await stubFor(c.env, sid).init();
   setCookie(c, COOKIE, `${sid}.${owner}`, { path: "/", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: Math.floor(FEED_TTL_MS / 1000) });
   return c.json({ sid, created: true });
 });

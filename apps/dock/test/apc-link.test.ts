@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { generateDataset } from "../../demo/src/model/seed.ts";
+import { demoDataset } from "../../demo/src/model/demo-world.ts";
 
 installWorkersStandIn();
 const { Hub } = await import(new URL("../src/worker/hub.ts", import.meta.url).href);
@@ -20,7 +20,6 @@ const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
 const DID = "c".repeat(32);
 const SID = "d".repeat(32);
-const SEED = 91;
 const CLIENT = { name: "claude-code", version: "2.1.0" };
 
 type Result = { isError?: boolean; structuredContent?: Record<string, unknown>; content: Array<{ text: string }> };
@@ -35,8 +34,8 @@ async function world(t: TestContext) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE });
   await hub.init(DID);
   const pulse = new Sandbox(durableObjectRoom().ctx, { APC_V2: "1", HUB_ORIGINS: DOCK, APC_PROFILES: "direct,dock" });
-  await pulse.init(SEED);
-  const customers = generateDataset(SEED).customers;
+  await pulse.init();
+  const customers = demoDataset().customers;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);

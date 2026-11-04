@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
+import { DEMO_SEED, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { buildMarket } from "../model/market.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
 import { displayNames } from "./agent-brands.ts";
@@ -172,10 +172,10 @@ export function CustomerDetail(props: { sid: string; state: SandboxState; data: 
   );
 }
 
-/** Download the person's own file. The browser makes it from the seed; Pulse's server has no MRR code. */
-export function DownloadCsv(props: { seed: number }) {
+/** Download the person's own file. The browser makes it from the demo world's seed; Pulse's server has no MRR code. */
+export function DownloadCsv() {
   const download = () => {
-    const blob = new Blob([mrrCsv(props.seed)], { type: "text/csv" });
+    const blob = new Blob([mrrCsv(DEMO_SEED)], { type: "text/csv" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = "mrr-by-customer.csv";

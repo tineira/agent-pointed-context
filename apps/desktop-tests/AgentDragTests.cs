@@ -87,6 +87,41 @@ public class AgentDragTests
     }
 }
 
+public class WorldTests
+{
+    // One world for everyone (TIN-621): an old dock's world link still names the Pulse to open, its seed is ignored.
+    [Theory]
+    [InlineData("https://pulse.apc.tineira.com/overview?seed=12345", "https://pulse.apc.tineira.com")]
+    [InlineData("  http://localhost:5199/overview?seed=7 ", "http://localhost:5199")]
+    [InlineData("12345", null)]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    [InlineData("file:///C:/pulse", null)]
+    public void An_old_world_link_gives_its_origin(string? link, string? origin) => Assert.Equal(origin, PulseClient.OriginOf(link));
+
+    /// <summary>What Pulse's state looks like (TIN-621): it still names the fixed world's seed, which this build ignores.</summary>
+    const string StateJson = "{\"seed\":2283,\"grants\":[],\"v2\":true,\"hub_links\":[],\"settings\":{\"share_view\":true}}";
+
+    [Fact]
+    public void The_state_reads_without_using_the_seed()
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<SandboxState>(StateJson, PulseClient.JsonOptions)!;
+        Assert.Empty(state.grants);
+        Assert.True(state.v2);
+    }
+
+    /// <summary>The record Pulse for Windows read the state into before TIN-621: builds of it are still installed.</summary>
+    public sealed record InstalledSandboxState(long seed, List<Grant> grants, bool? v2, List<HubLink>? hub_links);
+
+    [Fact]
+    public void An_installed_build_still_reads_the_state()
+    {
+        var state = System.Text.Json.JsonSerializer.Deserialize<InstalledSandboxState>(StateJson, PulseClient.JsonOptions)!;
+        Assert.Equal(2283, state.seed);
+        Assert.Empty(state.grants);
+    }
+}
+
 public class FigureTests
 {
     static Dataset Data()

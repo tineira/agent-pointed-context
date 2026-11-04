@@ -5,6 +5,38 @@
  */
 import type { SandboxState } from "./api.ts";
 import { AppLink } from "./ui.tsx";
+import { CROSS_APP, pulseCustomerPath, signalsPostPath } from "../model/demo-world.ts";
+
+/** Signals, the second demo app: its own site, opened by its own link (TIN-621). */
+const SIGNALS = import.meta.env.DEV ? "http://localhost:5201" : "https://signals.apc.tineira.com";
+
+/**
+ * One question across both apps that works every time (TIN-621, CROSS_APP in demo-world.ts): Pulse and
+ * Signals show the same world to everyone, so the post and the customer are always there, by the same links.
+ */
+export function CrossApp() {
+  return (
+    <section className="flex flex-col gap-2 border-t border-line pt-6 text-sm" aria-label="Ask across apps">
+      <h2 className="text-base font-semibold">Ask across apps</h2>
+      <p className="text-muted">Pulse and Signals show the same made-up company to everyone. Open them in any order; your agent joins what they say.</p>
+      <ol className="flex list-decimal flex-col gap-1.5 pl-5">
+        <li>
+          In Signals, open{" "}
+          <a className="underline" href={`${SIGNALS}${signalsPostPath(CROSS_APP.post)}`} target="_blank" rel="noreferrer">
+            {CROSS_APP.competitor}'s offer to Team teams in North America
+          </a>{" "}
+          and drop your agent on it.
+        </li>
+        <li>
+          Ask: <strong>"{CROSS_APP.question}"</strong> It reads the offer in Signals and the churn here: in Sep 2026, five Team customers in North America left Pulse, among them <AppLink href={pulseCustomerPath(CROSS_APP.customer)}>{CROSS_APP.customerName}</AppLink> ({CROSS_APP.customer}), which had {CROSS_APP.seatsBefore} seats in Aug 2026.
+        </li>
+        <li>
+          Or the other way round: drop your agent on <AppLink href={pulseCustomerPath(CROSS_APP.customer)}>{CROSS_APP.customerName}</AppLink> here and ask why they left.
+        </li>
+      </ol>
+    </section>
+  );
+}
 
 const dockName = (state: SandboxState) => state.hubs?.[0] ?? "your agent dock";
 
@@ -54,6 +86,7 @@ export function DockHowTo(props: { state: SandboxState }) {
           </li>
         ))}
       </ol>
+      <CrossApp />
       {props.state.profiles?.includes("direct") && (
         <section className="flex flex-col gap-2 border-t border-line pt-6 text-sm">
           <h2 className="text-base font-semibold">Or connect app by app</h2>

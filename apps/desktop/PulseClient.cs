@@ -38,11 +38,14 @@ public sealed class PulseClient : IDisposable
         catch (IOException) { }
     }
 
-    /// <summary>Open (or reopen) the sandbox, on a dock's world when a seed is given (TIN-393).</summary>
-    public async Task OpenAsync(long? seed)
+    /// <summary>The origin of a Pulse link (an old dock's world link, ?seed= and all), or null for anything else.</summary>
+    public static string? OriginOf(string? link) =>
+        Uri.TryCreate(link?.Trim(), UriKind.Absolute, out var url) && (url.Scheme == "https" || url.Scheme == "http") ? url.GetLeftPart(UriPartial.Authority) : null;
+
+    /// <summary>Open (or reopen) the sandbox. Its data is the demo's one world, the same as on the web (TIN-621).</summary>
+    public async Task OpenAsync()
     {
-        var body = seed is { } s ? (object)new { seed = s } : new { };
-        var res = await http.PostAsJsonAsync("/api/session", body);
+        var res = await http.PostAsJsonAsync("/api/session", new { });
         res.EnsureSuccessStatusCode();
         var json = await res.Content.ReadFromJsonAsync<JsonElement>();
         Sid = json.GetProperty("sid").GetString();

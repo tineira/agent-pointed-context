@@ -68,20 +68,22 @@ const tooMany = (c: { json: (body: unknown, status: 429, headers: Record<string,
 /** Public uptime probe without opening a sandbox. */
 app.get("/api/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
 
-/** Resume the visitor's sandbox, or open a new one. */
+/**
+ * Resume the visitor's sandbox, or open a new one. Every sandbox shows the demo's one world (TIN-621):
+ * a `seed` in the body, which docks and old links sent, is ignored.
+ */
 app.post("/api/session", async (c) => {
-  // On Pulse's v2 deploy, the world a dock opened it on (TIN-393). Ignored on apc.tineira.com.
-  const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
-  const seed = c.env.APC_V2 === "1" && typeof body.seed === "number" && Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 32 ? body.seed : undefined;
+  // The body is read and dropped: the page still sends one, and an unread body leaves the connection in a state
+  // the local runtime answers the next request on with "fetch failed" (TIN-621, mobile-e2e).
+  await c.req.text().catch(() => "");
   const current = session(getCookie(c, COOKIE));
   if (current && (await rpc(c.env, current.sid, (s) => s.isOwner(current.owner)))) {
-    if (seed !== undefined) await rpc(c.env, current.sid, (s) => s.useSeed(seed));
     return c.json({ sid: current.sid, created: false });
   }
   const loadTest = !!c.env.LOADTEST_KEY && c.req.header("x-apc-loadtest") === c.env.LOADTEST_KEY;
   if (!loadTest && !(await allowed(c.env.NEW_SANDBOX, `ip:${c.req.header("cf-connecting-ip") ?? "unknown"}`))) return tooMany(c);
   const sid = randomHex(16);
-  const { owner } = await rpc(c.env, sid, (s) => s.init(seed));
+  const { owner } = await rpc(c.env, sid, (s) => s.init());
   setCookie(c, COOKIE, `${sid}.${owner}`, {
     path: "/",
     httpOnly: true,
@@ -104,16 +106,16 @@ app.use("/api/s/:sid/*", async (c, next) => {
 });
 
 app.get("/api/s/:sid/state", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.state())));
-/**
- * The sandbox's data, for a client that is not this page (TIN-396: Pulse for desktop). The page
- * rebuilds it from the seed with the same function; a native client would have to port it. v2 only.
- */
 /** Start over (TIN-411, Pulse's v2 deploy only): this sandbox's data and cookie go. */
 app.post("/api/s/:sid/reset", async (c) => {
   if (!(await rpc(c.env, c.var.sid, (s) => s.reset()))) return c.json({ error: "not_found" }, 404);
   deleteCookie(c, COOKIE, { path: "/" });
   return c.json({ ok: true });
 });
+/**
+ * The demo world's data, for a client that is not this page (TIN-396: Pulse for desktop). The page
+ * rebuilds it from DEMO_SEED with the same function; a native client would have to port it. v2 only.
+ */
 app.get("/api/s/:sid/dataset", async (c) => {
   if (c.env.APC_V2 !== "1") return c.json({ error: "not_found" }, 404);
   return c.json(await rpc(c.env, c.var.sid, (s) => s.dataset()));
