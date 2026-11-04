@@ -2,6 +2,8 @@ import { createRoot } from "react-dom/client";
 import { HubDock } from "./hub.tsx";
 import { Landing } from "./landing.tsx";
 import { ExtensionInstall } from "./extension.tsx";
+import { Docs } from "./docs.tsx";
+import { isDocsPath } from "../docs/pages.ts";
 import { keepDockCurrent } from "./sw-reload.ts";
 import "./dock.css";
 
@@ -39,4 +41,7 @@ if (matchMedia("(display-mode: standalone)").matches) {
 const path = location.pathname;
 if (path === "/") document.title = "Agent Pointed Context: one agent across your apps";
 if (path === "/extension" || path === "/extension/") document.title = "Add the APC browser extension";
-createRoot(document.getElementById("root")!).render(path === "/extension" || path === "/extension/" ? <ExtensionInstall /> : path === "/" ? <Landing /> : <HubDock />);
+// /docs: the standard's docs (TIN-611); each page sets its own title.
+createRoot(document.getElementById("root")!).render(
+  path === "/extension" || path === "/extension/" ? <ExtensionInstall /> : path === "/" ? <Landing /> : isDocsPath(path) ? <Docs path={path} /> : <HubDock />,
+);

@@ -8,6 +8,8 @@ import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { APPS, DESKTOP } from "./setup.tsx";
 
 const DOCK = "/dock";
+/** The standard's docs (TIN-611): spec, integration guide, conformance. */
+const DOCS = "/docs";
 const REPO = "https://github.com/tineira/agent-pointed-context";
 const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
 /** "Connect app by app" leads to a live Direct app: Signals, with its Connect panel open. */
@@ -90,6 +92,7 @@ export function Landing() {
         <span className="kicker">Agent Pointed Context</span>
         <span className="row small">
           {hasDock && <Cta />}
+          <a href={DOCS}>Docs</a>
           <a href={REPO}>GitHub</a>
         </span>
       </header>
@@ -220,6 +223,9 @@ export function Landing() {
         <h2>Read more</h2>
         <ul className="landing-list">
           <li>
+            The docs: <a href={DOCS}>the standard, how to integrate your app, and its conformance suite</a>
+          </li>
+          <li>
             The paper: <a href="https://doi.org/10.5281/zenodo.23382909">Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen</a>
           </li>
           <li>
@@ -233,6 +239,7 @@ export function Landing() {
 
       <footer className="landing-foot">
         <Cta />
+        <a href={DOCS}>Docs: the spec and how to integrate an app</a>
         <a className="muted" href="/v1/">Version 1, as described in the paper →</a>
       </footer>
     </main>

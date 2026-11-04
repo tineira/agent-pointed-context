@@ -112,7 +112,7 @@ export function ExtensionInstall() {
   </ol>;
 
   return <main className="extension-install">
-    <header className="extension-header"><a href="/">Agent Pointed Context</a><a href="/dock">Back to your dock →</a></header>
+    <header className="extension-header"><a href="/">Agent Pointed Context</a><span className="row"><a href="/docs">Docs</a><a href="/dock">Back to your dock →</a></span></header>
     <section className="extension-intro">
       <span className="kicker">Your agent, on any page</span>
       <h1>Add the APC browser extension</h1>

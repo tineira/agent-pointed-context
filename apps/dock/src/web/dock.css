@@ -275,6 +275,43 @@ main.landing { max-width: 920px; margin: 0 auto; padding: 20px 16px 48px; gap: 3
 .landing-list { margin: 0; padding-left: 20px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; line-height: 1.6; }
 .landing-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 24px; padding-top: 8px; }
 
+/* The APC docs (TIN-611), at /docs: the landing's look, readable at 375 px. Code and tables scroll inside themselves. */
+main.docs { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; gap: 18px; font-size: 15px; }
+.docs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.docs-head .kicker { text-decoration: none; }
+.docs-head .row.small { gap: 14px; font-size: 14px; }
+.docs-nav { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.docs-nav a { padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--fg); text-decoration: none; font-size: 14px; }
+.docs-nav a:hover { border-color: var(--muted); }
+.docs-nav a[aria-current="page"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.docs-draft { padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; background: var(--chip); color: var(--fg); font-size: 14px; line-height: 1.55; }
+.docs-body { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
+.docs-body > :first-child { margin-top: 0; }
+.docs-body h1 { font-size: clamp(26px, 5vw, 36px); line-height: 1.15; letter-spacing: -0.01em; margin: 8px 0 16px; }
+.docs-body h2, .docs-body h3, .docs-body h4 { color: var(--fg); text-transform: none; letter-spacing: normal; line-height: 1.3; scroll-margin-top: 16px; }
+.docs-body h2 { font-size: 22px; margin: 36px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.docs-body h3 { font-size: 17px; margin: 26px 0 8px; }
+.docs-body h4 { font-size: 15px; margin: 20px 0 6px; }
+.docs-anchor { margin-left: 8px; color: var(--muted); text-decoration: none; font-weight: 400; opacity: 0; }
+.docs-body :is(h2, h3, h4):hover .docs-anchor, .docs-anchor:focus { opacity: 1; }
+.docs-body p { margin: 0 0 12px; color: var(--fg); }
+.docs-body ul, .docs-body ol { margin: 0 0 14px; padding-left: 22px; }
+.docs-body li { margin: 4px 0; }
+.docs-body code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 4px; border-radius: 5px; background: var(--chip); }
+.docs-pre { margin: 0 0 14px; padding: 12px 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 13px; line-height: 1.5; overflow-wrap: normal; }
+.docs-pre code { padding: 0; background: none; font-size: inherit; white-space: pre; }
+.docs-example { margin: 0 0 14px; }
+.docs-example figcaption { font: 12px ui-monospace, monospace; margin-bottom: 4px; }
+.docs-example .docs-pre { margin: 0; }
+.docs-table { margin: 0 0 14px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.docs-table table { border-collapse: collapse; width: 100%; font-size: 14px; overflow-wrap: normal; }
+.docs-table th, .docs-table td { padding: 7px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); min-width: 120px; }
+.docs-table tr:last-child td { border-bottom: 0; }
+.docs-table th { background: var(--chip); }
+.docs-body blockquote { margin: 0 0 14px; padding: 8px 14px; border-left: 3px solid var(--line); color: var(--muted); }
+.docs-body blockquote p { color: var(--muted); }
+.docs-foot { display: grid; gap: 6px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; }
+
 /* An agent's page (TIN-419), at /dock/agents/<id>. */
 .tile-more { align-self: center; font-size: 12px; color: var(--muted); text-decoration: none; padding: 2px 0; }
 .tile-more:hover { color: var(--fg); }

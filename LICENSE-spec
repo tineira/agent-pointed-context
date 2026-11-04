@@ -1,0 +1,19 @@
+The APC specification and its documentation
+
+The text of the Agent Pointed Context (APC) specification and of its documentation, as published at
+https://apc.tineira.com/docs, is licensed under the Creative Commons Attribution 4.0 International
+licence (CC BY 4.0), like the paper that introduced it:
+
+  https://creativecommons.org/licenses/by/4.0/
+
+That text is, in this repository:
+
+  - apps/dock/src/docs/pages/ (the docs: overview, spec, integration guide, conformance, for agents)
+  - packages/protocol/CHANGELOG.md (the standard's changelog)
+
+You may share and adapt it, for any purpose, provided you give appropriate credit ("Agent Pointed
+Context, https://apc.tineira.com/docs, Tomas Neira"), link to the licence, and indicate if changes were
+made.
+
+Everything else in this repository, the code included (the @apc/* packages, the examples in
+apps/dock/src/docs/examples, the reference apps), is licensed under the MIT licence in LICENSE.
