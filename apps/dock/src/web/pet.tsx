@@ -66,12 +66,14 @@ export function PetView(props: {
   decide: (id: string, action: UnverifiedAction) => void;
   startDrag: (e: DragEvent) => void;
   endDrag: () => void;
+  /** The hub's refusal of the last answer (Fix check 4 on #120): the bubble shows it, with or without a request left. */
+  refusal?: ReactNode;
 }) {
   const bubble = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
   // null while the app sizes the window for a bubble: it is laid out hidden, to be measured.
   const [side, setSide] = useState<Side | null>(null);
-  const asking = props.requests.map((r) => r.id).join(",");
+  const asking = [...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
   useLayoutEffect(() => {
     let live = true;
     setSide(null);
@@ -85,6 +87,7 @@ export function PetView(props: {
   const where = side ? `${side.left ? "pet-left" : "pet-right"} ${side.up ? "pet-up" : "pet-down"}` : "pet-measuring";
   const requests = asking ? (
     <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
+      {props.refusal}
       {props.requests.map((r) =>
         r.unverified ? (
           // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.

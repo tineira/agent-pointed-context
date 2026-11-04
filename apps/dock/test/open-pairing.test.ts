@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test, type TestContext } from "node:test";
+import { decisionNotice } from "../src/web/request-state.ts";
 import { LIMITS, NOT_VERIFIED, splitHost, UNVERIFIED_RISK, unverifiedWarning } from "../src/worker/trust.ts";
 import { DOCK, fakeApp, PULSE, SID, world, type Json } from "./hostile-world.ts";
 
@@ -333,16 +334,116 @@ test("removing an agent clears its domains' approvals before giving its grants b
   const removing = w.hub.removeAgent(removed);
   await revokeStarted;
   assert.equal(approvalOf(w, SHOP), false, "cleared at once, before the give-back");
+  // Everything of the removed agent is gone before the give-back too (Fix check 4 on #120): only the other agent is left.
+  assert.deepEqual((await w.state()).agents.map((a: Json) => a.id), [keep.id]);
   // Meanwhile the person approves the same domain for the other agent, with the warning.
   shop.revoke = undefined;
-  const asked = await w.pairApp(shop, { approve: false, agentIndex: 1 });
-  assert.equal((await w.agent(1)).pairings.find((p: Json) => p.id === asked.pairing_id).warning, true);
+  const asked = await w.pairApp(shop, { approve: false, agentIndex: 0 });
+  assert.equal((await w.agent()).pairings.find((p: Json) => p.id === asked.pairing_id).warning, true);
   assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: true });
   answerRevoke();
   assert.deepEqual(await removing, { ok: true });
   assert.equal(approvalOf(w, SHOP), true, "the approval given during the wait survives");
   assert.equal((await w.agent()).id, keep.id);
   assert.equal((await w.agent()).pairings[0].status, "paired");
+});
+
+// ---- Fix check 4 (Grok on #120) ----
+
+/** An app whose answer to initialize waits until `release()`, or answers `status` when given. */
+function heldApp(origin: string, o: { status?: number } = {}) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let asked!: () => void;
+  const initializeAsked = new Promise<void>((resolve) => (asked = resolve));
+  const app = fakeApp(origin, "Shop", {
+    respond: (method) => {
+      if (method !== "initialize") return null;
+      asked();
+      if (o.status) return new Response("gone", { status: o.status });
+      return released.then(() => Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "Shop", version: "1" } } }));
+    },
+  });
+  return { app, release, initializeAsked };
+}
+
+test("an Approve during a Remove's give-back finds nothing and inserts nothing: no approval is left, and the next request warns", async (t) => {
+  const w = await world(t);
+  await w.hub.addAgent();
+  const shop = fakeApp(SHOP, "Shop");
+  const asked = await w.pairApp(shop, { approve: false });
+  let answerRevoke!: () => void;
+  const revoking = new Promise<void>((resolve) => (answerRevoke = resolve));
+  let revokeAsked!: () => void;
+  const revokeStarted = new Promise<void>((resolve) => (revokeAsked = resolve));
+  shop.revoke = () => {
+    revokeAsked();
+    return revoking.then(() => Response.json({ ok: true }));
+  };
+  const removing = w.hub.removeAgent((await w.agent()).id);
+  await revokeStarted;
+  // The warning card still on screen in another tab: its Approve arrives now.
+  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: false, error: "unknown_pairing" });
+  assert.equal(approvalOf(w, SHOP), false, "nothing was inserted");
+  answerRevoke();
+  await removing;
+  assert.equal(approvalOf(w, SHOP), false);
+  shop.revoke = undefined;
+  assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
+  assert.equal((await w.agent()).pairings[0].warning, true);
+  assert.equal(shop.calls.includes("initialize"), false);
+});
+
+test("an Approve whose pairing vanishes during the introduction takes back the approval it inserted", async (t) => {
+  const w = await world(t);
+  // The app answers 404 to initialize: it took the grant back, and the hub drops the pairing.
+  const { app } = heldApp(SHOP, { status: 404 });
+  const asked = await w.pairApp(app, { approve: false });
+  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: false, error: "unknown_pairing" });
+  assert.equal(await w.pairingOf(SHOP), undefined);
+  assert.equal(approvalOf(w, SHOP), false, "the approval this call inserted went with it");
+  app.respond = undefined;
+  assert.equal((await w.pairApp(app, { approve: false })).ok, true);
+  assert.equal((await w.pairingOf(SHOP)).warning, true);
+});
+
+test("a failing Approve leaves an approval that stood before it", async (t) => {
+  const w = await world(t);
+  await w.hub.addAgent();
+  const shop = fakeApp(SHOP, "Shop");
+  await w.pairApp(shop);
+  assert.equal(approvalOf(w, SHOP), true);
+  // The other agent's request from the same domain: the usual yes, and the app answers 404 this time.
+  shop.respond = (method) => (method === "initialize" ? new Response("gone", { status: 404 }) : null);
+  const asked = await w.pairApp(shop, { approve: false, agentIndex: 1 });
+  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve"), { ok: false, error: "unknown_pairing" });
+  assert.equal(approvalOf(w, SHOP), true, "not this call's to take back");
+});
+
+test("removing agent A withdraws agent B's approval in flight for the same domain: B is not paired, says so, and the next request warns", async (t) => {
+  const w = await world(t);
+  await w.hub.addAgent();
+  const held = heldApp(SHOP);
+  const app = held.app;
+  const holding = app.respond;
+  // A is paired with the domain (the approval stands); B's request needs no warning.
+  app.respond = undefined;
+  await w.pairApp(app);
+  app.respond = holding;
+  const b = await w.pairApp(app, { approve: false, agentIndex: 1 });
+  const bLine = (await w.agent(1)).pairings.find((p: Json) => p.id === b.pairing_id);
+  assert.equal(bLine.warning, false);
+  const approving = w.hub.decide(b.pairing_id!, "approve");
+  await held.initializeAsked;
+  assert.equal((await w.hub.removeAgent((await w.agent()).id)).ok, true);
+  held.release();
+  assert.deepEqual(await approving, { ok: false, error: "approval_withdrawn" });
+  assert.equal(approvalOf(w, SHOP), false);
+  assert.equal((await w.agent()).pairings.length, 0, "B's pairing went");
+  assert.match(decisionNotice("approval_withdrawn"), /^Approval was withdrawn; ask again\./, "the dock says so");
+  app.respond = undefined;
+  assert.equal((await w.pairApp(app, { approve: false })).ok, true);
+  assert.equal((await w.agent()).pairings[0].warning, true);
 });
 
 // ---- Fix check 1 (Grok on #120) ----

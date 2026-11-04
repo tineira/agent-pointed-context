@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { buttonsOff, cardInFlight, inFlightOf, kindOf, landed, mayAnswer, mergeInFlight, sentOut, type Sent } from "../src/web/request-state.ts";
+import { buttonsOff, cardInFlight, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, mergeInFlight, sentOut, type Sent } from "../src/web/request-state.ts";
 
 test("the rules: a Deny goes while an Approve is on its way or the hub is approving; a second yes never does", () => {
   assert.deepEqual(buttonsOff({}), { deny: false, approve: false });
@@ -72,13 +72,27 @@ before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false },
     oxc: { jsx: { runtime: "automatic" } },
   } as Parameters<typeof createServer>[0])) as unknown as Vite;
-  const [{ UnverifiedRequest }, { createElement }, { renderToStaticMarkup }] = await Promise.all([
-    vite.ssrLoadModule("/src/web/unverified.tsx") as Promise<{ UnverifiedRequest: unknown }>,
+  const [{ UnverifiedRequest, DecisionNotice }, { createElement }, { renderToStaticMarkup }] = await Promise.all([
+    vite.ssrLoadModule("/src/web/unverified.tsx") as Promise<{ UnverifiedRequest: unknown; DecisionNotice: unknown }>,
     import("react"),
     import("react-dom/server"),
   ]);
   render = (props) =>
     renderToStaticMarkup(createElement(UnverifiedRequest as never, { domain: "pulse.apc.tineira.com.evil.example", declared: "Pulse", agent: "Claude", decide: () => {}, ...props } as never));
+  renderNotice = (notice) => renderToStaticMarkup(createElement(DecisionNotice as never, { notice, dismiss: () => {} } as never));
+});
+let renderNotice: (notice: string | null) => string;
+
+test("a refused answer is said, not dropped: the hub's 400 becomes a visible notice (Fix check 4 on #120)", () => {
+  const html = renderNotice(decisionNotice("approval_withdrawn"));
+  assert.match(html, /^<div class="decision-notice" role="alert"><p>Approval was withdrawn; ask again\./);
+  assert.match(html, /aria-label="Close"/);
+  assert.equal(renderNotice(null), "", "nothing when there is nothing to say");
+  for (const error of ["unknown_pairing", "warning_required", "app_blocked", "revoked", "invalid_action", "unreachable"]) {
+    assert.ok(decisionNotice(error).length > 20, error);
+  }
+  assert.match(decisionNotice("<script>"), /That did not go through \(<script>\)/, "an unknown code is shown as text (React escapes it)");
+  assert.match(renderNotice(decisionNotice("<script>")), /\(&lt;script&gt;\)/);
 });
 after(async () => {
   await vite?.close();

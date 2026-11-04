@@ -3,7 +3,7 @@
  * the dock, the apps it reads, how to connect it (folded), and Remove. Also the dock's shared types
  * and calls, and the Remove confirm (TIN-418).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Onboarding } from "../onboarding.ts";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
@@ -187,6 +187,8 @@ export function AgentPage(props: {
   dragProps: Record<string, unknown>;
   /** The person is dragging this agent (its pet stretches). */
   dragging?: boolean;
+  /** The hub's refusal of the last answer (Fix check 4 on #120), above the requests. */
+  refusal?: ReactNode;
 }) {
   const { agent: a, base } = props;
   const [calls, setCalls] = useState<CallEntry[] | null>(null);
@@ -292,6 +294,7 @@ export function AgentPage(props: {
 
       <section className="agent-section">
         <h2>Its apps</h2>
+        {props.refusal}
         {props.requests.map((r) =>
           r.app.unverified ? (
             <div key={r.id} className="request unverified">

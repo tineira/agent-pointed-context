@@ -213,7 +213,7 @@ export class Hub extends DurableObject<Env> {
       create table if not exists unverified_ok (origin text primary key, approved_at text not null);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -389,10 +389,12 @@ export class Hub extends DurableObject<Env> {
    * introduction finished or never will. It turns paired only if, now, nothing holds it (not blocked by our
    * list, not an unverified app while the kill switch is closed) and, for an unverified app, its domain's
    * approval still stands. Otherwise the pairing goes and the domain's approval with it, so the person
-   * approves again later; the app gets its grant back only if it may be called.
+   * approves again later; the app gets its grant back only if it may be called. Every change is synchronous
+   * (Fix check 4 on #120): it returns "paired", or the dropped pairing whose grant the caller gives back
+   * afterwards, or null when nothing is to be given back (gone already, or held).
    */
-  private async settleApproval(p: Pairing): Promise<"paired" | "dropped"> {
-    if (this.stored(p.id) !== "approving") return "dropped";
+  private settleNow(p: Pairing): "paired" | Pairing | null {
+    if (this.stored(p.id) !== "approving") return null;
     const held = p.status === "blocked";
     const approved = p.verified || (this.unverifiedOpen() && this.warned(p.app_origin));
     if (!held && approved) {
@@ -404,8 +406,7 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from pointer where pairing_id = ?", p.id);
     if (!p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
     this.broadcast();
-    if (givesBack(p)) await revokeGrant(p.mcp_url, transport(p));
-    return "dropped";
+    return givesBack(p) ? p : null;
   }
   /**
    * A pending pairing nobody decided within LIMITS.pendingMs (10 minutes) goes, as a deny would, and
@@ -415,19 +416,26 @@ export class Hub extends DurableObject<Env> {
   private async expirePending(): Promise<void> {
     // An approval whose introduction never finished within LIMITS.approvingMs (the object was evicted mid-way) is
     // settled: paired if nothing holds it and its approval stands, its tools read on first use; dropped otherwise.
+    // Every change below happens in one synchronous block; only then are grants given back (Fix check 4 on #120).
     const halfway = new Set(this.sql.exec<{ id: string }>("select id from pairings where status = 'approving' and approved_at <= ?", new Date(Date.now() - LIMITS.approvingMs).toISOString()).toArray().map((r) => r.id));
-    for (const p of this.pairings().filter((x) => halfway.has(x.id))) await this.settleApproval(p);
+    const giveBack: Pairing[] = [];
+    for (const p of this.pairings().filter((x) => halfway.has(x.id))) {
+      const settled = this.settleNow(p);
+      if (settled && settled !== "paired") giveBack.push(settled);
+    }
     const cutoff = new Date(Date.now() - LIMITS.pendingMs).toISOString();
     // Every row still pending in storage, a blocked domain's too (it reads as blocked, and is never called), so the alarm never rings for one that stays.
     const ids = new Set(this.sql.exec<{ id: string }>("select id from pairings where status = 'pending' and created_at <= ?", cutoff).toArray().map((r) => r.id));
-    if (!ids.size) return;
     const stale = this.pairings().filter((p) => ids.has(p.id));
     for (const p of stale) {
       this.sql.exec("delete from pairings where id = ? and status = 'pending'", p.id);
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+      // As a deny would: an unverified domain's approval goes with its request.
+      if (!p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
     }
-    this.broadcast();
-    await Promise.allSettled(stale.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
+    if (stale.length) this.broadcast();
+    giveBack.push(...stale.filter(givesBack));
+    if (giveBack.length) await Promise.allSettled(giveBack.map((p) => revokeGrant(p.mcp_url, transport(p))));
   }
   private async alive(): Promise<boolean> {
     if (!this.meta("owner")) return false;
@@ -497,11 +505,11 @@ export class Hub extends DurableObject<Env> {
    */
   async removeAgent(agentId: string): Promise<{ ok: boolean }> {
     if (!this.agent(agentId)) return { ok: false };
+    // Every change first, in one synchronous block, then the give-backs from a snapshot (Fix check 4 on #120): a
+    // decide() on one of these pairings that arrives during the give-back finds nothing and inserts nothing.
     const lines = this.pairings(agentId);
     // Its unverified apps lose the domain's approval, as on Unpair (TIN-581): the next request from one warns again.
-    // Before any await (Fix check 3 on #120), so an approval the person gives while the grants go back is kept.
     for (const p of lines.filter((x) => !x.verified)) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
-    await Promise.allSettled(lines.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
     this.sql.exec("delete from readers where agent_id = ?", agentId);
@@ -512,6 +520,7 @@ export class Hub extends DurableObject<Env> {
     this.busy.delete(agentId);
     this.busyUntil.delete(agentId);
     this.broadcast();
+    await Promise.allSettled(lines.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
     return { ok: true };
   }
 
@@ -656,31 +665,50 @@ export class Hub extends DurableObject<Env> {
     // Our blocklist, and the kill switch for unverified apps, win over the person's yes (TIN-580, TIN-581).
     if (approving && p.status === "blocked") return { ok: false, error: "app_blocked" };
     if (approving && p.status === "pending") {
+      // The approval this call inserts, if it inserts one (Fix check 4 on #120): when the call ends without a settled
+      // pairing, it takes back what it added, and only that (an approval that stood before the call stays).
+      let inserted: string | null = null;
       if (!p.verified) {
         // An unverified app pairs only once the person approved the warning (TIN-581): "approve_unverified", sent
         // only by the warning's Approve. A plain "approve" (an older dock page, a verified app's card) is refused while
         // the domain has no approval in this dock; once it has, the warning is not shown again, and the usual yes pairs it.
         if (action === "approve" && !this.warned(p.app_origin)) return { ok: false, error: "warning_required" };
-        this.sql.exec("insert into unverified_ok (origin, approved_at) values (?, ?) on conflict(origin) do nothing", p.app_origin, new Date().toISOString());
+        if (!this.warned(p.app_origin)) {
+          inserted = randomHex(8);
+          this.sql.exec("insert into unverified_ok (origin, approved_at, nonce) values (?, ?, ?)", p.app_origin, new Date().toISOString(), inserted);
+        }
       } else if (action === "approve_unverified") {
         return { ok: false, error: "invalid_action" };
       }
+      const takeBack = (error: string) => {
+        if (inserted) this.sql.exec("delete from unverified_ok where origin = ? and nonce = ?", p.app_origin, inserted);
+        this.broadcast();
+        return { ok: false, error };
+      };
       // Approving, not paired, until the hub has introduced itself (Review round 1 on #120): the introduction awaits
       // the app, and a Deny can arrive meanwhile. While approving, nothing relays to the app, and a Deny wins: it
       // deletes the row, introduce() stops before its next call, and the pairing never turns paired.
       this.sql.exec("update pairings set status = 'approving', approved_at = ? where id = ? and status = 'pending'", new Date().toISOString(), p.id);
       this.broadcast();
-      // Should the object be evicted before the introduction ends, the alarm settles the approval on time (settleApproval).
+      // Should the object be evicted before the introduction ends, the alarm settles the approval on time (settleNow).
       await this.arm();
+      // Re-read after every await: a Deny, Unpair, Remove or expiry may have taken the row meanwhile.
+      if (this.stored(p.id) !== "approving") return takeBack("unknown_pairing");
       await this.introduce({ ...p, status: "approving" });
       const now = this.pairings().find((x) => x.id === p.id);
       // Denied meanwhile (or the app answered 404 and the row went): nothing to pair.
-      if (!now) return { ok: false, error: "unknown_pairing" };
-      if (now.status === "revoked") return { ok: false, error: REVOKED_ERROR };
+      if (!now || this.stored(p.id) === null) return takeBack("unknown_pairing");
+      if (now.status === "revoked") return takeBack(REVOKED_ERROR);
       // Paired only if nothing holds it now and its approval still stands (Fix check 1 on #120); a blocked or
       // kill-switched row, or one whose domain lost its approval meanwhile, goes instead and is never stored paired.
-      if ((await this.settleApproval(now)) === "paired") return { ok: true };
-      return { ok: false, error: now.status === "blocked" ? "app_blocked" : "warning_required" };
+      // Synchronous to the end: settleNow decides and writes, and only the give-back is awaited.
+      const settled = this.settleNow(now);
+      if (settled === "paired") return { ok: true };
+      // Dropped. Held: app_blocked. Otherwise the domain's approval went while the hub introduced itself (a Deny,
+      // Unpair or Remove of that domain elsewhere in the dock): the person asks again, with the warning.
+      const result = takeBack(now.status === "blocked" ? "app_blocked" : "approval_withdrawn");
+      if (settled) await revokeGrant(settled.mcp_url, transport(settled));
+      return result;
     }
     if (action === "deny" || action === "unpair") {
       // Deny, Unpair or Remove on an unverified app takes back the domain's approval too, in any state (pending,

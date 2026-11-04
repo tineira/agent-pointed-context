@@ -39,6 +39,22 @@ export function HostName(props: { host: string; className?: string }) {
 }
 
 /**
+ * The hub's refusal of an answer, said on the surface where it was given (Fix check 4 on #120): "Approval was
+ * withdrawn; ask again." and the like (decisionNotice), until the person closes it or answers again.
+ */
+export function DecisionNotice(props: { notice: string | null; dismiss: () => void }) {
+  if (!props.notice) return null;
+  return (
+    <div className="decision-notice" role="alert">
+      <p>{props.notice}</p>
+      <button type="button" className="link" onClick={props.dismiss} aria-label="Close">
+        ✕
+      </button>
+    </div>
+  );
+}
+
+/**
  * A pending pairing with an unverified app. The first time its domain asks in this dock (`warning`),
  * the full warning: the domain first and big, the name the app gives itself only as secondary text,
  * the risk, Deny and Approve. Once the person approved that domain here, the usual request, with the badge.

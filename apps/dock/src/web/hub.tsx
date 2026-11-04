@@ -19,8 +19,8 @@ import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
-import { NotVerified, UnverifiedRequest } from "./unverified.tsx";
-import { buttonsOff, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
+import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
+import { buttonsOff, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -96,6 +96,14 @@ export function HubDock() {
   const [dragging, setDragging] = useState<string | null>(null);
   /** Answers on their way per request (Review round 1 and Fix check 2 on #120): which buttons are off until they land, on every surface. */
   const [deciding, setDeciding] = useState<Sent>(new Map());
+  /** What the hub said when it refused the last answer (Fix check 4 on #120), shown on every surface of this page. */
+  const [notice, setNotice] = useState<string | null>(null);
+  // It stays a while, then goes by itself; the person can close it sooner.
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 15_000);
+    return () => clearTimeout(id);
+  }, [notice]);
   const [shown, setShown] = useState<Set<string>>(new Set());
   const [world, setWorld] = useState(false);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
@@ -245,8 +253,13 @@ export function HubDock() {
     const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
     if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
     setDeciding((m) => sentOut(m, pid, kind));
-    void call(`${base}/pairings/${pid}`, { action })
-      .catch(() => undefined)
+    setNotice(null);
+    void call<{ ok?: boolean; error?: unknown }>(`${base}/pairings/${pid}`, { action })
+      // A refusal (400 with { ok: false, error }) is said, never dropped (Fix check 4 on #120); so is a call that failed.
+      .then((r) => {
+        if (r?.ok === false) setNotice(decisionNotice(r.error));
+      })
+      .catch(() => setNotice(decisionNotice("unreachable")))
       .finally(() => {
         // Answered or failed: that kind clears, and only it (a failed Deny can be sent again).
         setDeciding((m) => landed(m, pid, kind));
@@ -334,6 +347,8 @@ export function HubDock() {
     ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
   }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
+  // The hub's refusal of the last answer, on whichever surface this page is (Fix check 4 on #120).
+  const noticeEl = notice ? <DecisionNotice notice={notice} dismiss={() => setNotice(null)} /> : null;
 
   // The APC dock for Windows' pets (TIN-479): one agent, and its pairing requests; with no agent, the hint.
   if (PET) {
@@ -348,12 +363,13 @@ export function HubDock() {
         decide={(id, action) => decide(id, action)}
         startDrag={(e) => startDrag(e, agent.id)}
         endDrag={() => endDrag(agent.id)}
+        refusal={noticeEl}
       />
     );
   }
 
   // The APC dock for Windows' always-on-top strip (#84), in its builds before the pets: only what Float shows.
-  if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />;
+  if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} refusal={noticeEl} />;
 
   const pageOf = agentRoute(path);
   if (pageOf) {
@@ -383,6 +399,7 @@ export function HubDock() {
           back={back}
           dragProps={dragProps(agent)}
           dragging={dragging === agent.id}
+          refusal={noticeEl}
         />
       </>
     );
@@ -392,6 +409,7 @@ export function HubDock() {
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
+      {noticeEl}
       {requests}
       {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>Add an agent</b> below, then connect it.</p>}
       <ul className="tiles">
@@ -480,7 +498,7 @@ export function HubDock() {
     </main>
   );
   return (
-    <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand}>
+    <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand} refusal={noticeEl}>
       {renderDock}
     </KeepAtHand>
   );
@@ -519,6 +537,8 @@ interface FloatProps {
   decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   children: (button: ReactNode) => ReactNode;
+  /** The hub's refusal of the last answer (Fix check 4 on #120). */
+  refusal?: ReactNode;
 }
 
 /** One Float window and install event, with controls in both the checklist and permanent footer. */
@@ -595,6 +615,7 @@ function Float(props: FloatProps) {
       <FloatAgents
         agents={props.agents}
         requests={props.requests}
+        refusal={props.refusal}
         decide={(id, action) => {
           // The click is a user activation: the last decision gives the logos' size back at once.
           const last = latest.current.requests.length <= 1;
@@ -613,7 +634,7 @@ function Float(props: FloatProps) {
         }}
       />,
     );
-  }, [win, props.agents, props.requests, showCard, size.opened]);
+  }, [win, props.agents, props.requests, props.refusal, showCard, size.opened]);
   // Where a browser allows a resize without a click, the card shows at once (the window then fits);
   // otherwise the notice stays until the click. With no request left, back to the logos' size.
   useEffect(() => {
@@ -702,6 +723,8 @@ function FloatAgents(props: {
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
   notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
+  /** The hub's refusal of the last answer (Fix check 4 on #120): shown above the requests or the logos. */
+  refusal?: ReactNode;
 }) {
   // Which agent the person is dragging here: its pet stretches while held (TIN-483).
   const [dragging, setDragging] = useState<string | null>(null);
@@ -728,6 +751,7 @@ function FloatAgents(props: {
   if (props.requests.length > 0)
     return (
       <div className="float float-requests">
+        {props.refusal}
         {props.requests.map((r) =>
           r.unverified ? (
             // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
@@ -761,6 +785,8 @@ function FloatAgents(props: {
       </div>
     );
   if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;
+  // A refusal with no request left: said in place of the logos until it is closed.
+  if (props.refusal) return <div className="float float-requests">{props.refusal}</div>;
   return (
     <div className="float">
       {props.agents.map((a) => {

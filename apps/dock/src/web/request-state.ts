@@ -56,6 +56,29 @@ export function cardInFlight(page: InFlight | undefined, approveClicked: boolean
   return mergeInFlight(page, approveClicked ? "approve" : undefined);
 }
 
+/**
+ * What the dock tells the person when the hub refuses an answer (Fix check 4 on #120): a 400 with
+ * { ok: false, error } is shown, never dropped.
+ */
+export function decisionNotice(error: unknown): string {
+  switch (error) {
+    case "approval_withdrawn":
+      return "Approval was withdrawn; ask again. This app's domain was denied, unpaired or removed elsewhere in your dock while it was being approved, so it was not paired. Drop your agent on the app again to see the warning.";
+    case "unknown_pairing":
+      return "That request is no longer waiting: it was answered elsewhere, removed, or it expired. Drop your agent on the app again to ask again.";
+    case "warning_required":
+      return "This app is not verified: approve it from its warning. Drop your agent on the app again to see it.";
+    case "app_blocked":
+      return "The dock does not pair with this app right now, so it was not paired.";
+    case "revoked":
+      return "The app took the access back while it was being approved, so it was not paired.";
+    case "invalid_action":
+      return "That answer no longer applies to this request.";
+    default:
+      return `That did not go through (${typeof error === "string" ? error.slice(0, 40) : "error"}). Try again.`;
+  }
+}
+
 /** Two views of what is on its way (the page's, and a card's own click before the page re-renders) as one. */
 export function mergeInFlight(a: InFlight | undefined, b: InFlight | undefined): InFlight | undefined {
   return a === "deny" || b === "deny" ? "deny" : (a ?? b);
