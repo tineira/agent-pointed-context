@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentLabels, barCanCollapse, pathLabel, readingSummary, REVOKE_CONFIRM_MS, showDockHint, type BarAgent } from "../src/agents-bar.ts";
+import { agentLabels, barCanCollapse, DOCK_HINT, mergePins, pathLabel, readingSummary, REVOKE_CONFIRM_MS, showDockHint, type BarAgent } from "../src/agents-bar.ts";
 import { connectPrompt, directAgentStatus } from "../src/direct-agents.ts";
 
 const direct: BarAgent = { id: "g_d", name: "Claude", state: "idle", paths: ["direct"] };
@@ -42,6 +42,23 @@ test("the connect instructions: the URL, and a prompt that names the app and kee
   assert.match(prompt, /Do not open the URL in a browser/);
   assert.equal(directAgentStatus({ id: "g", name: "A", url, connected: false }), "not connected yet");
   assert.equal(directAgentStatus({ id: "g", name: "A", url, connected: true, client: "claude-code", linked: true }), "connected as claude-code, also through your dock");
+});
+
+test("a linked agent's entry shows the pin of either grant, and both when both have one (TIN-607)", () => {
+  const a = { label: "post_1", seen: true, here: true };
+  const b = { label: "post_2 offer", seen: false, here: false };
+  assert.equal(mergePins([null, null]), null);
+  assert.equal(mergePins([]), null);
+  assert.deepEqual(mergePins([a, null]), a, "only the Direct grant has a pin");
+  assert.deepEqual(mergePins([undefined, b]), b, "only the dock grant has a pin: it is no longer hidden");
+  assert.deepEqual(mergePins([a, b]), { label: "post_1 and post_2 offer", seen: false, here: false }, "both: unread until both are read, away until both are here");
+  assert.deepEqual(mergePins([a, { ...a }]), a, "both on the same target read as one");
+  assert.deepEqual(mergePins([{ ...b, seen: true, here: true }, a]), { label: "post_2 offer and post_1", seen: true, here: true });
+});
+
+test("the dock hint leads to the dock itself, not the landing at the root (TIN-607)", () => {
+  assert.equal(new URL(DOCK_HINT.url).pathname, "/dock");
+  assert.equal(new URL(DOCK_HINT.url).origin, "https://apc.tineira.com");
 });
 
 const agent: BarAgent = { id: "g_1", name: "Claude via dock", state: "idle" };

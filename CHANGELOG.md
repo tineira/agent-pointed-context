@@ -6,6 +6,15 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Direct and `apc_link` follow-ups (2026-11-04, TIN-607)
+
+- **A linked agent shows the pin of either grant in the bar, and both when both have one.** The merged entry reads "A and B", is unread until both are read, comes off both grants with its ×, and its dot opens the pin that is not already on the page. (`mergePins` in `packages/web/src/agents-bar.ts`, `apps/demo/src/web/App.tsx`, `apps/signals/src/web/app.tsx`)
+- **A typo in `APC_PROFILES` no longer turns on both profiles.** Unset or blank still means both; a value with an unknown word ("dirct") now offers none, and the app refuses its agent paths (`/mcp`, `/apc`, `apc.json`) with a 503 `profiles_misconfigured` and the reason in its log. Pulse's start-up cleanup of leftover Direct grants skips in that case, so a typo cannot delete agents. (`parseProfiles`, `profilesProblem`, `profilesRefusal` in `packages/server/src/direct.ts`, `apps/*/src/worker/index.ts`, `apps/demo/src/worker/sandbox.ts`)
+- **Signals' grants-table rebuild survives a stop in the middle.** A leftover copy table is dropped and redone, and a complete copy found without its `grants` table is renamed into place, so no dock grant is lost. (`apps/signals/src/worker/feed.ts`)
+- **Pulse holds at most 20 Direct agents per sandbox, as Signals does.** The Add buttons say so and the server answers `too_many`. (`apps/demo/src/worker/sandbox.ts`, `apps/demo/src/worker/index.ts`, `apps/demo/src/web/connect.tsx`)
+- **The dock hint in the agent bar opens `/dock`, not the landing.** (`DOCK_HINT` in `packages/web/src/agents-bar.ts`)
+- **Documented:** a same-client sibling on the opposite path can redeem a link code (DESIGN § 16 abuse table); the `wrangler.jsonc` comments say `APC_PROFILES` came with APC 0.4.
+
 ### Revoke from the app and open pairing, follow-ups (2026-11-04, TIN-606, TIN-609)
 
 - **Pulse and Signals check the person's consent on their server, not on the page (APC 0.7).** Every dock drop goes to the server; an agent it holds no grant for comes back `consent_required` with a single-use nonce, and only the consent's Allow that sends it back makes a grant, so a page that missed a revoke can no longer pair without asking. A double-clicked Allow pairs once: one drop per agent is answered at a time, the grant is linked only once the hub took it, and the consent's buttons turn off on the first click. (`packages/server/src/consent.ts`, `apps/demo/src/worker/sandbox.ts`, `apps/demo/src/web/App.tsx`, `apps/demo/src/web/hub-consent.tsx`, `apps/signals/src/worker/feed.ts`, `apps/signals/src/web/app.tsx`, `packages/protocol/src/core.ts`)

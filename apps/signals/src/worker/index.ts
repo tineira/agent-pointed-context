@@ -4,7 +4,7 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { apcJsonResponse, apcManifest, parseProfiles } from "@apc/server";
+import { apcJsonResponse, apcManifest, parseProfiles, profilesRefusal } from "@apc/server";
 import { FEED_TTL_MS, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";
@@ -12,6 +12,12 @@ export { Feed } from "./feed.ts";
 const COOKIE = "apc_signals";
 type Vars = { sid: string; owner: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+// A typo in APC_PROFILES serves no agent path at all, with the reason in the log and in the answer
+// (never both profiles by default). Registered first: Hono runs middleware in registration order.
+app.use("/mcp/*", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Signals") ?? next());
+app.use("/apc/*", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Signals") ?? next());
+app.use("/.well-known/apc.json", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Signals") ?? next());
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const stubFor = (env: Env, sid: string): DurableObjectStub<Feed> => env.FEED.get(env.FEED.idFromName(sid));

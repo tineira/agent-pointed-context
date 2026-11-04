@@ -109,6 +109,8 @@ app.get("/.well-known/apc.json", (c) =>
 );
 ```
 
+`parseProfiles` reads the one string an app declares (Pulse and Signals: `APC_PROFILES`, e.g. `"direct,dock"`). Unset or blank means both; a set value with an unknown word fails closed to no profile, and `profilesRefusal(env.APC_PROFILES, "My app")` gives the 503 (with the reason logged) to answer your agent paths with, so a typo never opens a path.
+
 **Your app works with the dock without being listed.** The dock at apc.tineira.com pairs any APC app on HTTPS that offers the Dock profile in its `apc.json`, not only Pulse and Signals. Until we verify it, people see a warning in their dock the first time your domain asks to pair (your domain, "Not verified", and what your app calls itself as its own word), and pair only when they approve it; your tools reach their agent under your domain (`example_com__<tool>`), marked untrusted, without annotations. Nothing changes in your app: the warning is the dock's, never your page's ([DESIGN.md § 18](DESIGN.md)).
 
 If your app offers only Direct, still take a dock agent's drop so the person learns how to connect instead of nothing happening: pass `profiles: () => loadApcProfiles()` (your own apc.json) and `direct: { name, connect }` to `enablePinning`, and it answers such a drop (holding one made before the file is read) with a note and your connect link, or calls your `onDockUnsupported`. The browser extension gives the same answer on a Direct-only app that does not.

@@ -153,6 +153,36 @@ test("a feed from before Direct gets a grants table that takes Direct agents, an
   assert.match(grants[1]!.secret ?? "", /^[0-9a-f]{32}$/);
 });
 
+const OLD_GRANTS = "create table grants (id text primary key, secret text not null unique, hub text not null, agent text not null, client_title text, created_at text not null, last_active_at text, unique (hub, agent))";
+const NEW_GRANTS = "create table grants_direct (id text primary key, secret text not null unique, hub text, agent text, client_title text, created_at text not null, last_active_at text, client_icon text, unique (hub, agent))";
+const oldRow = `insert into grants (id, secret, hub, agent, created_at) values ('g_old', '${"a".repeat(32)}', '${HUB}', 'ag_1', '2026-11-01T00:00:00.000Z')`;
+
+test("the grants-table rebuild survives a stop after the copy table was made (a leftover grants_direct, TIN-607)", async () => {
+  const room = durableObjectRoom();
+  room.db.exec(OLD_GRANTS);
+  room.db.exec("alter table grants add column client_icon text");
+  room.db.exec(oldRow);
+  room.db.exec(NEW_GRANTS); // the earlier start made it, then stopped before the copy finished
+  room.db.exec(`insert into grants_direct (id, secret, created_at) values ('g_half', '${"b".repeat(32)}', '2026-11-01T00:00:00.000Z')`);
+  const feed = new Feed(room.ctx, DEPLOY);
+  await feed.init(SEED);
+  const { grants } = (await feed.state()) as { grants: Array<{ id: string; path: string }> };
+  assert.deepEqual(grants.map((g) => [g.id, g.path]), [["g_old", "dock"]], "the real grants are kept; the half copy is not");
+  assert.equal((await feed.addDirectGrant()).ok, true, "and the table takes a Direct agent now");
+  assert.equal(room.db.prepare("select name from sqlite_master where name = 'grants_direct'").all().length, 0, "no leftover");
+});
+
+test("the grants-table rebuild survives a stop after the old table was dropped (the copy is complete, only its name is missing)", async () => {
+  const room = durableObjectRoom();
+  room.db.exec(NEW_GRANTS);
+  room.db.exec(`insert into grants_direct (id, secret, hub, agent, created_at) values ('g_old', '${"a".repeat(32)}', '${HUB}', 'ag_1', '2026-11-01T00:00:00.000Z')`);
+  const feed = new Feed(room.ctx, DEPLOY);
+  await feed.init(SEED);
+  const { grants } = (await feed.state()) as { grants: Array<{ id: string; path: string }> };
+  assert.deepEqual(grants.map((g) => [g.id, g.path]), [["g_old", "dock"]], "the dock grant was not lost");
+  assert.equal((await feed.addDirectGrant()).ok, true);
+});
+
 test("a Direct agent names itself on initialize, the person can rename it, and revoking it calls nobody", async (t) => {
   const { app, feed } = await signals("direct");
   const { grantId, mcpUrl } = await app.connect();

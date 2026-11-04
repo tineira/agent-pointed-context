@@ -84,8 +84,14 @@ export class Feed extends DurableObject<Env> {
   private migrate(): void {
     // A feed made before Signals took Direct agents (TIN-578) had hub and agent not null: its grants
     // table is made again with both nullable (a Direct grant has neither). Its pins go with the old table.
-    const old = this.sql.exec<{ sql: string }>("select sql from sqlite_master where type = 'table' and name = 'grants'").toArray()[0];
-    if (old && /hub text not null/i.test(old.sql)) {
+    // Crash-safe (TIN-607): the steps may stop anywhere, and the next start finishes or redoes them. A
+    // grants_direct left with no grants table was copied in full (the copy comes before the drop): it only
+    // needs its name. One left beside a grants table is a copy that never finished (or an old rename): dropped.
+    const tableSql = (name: string) => this.sql.exec<{ sql: string }>("select sql from sqlite_master where type = 'table' and name = ?", name).toArray()[0]?.sql;
+    const old = tableSql("grants");
+    if (!old && tableSql("grants_direct")) this.sql.exec("alter table grants_direct rename to grants");
+    else if (old) this.sql.exec("drop table if exists grants_direct");
+    if (old && /hub text not null/i.test(old)) {
       this.sql.exec("create table grants_direct (id text primary key, secret text not null unique, hub text, agent text, client_title text, created_at text not null, last_active_at text, client_icon text, unique (hub, agent))");
       this.sql.exec("insert into grants_direct (id, secret, hub, agent, client_title, created_at, last_active_at, client_icon) select id, secret, hub, agent, client_title, created_at, last_active_at, client_icon from grants");
       this.sql.exec("drop table grants");

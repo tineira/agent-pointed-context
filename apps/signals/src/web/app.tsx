@@ -6,7 +6,7 @@
  * Direct profile's list from @apc/web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, loadApcProfiles, type AgentDrag, type BarAgent } from "@apc/web";
+import { createViewReporter, enablePinning, loadApcProfiles, mergePins, type AgentDrag, type BarAgent } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
@@ -184,7 +184,11 @@ function Feed({ sid }: { sid: string }) {
 
   const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
   const advertisers = [...new Set(posts.map((p) => p.author))].map((a) => ({ author: a, n: posts.filter((p) => p.author === a).length }));
-  const unpin = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
+  // The bar's entry for a linked agent is both its grants: its pin comes off both.
+  const unpin = (id: string) => {
+    const partner = state.grants.find((g) => g.id === id)?.linked_with;
+    void Promise.all([id, ...(partner ? [partner] : [])].map((gid) => call(`${base}/unpin`, { grant_id: gid }))).then(refresh);
+  };
   // The standard agent bar (TIN-394): the agents here, the path each came by, their state, and where
   // each points. An agent linked across both paths (apc_link) is one entry, under its Direct grant.
   const onScreen = (postId: string) => shown.some((p) => p.id === postId);
@@ -198,7 +202,8 @@ function Feed({ sid }: { sid: string }) {
         name: g.name,
         icon: g.icon ?? other?.icon ?? null,
         state: !connected ? "off" : g.waiting || other?.waiting ? "waiting" : "idle",
-        pin: g.pin?.id ? { label: `${g.pin.id}${g.pin.part ? ` ${g.pin.part}` : ""}`, seen: !!g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at, here: onScreen(g.pin.id) } : null,
+        // A linked agent holds two grants, so up to two pins: the bar shows both (TIN-607).
+        pin: mergePins([g, other].map((x) => (x?.pin?.id ? { label: `${x.pin.id}${x.pin.part ? ` ${x.pin.part}` : ""}`, seen: !!x.pin.seen_at && x.pin.seen_at >= x.pin.pinned_at, here: onScreen(x.pin.id) } : null))),
         paths: other ? ["direct", "dock"] : [g.path],
       };
     });
@@ -237,7 +242,10 @@ function Feed({ sid }: { sid: string }) {
   );
   const unlink = (id: string) => void call(`${base}/grants/${id}/unlink`, {}).then(refresh);
   const openPin = (id: string) => {
-    const postId = state.grants.find((g) => g.id === id)?.pin?.id;
+    // A linked agent has two grants and maybe two pins: open the one not on this page, else the first.
+    const mine = state.grants.find((g) => g.id === id);
+    const held = [mine, state.grants.find((g) => g.id === mine?.linked_with)].filter((g) => g?.pin?.id);
+    const postId = (held.find((g) => !onScreen(g!.pin!.id!)) ?? held[0])?.pin?.id;
     if (!postId) return;
     setKind("");
     setMonth("");

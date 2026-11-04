@@ -188,11 +188,17 @@ export function AgentCard(props: {
 
 export function AddAgentButtons(props: { api: Api; state: SandboxState; onChanged: () => void }) {
   const hasRestricted = props.state.grants.some((g) => g.regions);
+  // The server holds at most 20 Direct agents (MAX_DIRECT_GRANTS); the buttons say so before it refuses.
+  const dockGrants = new Set((props.state.hub_links ?? []).map((l) => l.grant_id));
+  const full = props.state.grants.filter((g) => !dockGrants.has(g.id)).length >= 20;
+  const fullTitle = full ? "Pulse holds 20 agents on their own URLs. Revoke one first." : undefined;
   return (
     <div className="flex flex-wrap gap-2">
       <button
         type="button"
-        className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
+        disabled={full}
+        title={fullTitle}
+        className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament disabled:cursor-not-allowed disabled:opacity-50"
         onClick={async () => {
           await props.api.addAgent();
           props.onChanged();
@@ -203,7 +209,9 @@ export function AddAgentButtons(props: { api: Api; state: SandboxState; onChange
       {!hasRestricted && (
         <button
           type="button"
-          className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament"
+          disabled={full}
+          title={fullTitle}
+          className="inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-line bg-background px-3 text-sm font-medium text-foreground hover:border-filament disabled:cursor-not-allowed disabled:opacity-50"
           onClick={async () => {
             await props.api.addRestricted("latam");
             props.onChanged();

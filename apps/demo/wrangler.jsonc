@@ -12,7 +12,7 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
   },
-  // APC_PROFILES (APC 0.3, TIN-578) is the one place Pulse declares how agents reach it: Direct (its own MCP URL
+  // APC_PROFILES (APC 0.4, TIN-578) is the one place Pulse declares how agents reach it: Direct (its own MCP URL
   // per agent, made on the Agents screen) and Dock (dropped from a dock's hub). One of them alone works too.
   "vars": { "APC_V2": "1", "HUB_ORIGINS": "https://apc.tineira.com", "APC_PROFILES": "direct,dock" },
   "durable_objects": {

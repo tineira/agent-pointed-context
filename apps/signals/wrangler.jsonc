@@ -20,7 +20,7 @@
     { "name": "FEED_CALLS", "namespace_id": "1010", "simple": { "limit": 300, "period": 60 } }
   ],
   // The agent docks (hubs) Signals may pair with; under vite dev, localhost too. APC_PROFILES is the one
-  // place Signals declares how agents reach it (APC 0.3): Direct, Dock, or both.
+  // place Signals declares how agents reach it (APC 0.4): Direct, Dock, or both.
   "vars": { "HUB_ORIGINS": "https://apc.tineira.com", "APC_PROFILES": "direct,dock" },
   "routes": [{ "pattern": "signals.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,

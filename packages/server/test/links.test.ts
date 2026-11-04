@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { APC_AGENT_CLIENT_META, APC_LINK_TTL_S } from "@apc/protocol";
-import { ApcLinks, attachApcLink, cleanAgentName, directMcpUrl, initializeOf, linkClient, memoryKv, newDirectGrant, parseProfiles, sqlKv, toolResult, type LinkGrant } from "../src/index.ts";
+import { ApcLinks, attachApcLink, cleanAgentName, directMcpUrl, initializeOf, linkClient, memoryKv, newDirectGrant, parseProfiles, profilesProblem, sqlKv, toolResult, type LinkGrant } from "../src/index.ts";
 
 function world(now = { t: 1_000_000 }) {
   const grants: LinkGrant[] = [
@@ -15,12 +15,21 @@ function world(now = { t: 1_000_000 }) {
   return { grants, links, now };
 }
 
-test("profiles are declared in one string; nothing valid means both", () => {
+test("profiles are declared in one string; unset means both, a typo means none (fails closed)", () => {
   assert.deepEqual(parseProfiles("direct,dock"), ["direct", "dock"]);
   assert.deepEqual(parseProfiles(" dock "), ["dock"]);
   assert.deepEqual(parseProfiles("Direct"), ["direct"]);
-  assert.deepEqual(parseProfiles(undefined), ["direct", "dock"]);
-  assert.deepEqual(parseProfiles("v1"), ["direct", "dock"]);
+  assert.deepEqual(parseProfiles("dock, direct,"), ["direct", "dock"], "case, spaces and an empty segment do not matter");
+  assert.deepEqual(parseProfiles(undefined), ["direct", "dock"], "unset: the default of an app that does not choose");
+  assert.deepEqual(parseProfiles(null), ["direct", "dock"]);
+  assert.deepEqual(parseProfiles("  "), ["direct", "dock"], "blank counts as unset");
+  assert.deepEqual(parseProfiles("v1"), [], "an unknown word never opens a path");
+  assert.deepEqual(parseProfiles("dirct,dock"), [], "one typo among good words fails the whole value, not just the typo");
+  assert.deepEqual(parseProfiles(","), []);
+  assert.equal(profilesProblem("direct,dock"), null);
+  assert.equal(profilesProblem(undefined), null);
+  assert.match(profilesProblem("dirct,dock")!, /"dirct".*"direct" and\/or "dock".*No agent path is served/);
+  assert.match(profilesProblem(",")!, /only separators/);
 });
 
 test("a Direct grant: an id, 128 random bits of secret, and its MCP URL", () => {
