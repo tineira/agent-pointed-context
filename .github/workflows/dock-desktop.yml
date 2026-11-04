@@ -2,7 +2,7 @@ name: Dock for Windows
 
 # The APC dock for Windows (#84): the web dock in a Tauri window of its own, with its agents as
 # always-on-top desktop pets (TIN-479), a global shortcut and a tray icon. Built as an NSIS installer, kept as this run's artifact; on
-# main, also published to the dock-desktop prerelease, signed for the app's auto-update (TIN-615).
+# main, signed for the app's auto-update and published to the dock-desktop prerelease (TIN-615).
 on:
   push:
     branches: [main]
@@ -15,18 +15,18 @@ permissions:
   contents: read
 
 jobs:
+  # Lints and tests every run; builds the installer unsigned for everything but main (pull requests,
+  # a dispatch on another branch), as 0.1.<n> (scripts/build.mjs). Never sees the signing key.
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
       run:
         working-directory: apps/dock-desktop
-    outputs:
-      version: ${{ steps.signed.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # The version counts main's commits (scripts/build.mjs): the whole history, not one commit.
+          # The version counts the commits (scripts/build.mjs): the whole history, not one commit.
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -37,17 +37,44 @@ jobs:
           workspaces: apps/dock-desktop
       - run: cargo clippy --locked -- -D warnings
       - run: cargo test --locked
-      # Version 0.2.<commits on main>, stamped into this build only (scripts/build.mjs). Builds of
-      # main are signed for the updater with the repo's key and make its .sig; every other build
-      # (pull requests, a dispatch on another branch) never sees the key and makes no updater artifacts.
-      - id: signed
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+        run: node scripts/build.mjs --bundles nsis -- --locked
+      - if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: APC-Dock-win-x64
+          path: apps/dock-desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  # Builds of main (a push or a dispatch on main) only: 0.2.<commits on main>, signed for the updater
+  # with the key in the environment dock-desktop-signing, which only main may deploy to.
+  windows-signed:
+    needs: windows
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: dock-desktop-signing
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/dock-desktop
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/dock-desktop
+      - id: build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/build.mjs --updater --bundles nsis -- --locked
-      - if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
-        run: node scripts/build.mjs --bundles nsis -- --locked
       - uses: actions/upload-artifact@v4
         with:
           name: APC-Dock-win-x64
@@ -56,14 +83,20 @@ jobs:
             apps/dock-desktop/target/release/bundle/nsis/*.exe.sig
           if-no-files-found: error
 
-  # The web dock offers the installer on Windows: each build of main replaces it on one fixed
-  # prerelease, under a name without spaces, so its link never changes and releases/latest stays the
-  # APC release. Next to it, its signature and latest.json, which the installed app checks for updates.
+  # The web dock offers the installer on Windows from one fixed link: each build of main replaces
+  # APCDockSetup.exe on one prerelease, so the link never changes and releases/latest stays the APC
+  # release. The app updates from latest.json there, which names a versioned copy of the installer
+  # (APCDockSetup-<version>.exe), uploaded with its .sig before latest.json points at it, so it never
+  # names bytes its signature does not cover. The newest 3 versioned copies are kept.
   publish:
-    needs: windows
+    needs: windows-signed
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    # One publish at a time, none cancelled; an older build that publishes late changes nothing.
+    concurrency:
+      group: dock-desktop-publish
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -72,18 +105,38 @@ jobs:
           name: APC-Dock-win-x64
       - env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.windows.outputs.version }}
+          VERSION: ${{ needs.windows-signed.outputs.version }}
         run: |
           set -euo pipefail
-          test -n "$VERSION"
-          mv ./*-setup.exe.sig APCDockSetup.exe.sig
-          mv ./*-setup.exe APCDockSetup.exe
-          url="https://github.com/$GITHUB_REPOSITORY/releases/download/dock-desktop/APCDockSetup.exe"
+          [[ "$VERSION" =~ ^0\.2\.[0-9]+$ ]]
+          repo="$GITHUB_REPOSITORY"
+          versioned="APCDockSetup-$VERSION.exe"
+          mv ./*-setup.exe.sig "$versioned.sig"
+          mv ./*-setup.exe "$versioned"
+          gh release view dock-desktop -R "$repo" > /dev/null 2>&1 || gh release create dock-desktop -R "$repo" --prerelease --target "$GITHUB_SHA" --title "APC dock for Windows (latest build)" --notes "The APC dock for Windows, built from main."
+
+          # A build older than what latest.json announces publishes nothing.
+          published=$(gh release download dock-desktop -R "$repo" -p latest.json -O - 2>/dev/null | jq -r '.version // empty' || true)
+          if [[ -n "$published" && "$(printf '%s\n%s\n' "$published" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]]; then
+            echo "latest.json already announces $published, newer than $VERSION: nothing to publish."
+            exit 0
+          fi
+
+          # 1. The versioned installer and its signature.
+          gh release upload dock-desktop "$versioned" "$versioned.sig" -R "$repo" --clobber
+          # 2. latest.json, naming exactly those bytes.
           jq -n --arg version "$VERSION" --arg notes "APC dock $VERSION, built from main at $GITHUB_SHA." \
-            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile signature APCDockSetup.exe.sig --arg url "$url" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile signature "$versioned.sig" \
+            --arg url "https://github.com/$repo/releases/download/dock-desktop/$versioned" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > latest.json
-          gh release view dock-desktop -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create dock-desktop -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" --title "APC dock for Windows (latest build)" --notes "The APC dock for Windows, built from main."
-          # The installer and its signature first, then latest.json, which announces them.
-          gh release upload dock-desktop APCDockSetup.exe APCDockSetup.exe.sig -R "$GITHUB_REPOSITORY" --clobber
-          gh release upload dock-desktop latest.json -R "$GITHUB_REPOSITORY" --clobber
-          gh release edit dock-desktop -R "$GITHUB_REPOSITORY" --notes "The APC dock for Windows (installer), the app the web dock offers on Windows: your agents as desktop pets on top of every window, each dragged onto an app to point it or anywhere else to move it (Alt+Shift+Space, tray). APC dock ${VERSION}, built from main at ${GITHUB_SHA}. It checks this release for updates and installs one on your yes (latest.json; the installer's .sig is checked against the key built into the app). The installer is not code-signed: Windows SmartScreen asks once (More info, then Run anyway)."
+          gh release upload dock-desktop latest.json -R "$repo" --clobber
+          # 3. The fixed link the web dock offers.
+          cp "$versioned" APCDockSetup.exe
+          gh release upload dock-desktop APCDockSetup.exe -R "$repo" --clobber
+          # 4. The newest 3 versioned installers stay; older ones and their signatures go.
+          gh release view dock-desktop -R "$repo" --json assets --jq '.assets[].name' > assets.txt
+          grep -E '^APCDockSetup-0\.2\.[0-9]+\.exe$' assets.txt | sort -V | head -n -3 | while read -r old; do
+            gh release delete-asset dock-desktop "$old" -R "$repo" -y < /dev/null
+            if grep -qxF "$old.sig" assets.txt; then gh release delete-asset dock-desktop "$old.sig" -R "$repo" -y < /dev/null; fi
+          done
+          gh release edit dock-desktop -R "$repo" --notes "The APC dock for Windows (installer), the app the web dock offers on Windows: your agents as desktop pets on top of every window, each dragged onto an app to point it or anywhere else to move it (Alt+Shift+Space, tray). APC dock ${VERSION}, built from main at ${GITHUB_SHA}. It checks this release for updates (latest.json and the versioned installer it names, whose signature the app checks against the key built into it) and installs one on your yes. The installer is not code-signed: Windows SmartScreen asks once (More info, then Run anyway)."

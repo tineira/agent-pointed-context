@@ -1,7 +1,8 @@
 [package]
 name = "apc-dock"
-# Builds get 0.2.<commits on main> from scripts/build.mjs (TIN-615); this is a plain `cargo` build's.
-version = "0.2.0"
+# Builds of main get 0.2.<commits on main> from scripts/build.mjs, any other build 0.1.<n> (TIN-615);
+# this is a plain `cargo` build's, below every release.
+version = "0.1.0"
 description = "The APC agent dock for Windows: always on top, a global shortcut, a tray icon"
 license = "MIT"
 edition = "2021"
