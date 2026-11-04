@@ -251,19 +251,33 @@ function Sandbox({ sid }: { sid: string }) {
   };
 
   if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
-  // The standard agent bar's agents (TIN-394), on Pulse's v2 deploy.
-  const barAgents: PulseBarAgent[] = state.grants.map((g) => ({
-    id: g.id,
-    name: names.get(g.id) ?? g.label,
-    client_name: g.client_name,
-    client_ua: g.client_ua,
-    client_icon: g.client_icon,
-    icon: g.client_icon,
-    state: motionOf(g.id),
-    pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin), here: onScreen.has(g.id) } : null,
-    warning: activeConflict(g) ? `${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.` : null,
-    restricted: !!g.regions,
-  }));
+  // The standard agent bar's agents (TIN-394), on Pulse's v2 deploy. Each shows the path it came by;
+  // an agent linked across both (apc_link, APC 0.4) is one entry, under its Direct grant.
+  const dockGrants = new Set((state.hub_links ?? []).map((l) => l.grant_id));
+  const partners = new Map((state.links ?? []).flatMap(([d, k]) => [[d, k], [k, d]] as Array<[string, string]>));
+  const shownUnder = new Set((state.links ?? []).map(([, k]) => k));
+  const RANK: Record<AgentMotion, number> = { off: 0, idle: 1, seen: 2, waiting: 3, busy: 4 };
+  const barAgents: PulseBarAgent[] = state.grants
+    .filter((g) => !shownUnder.has(g.id))
+    .map((g) => {
+      const partner = partners.get(g.id);
+      const other = partner ? state.grants.find((x) => x.id === partner) : undefined;
+      const motion = [motionOf(g.id), ...(partner ? [motionOf(partner)] : [])].sort((a, b) => RANK[b] - RANK[a])[0]!;
+      return {
+        id: g.id,
+        name: names.get(g.id) ?? g.label,
+        client_name: g.client_name ?? other?.client_name ?? null,
+        client_ua: g.client_ua,
+        client_icon: g.client_icon ?? other?.client_icon ?? null,
+        icon: g.client_icon,
+        state: motion,
+        pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin), here: onScreen.has(g.id) } : null,
+        warning: activeConflict(g) ? `${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.` : null,
+        restricted: !!g.regions,
+        paths: partner ? ["direct", "dock"] : dockGrants.has(g.id) ? ["dock"] : ["direct"],
+      };
+    });
+  const offersDirect = !hubMode || !!state.profiles?.includes("direct");
   /** The screen that shows a pin: a customer's page, or the overview with the figure's filters. */
   const openPin = (pin: NonNullable<SandboxState["grants"][number]["pin"]>) => {
     if (pin.kind === "customer" && pin.id) return navigate({ screen: "customer", id: pin.id }, filters);
@@ -295,7 +309,7 @@ function Sandbox({ sid }: { sid: string }) {
             {tab("howto", "How-to", route.screen === "howto")}
             {tab("overview", "Overview", route.screen === "overview")}
             {tab("customers", "Customers", route.screen === "customers" || route.screen === "customer")}
-            {tab("agents", hubMode ? "Settings" : "Agents", route.screen === "agents")}
+            {tab("agents", offersDirect ? "Agents" : "Settings", route.screen === "agents")}
           </nav>
           {hubMode ? (
             // APC v2 (TIN-394): the standard agent bar. apc.tineira.com keeps its own marks below.
@@ -307,13 +321,14 @@ function Sandbox({ sid }: { sid: string }) {
               }}
               onUnpin={(id) => void api.unpin(id)}
               onWarning={() => nav("agents")}
+              onUnlink={(id) => void api.unlink(id).then(() => refresh())}
               onRevoke={(id) => {
                 // Revoke from the app (APC 0.2): at once, here; the dock learns it on its next call.
                 const name = names.get(id) ?? "Your agent";
                 void api
                   .revoke(id)
                   .then(
-                    (r) => (r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, drop it here again from your dock.` : `Not revoked: ${r.error}`),
+                    (r) => (r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, connect it again on the Agents screen, or drop it here again from your dock.` : `Not revoked: ${r.error}`),
                     (e: unknown) => `Not revoked: ${e instanceof Error ? e.message : String(e)}`,
                   )
                   .then((message) => {

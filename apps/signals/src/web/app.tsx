@@ -1,30 +1,39 @@
 /**
- * Signals' page (TIN-384): the market feed of the visitor's demo world (the dock's seed, TIN-393). Every post, and each of
- * its parts (offer, audience, code, text), is a target. Agents arrive from the agent dock: the
- * first drop asks the person here, then in the dock; later drops pin at once.
+ * Signals' page (TIN-384): the market feed of the visitor's demo world (the dock's seed, TIN-393, or one
+ * of its own). Every post, and each of its parts (offer, audience, code, text), is a target. Agents
+ * come both ways (TIN-578): from the agent dock (the first drop asks the person here, then in the dock;
+ * later drops pin at once), or connected directly, each with its own URL, from the Connect panel (the
+ * Direct profile's list from @apc/web). The same agent both ways shows as one.
  */
-import { canonicalTarget, focusAttrs, type FocusRow, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, type AgentDrag } from "@apc/web";
+import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@apc/protocol";
+import { createViewReporter, enablePinning, type AgentDrag, type BarAgent } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
-import { StartOver, startOverAsked } from "../../../demo/src/web/start-over.tsx";
+import { StartOver } from "../../../demo/src/web/start-over.tsx";
+import { DirectAgents } from "../../../demo/src/web/direct-agents.tsx";
 
 interface GrantState {
   id: string;
-  hub: string;
-  agent: string;
+  path: ApcProfile;
+  hub: string | null;
+  agent: string | null;
   name: string;
+  /** A Direct agent's secret, for its MCP URL; null for a dock's grant. */
+  secret: string | null;
+  client: string | null;
   icon: string | null;
   connected: boolean;
   waiting: boolean;
   pin: FocusRow | null;
+  linked_with: string | null;
 }
 interface FeedState {
   seed: number;
+  profiles: ApcProfile[];
   grants: GrantState[];
 }
 type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget };
@@ -51,15 +60,6 @@ export function App() {
       (e: unknown) => setError(String(e)),
     );
   }, []);
-  if (error === "no_seed")
-    return (
-      <Shell>
-        <p className="muted">
-          {startOverAsked() && <b>Nothing to start over here: this browser has no Signals feed. </b>}
-          Signals shows the market of one demo world. Open it from your <a href={DOCK_URL}>agent dock</a>, with its <b>Signals</b> button: the dock opens every app on the same world.
-        </p>
-      </Shell>
-    );
   if (error) return <Shell><p className="muted">Could not open Signals: {error}</p></Shell>;
   if (!sid) return <Shell><p className="muted">Opening Signals…</p></Shell>;
   return <Feed sid={sid} />;
@@ -100,6 +100,8 @@ function Feed({ sid }: { sid: string }) {
   const [month, setMonth] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The Connect panel (Direct): open when the visitor came to connect (?connect, from the dock's landing page).
+  const [connectOpen, setConnectOpen] = useState(() => new URLSearchParams(location.search).has("connect") || location.hash === "#connect");
   const stateRef = useRef<FeedState | null>(null);
   stateRef.current = state;
 
@@ -173,15 +175,57 @@ function Feed({ sid }: { sid: string }) {
   const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
   const advertisers = [...new Set(posts.map((p) => p.author))].map((a) => ({ author: a, n: posts.filter((p) => p.author === a).length }));
   const unpin = (id: string) => void call(`${base}/unpin`, { grant_id: id }).then(refresh);
-  // The standard agent bar (TIN-394): the agents paired here, their state, and where each points.
+  // The standard agent bar (TIN-394): the agents here, the path each came by, their state, and where
+  // each points. An agent linked across both paths (apc_link) is one entry, under its Direct grant.
   const onScreen = (postId: string) => shown.some((p) => p.id === postId);
-  const barAgents = state.grants.map((g) => ({
-    id: g.id,
-    name: g.name,
-    icon: g.icon,
-    state: (!g.connected ? "off" : g.waiting ? "waiting" : "idle") as "off" | "waiting" | "idle",
-    pin: g.pin?.id ? { label: `${g.pin.id}${g.pin.part ? ` ${g.pin.part}` : ""}`, seen: !!g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at, here: onScreen(g.pin.id) } : null,
-  }));
+  const barAgents: BarAgent[] = state.grants
+    .filter((g) => !(g.path === "dock" && g.linked_with))
+    .map((g) => {
+      const other = g.linked_with ? state.grants.find((x) => x.id === g.linked_with) : undefined;
+      const connected = g.connected || !!other?.connected;
+      return {
+        id: g.id,
+        name: g.name,
+        icon: g.icon ?? other?.icon ?? null,
+        state: !connected ? "off" : g.waiting || other?.waiting ? "waiting" : "idle",
+        pin: g.pin?.id ? { label: `${g.pin.id}${g.pin.part ? ` ${g.pin.part}` : ""}`, seen: !!g.pin.seen_at && g.pin.seen_at >= g.pin.pinned_at, here: onScreen(g.pin.id) } : null,
+        paths: other ? ["direct", "dock"] : [g.path],
+      };
+    });
+  const offersDirect = state.profiles.includes("direct");
+  const directAgents = state.grants
+    .filter((g) => g.path === "direct" && g.secret)
+    .map((g) => ({ id: g.id, name: g.name, url: `${location.origin}/mcp/${sid}/${g.secret}`, connected: g.connected, client: g.client, linked: !!g.linked_with }));
+  const connectPanel = offersDirect && connectOpen && (
+    <section className="panel connect" id="connect" aria-label="Connect an agent directly">
+      <div className="connect-head">
+        <h2>Connect an agent directly</h2>
+        <button type="button" className="link" aria-label="Close" onClick={() => setConnectOpen(false)}>
+          ×
+        </button>
+      </div>
+      <p className="muted small">
+        Your agent reads Signals on its own URL, and the feed goes straight to it. Once it is connected, drag its mark from the top onto any post. To use one agent across apps instead, connect it once to your <a href={DOCK_URL}>agent dock</a>.
+      </p>
+      <DirectAgents
+        appName="Signals"
+        agents={directAgents}
+        onAdd={() =>
+          void call<{ ok: boolean; error?: string }>(`${base}/grants/agent`, {}).then((r) => {
+            if (!r.ok) say(`No new agent: ${r.error}`);
+            refresh();
+          })
+        }
+        onRename={(id, name) => void call(`${base}/grants/${id}/name`, { name }).then(refresh)}
+      />
+    </section>
+  );
+  const connectButton = offersDirect && !connectOpen && (
+    <button type="button" className="connect-open" title="Connect an agent to Signals directly, on its own URL" onClick={() => setConnectOpen(true)}>
+      Connect an agent
+    </button>
+  );
+  const unlink = (id: string) => void call(`${base}/grants/${id}/unlink`, {}).then(refresh);
   const openPin = (id: string) => {
     const postId = state.grants.find((g) => g.id === id)?.pin?.id;
     if (!postId) return;
@@ -194,7 +238,7 @@ function Feed({ sid }: { sid: string }) {
     const name = state.grants.find((g) => g.id === id)?.name ?? "Your agent";
     void call<{ ok: boolean; error?: string }>(`${base}/grants/${id}/revoke`, {})
       .then(
-        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, drop it here again from your dock.` : `Not revoked: ${r.error}`),
+        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, connect it again here, or drop it here again from your dock.` : `Not revoked: ${r.error}`),
         (e: unknown) => `Not revoked: ${e instanceof Error ? e.message : String(e)}`,
       )
       .then((message) => {
@@ -202,12 +246,13 @@ function Feed({ sid }: { sid: string }) {
         refresh();
       });
   };
-  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpin} onRevoke={revoke} />;
+  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpin} onRevoke={revoke} onUnlink={unlink} />;
   return (
     <Shell
       mobile={
         <div className="mobile-actions">
           {bar}
+          {connectButton}
           <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
             <option value="">All months</option>
             {MONTHS.map((m) => (
@@ -241,11 +286,13 @@ function Feed({ sid }: { sid: string }) {
             ))}
           </div>
           {notice && <div className="notice">{notice}</div>}
+          {connectPanel}
         </>
       }
       side={
         <>
           <div className="bar-row">{bar}</div>
+          {connectButton}
           <section className="panel">
             <h2>Filter by month</h2>
             <select value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month">
@@ -272,9 +319,9 @@ function Feed({ sid }: { sid: string }) {
               ))}
             </ul>
           </section>
-          <section className="panel muted small">Drag an agent from the dock onto a post, or onto its offer, targeting, code or text. Your agent reads it with this feed's own tools.</section>
+          <section className="panel muted small">Drag an agent onto a post, or onto its offer, targeting, code or text: from the dock, or its mark at the top. Your agent reads it with this feed's own tools.</section>
           <section className="panel muted small">
-            <StartOver site="Signals" wipes={["the agents your dock paired here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
+            <StartOver site="Signals" wipes={["the agents you connected here or your dock paired here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
           </section>
         </>
       }

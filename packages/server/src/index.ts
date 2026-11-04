@@ -3,3 +3,6 @@ export * from "./presence.ts";
 export * from "./tools.ts";
 export * from "./prompts.ts";
 export * from "./revoke.ts";
+export * from "./kv.ts";
+export * from "./direct.ts";
+export * from "./links.ts";

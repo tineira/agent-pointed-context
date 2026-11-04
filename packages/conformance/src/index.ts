@@ -1,7 +1,8 @@
 /**
- * The APC conformance suite (APC 0.2, TIN-577): checks that an app implements the core of the standard
- * (`core.ts` in @apc/protocol), on either profile, through its MCP endpoint, the way an agent or a
- * dock's hub reaches it. What happens in the person's page (the view they report, the pin they drop,
+ * The APC conformance suite (APC 0.2, TIN-577; `apc_link` since 0.3, TIN-578): checks that an app
+ * implements the core of the standard (`core.ts` in @apc/protocol), on either profile, through its MCP
+ * endpoint, the way an agent or a dock's hub reaches it, and, for an app that offers both profiles,
+ * `apc_link` (give `link` in the adapter). What happens in the person's page (the view they report, the pin they drop,
  * the presence the app shows them, Revoke in the agent bar) comes through a small adapter the app
  * provides, since only the app knows its page.
  *
@@ -10,13 +11,19 @@
  * `runConformance(app)` runs them all and reports.
  */
 import {
+  APC_AGENT_CLIENT_META,
+  APC_LINK_KEY,
+  APC_LINK_TOOL,
+  APC_LINK_TTL_S,
   CORE_TOOLS,
+  LINK_REFUSED_ERROR,
   REVOKED_ERROR,
   REVOKED_HTTP_STATUS,
   canonicalTarget,
   isRevokedAnswer,
   parseParams,
   parseTarget,
+  type ApcLinkRefusal,
   type ApcProfile,
   type FocusTarget,
   type PresenceEvent,
@@ -26,6 +33,22 @@ import {
 export interface AgentConnection {
   mcpUrl: string;
   grantId: string;
+}
+
+/**
+ * What the `apc_link` checks need (APC 0.4), from an app that offers both profiles. The suite makes the
+ * connections arrive itself: an agent's own `initialize` on Direct, a hub's (naming the agent's client
+ * in `_meta`) on Dock.
+ */
+export interface ApcLinkAdapter {
+  /** A new agent with full access on this path, made the way the profile makes one, with no pin and no `initialize` yet. */
+  connect(path: ApcProfile): Promise<AgentConnection>;
+  /** The agents the agent bar shows: each entry's grants, two for a linked agent. */
+  agents(): Promise<Array<{ grants: string[] }>>;
+  /** The person's Unlink in the agent bar; false when the app refuses. */
+  unlink(grantId: string): Promise<boolean>;
+  /** Makes every code the app gave expire now, as if two minutes passed. Without it the check waits the code out (APC_LINK_TTL_S). */
+  expireCodes?(): Promise<void>;
 }
 
 /** What the suite needs from an app. */
@@ -54,6 +77,8 @@ export interface ApcAppAdapter {
     /** The person's Revoke in the agent bar; false when the app refuses. */
     revoke(grantId: string): Promise<boolean>;
   };
+  /** An app that offers both profiles: the `apc_link` checks run too. */
+  link?: ApcLinkAdapter;
 }
 
 export class ConformanceError extends Error {}
@@ -354,6 +379,128 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(d.error === REVOKED_ERROR, `its error is "revoked": ${JSON.stringify(d).slice(0, 200)}`);
       expect(!("focus" in d) && !("view" in d) && r.structuredContent === undefined, "it carries no focus, view or other data");
       expect(ms < 9000, `it ended at ${ms} ms, not soon after the revoke`);
+    }),
+    ...(app.link ? linkChecks(app, app.link) : []),
+  ];
+}
+
+/** A connection arrives: the agent's own initialize on Direct; on Dock, its hub's, naming the agent's client. */
+async function arrive(app: ApcAppAdapter, conn: AgentConnection & { path: ApcProfile }, client: string): Promise<void> {
+  const params =
+    conn.path === "direct"
+      ? { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: client, version: "1.0.0" } }
+      : { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", title: `${client} via dock`, version: "0.1.0" }, _meta: { [APC_AGENT_CLIENT_META]: client } };
+  await result(app, conn.mcpUrl, "initialize", params);
+}
+
+/** The offer on a result, where the model sees it: in the structured result and the same in the text. */
+function offerOf(r: ToolCallResult): { code: string; expires_in: number; note: string } | undefined {
+  const inData = data(r)[APC_LINK_KEY];
+  const inText = text(r)[APC_LINK_KEY];
+  expect(JSON.stringify(inData) === JSON.stringify(inText), "apc_link is the same in the structured result and the text");
+  if (inData === undefined) return undefined;
+  expect(isObject(inData) && typeof inData.code === "string" && inData.code.length >= 16, `apc_link is { code, expires_in, note }: ${JSON.stringify(inData)}`);
+  expect(typeof inData.expires_in === "number" && inData.expires_in > 0 && inData.expires_in <= APC_LINK_TTL_S, `expires_in is 1 to ${APC_LINK_TTL_S} s`);
+  expect(typeof inData.note === "string" && inData.note.includes(APC_LINK_TOOL), "its note names the apc_link tool");
+  return inData as { code: string; expires_in: number; note: string };
+}
+
+/** `apc_link` (APC 0.4): the checks of an app that offers both profiles. */
+function linkChecks(app: ApcAppAdapter, link: ApcLinkAdapter): ConformanceCheck[] {
+  const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (apc_link): ${name}`, run });
+  let clients = 0;
+  const client = () => `conformance-agent-${++clients}`;
+  const connect = async (path: ApcProfile) => ({ ...(await link.connect(path)), path });
+  /** The same agent, connected directly and then through a dock: the dock's connection is the new one, and gets the offer. */
+  const pair = async () => {
+    const name = client();
+    const direct = await connect("direct");
+    await arrive(app, direct, name);
+    const dock = await connect("dock");
+    await arrive(app, dock, name);
+    const offered = await call(app, dock.mcpUrl, app.probe.tool, app.probe.args);
+    expect(!offered.isError, `${app.probe.tool} failed`);
+    const offer = offerOf(offered);
+    expect(offer, `the second connection of ${name}, on the other path, gets apc_link on a result of one of the app's own tools`);
+    return { name, direct, dock, offer };
+  };
+  const redeem = (conn: AgentConnection, code: string) => call(app, conn.mcpUrl, APC_LINK_TOOL, { code });
+  const refused = (r: ToolCallResult, reason: ApcLinkRefusal, where: string) => {
+    expect(r.isError === true, `${where}: refused, as a tool error (${JSON.stringify(r).slice(0, 200)})`);
+    const d = text(r);
+    expect(d.error === LINK_REFUSED_ERROR && d.reason === reason, `${where}: { error: "link_refused", reason: "${reason}" }, got ${JSON.stringify(d).slice(0, 200)}`);
+  };
+  const linkedEntry = async (a: string, b: string) => (await link.agents()).find((e) => e.grants.includes(a) && e.grants.includes(b));
+  const works = async (conn: AgentConnection, where: string) => {
+    const r = await call(app, conn.mcpUrl, "get_current_view");
+    expect(!r.isError && "view" in data(r), `${where} still reads the app`);
+  };
+
+  return [
+    check("the same client on the other path is offered a code once per session, and the code links them", async () => {
+      const { direct, dock, offer } = await pair();
+      const again = await call(app, dock.mcpUrl, app.probe.tool, app.probe.args);
+      expect(offerOf(again) === undefined, "asked at most once per MCP session");
+      const done = await redeem(direct, offer.code);
+      expect(!done.isError && data(done).linked === true, `the other connection redeems it: ${JSON.stringify(done).slice(0, 200)}`);
+      expect(await linkedEntry(direct.grantId, dock.grantId), "the agent bar shows one agent with both grants");
+      // Linking grants nothing: each connection keeps its own grant.
+      await works(direct, "the Direct connection");
+      await works(dock, "the Dock connection");
+    }),
+
+    check("a code is refused on the connection that got it, on the same path, on another client, and once used", async () => {
+      const { name, direct, dock, offer } = await pair();
+      const sameSide = await connect("dock");
+      await arrive(app, sameSide, name);
+      const stranger = await connect("direct");
+      await arrive(app, stranger, client());
+      refused(await redeem(dock, offer.code), "same_connection", "on the connection that got it");
+      refused(await redeem(sameSide, offer.code), "same_path", "on another connection of the same path");
+      refused(await redeem(stranger, offer.code), "not_offered", "on the other path, by another client");
+      refused(await redeem(direct, "lk_000000000000000000000000"), "unknown_code", "a code the app never gave");
+      const done = await redeem(direct, offer.code);
+      expect(!done.isError, "the right connection still redeems it");
+      refused(await redeem(direct, offer.code), "used", "a second time");
+      expect(!(await linkedEntry(direct.grantId, sameSide.grantId)), "nothing else was linked");
+    }),
+
+    check("an expired code is refused, and the app does not ask again in that session", async () => {
+      const { direct, dock, offer } = await pair();
+      if (link.expireCodes) await link.expireCodes();
+      else await sleep((APC_LINK_TTL_S + 1) * 1000);
+      refused(await redeem(direct, offer.code), "expired", "after expires_in");
+      expect(!(await linkedEntry(direct.grantId, dock.grantId)), "it stays two agents");
+      expect(offerOf(await call(app, dock.mcpUrl, app.probe.tool, app.probe.args)) === undefined, "not asked again in that session");
+    }),
+
+    check("a connection of another client is offered nothing", async () => {
+      const direct = await connect("direct");
+      await arrive(app, direct, client());
+      const dock = await connect("dock");
+      await arrive(app, dock, client());
+      expect(offerOf(await call(app, dock.mcpUrl, app.probe.tool, app.probe.args)) === undefined, "no offer between two clients");
+    }),
+
+    check("revoke on a linked agent cuts both grants", async () => {
+      const { direct, dock, offer } = await pair();
+      expect(!(await redeem(direct, offer.code)).isError, "linked");
+      expect(await app.page.revoke(dock.grantId), "the app refused to revoke");
+      for (const [conn, where] of [[direct, "Direct"], [dock, "Dock"]] as const) {
+        const { status, body } = await send(app, conn.mcpUrl, "tools/call", { name: "get_current_view", arguments: {} });
+        expect(status === REVOKED_HTTP_STATUS && isRevokedAnswer(body), `the ${where} grant answers 403 revoked: HTTP ${status}`);
+      }
+    }),
+
+    check("unlink shows two agents again, each with its own grant", async () => {
+      const { direct, dock, offer } = await pair();
+      expect(!(await redeem(direct, offer.code)).isError, "linked");
+      expect(await link.unlink(direct.grantId), "the app refused to unlink");
+      expect(!(await linkedEntry(direct.grantId, dock.grantId)), "two agents again");
+      await works(direct, "the Direct connection");
+      await works(dock, "the Dock connection");
+      expect(await app.page.revoke(direct.grantId), "the app refused to revoke");
+      await works(dock, "once unlinked, revoking one leaves the other: the Dock connection");
     }),
   ];
 }

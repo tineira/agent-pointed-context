@@ -48,8 +48,8 @@ The packages are TypeScript sources in this workspace (not on npm yet). They are
 | Package | What it gives you |
 |---|---|
 | [`@apc/protocol`](packages/protocol) | wire types, the target grammar (kinds, parts, key-only params), `data-focus` attributes |
-| [`@apc/server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent` |
-| [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`), `flashTargets` for presence, `createViewReporter`, the agent bar `<apc-agents>` with Revoke |
+| [`@apc/server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent`; the Direct profile (`newDirectGrant`, `directMcpUrl`, `initializeOf`, `parseProfiles`) and `apc_link` (`ApcLinks`, `registerApcLinkTool`, `sqlKv`) |
+| [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`), `flashTargets` for presence, `createViewReporter`, the agent bar `<apc-agents>` with Revoke, paths, Unlink and the dock hint, and the Direct agent list `<apc-direct-agents>` with the connect instructions (`connectPrompt`) |
 | [`@apc/conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint |
 
 On the server, register the two APC tools next to your own and attach the envelope to every result while a pin is unread:
@@ -97,7 +97,9 @@ for (const check of apcConformance({
 })) test(check.name, check.run);
 ```
 
-Pulse (both profiles) and Signals run it in `pnpm test` with no network ([`apps/demo/test/conformance.test.ts`](apps/demo/test/conformance.test.ts), [`apps/signals/test/conformance.test.ts`](apps/signals/test/conformance.test.ts)); `@apc/conformance/workers` runs a Cloudflare Durable Object on Node for that.
+Pulse and Signals run it on both profiles in `pnpm test` with no network ([`apps/demo/test/conformance.test.ts`](apps/demo/test/conformance.test.ts), [`apps/signals/test/conformance.test.ts`](apps/signals/test/conformance.test.ts)); `@apc/conformance/workers` runs a Cloudflare Durable Object on Node for that. An app that offers both profiles also gives the adapter `link` (`connect(path)`, `agents()`, `unlink`), and the suite checks `apc_link`: the same agent on both paths is offered a code once per session, the code links them, an expired, reused, same-path or other-client code is refused, and Revoke on a linked agent cuts both grants.
+
+To offer the Direct profile (each agent on its own MCP URL), your Durable Object makes grants with `newDirectGrant()` in its own table, answers `initialize` with `ApcLinks.arrived(grant, linkClient(initializeOf(body), path))`, and wraps its tools so a result carries `attachApcLink(result, await links.offer(grant, tool))`; the page shows `<apc-direct-agents>` (make, name, URL and prompt to copy) and passes each agent's `paths` to `<apc-agents>`. Declare your profiles in one place (`APC_PROFILES="direct,dock"` in Pulse's and Signals' `wrangler.jsonc`). Signals is the small example ([`apps/signals/src/worker/feed.ts`](apps/signals/src/worker/feed.ts)).
 
 The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) (the sandbox, the MCP endpoint, grant trimming, the figure registry) and [`apps/v1/src/web`](apps/v1/src/web) (marks, pins, presence), V1 as the paper describes it, frozen with its own copy of the packages in [`apps/v1/src/apc`](apps/v1/src/apc). [`apps/demo`](apps/demo) is the same Pulse moving on with the APC standard.
 

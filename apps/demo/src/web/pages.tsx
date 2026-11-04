@@ -4,8 +4,9 @@ import { buildMarket } from "../model/market.ts";
 import { mrrCsv } from "../user-side/mrr.ts";
 import { displayNames } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
-import type { Api, CompatRow, SandboxState } from "./api.ts";
+import { mcpUrl, type Api, type CompatRow, type SandboxState } from "./api.ts";
 import { AddAgentButtons, AgentCard, ConnectPanel } from "./connect.tsx";
+import { DirectAgents } from "./direct-agents.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { DockHint } from "./dock-only.tsx";
 import { StartOver } from "./start-over.tsx";
@@ -275,9 +276,35 @@ export function CompatTable(props: { api: Api; initials: Map<string, string>; gr
 export function Agents(props: { api: Api; sid: string; state: SandboxState; initials: Map<string, string>; activity: number; onChanged: () => void }) {
   const { api, sid, state } = props;
   const names = displayNames(state.grants);
+  const hubLinked = new Set((state.hub_links ?? []).map((l) => l.grant_id));
+  const linked = new Set((state.links ?? []).flat());
   return (
     <>
-      {/* On the v2 deploy the dock manages the agents (TIN-410): this screen is Pulse's settings only. */}
+      {/* On the standard's deploy, the agents connected directly (the Direct profile, @apc/web): the dock's are managed in the dock (TIN-410). */}
+      {state.v2 && state.profiles?.includes("direct") && (
+        <section className="card">
+          <h2>Agents connected directly</h2>
+          <p className="hint">
+            Connect an agent to Pulse alone: it gets its own URL, and Pulse's data goes straight to it. To use one agent across apps, connect it once to your agent dock instead and drag it here. The same agent both ways shows as one, if it agrees.
+          </p>
+          <DirectAgents
+            appName="Pulse"
+            agents={state.grants
+              .filter((g) => !hubLinked.has(g.id))
+              .map((g) => ({ id: g.id, name: names.get(g.id) ?? g.label, url: mcpUrl(sid, g), connected: !!g.client_name, client: g.client_name, linked: linked.has(g.id) }))}
+            onAdd={async () => {
+              await api.addAgent();
+              props.onChanged();
+            }}
+            onRename={async (id, name) => {
+              await api.rename(id, name);
+              props.onChanged();
+            }}
+          />
+          <p className="hint">To cut an agent, use ⊘ next to its mark in the bar at the top.</p>
+        </section>
+      )}
+      {/* On the v2 deploy without Direct, the dock manages the agents (TIN-410): this screen is Pulse's settings only. */}
       {!state.v2 && (
       <section className="card">
         <h2>Your agents</h2>

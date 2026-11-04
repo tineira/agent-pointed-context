@@ -6,6 +6,8 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import type { ApcProfile } from "@apc/protocol";
+import { parseProfiles } from "@apc/server";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { SANDBOX_TTL_MS, type Env } from "./sandbox.ts";
 
@@ -21,6 +23,8 @@ function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 const stubFor = (env: Env, sid: string): Stub => env.SANDBOX.get(env.SANDBOX.idFromName(sid));
+/** The profiles Pulse offers, from APC_PROFILES (the one place they are declared). */
+const offers = (env: Env, profile: ApcProfile): boolean => parseProfiles(env.APC_PROFILES).includes(profile);
 
 /**
  * Call a sandbox, retrying a retryable failure with a fresh stub (a stub is
@@ -134,7 +138,7 @@ app.post("/api/s/:sid/unpin", async (c) => {
   return c.json({ ok: true });
 });
 app.post("/api/s/:sid/grants/restricted", async (c) => {
-  if (c.env.APC_V2 === "1") return c.json({ error: "dock_only" }, 404);
+  if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
   const body = (await c.req.json().catch(() => ({}))) as { region?: string };
   const region = (REGIONS as readonly string[]).includes(body.region ?? "") ? (body.region as Region) : "latam";
   return c.json(await rpc(c.env, c.var.sid, (s) => s.addRestrictedGrant(region)));
@@ -162,10 +166,15 @@ app.post("/api/s/:sid/hub/pair", async (c) => {
   const result = await rpc(c.env, c.var.sid, (s) => s.pairHub(c.var.sid, new URL(c.req.url).origin, body), 1);
   return c.json(result, result.ok ? 200 : 400);
 });
-/** A new direct agent. On Pulse's v2 deploy agents come only from a dock (TIN-402). */
+/** A new direct agent (the Direct profile, APC_PROFILES): its own grant and MCP URL. */
 app.post("/api/s/:sid/grants/agent", async (c) => {
-  if (c.env.APC_V2 === "1") return c.json({ error: "dock_only" }, 404);
-  return c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant()));
+  if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
+  return c.json(await rpc(c.env, c.var.sid, (s) => s.addAgentGrant(), 1));
+});
+/** apc_link (APC 0.4): the person unlinks an agent shown as one; both grants stay. */
+app.post("/api/s/:sid/grants/:id/unlink", async (c) => {
+  const result = await rpc(c.env, c.var.sid, (s) => s.unlinkGrant(c.req.param("id")));
+  return c.json(result, result.ok ? 200 : 400);
 });
 
 app.get("/api/s/:sid/compat.json", async (c) => c.json(await rpc(c.env, c.var.sid, (s) => s.compat())));
@@ -183,7 +192,7 @@ app.get("/api/s/:sid/ws", async (c) => {
  * it must be this origin's. Only on Pulse's v2 deploy.
  */
 app.post("/apc/revoke", async (c) => {
-  if (c.env.APC_V2 !== "1") return c.json({ error: "not_found" }, 404);
+  if (c.env.APC_V2 !== "1" || !offers(c.env, "dock")) return c.json({ error: "not_found" }, 404);
   const body = (await c.req.json().catch(() => null)) as { mcp_url?: unknown } | null;
   let m: RegExpMatchArray | null = null;
   try {

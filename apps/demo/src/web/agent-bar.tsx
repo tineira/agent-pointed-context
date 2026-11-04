@@ -1,7 +1,8 @@
 /**
  * The standard agent bar (TIN-394, `<apc-agents>` from @apc/web) in React, with Pulse's own logos:
  * the bar calls renderIcon with an element it keeps per agent, and Pulse draws AgentIcon there.
- * Used on Pulse's v2 deploy; apc.tineira.com keeps its own top-bar marks.
+ * Each agent shows the path it came by, a linked one both with Unlink (APC 0.4), and the bar offers
+ * the dock to a Direct user (on by default).
  */
 import { defineAgentBar, type ApcAgentsElement, type BarAgent } from "@apc/web";
 import { createElement, useEffect, useRef } from "react";
@@ -18,7 +19,14 @@ export interface PulseBarAgent extends BarAgent {
 
 const roots = new WeakMap<HTMLElement, Root>();
 
-export function AgentBar(props: { agents: PulseBarAgent[]; onOpen: (id: string) => void; onUnpin: (id: string) => void; onWarning: (id: string) => void; onRevoke: (id: string) => void }) {
+export function AgentBar(props: {
+  agents: PulseBarAgent[];
+  onOpen: (id: string) => void;
+  onUnpin: (id: string) => void;
+  onWarning: (id: string) => void;
+  onRevoke: (id: string) => void;
+  onUnlink: (id: string) => void;
+}) {
   const ref = useRef<ApcAgentsElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -33,14 +41,20 @@ export function AgentBar(props: { agents: PulseBarAgent[]; onOpen: (id: string) 
         root = createRoot(into);
         roots.set(into, root);
       }
-      root.render(<AgentIcon clientName={a?.client_name ?? null} clientUa={a?.client_ua} clientIcon={a?.client_icon} motion="idle" size={22} />);
+      root.render(<AgentIcon clientName={a?.client_name ?? null} clientUa={a?.client_ua} clientIcon={a?.client_icon} motion="idle" size={into.classList.contains("apc-agents__mini-icon") ? 16 : 22} />);
     };
     const on = (type: string, fn: (id: string) => void) => {
       const handler = (e: Event) => fn((e as CustomEvent<{ id: string }>).detail.id);
       el.addEventListener(type, handler);
       return () => el.removeEventListener(type, handler);
     };
-    const offs = [on("apc-open", (id) => latest.current.onOpen(id)), on("apc-unpin", (id) => latest.current.onUnpin(id)), on("apc-warning", (id) => latest.current.onWarning(id)), on("apc-revoke", (id) => latest.current.onRevoke(id))];
+    const offs = [
+      on("apc-open", (id) => latest.current.onOpen(id)),
+      on("apc-unpin", (id) => latest.current.onUnpin(id)),
+      on("apc-warning", (id) => latest.current.onWarning(id)),
+      on("apc-revoke", (id) => latest.current.onRevoke(id)),
+      on("apc-unlink", (id) => latest.current.onUnlink(id)),
+    ];
     return () => offs.forEach((off) => off());
   }, []);
 

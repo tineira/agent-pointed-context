@@ -1,8 +1,9 @@
 /**
  * The MCP URL as a QR, and the prompt a person pastes to their agent: what connecting an agent
- * shows, in Pulse (connect.tsx) and in the agent dock (TIN-403). No other imports, so the dock can
- * use it without Pulse's page code.
+ * shows, in Pulse (connect.tsx) and in the agent dock (TIN-403). No imports of Pulse's page code, so
+ * the dock can use it.
  */
+import { connectPrompt } from "@apc/web";
 import { encode } from "uqr";
 import { useMemo } from "react";
 
@@ -32,7 +33,8 @@ export const SCAN_HINT = "Scan with a phone, then paste the URL into the agent. 
  * name the person will recognise, and for the steps only if the agent cannot (TIN-408).
  */
 export function askYourAgentPrompt(url: string, name = "Pulse"): string {
-  return `Please connect this remote MCP server, named "${name}". URL: ${url}. It uses Streamable HTTP and needs no OAuth or API key: the access is in the URL. If you can add it yourself, do it now and tell me when it's connected. If you can't, tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
+  // The Direct profile's connect instructions, from @apc/web (TIN-578): one text for every app.
+  return connectPrompt(url, name);
 }
 
 /** The other way round (TIN-411): what a person pastes to their agent to drop the server again. */

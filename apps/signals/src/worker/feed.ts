@@ -1,13 +1,15 @@
 /**
- * One visitor's Signals (TIN-384): a Durable Object holding the seed of their demo world, from the dock (the
- * posts are rebuilt from it), the grants it gave agent docks, the view, the pins and the page's
- * WebSocket. Agents never connect directly: a dock's hub pairs, after the person says yes here and
- * in the dock, and reads with the grant Signals made for it.
+ * One visitor's Signals (TIN-384): a Durable Object holding the seed of their demo world (the posts are
+ * rebuilt from it), its grants, the view, the pins and the page's WebSocket. Agents come both ways
+ * (APC_PROFILES, TIN-578): Direct, with a grant and MCP URL the person makes on the page (the Direct
+ * profile from @apc/server and @apc/web), and Dock, where a dock's hub pairs after the person says yes
+ * here and in the dock, and reads with the grant Signals made for it. The same agent on both shows as
+ * one (apc_link).
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { FocusRow } from "@apc/protocol";
-import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, isUnread, presenceEvent, revokedResponse, revokedToolResult, secretHash, toolError, toolResult, type ToolResult } from "@apc/server";
+import type { ApcProfile, FocusRow } from "@apc/protocol";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@apc/server";
 import { generateDataset } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -24,6 +26,8 @@ export interface Env {
   FEED_CALLS?: RateLimit;
   /** Comma-separated origins of the agent docks Signals may pair with. */
   HUB_ORIGINS?: string;
+  /** The profiles Signals offers, in one place ("direct,dock" in wrangler.jsonc). Missing: both. */
+  APC_PROFILES?: string;
 }
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
@@ -39,11 +43,18 @@ async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?:
   }
 }
 
+const pathOf = (g: { hub: string | null }): ApcProfile => (g.hub ? "dock" : "direct");
+
 interface Grant {
   id: string;
   secret: string;
-  hub: string;
-  agent: string;
+  /** The dock's hub and its agent handle (Dock); both null for an agent the person connected directly. */
+  hub: string | null;
+  agent: string | null;
+  /** clientInfo.name of a Direct agent's initialize. */
+  client_name: string | null;
+  /** The person's own name for it. */
+  owner_name: string | null;
   client_title: string | null;
   /** The agent's mark from the dock (TIN-388): a small PNG, drawn on its pins. */
   client_icon: string | null;
@@ -56,6 +67,8 @@ export class Feed extends DurableObject<Env> {
   private cached: { seed: number; posts: Post[] } | null = null;
   /** Grants with a wait_for_focus in flight, for the agent bar's floating mark (memory only). */
   private waiting = new Set<string>();
+  /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
+  private links!: ApcLinks;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -65,11 +78,20 @@ export class Feed extends DurableObject<Env> {
   }
 
   private migrate(): void {
+    // A feed made before Signals took Direct agents (TIN-578) had hub and agent not null: its grants
+    // table is made again with both nullable (a Direct grant has neither). Its pins go with the old table.
+    const old = this.sql.exec<{ sql: string }>("select sql from sqlite_master where type = 'table' and name = 'grants'").toArray()[0];
+    if (old && /hub text not null/i.test(old.sql)) {
+      this.sql.exec("create table grants_direct (id text primary key, secret text not null unique, hub text, agent text, client_title text, created_at text not null, last_active_at text, client_icon text, unique (hub, agent))");
+      this.sql.exec("insert into grants_direct (id, secret, hub, agent, client_title, created_at, last_active_at, client_icon) select id, secret, hub, agent, client_title, created_at, last_active_at, client_icon from grants");
+      this.sql.exec("drop table grants");
+      this.sql.exec("alter table grants_direct rename to grants");
+    }
     this.sql.exec(`
       create table if not exists meta (key text primary key, value text not null);
       create table if not exists grants (
-        id text primary key, secret text not null unique, hub text not null, agent text not null,
-        client_title text, created_at text not null, last_active_at text, unique (hub, agent));
+        id text primary key, secret text not null unique, hub text, agent text,
+        client_title text, created_at text not null, last_active_at text, client_icon text, unique (hub, agent));
       create table if not exists view_state (id integer primary key check (id = 1), data text not null);
       create table if not exists agent_focus (
         grant_id text primary key references grants(id) on delete cascade,
@@ -77,11 +99,19 @@ export class Feed extends DurableObject<Env> {
       create table if not exists revoked_grants (
         secret_hash text primary key, grant_id text not null, hub text not null, agent text not null, revoked_at text not null);
     `);
-    try {
-      this.sql.exec("alter table grants add column client_icon text");
-    } catch {
-      // already there (TIN-388)
+    for (const column of ["client_icon", "client_name", "owner_name"]) {
+      try {
+        this.sql.exec(`alter table grants add column ${column} text`);
+      } catch {
+        // already there (client_icon since TIN-388, the names since TIN-578)
+      }
     }
+    this.links = new ApcLinks(sqlKv(this.sql), { appName: "Signals", grants: () => this.grants().map((g) => ({ id: g.id, path: pathOf(g) })) });
+  }
+
+  /** Whether Signals offers this profile (APC_PROFILES). */
+  private offers(profile: ApcProfile): boolean {
+    return parseProfiles(this.env.APC_PROFILES).includes(profile);
   }
 
   private meta(key: string): string | null {
@@ -96,7 +126,7 @@ export class Feed extends DurableObject<Env> {
     return this.cached.posts;
   }
   private grants(): Grant[] {
-    return this.sql.exec<Record<string, string | null>>("select * from grants order by created_at").toArray() as unknown as Grant[];
+    return this.sql.exec<Record<string, string | null>>("select * from grants order by created_at, id").toArray() as unknown as Grant[];
   }
   private focusRow(grantId: string): FocusRow | null {
     const r = this.sql.exec<Record<string, string | null>>("select * from agent_focus where grant_id = ?", grantId).toArray()[0];
@@ -175,10 +205,55 @@ export class Feed extends DurableObject<Env> {
   }
 
   async state() {
+    let n = 0;
     return {
       seed: Number(this.meta("seed")),
-      grants: this.grants().map((g) => ({ id: g.id, hub: g.hub, agent: g.agent, name: g.client_title ?? "Agent via dock", icon: g.client_icon, connected: !!g.client_title, waiting: this.waiting.has(g.id), pin: this.focusRow(g.id) })),
+      profiles: parseProfiles(this.env.APC_PROFILES),
+      grants: this.grants().map((g) => {
+        const path = pathOf(g);
+        const fallback = path === "dock" ? "Agent via dock" : `Agent ${++n}`;
+        return {
+          id: g.id,
+          path,
+          hub: g.hub,
+          agent: g.agent,
+          name: g.owner_name ?? g.client_title ?? g.client_name ?? fallback,
+          // The person's page builds a Direct agent's MCP URL from it; a dock's grant stays the hub's.
+          secret: path === "direct" ? g.secret : null,
+          client: g.client_name,
+          icon: g.client_icon,
+          connected: !!(g.client_title || g.client_name),
+          waiting: this.waiting.has(g.id),
+          pin: this.focusRow(g.id),
+          linked_with: this.links.partnerOf(g.id),
+        };
+      }),
     };
+  }
+
+  /** A new agent connected directly (the Direct profile): its own grant and MCP URL, made by the person. */
+  async addDirectGrant(): Promise<{ ok: boolean; error?: string; grant_id?: string }> {
+    if (!this.offers("direct")) return { ok: false, error: "dock_only" };
+    if (this.grants().filter((g) => !g.hub).length >= 20) return { ok: false, error: "too_many" };
+    const g = newDirectGrant();
+    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, null, null, ?)", g.id, g.secret, g.created_at);
+    this.broadcast();
+    return { ok: true, grant_id: g.id };
+  }
+
+  /** The person's own name for an agent; empty gives it back its own. */
+  async renameGrant(grantId: string, raw: unknown): Promise<{ ok: boolean }> {
+    if (!this.grants().some((g) => g.id === grantId)) return { ok: false };
+    this.sql.exec("update grants set owner_name = ? where id = ?", cleanAgentName(raw), grantId);
+    this.broadcast();
+    return { ok: true };
+  }
+
+  /** The person unlinks an agent shown as one (apc_link): the link goes, both grants stay. */
+  async unlinkGrant(grantId: string): Promise<{ ok: boolean }> {
+    const partner = this.links.unlink(grantId);
+    this.broadcast();
+    return { ok: !!partner };
   }
 
   async reportView(raw: unknown): Promise<{ ok: boolean }> {
@@ -211,6 +286,7 @@ export class Feed extends DurableObject<Env> {
    * a grant for it, handed to the dock's hub server to server with the drag's ticket, and the pin.
    */
   async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string }> {
+    if (!this.offers("dock")) return { ok: false, error: "not_available" };
     const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; target?: unknown } | null;
     const hub = typeof b?.hub === "string" ? b.hub : "";
     const allowed = (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
@@ -245,7 +321,8 @@ export class Feed extends DurableObject<Env> {
   /** A dock's hub gives back its grant (TIN-388): the grant and its pin go, and the next drop asks again. */
   async revoke(secret: string): Promise<{ ok: boolean }> {
     const grant = this.grants().find((g) => g.secret === secret);
-    if (!grant) return { ok: false };
+    if (!grant?.hub) return { ok: false };
+    this.links.forget(grant.id);
     this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
     this.sql.exec("delete from grants where id = ?", grant.id);
     this.broadcast();
@@ -259,15 +336,21 @@ export class Feed extends DurableObject<Env> {
    * learns it on its next call and shows "Revoked by" this host; a new drop asks the person again.
    */
   async revokeGrant(grantId: string): Promise<{ ok: boolean; error?: string }> {
-    const found = this.grants().find((g) => g.id === grantId);
-    if (!found) return { ok: false, error: "unknown_grant" };
-    const hash = await secretHash(found.secret);
+    // A linked agent (apc_link) is one agent with two grants: Revoke cuts both.
+    const partner = this.links.partnerOf(grantId);
+    const targets = this.grants().filter((g) => g.id === grantId || g.id === partner);
+    if (!targets.some((g) => g.id === grantId)) return { ok: false, error: "unknown_grant" };
+    const hashes = await Promise.all(targets.map(async (g) => [g, await secretHash(g.secret)] as const));
     // Everything below is synchronous storage work: nothing runs between the check and the deletes.
-    const grant = this.grants().find((g) => g.id === grantId);
-    if (!grant) return { ok: false, error: "unknown_grant" };
-    this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub, grant.agent, new Date().toISOString());
-    this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
-    this.sql.exec("delete from grants where id = ?", grant.id);
+    if (!this.grants().some((g) => g.id === grantId)) return { ok: false, error: "unknown_grant" };
+    const at = new Date().toISOString();
+    for (const [grant, hash] of hashes) {
+      // A Direct grant has no hub or agent; the table, older than Direct, wants text there.
+      this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub ?? "", grant.agent ?? "", at);
+      this.links.forget(grant.id);
+      this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
+      this.sql.exec("delete from grants where id = ?", grant.id);
+    }
     this.broadcast();
     return { ok: true };
   }
@@ -314,17 +397,20 @@ export class Feed extends DurableObject<Env> {
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     await this.touch();
     try {
-      const body = (await request.clone().json()) as { method?: string; params?: { clientInfo?: { title?: unknown; icons?: unknown } } } | null;
-      const info = body?.method === "initialize" ? body.params?.clientInfo : undefined;
-      if (typeof info?.title === "string") {
-        this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", info.title.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null, pickClientIcon(info.icons), grant.id);
+      const arriving = initializeOf(await request.clone().json());
+      if (arriving) {
+        // The hub introduces a dock agent by its title; a Direct agent's client names itself.
+        const title = arriving.title?.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null;
+        if (title || !grant.hub) this.sql.exec("update grants set client_title = coalesce(?, client_title), client_icon = coalesce(?, client_icon), client_name = ? where id = ?", title, pickClientIcon(arriving.icons), grant.hub ? grant.client_name : arriving.name, grant.id);
+        // apc_link: a new MCP session of this grant, by its client (on the Dock path, the one its hub names).
+        this.links.arrived(grant.id, linkClient(arriving, pathOf(grant)));
         this.broadcast();
       }
     } catch {
       // not JSON: the transport answers the error
     }
 
-    const [{ McpServer }, { WebStandardStreamableHTTPServerTransport }, { CfWorkerJsonSchemaValidator }, { registerApcTools }, { z }] = await Promise.all([
+    const [{ McpServer }, { WebStandardStreamableHTTPServerTransport }, { CfWorkerJsonSchemaValidator }, { registerApcLinkTool, registerApcTools }, { z }] = await Promise.all([
       import("@modelcontextprotocol/sdk/server/mcp.js"),
       import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
       import("@modelcontextprotocol/sdk/validation/cfworker"),
@@ -378,6 +464,17 @@ export class Feed extends DurableObject<Env> {
         return "error" in answer ? toolError(answer.error!, answer.message!) : toolResult(answer);
       },
     );
+    // apc_link: where Signals offers both profiles, the same agent on both paths can show as one.
+    if (this.offers("direct") && this.offers("dock")) {
+      registerApcLinkTool(server, {
+        appName: "Signals",
+        redeem: async (code) => {
+          const r = await this.links.redeem(grant.id, code);
+          if (r.ok) this.broadcast();
+          return r;
+        },
+      });
+    }
 
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
@@ -429,7 +526,10 @@ export class Feed extends DurableObject<Env> {
           this.broadcast({ type: "presence", event: presenceEvent({ grantId, tool, kind: "read", targets }) });
         }
         // Signals shares the view always (it has no switch), so attendance is the page itself.
-        return attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen()));
+        result = attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen()));
+        // apc_link: at most once per session, the offer to show this agent as one with its other path.
+        const offer = result.isError ? null : await this.links.offer(grantId, tool);
+        return offer ? attachApcLink(result, offer) : result;
       });
   }
 }

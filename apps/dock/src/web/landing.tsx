@@ -8,6 +8,8 @@ import { APPS, DESKTOP } from "./setup.tsx";
 const DOCK = "/dock";
 const REPO = "https://github.com/tineira/agent-pointed-context";
 const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
+/** "Connect app by app" leads to a live Direct app: Signals, with its Connect panel open. */
+const DIRECT_TRY = `${SIGNALS.url}?connect`;
 /** A few of the agents that connect, by their logos (products.ts). */
 const BRANDS = ["claude", "openai", "gemini", "grok", "cursor", "kimi", "zai"];
 
@@ -100,6 +102,7 @@ export function Landing() {
             <p>Dock: one connection in your agent, to your agent dock. Drag it onto any app you paired and it follows your focus from app to app.</p>
             <div className="row">
               <Cta />
+              <a className="small" href="#dock">How the dock works</a>
             </div>
           </div>
           <div className="landing-card">
@@ -108,13 +111,15 @@ export function Landing() {
             </div>
             <p>Direct: each app gives your agent its own connection. The content goes from the app to your agent and never passes through us.</p>
             <div className="row">
-              <a className="landing-cta" href="#direct">See how Direct works</a>
+              {/* A live Direct app (TIN-578): Signals opens with its Connect panel. */}
+              <a className="landing-cta" href={DIRECT_TRY}>Connect to Signals</a>
+              <a className="small" href="#direct">How Direct works</a>
             </div>
           </div>
         </div>
       </section>
 
-      <section>
+      <section id="dock">
         <h2>How Connect once works</h2>
         <ol className="landing-steps">
           {STEPS.map((s, i) => (
@@ -143,7 +148,7 @@ export function Landing() {
           ))}
         </ol>
         <p className="muted small-note">
-          The details are in the <a href={`${REPO}/blob/main/DESIGN.md`}>design record</a>. The demo apps below pair through the dock for now; a demo app that takes Direct agents is coming.
+          Try it on <a href={DIRECT_TRY}>Signals</a> or Pulse: both demo apps below take agents both ways, and the same agent connected both ways shows as one. The details are in the <a href={`${REPO}/blob/main/DESIGN.md`}>design record</a>.
         </p>
       </section>
 
