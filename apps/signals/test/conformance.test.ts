@@ -9,6 +9,7 @@ import { test, type TestContext } from "node:test";
 import { apcConformance, type ApcAppAdapter } from "@apc/conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
 import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@apc/protocol";
+import { barCanCollapse, createTapPin, type BarAgent } from "@apc/web";
 import { generateDataset } from "../../demo/src/model/seed.ts";
 import { buildMarket } from "../../demo/src/model/market.ts";
 
@@ -98,6 +99,24 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       pin: async (grantId, target) => (await feed.pin(grantId, target, true)).ok,
       takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceEvent),
       revoke: async (grantId) => (await feed.revokeGrant(grantId)).ok,
+      // The page on a phone (APC 0.6), modelled with @apc/web's own pieces: the bar's collapse rule on mobile and
+      // the tap-to-pin controller `enablePinning` runs, which pins through the feed like the page's onPin does.
+      // The real page, at 375x812 with a touch pointer, is scripts/mobile-e2e.mjs.
+      mobile: {
+        async agentBar() {
+          const { grants } = (await feed.state()) as { grants: Array<{ id: string; path: "direct" | "dock"; linked_with: string | null }> };
+          const bar: BarAgent[] = grants.filter((g) => !(g.path === "dock" && g.linked_with)).map((g) => ({ id: g.id, name: g.id, state: "idle", paths: [g.path] }));
+          return { visible: bar.map((a) => a.id), collapsible: barCanCollapse(bar, true) };
+        },
+        async pinByTouch(grantId, target) {
+          const pins: Array<Promise<{ ok: boolean }>> = [];
+          const tap = createTapPin({ onPin: (id, t) => void pins.push(feed.pin(id, t)) });
+          tap.toggle(grantId);
+          assert.equal(tap.tap({ element: {} as Element, target }), "pinned");
+          return pins.length === 1 && (await pins[0]!).ok;
+        },
+        unpinByTouch: async (grantId) => (await feed.unpin(grantId), true),
+      },
     },
   };
   return { app, feed, room };

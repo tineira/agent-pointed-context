@@ -54,3 +54,11 @@ test("every agent in the bar can be revoked, and the button says what it does (A
   assert.equal(agentLabels({ ...agent, state: "off", pin: { label: "cus_0001", seen: false, here: true } }).revoke, labels.revoke);
   assert.ok(REVOKE_CONFIRM_MS >= 2000, "the second click has time to come");
 });
+
+test("on mobile the bar never collapses, whatever the agents' paths (APC 0.6)", () => {
+  assert.equal(barCanCollapse([dock], true), false, "a bar of dock agents only can collapse on a desktop, never on a phone");
+  assert.equal(barCanCollapse([dock, { ...dock, id: "k2" }], true), false);
+  assert.equal(barCanCollapse([direct], true), false);
+  assert.equal(barCanCollapse([dock], false), true, "the desktop rule is unchanged");
+  assert.equal(barCanCollapse([dock]), true, "mobile is off by default");
+});

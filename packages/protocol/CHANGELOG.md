@@ -4,6 +4,16 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
 
+## 0.6.0 (draft, 2026-11-04)
+
+On mobile, every app shows the agent in its page (TIN-608). In `packages/protocol/src/core.ts`, `packages/web`, `packages/conformance` and DESIGN.md section 19.
+
+- **A new core rule (item 9).** In a viewport that matches `APC_MOBILE_MEDIA` (`(pointer: coarse), (max-width: 640px)`: a touch device, or a narrow window), an app shows its agents in its own page, each with its mark visible and usable for pinning, on both profiles. On a phone there is no dock window, extension or desktop pet to drag from, so the agent in the page is the only way the person can point it. The Dock profile's rule that the agent bar may collapse (0.4.0) does not apply there: the bar is never collapsed or hidden, and it stays reachable while the page scrolls without covering content.
+- **A finger can pin.** With no mouse drag (phone browsers do no HTML5 drag and drop): touching the agent's mark and then a target (tap to pin, with a clear state and a way to cancel), or dragging the mark with a finger by pointer events. The result is the same pin as a mouse drag's. Unpin and Revoke work by touch, with finger-sized targets.
+- `APC_MOBILE_MEDIA` and `APC_MOBILE_VIEWPORT` (375 x 812, the reference viewport) are exported.
+- **Conformance.** An adapter may give `page.mobile` (`ApcMobilePage`: `agentBar`, `pinByTouch`, `unpinByTouch`). The suite then checks that every connected agent is shown in the page and the bar cannot be collapsed, that a pin made by touch is read by the agent through `get_current_view`, and that unpin by touch removes it.
+- An app that implemented 0.5 and meets the rule needs no change to its MCP surface or `apc.json`; `standard` in `apc.json` may say 0.5.0 or 0.6.0.
+
 ## 0.5.0 (draft, 2026-11-03)
 
 Discovery with `apc.json`, and a clear answer to a drop an app cannot take (TIN-579). In `packages/protocol/src/manifest.ts`, `packages/server/src/apc-json.ts`, `packages/web/src/pinning.ts`, `packages/conformance`, `apps/dock/src/worker/hub.ts` and DESIGN.md section 17.

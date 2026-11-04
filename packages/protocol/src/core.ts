@@ -28,6 +28,8 @@
  *    with a one-time code; it grants nothing (`ApcLinkOffer`).
  * 8. **`apc.json`** (APC 0.5): what the app is, at `GET {origin}/.well-known/apc.json`: its name, the
  *    standard, its origin, its profiles, where its MCP URLs live, its connect page (`manifest.ts`).
+ * 9. **Mobile** (APC 0.6): on a phone or any touch viewport (`APC_MOBILE_MEDIA`) the app shows its agents
+ *    in its own page, on both profiles (below).
  *
  * `@apc/conformance` checks an app against this core, given its MCP endpoint and a small adapter for
  * what happens in the page.
@@ -114,6 +116,27 @@ export function isRevokedAnswer(body: unknown): body is RevokedAnswer {
   const b = body as Partial<RevokedAnswer> | null;
   return !!b && typeof b === "object" && b.error === REVOKED_ERROR && typeof b.revoked_by === "string";
 }
+
+/**
+ * Mobile (APC 0.6). On a phone there is no dock window, browser extension or desktop pet to drag an
+ * agent from, so the agent in the app's own page is the only way the person can point it (give it
+ * focus). So, in a viewport that matches `APC_MOBILE_MEDIA`, on both profiles:
+ *
+ * - **The agents are shown in the page**, all of them, each with its mark visible and usable for
+ *   pinning. This holds whatever the app's profiles, and whatever the agent bar does elsewhere: the
+ *   Dock profile's rule that the bar may collapse to a small indicator does not apply, and the bar is
+ *   never hidden or collapsed. It stays reachable while the page scrolls, without covering content
+ *   the person needs.
+ * - **The person can pin with a finger, with no mouse drag.** Browsers on phones do not do HTML5
+ *   drag and drop, so the app takes a touch alternative: touching the agent's mark and then a target
+ *   ("tap to pin": a clear state, a way to cancel), or dragging the mark with a finger with pointer
+ *   events. The result is the same pin (`FocusTarget`) as a mouse drag. Removing the pin (unpin) and
+ *   Revoke work by touch too, with targets large enough for a finger.
+ *
+ * `APC_MOBILE_VIEWPORT` is the reference viewport the conformance suite and the apps are checked at.
+ */
+export const APC_MOBILE_MEDIA = "(pointer: coarse), (max-width: 640px)";
+export const APC_MOBILE_VIEWPORT = { width: 375, height: 812 } as const;
 
 /** The other path: Direct for Dock and Dock for Direct. */
 export function oppositePath(path: ApcProfile): ApcProfile {

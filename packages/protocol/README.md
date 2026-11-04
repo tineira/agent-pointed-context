@@ -15,6 +15,7 @@ What every APC app implements, whichever way agents reach it ([`src/core.ts`](sr
 | `get_current_view`, `wait_for_focus` | The two core tools (`CORE_TOOLS`), with `then` on results while a page of the person's is open, never on a wait that came back empty. A wait returns a pin dropped during it, times out cleanly, and ends as soon as the app knows the page is closed. |
 | `apc.json` | Serves `/.well-known/apc.json` from its own origin: what it is and which profiles it offers (below). |
 | `apc_link` | Only with both profiles: the same agent on both paths shown as one, with a one-time code; it grants nothing (below). |
+| Mobile (0.6) | On a phone or any touch viewport (`APC_MOBILE_MEDIA`) shows its agents in its own page, on both profiles (below). |
 | Revoke from the app | Revoke on every agent in the agent bar. At once, in the app alone (it calls nobody): the grant's MCP URL answers 403 with `RevokedAnswer` from then on, a call already running ends the same way, and the grant never works again. |
 
 What belongs to a profile, not to the core:
@@ -25,6 +26,15 @@ What belongs to a profile, not to the core:
 Whatever it offers, an app publishes `apc.json` (below).
 
 An app offers one profile or both. Pulse (`apps/demo`) and Signals (`apps/signals`) offer both, declared in `APC_PROFILES` in their `wrangler.jsonc`; the Direct profile's parts are packaged in `@apc/server` (`direct.ts`) and `@apc/web` (`<apc-direct-agents>`).
+
+### Mobile (0.6)
+
+On a phone there is no dock window, browser extension or desktop pet to drag an agent from, so the agent in the app's own page is the only way the person can point it. In a viewport that matches `APC_MOBILE_MEDIA` (`(pointer: coarse), (max-width: 640px)`), on both profiles, an app ([`src/core.ts`](src/core.ts)):
+
+- **shows its agents in the page**, each with its mark visible and usable for pinning. The Dock profile's rule that the agent bar may collapse does not apply there, and the bar is never collapsed or hidden; it stays reachable while the page scrolls without covering content the person needs;
+- **lets a finger pin**, with no mouse drag (phone browsers do no HTML5 drag and drop): touching the agent's mark and then a target ("tap to pin", with a clear state and a way to cancel), or dragging the mark with a finger by pointer events. The pin is the same `FocusTarget` as a mouse drag's. Unpin and Revoke work by touch, with finger-sized targets.
+
+`@apc/web` does both (`<apc-agents>`, `enablePinning`). `APC_MOBILE_VIEWPORT` (375 x 812) is the reference viewport; `@apc/conformance` checks it through the adapter's `page.mobile`.
 
 ### `apc_link` (0.4)
 
