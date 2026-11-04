@@ -59,6 +59,8 @@ export function createApi(sid: string) {
     setting: (name: "share_view" | "show_activity", on: boolean) => post("/settings", { name, on }),
     pin: (grantId: string, target: FocusTarget) => post<{ ok: boolean; error?: string }>("/pin", { grant_id: grantId, target }),
     unpin: (grantId: string) => post("/unpin", { grant_id: grantId }),
+    /** Revoke from the app (APC 0.2): the agent's grant goes at once, whichever way it came. */
+    revoke: (grantId: string) => post<{ ok: boolean; error?: string }>(`/grants/${grantId}/revoke`, {}),
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
     reset: () => post<{ ok: boolean }>("/reset", {}),

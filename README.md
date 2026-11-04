@@ -49,7 +49,8 @@ The packages are TypeScript sources in this workspace (not on npm yet). They are
 |---|---|
 | [`@apc/protocol`](packages/protocol) | wire types, the target grammar (kinds, parts, key-only params), `data-focus` attributes |
 | [`@apc/server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent` |
-| [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`), `flashTargets` for presence, `createViewReporter` |
+| [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`), `flashTargets` for presence, `createViewReporter`, the agent bar `<apc-agents>` with Revoke |
+| [`@apc/conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint |
 
 On the server, register the two APC tools next to your own and attach the envelope to every result while a pin is unread:
 
@@ -79,6 +80,24 @@ import { enablePinning } from "@apc/web";
 
 enablePinning({ onPin: (grantId, target) => savePin(grantId, target) });
 ```
+
+Every APC app implements the same core, whichever way agents reach it (directly on its own MCP URL, or once through a dock): the view, the pin, presence, the focus format, `get_current_view`, `wait_for_focus`, and Revoke in the app itself. [`packages/protocol/README.md`](packages/protocol/README.md#the-core) sums it up. To check your app against it, run the conformance suite on its MCP endpoint, with a small adapter for what happens in your page (the view it reports, the pin the person drops, the presence you send it, Revoke):
+
+```ts
+import { test } from "node:test";
+import { apcConformance } from "@apc/conformance";
+
+for (const check of apcConformance({
+  name: "My app",
+  profile: "direct",
+  connect: async () => ({ mcpUrl, grantId }),               // a new agent with full access, no pin yet
+  targets: [firstTarget, secondTarget],                       // two things the person can point at
+  probe: { tool: "list_things", args: {} },                   // one of your read tools
+  page: { setOpen, showView, pin, takePresence, revoke },     // your page, as your server sees it
+})) test(check.name, check.run);
+```
+
+Pulse (both profiles) and Signals run it in `pnpm test` with no network ([`apps/demo/test/conformance.test.ts`](apps/demo/test/conformance.test.ts), [`apps/signals/test/conformance.test.ts`](apps/signals/test/conformance.test.ts)); `@apc/conformance/workers` runs a Cloudflare Durable Object on Node for that.
 
 The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) (the sandbox, the MCP endpoint, grant trimming, the figure registry) and [`apps/v1/src/web`](apps/v1/src/web) (marks, pins, presence), V1 as the paper describes it, frozen with its own copy of the packages in [`apps/v1/src/apc`](apps/v1/src/apc). [`apps/demo`](apps/demo) is the same Pulse moving on with the APC standard.
 
@@ -124,7 +143,8 @@ On Windows the local Workers runtime needs the Microsoft Visual C++ Redistributa
 |---|---|
 | `packages/protocol` | wire types and the target grammar |
 | `packages/server` | the attention envelope, `get_current_view`, `wait_for_focus`, presence events |
-| `packages/web` | drag-to-pin, presence marks, view reporting |
+| `packages/web` | drag-to-pin, presence marks, view reporting, the agent bar and pin badge |
+| `packages/conformance` | the conformance suite for the core of the standard, and a Durable Object stand-in for Node |
 | `apps/v1` | V1, frozen (TIN-604): Pulse as the paper describes it, at apc.tineira.com/v1 (Worker `apc-demo`), with its own copy of the three packages in `src/apc`; changed only to keep it running ([README](apps/v1/README.md)) |
 | `apps/demo` | Pulse for the APC standard: a Cloudflare Worker with one Durable Object per visitor, a Vite + React front end, paired from the dock (`apc-pulse`, pulse.apc.tineira.com) |
 | `apps/signals` | The APC standard: Signals, a market feed (competitor offers and our ads, from the same seed as Pulse) as the second APC app (`apc-signals`, signals.apc.tineira.com) |

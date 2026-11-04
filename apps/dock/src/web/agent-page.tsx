@@ -36,7 +36,8 @@ export interface DockAgent {
   readings: ReadingRow[];
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
   /** Apps, and browsers sending page readings (kind "reader", TIN-421). */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired"; created_at: string; page_open: boolean | null; error: string | null }>;
+  /** revoked: the app revoked the grant itself (APC 0.2); revoked_by is the app's host. */
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 export interface DockState {
@@ -183,6 +184,7 @@ export function AgentPage(props: {
   const [calls, setCalls] = useState<CallEntry[] | null>(null);
   const connected = !!a.client_name;
   const paired = a.pairings.filter((p) => p.status === "paired");
+  const revoked = a.pairings.filter((p) => p.status === "revoked");
   const names = new Map(a.pairings.map((p) => [p.app.id, p.app.name]));
   useEffect(() => {
     call<{ calls: CallEntry[] }>(`${base}/agents/${a.id}/calls`).then((r) => setCalls(r.calls ?? []), () => setCalls([]));
@@ -296,7 +298,7 @@ export function AgentPage(props: {
             </div>
           </div>
         ))}
-        {paired.length === 0 && props.requests.length === 0 ? (
+        {paired.length === 0 && revoked.length === 0 && props.requests.length === 0 ? (
           <p className="muted">None yet. Drag {a.name} onto an app to pair it.</p>
         ) : (
           <ul className="apps">
@@ -308,6 +310,19 @@ export function AgentPage(props: {
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")}>
                   Unpair
+                </button>
+              </li>
+            ))}
+            {/* Revoked in the app itself (APC 0.2): the dock no longer reads it, and pairing again takes a new drop there. */}
+            {revoked.map((p) => (
+              <li key={p.id} className="revoked">
+                <span>
+                  {p.app.name} <span className="warn">· Revoked by {p.revoked_by ?? host(p.app.origin)}</span>
+                  {p.revoked_at ? <span className="muted"> · {when(p.revoked_at)}</span> : null}
+                  <span className="muted"> · drop {a.name} on it again to ask for access</span>
+                </span>
+                <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
+                  Remove
                 </button>
               </li>
             ))}

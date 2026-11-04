@@ -6,7 +6,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow, FocusTarget } from "@apc/protocol";
-import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, thenBytes, toolError, toolResult, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, envelopeBytes, isUnread, presenceEvent, revokedResponse, revokedToolResult, secretHash, thenBytes, toolError, toolResult, type ToolResult } from "@apc/server";
 import { generateDataset, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
@@ -54,7 +54,6 @@ function stable(value: unknown): string {
 }
 
 const bytes = (value: unknown) => new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value ?? null)).length;
-
 /** One call to a dock's hub, server to server (TIN-382, TIN-389). Any failure is an answer, never a throw. */
 async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name?: unknown; icon?: unknown } }> {
   try {
@@ -95,6 +94,8 @@ export class Sandbox extends DurableObject<Env> {
       create table if not exists hub_links (
         hub text not null, agent text not null, grant_id text not null references grants(id) on delete cascade,
         pairing_id text, created_at text not null, primary key (hub, agent));
+      create table if not exists revoked_grants (
+        secret_hash text primary key, grant_id text not null, hub text, agent text, revoked_at text not null);
     `);
     // Columns added after the table: client_icon (TIN-350), the names (TIN-356). A sandbox made before lacks them.
     for (const column of ["client_icon", "client_title", "agent_name", "owner_name", "conflict", "client_ua"]) {
@@ -479,6 +480,40 @@ export class Sandbox extends DurableObject<Env> {
     return { ok: true };
   }
 
+  /**
+   * Revoke from the app (APC 0.2, TIN-577): the person cuts an agent from Pulse itself, whichever way it
+   * came (its own URL, or a dock's hub). It holds at once and calls nobody, so it holds with the hub
+   * down: the grant, its pin and its dock link go, and its MCP URL answers 403 "revoked" from then on
+   * (mcp()), with a call already running ending the same way (instrument()). It never comes back by
+   * itself: a dock agent dropped here again asks the person, as a new one does.
+   */
+  async revokeGrant(grantId: string): Promise<{ ok: boolean; error?: string }> {
+    const found = this.grants().find((g) => g.id === grantId);
+    if (!found) return { ok: false, error: "unknown_grant" };
+    const hash = await secretHash(found.secret);
+    // Everything below is synchronous storage work: nothing runs between the check and the deletes.
+    if (!this.grants().some((g) => g.id === grantId)) return { ok: false, error: "unknown_grant" };
+    const link = this.sql.exec<{ hub: string; agent: string }>("select hub, agent from hub_links where grant_id = ?", grantId).toArray()[0];
+    this.sql.exec(
+      "insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)",
+      hash, grantId, link?.hub ?? null, link?.agent ?? null, new Date().toISOString(),
+    );
+    this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
+    this.sql.exec("delete from hub_links where grant_id = ?", grantId);
+    this.sql.exec("delete from grants where id = ?", grantId);
+    this.log("revoked", grantId, { via: link ? "dock" : "direct" });
+    this.broadcast({ type: "grants" });
+    return { ok: true };
+  }
+
+  /** When the person revoked this grant in the app, or null: by its id (a call in flight) or its secret's hash (a new request). */
+  private revokedAt(by: { grantId: string } | { hash: string }): string | null {
+    const row = "grantId" in by
+      ? this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where grant_id = ?", by.grantId).toArray()[0]
+      : this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where secret_hash = ?", by.hash).toArray()[0];
+    return row?.revoked_at ?? null;
+  }
+
   /** A dock's grant goes with its pins and its link: given back by the hub, or no longer paired there. */
   private async dropHubGrant(grantId: string): Promise<void> {
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
@@ -534,7 +569,12 @@ export class Sandbox extends DurableObject<Env> {
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "sandbox_expired" }, { status: 404 });
     const grant = this.grants().find((g) => g.secret === secret);
-    if (!grant) return Response.json({ error: "unknown_grant" }, { status: 404 });
+    if (!grant) {
+      // Revoked in the app (APC 0.2): 403 with the answer, whatever the method, so the holder (an agent, or a dock's hub) can say so.
+      const revokedAt = this.revokedAt({ hash: await secretHash(secret) });
+      if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
+      return Response.json({ error: "unknown_grant" }, { status: 404 });
+    }
     await this.touch();
 
     if (request.method === "POST") {
@@ -621,7 +661,8 @@ export class Sandbox extends DurableObject<Env> {
         this.log("seen", grant.id, { pinned_at: row.pinned_at, seen_at: seenAt, via: call.tool });
         this.broadcast({ type: "pin", grant_id: grant.id, pin: this.focusRow(grant.id) });
       },
-      pageOpen: async () => this.attendance(),
+      // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
+      pageOpen: async () => (this.grants().some((g) => g.id === grant.id) ? this.attendance() : false),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
@@ -666,6 +707,15 @@ export class Sandbox extends DurableObject<Env> {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>
       register(name, config, async (args: Record<string, unknown>, extra: unknown) => {
+        // Revoke from the app (APC 0.2): a call of a grant revoked since its request came in (one of a
+        // batch, or the next poll of a wait) gets the revoked answer and nothing of Pulse's.
+        const cut = (): ToolResult | null => {
+          if (this.grants().some((g) => g.id === grant.id)) return null;
+          const revokedAt = this.revokedAt({ grantId: grant.id });
+          return revokedAt ? revokedToolResult(new URL(origin).host, revokedAt) : toolError("unknown_grant", "This grant no longer exists.");
+        };
+        const before = cut();
+        if (before) return before;
         const started = Date.now();
         const tool = String(name);
         call.tool = tool;
@@ -681,6 +731,8 @@ export class Sandbox extends DurableObject<Env> {
         } finally {
           if (waiting) this.broadcast({ type: "waiting", grant_id: grant.id, on: false });
         }
+        const after = cut();
+        if (after) return after;
 
         const row = this.focusRow(grant.id);
         const focus = resolveFocus(row, grant, data, origin);

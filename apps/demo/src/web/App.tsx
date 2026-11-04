@@ -307,6 +307,15 @@ function Sandbox({ sid }: { sid: string }) {
               }}
               onUnpin={(id) => void api.unpin(id)}
               onWarning={() => nav("agents")}
+              onRevoke={(id) => {
+                // Revoke from the app (APC 0.2): at once, here; the dock learns it on its next call.
+                const name = names.get(id) ?? "Your agent";
+                void api.revoke(id).then((r) => {
+                  setNotice(r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, drop it here again from your dock.` : `Not revoked: ${r.error}`);
+                  setTimeout(() => setNotice(null), 8000);
+                  void refresh();
+                });
+              }}
             />
           ) : (
             <div className="marks">

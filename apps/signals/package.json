@@ -21,6 +21,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@apc/conformance": "workspace:*",
     "@cloudflare/vite-plugin": "1.64.0",
     "@cloudflare/workers-types": "5.20261012.1",
     "@types/react": "19.3.0",

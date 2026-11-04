@@ -23,9 +23,22 @@ const PROTOCOL = "2025-06-18";
 export class AppCallError extends Error {
   /** The app's HTTP status, when it answered with an error. */
   readonly status: number | undefined;
-  constructor(message: string, status?: number) {
+  /** The `error` of the app's JSON body, when it gave one: "revoked" when the person revoked the grant in the app (APC 0.2). */
+  readonly code: string | undefined;
+  constructor(message: string, status?: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
+  }
+}
+
+/** The `error` field of an error response's JSON body, if any. */
+async function errorCode(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { error?: unknown } | null;
+    return typeof body?.error === "string" ? body.error.slice(0, 64) : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -36,7 +49,10 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok) throw new AppCallError(`${method}: HTTP ${response.status}`, response.status);
+  if (!response.ok) {
+    const code = await errorCode(response);
+    throw new AppCallError(`${method}: HTTP ${response.status}${code ? ` ${code}` : ""}`, response.status, code);
+  }
   const type = response.headers.get("content-type") ?? "";
   type Reply = { result?: unknown; error?: { message?: string } } | null;
   let message: Reply = null;

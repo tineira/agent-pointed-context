@@ -361,6 +361,8 @@ export function HubDock() {
         {state.agents.map((a) => {
           const connected = !!a.client_name;
           const paired = a.pairings.filter((p) => p.status === "paired");
+          // Apps that revoked this agent themselves (APC 0.2), by host.
+          const revokedBy = a.pairings.filter((p) => p.status === "revoked").map((p) => p.revoked_by ?? host(p.app.origin));
           return (
             <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
               <div className="tile-drag" {...dragProps(a)}>
@@ -393,7 +395,8 @@ export function HubDock() {
                   }}
                 >
                   Details{paired.length ? ` · ${paired.length} app${paired.length === 1 ? "" : "s"}` : ""}
-                  {a.calls ? ` · ${a.calls} call${a.calls === 1 ? "" : "s"}` : ""} →
+                  {a.calls ? ` · ${a.calls} call${a.calls === 1 ? "" : "s"}` : ""}
+                  {revokedBy.length ? ` · revoked by ${revokedBy.join(", ")}` : ""} →
                 </a>
               ) : (
                 // Not connected yet: how to connect it stays under its tile, as in the first run.

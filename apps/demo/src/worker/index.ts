@@ -147,6 +147,11 @@ app.post("/api/s/:sid/grants/:id/conflict", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
   return c.json(await rpc(c.env, c.var.sid, (s) => s.resolveConflict(c.req.param("id"), body.action)));
 });
+/** Revoke from the app (APC 0.2, TIN-577): the person cuts an agent, direct or from a dock, at once; the hub is not called. */
+app.post("/api/s/:sid/grants/:id/revoke", async (c) => {
+  const result = await rpc(c.env, c.var.sid, (s) => s.revokeGrant(c.req.param("id")), 1);
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/s/:sid/tour", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
   return c.json(await rpc(c.env, c.var.sid, (s) => s.tourAction(body.action)));

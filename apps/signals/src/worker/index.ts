@@ -77,6 +77,11 @@ app.post("/api/s/:sid/unpin", async (c) => {
   await stub(c).unpin(body.grant_id);
   return c.json({ ok: true });
 });
+/** Revoke from the app (APC 0.2, TIN-577): the person cuts an agent at once; the dock's hub is not called. */
+app.post("/api/s/:sid/grants/:id/revoke", async (c) => {
+  const result = await stub(c).revokeGrant(c.req.param("id"));
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/s/:sid/hub/pair", async (c) => {
   const result = await stub(c).pairHub(c.var.sid, new URL(c.req.url).origin, await c.req.json().catch(() => null));
   return c.json(result, result.ok ? 200 : 400);

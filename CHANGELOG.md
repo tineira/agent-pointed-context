@@ -18,6 +18,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Dock
 
+- **The dock says when an app revoked an agent.** The hub learns it on its next call to the app (403 `revoked`): the pairing shows **Revoked by** the app's host on the agent's page and its tile, the hub stops relaying to it and drops the view and pin it took from it, never confirms it on a drop, and a new pairing with that app replaces the line. (TIN-577, `apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/app-client.ts`, `apps/dock/src/web/agent-page.tsx`)
 - **The dock retries when the network is back after sleep.** A laptop that wakes with no connection no longer leaves the dock stuck on an error; it tries again when the network returns. (#109, `apps/dock/src/web/hub.tsx`)
 - **The extension's readings are listed in the dock.** Each agent's page shows the log of its last 50 readings, with the site, time and size only, and a **Clear** button. (#107, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/worker/reading.ts`)
 - **The dock's footer controls and the platform downloads are back** after the checklist change. (#103, `apps/dock/src/web/downloads.tsx`)
@@ -46,6 +47,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Pulse
 
+- **Revoke an agent from Pulse itself, even one from a dock.** Every agent in Pulse's agent bar has Revoke (⊘, then **Revoke?**): its grant, pin and dock link go at once, with no call to the dock, so it holds with the dock down; its MCP URL answers 403 `revoked` from then on, a call already running ends the same way, and the next drop asks again in Pulse and in the dock. Only a hash of a revoked grant's secret is kept, to answer `revoked`. (TIN-577, `apps/demo/src/worker/sandbox.ts`, `apps/demo/src/worker/index.ts`, `apps/demo/src/web/App.tsx`)
 - **V1 is frozen at apc.tineira.com/v1, in an app of its own.** The paper describes V1, so it no longer shares code with anything else: `apps/v1` is today's V1 build of Pulse with a copy of the `@apc/protocol`, `@apc/server` and `@apc/web` source it uses (and their tests) inside the app, no `@apc/*` workspace dependency, and the v2-only code left out. It runs on the same Worker (`apc-demo`, same Durable Objects, secret and analytics dataset) and serves everything under `/v1`: the page, `/v1/api/*`, the MCP URLs `/v1/mcp/<sandbox>/<secret>` and every `app_url` an agent gets. `/` redirects to `/v1/` until phase 0c; the old root URLs are gone. CI deploys V1 only when `apps/v1/` changes; `apps/demo` is now Pulse for the standard only (its former env `v2` is its top-level config) and the `pulse-agent` skill is generated from, and drift-tested against, V1's copy of the manual. (#112, `apps/v1`, `apps/demo/wrangler.jsonc`, `apps/demo/src/worker/guide.ts`, `scripts/build-skill.mjs`, `package.json`, `.github/workflows/ci.yml`)
 - **V1 is served under `/v1` without `assets.base_path`,** which Cloudflare refused on the first deploy (code 100343). The page's files now sit in a `v1/` folder of the assets directory, so every URL stays the same; the Worker gets the `ASSETS` binding and itself answers an app route under `/v1/` with `v1/index.html`, while a missing file stays a 404 and nothing outside `/v1` ever gets the page. (`apps/v1/vite.config.ts`, `apps/v1/v1/index.html`, `apps/v1/public/v1/`, `apps/v1/wrangler.jsonc`, `apps/v1/src/worker/index.ts`)
 - **`GET /api/health` is public** on Pulse and on the dock, for uptime probes. (#104, `apps/demo/src/worker/index.ts`, `apps/dock/src/worker/index.ts`)
@@ -75,6 +77,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Signals
 
+- **Revoke an agent from Signals itself,** as in Pulse, with no call to the dock. Signals now also publishes presence (`get_post` names the post) and, like Pulse, sends no `then` on a `wait_for_focus` that came back empty; its page ignores presence for now, so nothing else changes on screen. (TIN-577, `apps/signals/src/worker/feed.ts`, `apps/signals/src/web/app.tsx`)
 - **Signals has a realistic social feed look.** (#38, `apps/signals/src/web/styles.css`)
 - **Signals, the second APC v2 app,** and prefixed tools (`<app>__<tool>`) in the hub. (#37, `apps/signals/`)
 
@@ -109,6 +112,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Packages
 
+- **The APC standard 0.2.0: the core written down, and a conformance suite.** `@apc/protocol` names the core every app implements on either profile (Direct or Dock) and revoke from the app (`RevokedAnswer`); `@apc/server` gives the revoked answer (`revokedResponse`, `revokedToolResult`); `<apc-agents>` gets Revoke (event `apc-revoke`); and the new `@apc/conformance` checks any APC app through its MCP endpoint and a small page adapter, with `@apc/conformance/workers` to run a Durable Object on Node. Pulse (both profiles) and Signals pass it in `pnpm test`. (TIN-577, `packages/protocol/src/core.ts`, `packages/server/src/revoke.ts`, `packages/web/src/agents-bar.ts`, `packages/conformance`)
 - **`<apc-pin>`, a standard pin badge in `@apc/web`:** drag a pinned agent on in every APC app. (#95, `packages/web/src/pin-badge.ts`)
 - **`<apc-agents>`, the standard agent bar in `@apc/web`,** used by Pulse v2 and Signals. (#41, `packages/web/src/agents-bar.ts`)
 - **`enablePinning` accepts native drops of an agent** dragged from another window, opt in. (#32, `packages/web/src/pinning.ts`)
