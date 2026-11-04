@@ -1,8 +1,24 @@
 {
   "name": "@apc/protocol",
   "version": "0.7.0",
+  "description": "Agent Pointed Context (APC): the contract an app and an AI agent share. Wire types, the target grammar, the core, apc.json and the version of the standard.",
+  "keywords": ["apc", "agent-pointed-context", "mcp", "model-context-protocol", "ai-agents", "protocol"],
+  "homepage": "https://apc.tineira.com/docs",
+  "bugs": { "url": "https://github.com/tineira/agent-pointed-context/issues" },
+  "repository": { "type": "git", "url": "git+https://github.com/tineira/agent-pointed-context.git", "directory": "packages/protocol" },
   "license": "MIT",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "sideEffects": false
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "sideEffects": false,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "prepack": "node ../../scripts/check-packages.mjs --dist"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next",
+    "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+    "types": "./dist/index.d.ts"
+  }
 }

@@ -1,0 +1,66 @@
+name: Publish @apc/* to npm
+
+# The four packages (@apc/protocol, @apc/server, @apc/web, @apc/conformance) go to npm as 0.x pre-releases on the
+# `next` dist-tag (TIN-612), never `latest` before the standard is 1.0. A tag `apc-v<version>` publishes that version
+# (the four package.json versions, which scripts/check-packages.mjs holds to APC_STANDARD_VERSION); running it by hand
+# (workflow_dispatch) is a dry run that publishes nothing. Publishing needs the repository secret NPM_TOKEN (an npm
+# automation or granular token with publish rights on the @apc scope); provenance comes from GitHub's OIDC token.
+
+on:
+  push:
+    tags: ["apc-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DRY_RUN: ${{ github.event_name != 'push' }}
+    steps:
+      - name: Check the npm token
+        if: github.event_name == 'push'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error title=NPM_TOKEN is missing::The repository secret NPM_TOKEN is not set, so nothing can be published. Add an npm token with publish rights on the @apc scope as NPM_TOKEN (Settings > Secrets and variables > Actions), then re-run this workflow or push the tag again."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Check the versions (and the tag)
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            node scripts/check-packages.mjs --tag "$GITHUB_REF_NAME"
+          else
+            node scripts/check-packages.mjs
+          fi
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: node scripts/build-packages.mjs
+      - run: node scripts/check-packages.mjs --dist
+      - name: Publish (a dry run unless this is a tag)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            pnpm -r --filter "./packages/*" publish --tag next --access public --no-git-checks --dry-run
+          else
+            pnpm -r --filter "./packages/*" publish --tag next --access public --no-git-checks --provenance
+          fi

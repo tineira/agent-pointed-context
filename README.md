@@ -43,14 +43,14 @@ Measurements (load test up to 150 visitors at once, CPU per request) are in [DES
 
 ## Use the pattern in your app
 
-The packages are TypeScript sources in this workspace (not on npm yet). They are small, so copying them is fine too.
+The packages go to npm as 0.x pre-releases on the `next` tag ([Using the packages](#using-the-packages)); in this workspace the apps use their TypeScript sources. They are small, so copying them is fine too.
 
 | Package | What it gives you |
 |---|---|
 | [`@apc/protocol`](packages/protocol) | wire types, the target grammar (kinds, parts, key-only params), `data-focus` attributes |
 | [`@apc/server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent`; the Direct profile (`newDirectGrant`, `directMcpUrl`, `initializeOf`, `parseProfiles`), `apc_link` (`ApcLinks`, `registerApcLinkTool`, `sqlKv`) and `apc.json` (`apcManifest`, `apcJsonResponse`) |
 | [`@apc/web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`; on a Direct-only app, the answer to a dock agent's drop), `flashTargets` for presence, `createViewReporter`, the agent bar `<apc-agents>` with Revoke, paths, Unlink and the dock hint, and the Direct agent list `<apc-direct-agents>` with the connect instructions (`connectPrompt`) |
-| [`@apc/conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint |
+| [`@apc/conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint, in your tests or live with `npx @apc/conformance@next <app-origin>` |
 
 On the server, register the two APC tools next to your own and attach the envelope to every result while a pin is unread:
 
@@ -119,6 +119,22 @@ To offer the Direct profile (each agent on its own MCP URL), your Durable Object
 
 The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) (the sandbox, the MCP endpoint, grant trimming, the figure registry) and [`apps/v1/src/web`](apps/v1/src/web) (marks, pins, presence), V1 as the paper describes it, frozen with its own copy of the packages in [`apps/v1/src/apc`](apps/v1/src/apc). [`apps/demo`](apps/demo) is the same Pulse moving on with the APC standard.
 
+## Using the packages
+
+`@apc/protocol`, `@apc/server`, `@apc/web` and `@apc/conformance` go to npm together, as 0.x pre-releases on the `next` dist-tag (never `latest` before the standard is 1.0). Their version follows the standard's: 0.7.x ships APC 0.7 (`APC_STANDARD_VERSION`).
+
+```sh
+npm i @apc/protocol@next @apc/web@next                                # the page
+npm i @apc/server@next @modelcontextprotocol/sdk zod                  # the server (the SDK and zod are peers)
+npx @apc/conformance@next https://your.app --grant <an agent's MCP URL>   # check a live app
+```
+
+They are ESM with type declarations. `@apc/protocol` and `@apc/web` have no Node imports (`@apc/web` is browser code for any bundler); `@apc/server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@apc/conformance` needs Node 22.15+. Each package's README has a minimal example; the docs are at https://apc.tineira.com/docs.
+
+`apc-conformance` checks over HTTP what HTTP reaches: the app's `apc.json` and, with `--grant` (an agent's MCP URL, Direct profile), `initialize`, the core tools and their arguments, the shapes of `get_current_view`, `attention` and `then`, `wait_for_focus` timing, an unknown grant's 404 and, with `--revoked`, a revoked grant's 403. `PASS`, `FAIL` or `SKIP` per check, exit 1 on a failure, `--json` for the report. What needs the person's page (a pin, the page open or closed, presence, Revoke pressed, mobile, `apc_link`) is reported `SKIP`: run `apcConformance` with an adapter for that (above). It reads only that origin, over https (`--allow-http` for localhost), never follows a redirect, caps every answer and times out every request.
+
+**Releasing them.** In the workspace each package's `exports` point at `src/`; what pnpm publishes points at `dist/` (`publishConfig`), and `workspace:^` becomes `^<version>`. `pnpm build:packages` builds `dist/` (tsc, ESM and `.d.ts`), and `pnpm check:packages` checks that the four share one version that matches `APC_STANDARD_VERSION`; `pnpm build` runs both. To release, set the four versions, merge, and push the tag `apc-v<version>`: [`.github/workflows/publish.yml`](.github/workflows/publish.yml) checks the tag, typechecks, tests, builds and runs `pnpm -r publish --tag next --access public` with npm provenance. It needs the repository secret `NPM_TOKEN` (it stops at once, saying so, without it); run by hand, it is a dry run. Locally: `pnpm build:packages && pnpm -r --filter "./packages/*" publish --dry-run --tag next --no-git-checks`. Pack with pnpm, not npm: a pack with npm stops, since only pnpm writes the published manifest.
+
 ## The agent's manual (optional)
 
 The server already tells every agent the essentials (its instructions, the tool descriptions, the `attention` and `then` keys). The full manual is opt-in, in two forms with the same text:
@@ -162,7 +178,8 @@ On Windows the local Workers runtime needs the Microsoft Visual C++ Redistributa
 | `packages/protocol` | wire types and the target grammar |
 | `packages/server` | the attention envelope, `get_current_view`, `wait_for_focus`, presence events |
 | `packages/web` | drag-to-pin, presence marks, view reporting, the agent bar and pin badge |
-| `packages/conformance` | the conformance suite for the core of the standard, and a Durable Object stand-in for Node |
+| `packages/conformance` | the conformance suite for the core of the standard, the `apc-conformance` command (the checks HTTP reaches, against a live app), and a Durable Object stand-in for Node |
+| `scripts/build-packages.mjs`, `scripts/check-packages.mjs` | build the four packages' `dist/` for npm, and check their versions and manifests before a release (`.github/workflows/publish.yml`) |
 | `apps/v1` | V1, frozen (TIN-604): Pulse as the paper describes it, at apc.tineira.com/v1 (Worker `apc-demo`), with its own copy of the three packages in `src/apc`; changed only to keep it running ([README](apps/v1/README.md)) |
 | `apps/demo` | Pulse for the APC standard: a Cloudflare Worker with one Durable Object per visitor, a Vite + React front end, paired from the dock (`apc-pulse`, pulse.apc.tineira.com) |
 | `apps/signals` | The APC standard: Signals, a market feed (competitor offers and our ads, from the same seed as Pulse) as the second APC app (`apc-signals`, signals.apc.tineira.com) |

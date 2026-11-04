@@ -1,6 +1,26 @@
 # @apc/protocol
 
-The contract an app and an agent share in Agent Pointed Context: wire types, the target grammar, the version of the standard (`APC_STANDARD_VERSION`) and the core. Its changes are in [CHANGELOG.md](CHANGELOG.md).
+The contract an app and an agent share in Agent Pointed Context: wire types, the target grammar, the version of the standard (`APC_STANDARD_VERSION`) and the core. Its changes are in [CHANGELOG.md](CHANGELOG.md). No dependencies, no Node imports: it runs in the browser, on Workers and on Node. Docs: https://apc.tineira.com/docs
+
+## Install
+
+```sh
+npm i @apc/protocol@next
+```
+
+Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.7.x ships APC 0.7).
+
+```ts
+import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@apc/protocol";
+
+// Mark something in your page that the person can point an agent at:
+const attrs = focusAttrs({ kind: "customer", id: "cus_0042" }); // { "data-focus": "customer:cus_0042" }
+
+// Read an app's apc.json, checked against the origin it came from:
+const res = await fetch("https://pulse.apc.tineira.com/.well-known/apc.json", { redirect: "manual" });
+const parsed = parseApcManifest(await res.json(), "https://pulse.apc.tineira.com");
+if (parsed.ok) console.log(parsed.manifest.profiles, parsed.manifest.standard, APC_STANDARD_VERSION);
+```
 
 ## The core
 
@@ -44,4 +64,4 @@ An app that offers both profiles shows the same agent on both paths as one ([`sr
 
 Every APC origin says what it is at `GET {origin}/.well-known/apc.json` ([`src/manifest.ts`](src/manifest.ts)): its `name`, the `standard` it implements, its `origin` (exactly the one it is served from), its `profiles` (`"direct"`, `"dock"` or both; `"hub"` alone for a dock), `mcp.path` (where its MCP URLs live) and, with Direct, `direct.connect` (its page where the person connects an agent directly). `@apc/server` builds an app's (`apcManifest`, `apcJsonResponse`). A hub reads it before it pairs and refuses an app whose file is missing, invalid, names another origin, lists no `"dock"` or does not cover the MCP URL; a dock agent dropped on a Direct-only app is answered with how to connect directly (`directOnlyNote`), in the page and in the browser extension.
 
-To check an app against the core, run [`@apc/conformance`](../conformance/src/index.ts) on its MCP endpoint (see the root README).
+To check an app against the core, run [`@apc/conformance`](../conformance) on its MCP endpoint (see the root README), or `npx @apc/conformance@next <app-origin>` against a live app.

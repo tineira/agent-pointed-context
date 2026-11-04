@@ -437,7 +437,7 @@ importers:
   packages/conformance:
     dependencies:
       '@apc/protocol':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../protocol
 
   packages/protocol: {}
@@ -445,7 +445,7 @@ importers:
   packages/server:
     dependencies:
       '@apc/protocol':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../protocol
     devDependencies:
       '@modelcontextprotocol/sdk':
@@ -458,7 +458,7 @@ importers:
   packages/web:
     dependencies:
       '@apc/protocol':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../protocol
 
 packages:
