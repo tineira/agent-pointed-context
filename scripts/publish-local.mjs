@@ -7,16 +7,19 @@
 //   node scripts/publish-local.mjs                   # npm publish per package, 2FA prompt each time
 //
 // It refuses to run on a working tree with changes, when HEAD is not exactly origin/main (fetched first; a dry
-// run only warns), or when the four versions do not match each other and APC_STANDARD_VERSION. It builds dist/, packs each package with pnpm (which rewrites workspace:^ and
-// publishConfig) into a temporary folder, and runs `npm publish <tarball> --tag next --access public` per tarball,
-// @tineira/apc-protocol first, stopping at the first failure.
+// run only warns), or when the four versions do not match each other and APC_STANDARD_VERSION. It runs
+// `pnpm install --frozen-lockfile` (so workspace links left from before a rename cannot break the build, TIN-613),
+// builds dist/, packs each package with pnpm (which rewrites workspace:^ and publishConfig) into a temporary folder,
+// and runs `npm publish <tarball> --tag next --access public` per tarball, @tineira/apc-protocol first, stopping at
+// the first failure. The temporary folder (apc-publish-*) is removed when the script ends: after a dry run, a
+// publish or a failure.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { DIST_TAG, PACKAGES, checkManifest, checkVersions, npmPublishArgs, standardVersionOf, tarballName } from "./lib/packages.mjs";
+import { DIST_TAG, PACKAGES, PUBLISH_TEMP_PREFIX, checkManifest, checkVersions, npmPublishArgs, publishPrepareSteps, standardVersionOf, tarballName } from "./lib/packages.mjs";
+import { tempFolderUntilExit } from "./lib/temp-folder.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { values } = parseArgs({ options: { "dry-run": { type: "boolean", default: false } } });
@@ -65,20 +68,19 @@ if (!dryRun) {
   console.log(`publish-local: signed in to npm as ${who.out.trim()}`);
 }
 
-// 4. Build, check, pack with pnpm.
-for (const [cmd, args] of [
-  [process.execPath, [join(root, "scripts", "build-packages.mjs")]],
-  [process.execPath, [join(root, "scripts", "check-packages.mjs"), "--dist"]],
-]) {
-  const r = spawnSync(cmd, args, { cwd: root, stdio: "inherit" });
-  if (r.status !== 0) stop(`${args[0]} failed`);
+// 4. A frozen install, then build and check, then pack with pnpm into a folder removed when the script exits.
+for (const { cmd, args } of publishPrepareSteps(root)) {
+  const label = [cmd, ...args.map((a) => a.replace(`${root}/`, ""))].join(" ");
+  console.log(`publish-local: ${label}`);
+  const ok = cmd === "node" ? spawnSync(process.execPath, args, { cwd: root, stdio: "inherit" }).status === 0 : run(cmd, args, { interactive: true }).ok;
+  if (!ok) stop(`${label} failed`);
 }
-const out = mkdtempSync(join(tmpdir(), "apc-publish-"));
+const out = tempFolderUntilExit(PUBLISH_TEMP_PREFIX);
 const packed = run("pnpm", ["-r", "--filter", "./packages/*", "pack", "--pack-destination", out]);
 if (!packed.ok) stop(`pnpm pack failed:\n${packed.err || packed.out}`);
 const tarballs = PACKAGES.map((dir) => join(out, tarballName(dir, version)));
 for (const t of tarballs) if (!existsSync(t)) stop(`pnpm pack made no ${t}`);
-console.log(`publish-local: ${version} at ${head.slice(0, 12)}, packed into ${out}${dryRun ? " (dry run)" : ""}`);
+console.log(`publish-local: ${version} at ${head.slice(0, 12)}, packed into ${out} (removed when this script ends)${dryRun ? " (dry run)" : ""}`);
 
 // 5. npm publish per tarball, protocol first; npm asks for 2FA each time. The dist-tag is this explicit flag
 // (npm and pnpm ignore publishConfig.tag and default to latest): no command without `--tag next` runs.

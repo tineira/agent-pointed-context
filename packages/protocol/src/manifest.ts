@@ -32,7 +32,7 @@ export const APC_JSON_PATH = "/.well-known/apc.json";
 /** The most bytes a reader takes of an `apc.json`. */
 export const APC_JSON_MAX_BYTES = 16_384;
 /**
- * Where an app's MCP URLs live when it says nothing else: `@apc/server`'s default `mcp.path`, and the
+ * Where an app's MCP URLs live when it says nothing else: `@tineira/apc-server`'s default `mcp.path`, and the
  * path a hub holds a verified app to when it pairs it without a file (its file out of reach, no copy).
  */
 export const APC_DEFAULT_MCP_PATH = "/mcp/";
@@ -156,7 +156,7 @@ export function declaresMcpUrl(manifest: Pick<ApcManifest, "origin" | "mcp">, mc
 /**
  * What an app tells a person who drops an agent from their dock on it when it connects agents only
  * directly (its `apc.json` lists no `"dock"`): the drop is answered, never lost. These are the app's
- * own words, on its own page (`@apc/web`); the browser extension, which speaks for itself, puts the
+ * own words, on its own page (`@tineira/apc-web`); the browser extension, which speaks for itself, puts the
  * domain first and the name only as what the page says it is.
  */
 export function directOnlyNote(name: string): string {

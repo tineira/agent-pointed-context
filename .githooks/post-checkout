@@ -1,0 +1,11 @@
+#!/bin/sh
+# After a branch checkout (third argument 1; a checkout of files is 0): rebuild the browser extension if its
+# inputs differ between the two branches.
+[ "$3" = "1" ] || exit 0
+# Not in the middle of a rebase: post-rewrite rebuilds once it is done.
+for d in rebase-merge rebase-apply; do
+  [ -d "$(git rev-parse --git-path "$d" 2> /dev/null)" ] && exit 0
+done
+. "$(dirname "$0")/lib/rebuild-extension.sh"
+rebuild_extension "$1" "$2"
+exit 0

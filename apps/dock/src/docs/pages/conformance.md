@@ -2,7 +2,7 @@
 
 `@tineira/apc-conformance` checks an app against the [core](/docs/spec#the-core) of the standard the way an agent or a dock's hub reaches it: JSON-RPC over the app's MCP endpoint, stateless, plus `GET /.well-known/apc.json`. What only the app's page knows (whether a page is open, the view it reports, the pin the person drops, the presence it receives, Revoke in the agent bar) comes through a small **adapter** the app writes.
 
-It checks the version of the standard it ships with, and any app that claims a version from 0.5.0 up to it. It runs two ways: [from the command line](#run-it-from-the-command-line), against a live app over HTTP (what HTTP alone can reach), or [from code](#run-it-from-code), in your tests, with an adapter for the page (everything).
+It checks the version of the standard it ships with, and any app that claims a version from 0.5.0 up to it, or a newer patch of it (a patch never changes the contract; the check passes with a note). It runs two ways: [from the command line](#run-it-from-the-command-line), against a live app over HTTP (what HTTP alone can reach), or [from code](#run-it-from-code), in your tests, with an adapter for the page (everything).
 
 ## What the suite checks
 
@@ -44,7 +44,7 @@ apc-conformance <app-origin> [--grant <mcp-url>] [--revoked <mcp-url>] [--json] 
 
 It checks what HTTP reaches:
 
-- **`apc.json`**: served with HTTP 200, no redirect, as JSON of at most 16 KiB; the standard's shape, naming the origin it is served from; a standard the checks know (0.5.0 up to the package's); an app's profiles, with a Direct app's connect page on its origin.
+- **`apc.json`**: served with HTTP 200, no redirect, as JSON of at most 16 KiB; the standard's shape, naming the origin it is served from; a standard the checks know (0.5.0 up to the package's, or a newer patch of it, with a note); an app's profiles, with a Direct app's connect page on its origin.
 - **With `--grant`**: the grant's MCP URL lies under the origin and `mcp.path`; `initialize` answers as an MCP server with tools; the core tools are listed with their arguments; `get_current_view` answers in the core's format, with `attention` and `then` the same in the structured result and the text; `wait_for_focus({ timeout_s: 1 })` with no pin times out at 1 s (900 to 5000 ms), or ends at once when no page is open, with a note and no `then`; an unknown grant answers HTTP 404.
 - **With `--revoked`**: the revoked grant answers HTTP 403 `{ error: "revoked", revoked_by, revoked_at }` to POST, GET and DELETE.
 

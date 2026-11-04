@@ -1,0 +1,5 @@
+#!/bin/sh
+# After a merge or a pull (merge or fast-forward): rebuild the browser extension if its inputs changed.
+. "$(dirname "$0")/lib/rebuild-extension.sh"
+rebuild_extension "$(git rev-parse -q --verify ORIG_HEAD 2> /dev/null)" "$(git rev-parse HEAD 2> /dev/null)"
+exit 0

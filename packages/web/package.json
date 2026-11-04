@@ -1,6 +1,6 @@
 {
   "name": "@tineira/apc-web",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Agent Pointed Context (APC) for an app's page, in the browser: pinning agents to what the person sees, the agent bar (<apc-agents>), the pin badge, presence and the Direct agents list.",
   "keywords": ["apc", "agent-pointed-context", "mcp", "ai-agents", "web-components", "browser"],
   "homepage": "https://apc.tineira.com/docs",

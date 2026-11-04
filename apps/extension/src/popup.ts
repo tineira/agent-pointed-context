@@ -139,6 +139,12 @@ async function render(): Promise<void> {
   );
 }
 
+// Which build this is: the version and the commit it was built from (build.mjs writes both into the manifest).
+{
+  const manifest = chrome.runtime.getManifest();
+  $("version").textContent = `Version ${manifest.version_name ?? manifest.version}`;
+}
+
 $("open-dock").addEventListener("click", () => void openDock(false).then(() => close()));
 $("float").addEventListener("click", () => void openDock(true).then(() => close()));
 
