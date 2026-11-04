@@ -7,6 +7,25 @@ export const PACKAGES = ["protocol", "server", "web", "conformance"];
 /** The dist-tag every pre-release goes out on; `latest` waits for 1.0. */
 export const DIST_TAG = "next";
 
+/**
+ * Every package's `repository.url`, exactly: npm's trusted publishing (OIDC from GitHub Actions) requires it to
+ * match the repository the workflow runs in.
+ */
+export const REPOSITORY_URL = "https://github.com/tineira/agent-pointed-context";
+
+/** The tarball `pnpm pack` makes for a package directory, e.g. "protocol" → "tineira-apc-protocol-0.7.0.tgz". */
+export function tarballName(dir, version) {
+  return `tineira-apc-${dir}-${version}.tgz`;
+}
+
+/**
+ * The `npm publish` arguments for one packed tarball: on `next`, public, never `latest`. Provenance comes with
+ * trusted publishing on its own, so there is no --provenance.
+ */
+export function npmPublishArgs(tarball, { dryRun = false } = {}) {
+  return ["publish", tarball, "--tag", DIST_TAG, "--access", "public", ...(dryRun ? ["--dry-run"] : [])];
+}
+
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/;
 
 /** `APC_STANDARD_VERSION` as written in packages/protocol/src/version.ts, or null. */
@@ -61,7 +80,8 @@ export function checkManifest(manifest) {
   if (!pc.exports || typeof pc.exports !== "object") problems.push(`${name}: no publishConfig.exports`);
   for (const target of distTargets(manifest)) if (!target.startsWith("./dist/")) problems.push(`${name}: ${target} is not in dist/`);
   for (const f of ["dist", "README.md", "LICENSE"]) if (!manifest.files?.includes(f)) problems.push(`${name}: files leaves out ${f}`);
-  if (!manifest.repository?.url || manifest.repository?.directory !== `packages/${name.replace("@tineira/apc-", "")}`) problems.push(`${name}: repository names no url and directory`);
+  if (manifest.repository?.url !== REPOSITORY_URL) problems.push(`${name}: repository.url is ${manifest.repository?.url}, not exactly ${REPOSITORY_URL} (trusted publishing compares it)`);
+  if (manifest.repository?.directory !== `packages/${name.replace("@tineira/apc-", "")}`) problems.push(`${name}: repository.directory is not its folder`);
   if (!manifest.engines?.node) problems.push(`${name}: no engines.node`);
   if (manifest.sideEffects !== false) problems.push(`${name}: sideEffects is not false`);
   for (const [dep, spec] of Object.entries({ ...manifest.dependencies, ...manifest.peerDependencies })) {

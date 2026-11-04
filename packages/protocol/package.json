@@ -5,7 +5,7 @@
   "keywords": ["apc", "agent-pointed-context", "mcp", "model-context-protocol", "ai-agents", "protocol"],
   "homepage": "https://apc.tineira.com/docs",
   "bugs": { "url": "https://github.com/tineira/agent-pointed-context/issues" },
-  "repository": { "type": "git", "url": "git+https://github.com/tineira/agent-pointed-context.git", "directory": "packages/protocol" },
+  "repository": { "type": "git", "url": "https://github.com/tineira/agent-pointed-context", "directory": "packages/protocol" },
   "license": "MIT",
   "type": "module",
   "exports": { ".": "./src/index.ts" },

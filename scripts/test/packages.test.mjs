@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { PACKAGES, checkManifest, checkVersions, distTargets, rewriteDeclaration, standardVersionOf } from "../lib/packages.mjs";
+import { PACKAGES, REPOSITORY_URL, checkManifest, checkVersions, distTargets, npmPublishArgs, rewriteDeclaration, standardVersionOf, tarballName } from "../lib/packages.mjs";
 
 const at = (version) => PACKAGES.map((n) => ({ name: `@tineira/apc-${n}`, version }));
 const repo = (path) => new URL(`../../${path}`, import.meta.url);
@@ -43,6 +43,23 @@ test("a manifest that would publish wrong is caught", () => {
   assert.match(checkManifest({ ...good, publishConfig: { ...good.publishConfig, exports: { ".": "./src/index.ts" } } }).join(), /not in dist/);
   assert.match(checkManifest({ ...good, files: ["dist"] }).join(), /README\.md/);
   assert.match(checkManifest({ ...good, private: true }).join(), /private/);
+  assert.match(checkManifest({ ...good, name: "@apc/server" }).join(), /@tineira\/apc-\*/);
+  for (const url of ["git+https://github.com/tineira/agent-pointed-context.git", "https://github.com/tineira/agent-pointed-context/", "https://github.com/Tineira/agent-pointed-context"]) {
+    assert.match(checkManifest({ ...good, repository: { ...good.repository, url } }).join(), /not exactly https:\/\/github\.com\/tineira\/agent-pointed-context/, url);
+  }
+});
+
+test("each tarball is published with npm on next, public, protocol first, with no token or --provenance", () => {
+  assert.equal(REPOSITORY_URL, "https://github.com/tineira/agent-pointed-context");
+  assert.deepEqual(PACKAGES.map((d) => tarballName(d, "0.7.0")), ["tineira-apc-protocol-0.7.0.tgz", "tineira-apc-server-0.7.0.tgz", "tineira-apc-web-0.7.0.tgz", "tineira-apc-conformance-0.7.0.tgz"]);
+  assert.deepEqual(npmPublishArgs("/t/x.tgz"), ["publish", "/t/x.tgz", "--tag", "next", "--access", "public"]);
+  assert.deepEqual(npmPublishArgs("/t/x.tgz", { dryRun: true }).slice(-1), ["--dry-run"]);
+  const workflow = readFileSync(repo(".github/workflows/publish.yml"), "utf8");
+  assert.ok(!/NPM_TOKEN|NODE_AUTH_TOKEN|--provenance/.test(workflow), "trusted publishing: no token, provenance is automatic");
+  assert.match(workflow, /id-token: write/);
+  assert.match(workflow, /tags: \["apc-v\*"\]/);
+  assert.ok(!/pull_request/.test(workflow), "never on a pull request");
+  assert.match(workflow, /npm publish "\$RUNNER_TEMP\/apc-tarballs\/tineira-apc-\$p-\$version\.tgz" --tag next --access public/);
 });
 
 test("declarations import .js, not the .ts the sources import", () => {

@@ -133,7 +133,20 @@ They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-w
 
 `apc-conformance` checks over HTTP what HTTP reaches: the app's `apc.json` and, with `--grant` (an agent's MCP URL, Direct profile), `initialize`, the core tools and their arguments, the shapes of `get_current_view`, `attention` and `then`, `wait_for_focus` timing, an unknown grant's 404 and, with `--revoked`, a revoked grant's 403. `PASS`, `FAIL` or `SKIP` per check, exit 1 on a failure, `--json` for the report. What needs the person's page (a pin, the page open or closed, presence, Revoke pressed, mobile, `apc_link`) is reported `SKIP`: run `apcConformance` with an adapter for that (above). It reads only that origin, over https (`--allow-http` for localhost), never follows a redirect, caps every answer and times out every request.
 
-**Releasing them.** In the workspace each package's `exports` point at `src/`; what pnpm publishes points at `dist/` (`publishConfig`), and `workspace:^` becomes `^<version>`. `pnpm build:packages` builds `dist/` (tsc, ESM and `.d.ts`), and `pnpm check:packages` checks that the four share one version that matches `APC_STANDARD_VERSION`; `pnpm build` runs both. To release, set the four versions, merge, and push the tag `apc-v<version>`: [`.github/workflows/publish.yml`](.github/workflows/publish.yml) checks the tag, typechecks, tests, builds and runs `pnpm -r publish --tag next --access public` with npm provenance. It needs the repository secret `NPM_TOKEN` (it stops at once, saying so, without it); run by hand, it is a dry run. Locally: `pnpm build:packages && pnpm -r --filter "./packages/*" publish --dry-run --tag next --no-git-checks`. Pack with pnpm, not npm: a pack with npm stops, since only pnpm writes the published manifest.
+**Releasing them.** In the workspace each package's `exports` point at `src/`; what pnpm publishes points at `dist/` (`publishConfig`), and `workspace:^` becomes `^<version>`. `pnpm build:packages` builds `dist/` (tsc, ESM and `.d.ts`), and `pnpm check:packages` checks that the four share one version that matches `APC_STANDARD_VERSION`; `pnpm build` runs both. Pack with pnpm, not npm: a pack with npm stops, since only pnpm writes the published manifest. Publishing is npm's, from those tarballs.
+
+To release, set the four versions, merge, and push the tag `apc-v<version>`. [`.github/workflows/publish.yml`](.github/workflows/publish.yml) runs only for that tag (a manual run is a dry run). It checks the tag against the versions, typechecks, tests, builds, packs the four with pnpm, and runs `npm publish <tarball> --tag next --access public` for each one, `@tineira/apc-protocol` first. It uses npm [trusted publishing](https://docs.npmjs.com/trusted-publishers): there is no npm token. npm trusts this repository's `publish.yml` through GitHub's OIDC token (`id-token: write`, npm 12.2.1 on Node 24), and adds provenance by itself. Each `package.json` has `repository.url` exactly `https://github.com/tineira/agent-pointed-context`, which `check-packages` enforces, because npm compares it.
+
+**The first publish, once, by hand.** A trusted publisher can only be set on a package that exists, so 0.7.0 goes out from a maintainer's machine:
+
+```sh
+npm login                                   # the npm account that owns the @tineira scope
+git status                                  # clean, on the commit to publish (main after this merges)
+node scripts/publish-local.mjs --dry-run    # builds, packs, npm publish --dry-run per package
+node scripts/publish-local.mjs              # npm publish <tgz> --tag next --access public per package; 2FA each time
+```
+
+[`scripts/publish-local.mjs`](scripts/publish-local.mjs) refuses to run when the tree has changes, when the four versions do not match each other and `APC_STANDARD_VERSION`, or (outside a dry run) when `npm whoami` fails. It builds `dist/` and packs with `pnpm -r --filter "./packages/*" pack` into a temporary folder. Then it runs `npm publish <folder>/tineira-apc-<pkg>-0.7.0.tgz --tag next --access public` for protocol, server, web and conformance, in that order, and stops at the first failure. After that, on npmjs.com, open each of the four packages, go to Settings, then Trusted Publisher, then GitHub Actions, and set: user `tineira`, repository `agent-pointed-context`, workflow filename `publish.yml`, no environment. Each one must see a successful publish within 2 days of being set, so tag the next version soon after, or re-check with a manual (dry) run. From then on, the tag is all it takes.
 
 ## The agent's manual (optional)
 
@@ -179,7 +192,7 @@ On Windows the local Workers runtime needs the Microsoft Visual C++ Redistributa
 | `packages/server` | the attention envelope, `get_current_view`, `wait_for_focus`, presence events |
 | `packages/web` | drag-to-pin, presence marks, view reporting, the agent bar and pin badge |
 | `packages/conformance` | the conformance suite for the core of the standard, the `apc-conformance` command (the checks HTTP reaches, against a live app), and a Durable Object stand-in for Node |
-| `scripts/build-packages.mjs`, `scripts/check-packages.mjs` | build the four packages' `dist/` for npm, and check their versions and manifests before a release (`.github/workflows/publish.yml`) |
+| `scripts/build-packages.mjs`, `scripts/check-packages.mjs`, `scripts/publish-local.mjs` | build the four packages' `dist/` for npm, check their versions and manifests before a release (`.github/workflows/publish.yml`), and the one-time first publish by hand |
 | `apps/v1` | V1, frozen (TIN-604): Pulse as the paper describes it, at apc.tineira.com/v1 (Worker `apc-demo`), with its own copy of the three packages in `src/apc`; changed only to keep it running ([README](apps/v1/README.md)) |
 | `apps/demo` | Pulse for the APC standard: a Cloudflare Worker with one Durable Object per visitor, a Vite + React front end, paired from the dock (`apc-pulse`, pulse.apc.tineira.com) |
 | `apps/signals` | The APC standard: Signals, a market feed (competitor offers and our ads, from the same seed as Pulse) as the second APC app (`apc-signals`, signals.apc.tineira.com) |
