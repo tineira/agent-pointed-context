@@ -1,8 +1,13 @@
 // Build the APC browser extension (TIN-421) into dist/, or with --dev into dist-dev/ (local docks allowed).
 // The content script is one classic script (IIFE): content scripts cannot be modules. The service
 // worker and the popup are ES modules.
+// The manifest's version moves with every change to the extension (scripts/lib/extension-version.mjs): 0.2.<n>,
+// n the commits up to the extension's last change, and version_name adds that commit's short hash, which the popup
+// and chrome://extensions show.
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { build } from "vite";
+import { readExtensionVersion } from "../../scripts/lib/extension-version.mjs";
 
 const dev = process.argv.includes("--dev");
 const outDir = dev ? "dist-dev" : "dist";
@@ -31,6 +36,9 @@ for (const [i, e] of entries.entries()) {
 }
 
 const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
+const { version, commit } = readExtensionVersion(fileURLToPath(new URL("../..", import.meta.url)));
+manifest.version = version;
+manifest.version_name = `${version} (${[commit ?? "unknown commit", ...(dev ? ["dev"] : [])].join(", ")})`;
 if (dev) {
   // A local dock on localhost (vite dev of apps/dock) and test pages on 127.0.0.1; never in the published build.
   manifest.name += " (dev)";
@@ -41,4 +49,4 @@ await mkdir(outDir, { recursive: true });
 await writeFile(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
 for (const page of ["popup.html", "welcome.html"]) await copyFile(page, `${outDir}/${page}`);
 for (const icon of ["icon-32.png", "icon-128.png"]) await copyFile(`public/${icon}`, `${outDir}/${icon}`);
-console.log(`built ${outDir}${dev ? " (dev)" : ""}`);
+console.log(`built ${outDir}: ${manifest.version_name}`);

@@ -1,18 +1,49 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { EXTENSION_PRESENT } from "../../../extension/src/presence.ts";
+import { EXTENSION_PRESENT, EXTENSION_VERSION, extensionOutdated } from "../../../extension/src/presence.ts";
 import { extensionBrowser, extensionsAddress, EXTENSION_DOWNLOAD, EXTENSION_STORES } from "./extension-install.ts";
 
-export function useExtensionInstalled(): boolean {
-  const [installed, setInstalled] = useState(() => document.documentElement.hasAttribute(EXTENSION_PRESENT));
+/** What the extension's content script marked on this page: whether it is here, and the version it reported. */
+export function useExtensionPresence(): { installed: boolean; version: string | null } {
+  const read = () => ({ installed: document.documentElement.hasAttribute(EXTENSION_PRESENT), version: document.documentElement.getAttribute(EXTENSION_VERSION) });
+  const [presence, setPresence] = useState(read);
   useEffect(() => {
     // This is an unauthenticated hint. It never calls an API or completes the dock checklist.
-    const update = () => setInstalled(document.documentElement.hasAttribute(EXTENSION_PRESENT));
+    const update = () => setPresence((was) => {
+      const now = read();
+      return now.installed === was.installed && now.version === was.version ? was : now;
+    });
     const observer = new MutationObserver(update);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: [EXTENSION_PRESENT] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: [EXTENSION_PRESENT, EXTENSION_VERSION] });
     update();
     return () => observer.disconnect();
   }, []);
-  return installed;
+  return presence;
+}
+
+export function useExtensionInstalled(): boolean {
+  return useExtensionPresence().installed;
+}
+
+/** The latest extension's version, baked in when the dock was built (vite.config.ts); null when unknown. */
+export const EXTENSION_LATEST: string | null = __APC_EXTENSION_LATEST__;
+
+/** Where the update steps are, on /extension. */
+export const EXTENSION_UPDATE_ANCHOR = "update";
+
+/**
+ * Whether the installed extension reported a version older than the latest one. A build too old to report a
+ * version is not flagged: the page cannot tell (/extension says to download the latest zip if it stops working).
+ */
+export function useExtensionOutdated(): { outdated: boolean; version: string | null; latest: string | null } {
+  const { installed, version } = useExtensionPresence();
+  return { outdated: installed && extensionOutdated(version, EXTENSION_LATEST), version, latest: EXTENSION_LATEST };
+}
+
+/** The quiet notice on the dock: the installed extension is older than the latest one. */
+export function ExtensionOutdatedNotice() {
+  const { outdated } = useExtensionOutdated();
+  if (!outdated) return null;
+  return <p className="extension-outdated-note" role="status">Your APC extension is out of date. <a href={`/extension#${EXTENSION_UPDATE_ANCHOR}`} target="_blank" rel="noreferrer">How to update it</a></p>;
 }
 
 /** Small schematic illustrations: the words next to each picture give the full instructions. */
@@ -73,6 +104,14 @@ function Step({ number, title, address, children }: { number: number; title: str
 
 export function ExtensionInstall() {
   const installed = useExtensionInstalled();
+  const { outdated, version, latest } = useExtensionOutdated();
+  const [updateOpen, setUpdateOpen] = useState(() => location.hash === `#${EXTENSION_UPDATE_ANCHOR}`);
+  useEffect(() => {
+    if (outdated) setUpdateOpen(true);
+    const onHash = () => { if (location.hash === `#${EXTENSION_UPDATE_ANCHOR}`) setUpdateOpen(true); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [outdated]);
   const [browser, setBrowser] = useState(() => extensionBrowser(navigator.userAgent));
   const address = extensionsAddress(browser);
   const store = EXTENSION_STORES[browser];
@@ -118,7 +157,7 @@ export function ExtensionInstall() {
       <h1>Add the APC browser extension</h1>
       <p>Drag your agent from the dock onto a paragraph, and ask about what you’re reading.</p>
       <p className="extension-computer">You need Chrome or Edge on a computer. If you’re on your phone, open this page on your computer to install it.</p>
-      {installed ? <div className="extension-installed" role="status"><b>Installed ✓</b><p>Your browser has the extension. <a href="#try-extension">Try it with your agent below ↓</a></p></div> : store ? <a className="extension-primary" href={store}>Add to {browser === "edge" ? "Edge" : "Chrome"}</a> : <p>Until APC is in the browser stores, add it from a downloaded folder. Follow these seven steps once.</p>}
+      {outdated ? <div className="extension-outdated" role="status"><b>Your APC extension is out of date</b><p>You have version {version}; the latest is {latest}. <a href={`#${EXTENSION_UPDATE_ANCHOR}`} onClick={() => setUpdateOpen(true)}>Update it in three steps ↓</a></p></div> : installed ? <div className="extension-installed" role="status"><b>Installed ✓</b><p>Your browser has the extension. <a href="#try-extension">Try it with your agent below ↓</a></p></div> : store ? <a className="extension-primary" href={store}>Add to {browser === "edge" ? "Edge" : "Chrome"}</a> : <p>Until APC is in the browser stores, add it from a downloaded folder. Follow these seven steps once.</p>}
     </section>
     {installed || store ? <details className="extension-manual"><summary>Install again or see the download steps (1–6)</summary>{manualSteps}</details> : manualSteps}
     <ol className="extension-steps" start={7}>
@@ -129,6 +168,15 @@ export function ExtensionInstall() {
       </Step>
     </ol>
     <aside className="extension-note"><h2>About the Developer mode warning</h2><p>Your browser may remind you that this extension was loaded from a folder instead of a store. That’s expected with this install method. Close or dismiss the reminder to keep using APC; if it offers to disable extensions, leave APC enabled. Once the store listings are ready, you’ll be able to install from there.</p></aside>
-    <details className="extension-update"><summary>Updating the extension later</summary><p>Download the zip again, unzip it, and replace the files in the folder you kept. On <code>{address}</code>, click APC’s reload button. Reload any page where you want to drop your agent.</p></details>
+    <details className="extension-update" id={EXTENSION_UPDATE_ANCHOR} open={updateOpen} onToggle={(e) => setUpdateOpen(e.currentTarget.open)}>
+      <summary>Updating the extension later</summary>
+      <ol>
+        <li><a href={EXTENSION_DOWNLOAD}>Download the zip again</a> and unzip it.</li>
+        <li>Replace the files in the folder you kept (the one with <code>manifest.json</code>) with the new ones.</li>
+        <li>On <code>{address}</code>, click APC’s reload button. Then reload any page where you want to drop your agent.</li>
+      </ol>
+      <p><b>Reload alone does not update it:</b> it loads the same files again from that folder. The new files have to be in the folder first.</p>
+      <p>{installed && version ? <>You have version {version}{latest ? <>; the latest is {latest}</> : null}. </> : null}Your dock tells you when the extension is out of date. Builds from before November 2026 can’t say their version, so if the extension stops working, download the latest zip and replace the files the same way.</p>
+    </details>
   </main>;
 }

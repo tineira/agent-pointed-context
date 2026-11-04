@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "APC: point your agent at any page",
   "short_name": "APC",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drop the agent from your APC dock on a page you allow, and it reads what you pointed at.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoHKlo+6mozHUEj8gayLMztm3+Tpjxqwa23o4tromj9bpQ0tI5U87xhysRceJV51kgqJzwU5ZJwKfYKX00RvroayyZDDX94kSKq8te1F/xY6AR6AI3GY0GpfY53lf3jNzSyDBlKmyUmNIoWsAScjRhkHsppYSst9vRxhAZwXGJ4ex/2xNovlndkhqUX7205W8oEoNKRocrvJHoGukiP8rUOEMmwNsbbgfQb/Z/pm8tVlP+ROnjsNgJHl/aj4UJjVdyUjgtk1UPZ+303q716rf+Ayhm6H11pxXTpOsmdiuS+sI8bADxSxaiFH41RFpt0az237GRAlBm9YKhCisr851LQIDAQAB",
   "minimum_chrome_version": "122",

@@ -26,7 +26,25 @@ export function npmPublishArgs(tarball, { dryRun = false } = {}) {
   return ["publish", tarball, "--tag", DIST_TAG, "--access", "public", ...(dryRun ? ["--dry-run"] : [])];
 }
 
-const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/;
+/**
+ * What scripts/publish-local.mjs runs before it packs, in order (TIN-613): a frozen install first, so workspace
+ * links left from before a rename (the @apc → @tineira/apc-* move) cannot break the build, then the build and the
+ * check of dist/. `cmd` "node" means the running Node.
+ * @param {string} root the repository root
+ * @returns {Array<{ cmd: "pnpm" | "node"; args: string[] }>}
+ */
+export function publishPrepareSteps(root) {
+  return [
+    { cmd: "pnpm", args: ["install", "--frozen-lockfile"] },
+    { cmd: "node", args: [`${root}/scripts/build-packages.mjs`] },
+    { cmd: "node", args: [`${root}/scripts/check-packages.mjs`, "--dist"] },
+  ];
+}
+
+/** The prefix of the temporary folder scripts/publish-local.mjs packs into; it is removed when the script exits. */
+export const PUBLISH_TEMP_PREFIX = "apc-publish-";
+
+const VERSION_RE =/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/;
 
 /** `APC_STANDARD_VERSION` as written in packages/protocol/src/version.ts, or null. */
 export function standardVersionOf(source) {

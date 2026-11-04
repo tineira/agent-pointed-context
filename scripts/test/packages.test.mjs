@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { PACKAGES, REPOSITORY_URL, checkManifest, checkVersions, distTargets, npmPublishArgs, rewriteDeclaration, standardVersionOf, tarballName } from "../lib/packages.mjs";
+import { PACKAGES, PUBLISH_TEMP_PREFIX, REPOSITORY_URL, checkManifest, checkVersions, distTargets, npmPublishArgs, publishPrepareSteps, rewriteDeclaration, standardVersionOf, tarballName } from "../lib/packages.mjs";
 
 const at = (version) => PACKAGES.map((n) => ({ name: `@tineira/apc-${n}`, version }));
 const repo = (path) => new URL(`../../${path}`, import.meta.url);
@@ -123,4 +123,35 @@ test("declarations import .js, not the .ts the sources import", () => {
   assert.equal(rewriteDeclaration('let x: import("../a/b.ts").T;'), 'let x: import("../a/b.js").T;');
   assert.equal(rewriteDeclaration('import { z } from "zod";\nimport { a } from "@tineira/apc-protocol";'), 'import { z } from "zod";\nimport { a } from "@tineira/apc-protocol";', "packages untouched");
   assert.equal(rewriteDeclaration('const s = "see ./x.ts";'), 'const s = "see ./x.ts";', "only specifiers");
+});
+
+test("publish-local installs with the frozen lockfile before it builds, checks dist/ and packs (TIN-613)", () => {
+  const steps = publishPrepareSteps("/repo");
+  assert.deepEqual(steps[0], { cmd: "pnpm", args: ["install", "--frozen-lockfile"] }, "first: stale workspace links from before a rename cannot break the build");
+  assert.deepEqual(steps.slice(1).map((s) => [s.cmd, ...s.args]), [["node", "/repo/scripts/build-packages.mjs"], ["node", "/repo/scripts/check-packages.mjs", "--dist"]]);
+  const script = readFileSync(repo("scripts/publish-local.mjs"), "utf8");
+  assert.ok(script.includes("publishPrepareSteps(root)") && script.indexOf("publishPrepareSteps(root)") < script.indexOf('"pack", "--pack-destination"'), "the script runs these steps before it packs");
+  assert.ok(script.includes("tempFolderUntilExit(PUBLISH_TEMP_PREFIX)") && !script.includes("mkdtempSync"), "it packs into the folder that is removed on exit");
+});
+
+/** The folder publish-local packs into, made by a real child process that then ends each way the script can. */
+test("the apc-publish-* folder is removed after a normal end, a failure and (off Windows) Ctrl+C", async () => {
+  const helper = fileURLToPath(new URL("../lib/temp-folder.mjs", import.meta.url));
+  const prefix = `${PUBLISH_TEMP_PREFIX}test-`;
+  const ending = { "a dry run or a publish": "", "a failure (stop)": "process.exit(1);" };
+  // Windows has no POSIX signals between processes (a kill ends the process outright), so Ctrl+C is checked elsewhere.
+  if (process.platform !== "win32") ending["Ctrl+C"] = "process.kill(process.pid, 'SIGINT'); setTimeout(() => {}, 5000);";
+  for (const [why, end] of Object.entries(ending)) {
+    const code = `import { writeFileSync } from "node:fs"; import { join } from "node:path"; import { pathToFileURL } from "node:url";
+      const { tempFolderUntilExit } = await import(pathToFileURL(${JSON.stringify(helper)}).href);
+      const dir = tempFolderUntilExit(${JSON.stringify(prefix)});
+      writeFileSync(join(dir, "tineira-apc-protocol-0.7.1.tgz"), "x");
+      console.log(dir); ${end}`;
+    const dir = await new Promise((done) => {
+      execFile(process.execPath, ["--input-type=module", "-e", code], { timeout: 30_000 }, (_error, stdout) => done(stdout.trim()));
+    });
+    assert.ok(dir.includes(prefix), `${why}: the child made its folder (${dir})`);
+    assert.equal(existsSync(dir), false, `${why}: ${dir} is gone`);
+  }
+  assert.equal(PUBLISH_TEMP_PREFIX, "apc-publish-");
 });

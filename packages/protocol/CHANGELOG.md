@@ -2,7 +2,14 @@
 
 This file records the contract that an app and an agent share in Agent Pointed Context: the view an app reports, the pin (focus) a person drops on a target, presence, the format of the focus, `wait_for_focus`, the tools an app and a hub expose, the drag payload and pairing. It does not record the software (Pulse, the dock, Signals, the extension, the desktop apps); that is [`CHANGELOG.md`](../../CHANGELOG.md) at the root.
 
-The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
+The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
+
+## 0.7.1 (draft, 2026-11-04)
+
+No change to the contract: an app or a hub that implements 0.7.0 implements 0.7.1, and `standard` in `apc.json` may say either. This is the first release of `@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` published by `.github/workflows/publish.yml` (npm trusted publishing) rather than from a maintainer's machine.
+
+- **The package names in the doc comments are the published ones.** `core.ts` and `manifest.ts` (and so the `.d.ts` files in `dist/`) named `@apc/server`, `@apc/web` and `@apc/conformance`, from before the rename; they now say `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance`.
+- The four packages and `APC_STANDARD_VERSION` are 0.7.1; nothing else in what the packages ship changed.
 
 ## 0.7.0 (draft, 2026-11-04)
 

@@ -5,6 +5,7 @@
   "packageManager": "pnpm@12.11.2",
   "type": "module",
   "scripts": {
+    "prepare": "node scripts/git-hooks.mjs",
     "dev": "cd apps/demo && node node_modules/vite/bin/vite.js",
     "build": "node scripts/build-packages.mjs && node scripts/check-packages.mjs --dist && cd apps/v1 && node node_modules/vite/bin/vite.js build && cd ../demo && node node_modules/vite/bin/vite.js build && cd ../dock && node node_modules/vite/bin/vite.js build && cd ../signals && node node_modules/vite/bin/vite.js build && cd ../extension && node build.mjs",
     "typecheck": "tsc -p packages/protocol && tsc -p packages/server && tsc -p packages/web && tsc -p packages/conformance && tsc -p apps/v1/tsconfig.web.json && tsc -p apps/v1/tsconfig.worker.json && tsc -p apps/v1/tsconfig.test.json && tsc -p apps/demo/tsconfig.web.json && tsc -p apps/demo/tsconfig.worker.json && tsc -p apps/demo/tsconfig.test.json && tsc -p apps/dock/tsconfig.web.json && tsc -p apps/dock/tsconfig.worker.json && tsc -p apps/dock/tsconfig.test.json && tsc -p apps/dock/tsconfig.docs.json && tsc -p apps/signals/tsconfig.web.json && tsc -p apps/signals/tsconfig.worker.json && tsc -p apps/signals/tsconfig.test.json && tsc -p apps/extension && tsc -p apps/extension/tsconfig.test.json",

@@ -1,0 +1,8 @@
+#!/bin/sh
+# After a rebase (pull --rebase included; not after commit --amend): rebuild the browser extension if its inputs
+# changed between the head before the rebase (ORIG_HEAD) and the new one.
+[ "$1" = "rebase" ] || exit 0
+cat > /dev/null
+. "$(dirname "$0")/lib/rebuild-extension.sh"
+rebuild_extension "$(git rev-parse -q --verify ORIG_HEAD 2> /dev/null)" "$(git rev-parse HEAD 2> /dev/null)"
+exit 0
