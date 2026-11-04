@@ -1,5 +1,7 @@
 [package]
 name = "apc-dock"
+# Builds of main get 0.2.<commits on main> from scripts/build.mjs, any other build 0.1.<n> (TIN-615);
+# this is a plain `cargo` build's, below every release.
 version = "0.1.0"
 description = "The APC agent dock for Windows: always on top, a global shortcut, a tray icon"
 license = "MIT"
@@ -14,6 +16,9 @@ tauri = { version = "=2.12.3", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "=2.4.1"
 tauri-plugin-opener = "=2.7.1"
 tauri-plugin-single-instance = "=2.5.3"
+# Signed auto-update (TIN-615): the update's question in a native dialog, the update from the dock-desktop prerelease.
+tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-updater = "=2.14.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 
@@ -22,6 +27,10 @@ serde_json = "=1.0.154"
 # subclass, so activating a pet paints no title bar in it.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+# The version order the updater uses (update.rs tests); already in the lockfile through tauri.
+semver = "=1.0.28"
 
 [profile.release]
 codegen-units = 1
