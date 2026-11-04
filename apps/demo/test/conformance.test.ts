@@ -11,7 +11,8 @@ import { apcConformance, runConformance, type ApcAppAdapter } from "@tineira/apc
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import { APC_JSON_PATH, APC_STANDARD_VERSION, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
-import { generateDataset, LAST_MONTH } from "../src/model/seed.ts";
+import { LAST_MONTH } from "../src/model/seed.ts";
+import { demoDataset } from "../src/model/demo-world.ts";
 
 installWorkersStandIn();
 const { Sandbox } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);
@@ -20,7 +21,6 @@ const { default: worker } = await import(new URL("../src/worker/index.ts", impor
 const ORIGIN = "https://pulse.test";
 const HUB = "https://dock.test";
 const SID = "5".repeat(32);
-const SEED = 4242;
 
 /** A real dock pairs through /apc/pair; here a stand-in hub says yes, and nothing else leaves the process. */
 function standInHub(t: TestContext | null): { calls: string[] } {
@@ -43,8 +43,8 @@ const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
 async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response> } = {}) {
   const room = durableObjectRoom();
   const sandbox = new Sandbox(room.ctx, options.env ?? DEPLOY);
-  await sandbox.init(SEED);
-  const data = generateDataset(SEED);
+  await sandbox.init();
+  const data = demoDataset();
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "customer", id: data.customers[0]!.id, part: null, params: null },
     { kind: "customer", id: data.customers[1]!.id, part: null, params: null },
@@ -312,7 +312,7 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
     }
     throw new Error(`no network in this test: ${url}`);
   });
-  const drop = { hub: HUB, agent: "ag_8", ticket: `${"d".repeat(32)}.${"8".repeat(16)}`, target: { kind: "customer", id: generateDataset(SEED).customers[0]!.id } };
+  const drop = { hub: HUB, agent: "ag_8", ticket: `${"d".repeat(32)}.${"8".repeat(16)}`, target: { kind: "customer", id: demoDataset().customers[0]!.id } };
   const { consent } = await sandbox.pairHub(SID, ORIGIN, drop);
   const first = sandbox.pairHub(SID, ORIGIN, { ...drop, consent });
   await asked;
@@ -329,7 +329,7 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
 test("Pulse makes a grant for a dock agent only with the nonce its consent was shown with (TIN-606)", async (t) => {
   const { sandbox } = await pulse("dock");
   const hub = standInHub(t);
-  const drop = { hub: HUB, agent: "ag_9", ticket: `${"d".repeat(32)}.${"9".repeat(16)}`, target: { kind: "customer", id: generateDataset(SEED).customers[0]!.id } };
+  const drop = { hub: HUB, agent: "ag_9", ticket: `${"d".repeat(32)}.${"9".repeat(16)}`, target: { kind: "customer", id: demoDataset().customers[0]!.id } };
   const asked = await sandbox.pairHub(SID, ORIGIN, drop);
   assert.deepEqual(Object.keys(asked).sort(), ["consent", "error", "ok"]);
   assert.equal(asked.error, "consent_required");

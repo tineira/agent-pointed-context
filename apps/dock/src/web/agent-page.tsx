@@ -48,7 +48,6 @@ export interface DockAgent {
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 export interface DockState {
-  seed: number;
   setup_done: boolean;
   onboarding: Onboarding;
   expires_at: string;

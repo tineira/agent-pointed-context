@@ -1,6 +1,7 @@
 /**
- * Signals' page (TIN-384): the market feed of the visitor's demo world (the dock's seed, TIN-393, or one
- * of its own). Every post, and each of its parts (offer, audience, code, text), is a target. Agents
+ * Signals' page (TIN-384): the market feed of the demo's one world (TIN-621: the same posts for everyone,
+ * the same company as Pulse, so it opens on its own, in any order). A post has a stable link, /?post=post_NNN,
+ * that opens the feed on it; ?kind= and ?month= set the filters. Every post, and each of its parts (offer, audience, code, text), is a target. Agents
  * come both ways (TIN-578): from the agent dock (the first drop asks the person here, then in the dock;
  * later drops pin at once), or connected directly, each with its own URL, from the Connect panel (the
  * Direct profile's list from @tineira/apc-web). The same agent both ways shows as one.
@@ -8,8 +9,9 @@
 import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
 import { createViewReporter, enablePinning, loadApcProfiles, mergePins, type AgentDrag, type BarAgent } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
-import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
+import { DEMO_SEED, MONTHS } from "../../../demo/src/model/seed.ts";
+import type { Post } from "../../../demo/src/model/market.ts";
+import { CROSS_APP, demoMarket, pulseCustomerPath, signalsPostPath } from "../../../demo/src/model/demo-world.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
@@ -33,7 +35,6 @@ interface GrantState {
   linked_with: string | null;
 }
 interface FeedState {
-  seed: number;
   profiles: ApcProfile[];
   grants: GrantState[];
 }
@@ -41,6 +42,36 @@ interface FeedState {
 type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget; consent: string };
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
+/** Pulse, the other demo app, at its own site (TIN-621). */
+const PULSE_URL = import.meta.env.DEV ? "http://localhost:5199" : "https://pulse.apc.tineira.com";
+/** The demo's one world: the same posts on every visit, for everyone. */
+const POSTS = demoMarket().posts;
+const KIND_TABS = ["competitor_offer", "our_ad"] as const;
+
+/**
+ * The feed's address (TIN-621): ?post= opens it on one post, ?kind= and ?month= set the filters. A ?seed=
+ * from an old dock link means nothing now (one world): it is dropped from the address, and the link opens.
+ */
+function readLink(): { kind: "" | Post["kind"]; month: string; post: string | null } {
+  const q = new URLSearchParams(location.search);
+  const kind = q.get("kind");
+  const month = q.get("month");
+  const post = q.get("post");
+  return {
+    kind: (KIND_TABS as readonly (string | null)[]).includes(kind) ? (kind as Post["kind"]) : "",
+    month: month && MONTHS.includes(month) ? month : "",
+    post: post && POSTS.some((p) => p.id === post) ? post : null,
+  };
+}
+function writeLink(link: { kind: string; month: string; post: string | null }): void {
+  const q = new URLSearchParams(location.search);
+  for (const key of ["seed", "kind", "month", "post"]) q.delete(key);
+  if (link.kind) q.set("kind", link.kind);
+  if (link.month) q.set("month", link.month);
+  if (link.post) q.set("post", link.post);
+  const next = `${location.pathname}${q.size ? `?${q}` : ""}${location.hash}`;
+  if (next !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, "", next);
+}
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
 const PLAN_NAME: Record<string, string> = { starter: "Starter", team: "Team", business: "Business" };
 const MONTH_NAME = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -84,7 +115,7 @@ function Shell(props: { children: React.ReactNode; nav?: React.ReactNode; side?:
           <span>Signals</span>
         </div>
         {props.nav}
-        <p className="disclaimer">A fictional market feed, generated for your dock's demo world.</p>
+        <p className="disclaimer">A fictional market feed. Everyone sees the same one, about the same company as Pulse.</p>
       </nav>
       <main className="timeline">
         <div className="mobile-bar">
@@ -102,8 +133,11 @@ function Shell(props: { children: React.ReactNode; nav?: React.ReactNode; side?:
 function Feed({ sid }: { sid: string }) {
   const base = `/api/s/${sid}`;
   const [state, setState] = useState<FeedState | null>(null);
-  const [kind, setKind] = useState<"" | Post["kind"]>("");
-  const [month, setMonth] = useState("");
+  const [initial] = useState(readLink);
+  const [kind, setKind] = useState<"" | Post["kind"]>(initial.kind);
+  const [month, setMonth] = useState(initial.month);
+  // The post a link opened on (?post=), or the one whose time the person clicked: highlighted, in the address.
+  const [selected, setSelected] = useState<string | null>(initial.post);
   const [pending, setPending] = useState<Pending | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // The Connect panel (Direct): open when the visitor came to connect (?connect, from the dock's landing page).
@@ -136,7 +170,7 @@ function Feed({ sid }: { sid: string }) {
     };
   }, [base, refresh]);
 
-  const posts = useMemo(() => (state ? buildMarket(generateDataset(state.seed)).posts : []), [state?.seed]);
+  const posts = POSTS;
   const shown = posts.filter((p) => (!kind || p.kind === kind) && (!month || p.month === month));
 
   const say = (text: string) => {
@@ -146,7 +180,13 @@ function Feed({ sid }: { sid: string }) {
 
   // The view, as identifiers.
   const report = useMemo(() => createViewReporter((view) => void call(`${base}/view`, view)), [base]);
-  useEffect(() => report({ screen: "feed", params: { ...(kind ? { kind } : {}), ...(month ? { month } : {}) }, selection: null }), [report, kind, month]);
+  useEffect(() => report({ screen: "feed", params: { ...(kind ? { kind } : {}), ...(month ? { month } : {}) }, selection: selected ? { kind: "post", id: selected } : null }), [report, kind, month, selected]);
+  useEffect(() => writeLink({ kind, month, post: selected }), [kind, month, selected]);
+  // A link to a post opens the feed on it, once the feed is drawn.
+  const loaded = !!state;
+  useEffect(() => {
+    if (loaded && initial.post) document.querySelector(`[data-focus="post:${initial.post}"]`)?.scrollIntoView({ block: "center" });
+  }, [loaded, initial.post]);
 
   // Agents come only from the dock: a known one pins, an unknown one asks first.
   useEffect(
@@ -344,6 +384,30 @@ function Feed({ sid }: { sid: string }) {
               ))}
             </ul>
           </section>
+          <section className="panel small" aria-label="Ask across apps">
+            <h2>Ask across apps</h2>
+            <p className="muted">
+              Drop your agent on{" "}
+              <a
+                href={signalsPostPath(CROSS_APP.post)}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                  e.preventDefault();
+                  setKind("");
+                  setMonth("");
+                  setSelected(CROSS_APP.post);
+                  setTimeout(() => document.querySelector(`[data-focus="post:${CROSS_APP.post}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+                }}
+              >
+                {CROSS_APP.competitor}'s offer to Team teams in North America
+              </a>{" "}
+              and ask: <b>"{CROSS_APP.question}"</b> Your agent reads it here and the churn in{" "}
+              <a href={`${PULSE_URL}${pulseCustomerPath(CROSS_APP.customer)}`} target="_blank" rel="noreferrer">
+                Pulse
+              </a>
+              , which shows the same company.
+            </p>
+          </section>
           <section className="panel muted small">Drag an agent onto a post, or onto its offer, targeting, code or text: from the dock, or its mark at the top. Your agent reads it with this feed's own tools.</section>
           <section className="panel muted small">
             <StartOver site="Signals" wipes={["the agents you connected here or your dock paired here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
@@ -354,17 +418,29 @@ function Feed({ sid }: { sid: string }) {
       {shown.length === 0 && <p className="empty muted">No posts in {monthLabel(month)}.</p>}
       {[...shown].reverse().map((p) => {
         const b = brandOf(p.author);
-        const st = stats(p, state.seed);
+        const st = stats(p, DEMO_SEED);
         const parts = p.kind === "our_ad" ? p.text.split(p.code) : [p.text];
         return (
-          <article key={p.id} className={`post ${p.kind}`} {...focusAttrs({ kind: "post", id: p.id })}>
+          <article key={p.id} className={`post ${p.kind}${selected === p.id ? " selected" : ""}`} {...focusAttrs({ kind: "post", id: p.id })}>
             <Avatar author={p.author} />
             <div className="post-body">
               <div className="post-head">
                 <b>{p.author}</b>
                 <Verified />
                 <span className="muted">
-                  @{b.handle} · {MONTH_NAME[Number(p.month.slice(5)) - 1]} {st.day}
+                  @{b.handle} ·{" "}
+                  <a
+                    className="post-time"
+                    href={signalsPostPath(p.id)}
+                    title="Link to this post"
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                      e.preventDefault();
+                      setSelected(p.id);
+                    }}
+                  >
+                    {MONTH_NAME[Number(p.month.slice(5)) - 1]} {st.day}
+                  </a>
                 </span>
                 <Pins grants={pinsOn(p.id, null)} onUnpin={unpinGrant} />
               </div>

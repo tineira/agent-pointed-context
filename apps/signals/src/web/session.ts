@@ -11,7 +11,7 @@ export const sessionLimits = { openMs: 10_000, waitMs: 15_000 };
 let inFlight: Promise<string> | null = null;
 
 /**
- * Resume the visitor's feed or open one (with the ?seed= a dock opened Signals with), and resolve its id.
+ * Resume the visitor's feed or open one, and resolve its id. Every feed shows the demo's one world (TIN-621).
  *
  * One open at a time (TIN-490): concurrent callers on this page (React StrictMode's second effect, a
  * remount) share one request, and Signals' pages in other tabs wait for it under a Web Lock, so theirs
@@ -40,8 +40,7 @@ function bounded(): Promise<string> {
 }
 
 async function resumeOrOpen(): Promise<string> {
-  const seed = Number(new URLSearchParams(location.search).get("seed"));
-  const body = Number.isInteger(seed) && seed > 0 ? { seed } : {};
+  const body = {};
   const response = await fetch("/api/session", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(sessionLimits.openMs) });
   if (!response.ok && response.status !== 400) throw new Error(`/api/session: ${response.status}`);
   const result = (await response.json()) as { sid?: string; error?: string };

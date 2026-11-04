@@ -31,7 +31,6 @@ public sealed class MainWindow : Window
     Dataset? data;
     string month = "";
     readonly List<(Control Control, Target Target, Panel Pins)> targets = [];
-    readonly TextBox world = new() { Watermark = "Paste the Pulse link from your agent dock (or leave empty)", MinWidth = 320 };
     readonly StackPanel bar = new() { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
     readonly ComboBox months = new() { MinWidth = 140 };
     readonly ContentControl body = new();
@@ -44,12 +43,9 @@ public sealed class MainWindow : Window
         Height = 760;
         MinWidth = 760;
         MinHeight = 520;
-        var origin = Arg(args, "--pulse") ?? Environment.GetEnvironmentVariable("PULSE_URL") ?? "https://pulse.apc.tineira.com";
+        // One world for everyone (TIN-621): nothing to paste. An old --world <Pulse link> still names a Pulse to open.
+        var origin = Arg(args, "--pulse") ?? Environment.GetEnvironmentVariable("PULSE_URL") ?? PulseClient.OriginOf(Arg(args, "--world")) ?? "https://pulse.apc.tineira.com";
         client = NewClient(new Uri(origin));
-        if (Arg(args, "--world") is { } w) world.Text = w;
-
-        var open = new Button { Content = "Open world" };
-        open.Click += async (_, _) => await OpenAsync();
         var dock = new Button { Content = "Open agent dock" };
         dock.Click += (_, _) => OpenUrl(DockUrl);
         var startOver = new Button { Content = "Start over" };
@@ -83,8 +79,6 @@ public sealed class MainWindow : Window
                         {
                             new TextBlock { Text = "Pulse", FontSize = 18, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center },
                             new TextBlock { Text = "FOR DESKTOP", FontSize = 11, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center },
-                            world,
-                            open,
                         },
                     }.Also(p => DockPanel.SetDock(p, Dock.Left)),
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Children = { bar, dock, startOver } }.Also(p => DockPanel.SetDock(p, Dock.Right)),
@@ -112,26 +106,12 @@ public sealed class MainWindow : Window
         return c;
     }
 
-    /// <summary>Open the sandbox on the world in the box: a dock's Pulse link (…?seed=N), a bare seed, or nothing.</summary>
+    /// <summary>Open the sandbox: the demo's one world, the same customers and ids as Pulse and Signals on the web (TIN-621).</summary>
     async Task OpenAsync()
     {
-        long? seed = null;
-        var text = world.Text?.Trim() ?? "";
-        if (Uri.TryCreate(text, UriKind.Absolute, out var url) && url.Scheme.StartsWith("http"))
-        {
-            var origin = new Uri(url.GetLeftPart(UriPartial.Authority));
-            if (origin != client.Origin)
-            {
-                client.Dispose();
-                client = NewClient(origin);
-            }
-            var q = System.Web.HttpUtility.ParseQueryString(url.Query)["seed"];
-            if (long.TryParse(q, out var s)) seed = s;
-        }
-        else if (long.TryParse(text, out var s)) seed = s;
         await Try(async () =>
         {
-            await client.OpenAsync(seed);
+            await client.OpenAsync();
             data = await client.DatasetAsync();
             var all = Figures.Months(data);
             months.ItemsSource = all;
@@ -139,7 +119,7 @@ public sealed class MainWindow : Window
             months.SelectedItem = month;
             await RefreshAsync();
             await client.ReportViewAsync("overview", month, null);
-            Say($"Open on {client.Origin.Host}, world {data.seed}. Drag an agent from your dock onto a step, a bar or a customer.");
+            Say($"Open on {client.Origin.Host}, the same data as Pulse on the web. Drag an agent from your dock onto a step, a bar or a customer.");
         });
     }
 
@@ -475,9 +455,9 @@ public sealed class MainWindow : Window
             month = "";
             body.Content = null;
             bar.Children.Clear();
-            world.Text = "";
-            Say("Started over. Paste the Pulse link from your dock's \"Open Pulse\" step, then click Open world.");
         });
+        // A new sandbox at once, as the web page opens one: the same data, none of the old agents or pins.
+        await OpenAsync();
     }
 
     // ---- helpers ----

@@ -95,11 +95,6 @@ app.post("/api/d/:did/reset", async (c) => {
   deleteCookie(c, COOKIE, { path: "/" });
   return c.json({ ok: true });
 });
-app.post("/api/d/:did/world", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
-  const result = await stub(c).setWorld(body.seed);
-  return c.json(result, result.ok ? 200 : 400);
-});
 app.post("/api/d/:did/agents/:aid/ticket", async (c) => {
   const t = await stub(c).ticket(c.req.param("aid"));
   return t ? c.json(t) : c.json({ error: "unknown_agent" }, 404);

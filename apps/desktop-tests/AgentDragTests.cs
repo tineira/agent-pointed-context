@@ -87,6 +87,28 @@ public class AgentDragTests
     }
 }
 
+public class WorldTests
+{
+    // One world for everyone (TIN-621): an old dock's world link still names the Pulse to open, its seed is ignored.
+    [Theory]
+    [InlineData("https://pulse.apc.tineira.com/overview?seed=12345", "https://pulse.apc.tineira.com")]
+    [InlineData("  http://localhost:5199/overview?seed=7 ", "http://localhost:5199")]
+    [InlineData("12345", null)]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    [InlineData("file:///C:/pulse", null)]
+    public void An_old_world_link_gives_its_origin(string? link, string? origin) => Assert.Equal(origin, PulseClient.OriginOf(link));
+
+    [Fact]
+    public void The_state_reads_without_a_seed()
+    {
+        var json = "{\"grants\":[],\"v2\":true,\"hub_links\":[],\"settings\":{\"share_view\":true}}";
+        var state = System.Text.Json.JsonSerializer.Deserialize<SandboxState>(json, PulseClient.JsonOptions)!;
+        Assert.Empty(state.grants);
+        Assert.True(state.v2);
+    }
+}
+
 public class FigureTests
 {
     static Dataset Data()

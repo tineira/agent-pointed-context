@@ -1,4 +1,5 @@
-// Pulse for desktop (TIN-396). Usage: PulseDesktop [--world <dock's Pulse link or seed>] [--pulse <origin>]
+// Pulse for desktop (TIN-396). Usage: PulseDesktop [--pulse <origin>]
+// It shows the demo's one world, as Pulse on the web does (TIN-621). An old --world <Pulse link> still works: its origin is used, its seed ignored.
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Styling;

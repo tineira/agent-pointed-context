@@ -1,9 +1,17 @@
 /**
  * Pulse: synthetic product analytics for a fictional SaaS. Deterministic from
- * one seed, so a sandbox stores only its seed and anyone can rebuild its data.
+ * one seed, so anyone can rebuild its data. The demo apps all show one world,
+ * DEMO_SEED (demo-world.ts); other seeds are for tests.
  * The application knows customers, plans, regions, seats and activity. It does
  * not know revenue (see src/user-side/).
  */
+
+/**
+ * The demo's one world (TIN-621): Pulse, Signals and Pulse for Windows always show the data of this
+ * seed, so every visitor sees the same customers and posts, with the same ids, in any app, opened in
+ * any order. Changing it changes every deep link and the cross-app question (demo-world.ts).
+ */
+export const DEMO_SEED = 2283;
 
 export const PLANS = ["starter", "team", "business"] as const;
 export const REGIONS = ["latam", "na", "emea"] as const;

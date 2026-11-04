@@ -116,3 +116,7 @@ apc-agents.agent-bar { --apc-chip: var(--panel); --apc-line: var(--line); --apc-
 .connect-open { align-self: flex-end; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); padding: 6px 14px; font-size: 14px; font-weight: 700; cursor: pointer; }
 .connect-open:hover { background: var(--hover); }
 .mobile-actions > .connect-open { font-size: 13px; padding: 5px 10px; }
+
+/* The post a link opened on (TIN-621), and the time that links to a post. */
+.post.selected { box-shadow: inset 4px 0 0 var(--link); background: var(--hover); }
+.post-time { color: inherit; }

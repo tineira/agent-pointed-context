@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { generateDataset } from "../../demo/src/model/seed.ts";
+import { demoDataset } from "../../demo/src/model/demo-world.ts";
 import { LIMITS } from "../src/worker/trust.ts";
 
 installWorkersStandIn();
@@ -20,15 +20,14 @@ const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
 const DID = "a".repeat(32);
 const SID = "b".repeat(32);
-const SEED = 77;
 
 async function world(t: TestContext) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE });
   await hub.init(DID);
   const pulseRoom = durableObjectRoom();
   const pulse = new Sandbox(pulseRoom.ctx, { APC_V2: "1", HUB_ORIGINS: DOCK });
-  await pulse.init(SEED);
-  const customers = generateDataset(SEED).customers;
+  await pulse.init();
+  const customers = demoDataset().customers;
 
   const net = { hubDown: false, toHub: 0, toPulse: 0, pulseDelayMs: 0 };
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {

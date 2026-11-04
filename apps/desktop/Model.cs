@@ -20,7 +20,7 @@ public sealed record Grant(string id, string label, string? client_name, string?
 
 public sealed record HubLink(string hub, string agent, string grant_id);
 
-public sealed record SandboxState(long seed, List<Grant> grants, bool? v2, List<HubLink>? hub_links);
+public sealed record SandboxState(List<Grant> grants, bool? v2, List<HubLink>? hub_links);
 
 /// <summary>A target, as the protocol names one (packages/protocol): kind, id, part, params.</summary>
 public sealed record Target(string Kind, string? Id, string? Part, SortedDictionary<string, string>? Params)

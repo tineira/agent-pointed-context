@@ -25,7 +25,6 @@ export interface GrantState {
 export type TourStep = "off" | "connect" | "connected" | "point" | "pinned" | "read_once" | "read_twice";
 
 export interface SandboxState {
-  seed: number;
   settings: { share_view: boolean; show_activity: boolean };
   grants: GrantState[];
   tour: { step: TourStep; grant_id: string | null };

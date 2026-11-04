@@ -122,7 +122,7 @@ export function Tour(props: { api: Api; state: SandboxState; names: Map<string, 
               <ol className="tour-steps">
                 <li>
                   <span>Download your file (it stands in for your billing export).</span>
-                  <DownloadCsv seed={state.seed} />
+                  <DownloadCsv />
                 </li>
                 <li>{GIVE_IT}</li>
                 <li>

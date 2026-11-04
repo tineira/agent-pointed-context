@@ -1,13 +1,15 @@
 /**
- * One visitor's sandbox: a Durable Object that holds its seed, grants, view,
- * pins and event log, serves its MCP endpoint and its presence WebSocket.
- * Visitors never share state: a URL leads to exactly one sandbox.
+ * One visitor's sandbox: a Durable Object that holds its grants, view, pins and
+ * event log, serves its MCP endpoint and its presence WebSocket. The data is the
+ * demo's one world (demo-world.ts, TIN-621), the same for everyone and read-only;
+ * the rest is the visitor's alone: a URL leads to exactly one sandbox.
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
 import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
-import { generateDataset, REGIONS, type Dataset, type Region } from "../model/seed.ts";
+import { REGIONS, type Dataset, type Region } from "../model/seed.ts";
+import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type ClientConflict, type Grant, type StoredView } from "./domain.ts";
@@ -82,7 +84,6 @@ async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?:
 
 export class Sandbox extends DurableObject<Env> {
   private sql: SqlStorage;
-  private cached: Dataset | null = null;
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. Its table is made again with the others (migrate). */
   private links!: ApcLinks;
   /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. In the same table as the links. */
@@ -157,9 +158,9 @@ export class Sandbox extends DurableObject<Env> {
   private setMeta(key: string, value: string): void {
     this.sql.exec("insert into meta (key, value) values (?, ?) on conflict(key) do update set value = excluded.value", key, value);
   }
+  /** The demo's one world (TIN-621). A sandbox made before it kept a seed of its own; it is ignored. */
   private data(): Dataset {
-    if (!this.cached) this.cached = generateDataset(Number(this.meta("seed")));
-    return this.cached;
+    return demoDataset();
   }
   private grants(): Grant[] {
     return this.sql
@@ -276,19 +277,16 @@ export class Sandbox extends DurableObject<Env> {
   async alarm(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "sandbox expired");
     await this.ctx.storage.deleteAll();
-    this.cached = null;
     this.migrate();
   }
 
   // ---- owner RPC (the worker checked the owner secret first) ----
 
-  /** seed: on Pulse's v2 deploy, the world a dock opened it on (TIN-393); otherwise a new one. */
-  async init(seed?: number): Promise<{ owner: string }> {
+  async init(): Promise<{ owner: string }> {
     const existing = this.meta("owner");
     if (existing) return { owner: existing };
     const owner = randomHex(16);
     this.setMeta("owner", owner);
-    this.setMeta("seed", String(seed ?? crypto.getRandomValues(new Uint32Array(1))[0]));
     this.setMeta("created_at", new Date().toISOString());
     this.setMeta("share_view", "1");
     this.setMeta("show_activity", "1");
@@ -300,20 +298,6 @@ export class Sandbox extends DurableObject<Env> {
     }
     await this.touch();
     return { owner };
-  }
-
-  /**
-   * Follow the world a dock opened Pulse on (TIN-393, v2 deploy only): a new seed is new data, so the
-   * pins and the stored view go; the agents and their dock pairings stay.
-   */
-  async useSeed(seed: number): Promise<void> {
-    if (this.env.APC_V2 !== "1" || Number(this.meta("seed")) === seed) return;
-    this.setMeta("seed", String(seed));
-    this.cached = null;
-    this.sql.exec("delete from agent_focus");
-    this.sql.exec("delete from view_state");
-    this.log("reseeded", null, {});
-    this.broadcast({ type: "grants" });
   }
 
   async isOwner(secret: string): Promise<boolean> {
@@ -329,7 +313,6 @@ export class Sandbox extends DurableObject<Env> {
 
   async state() {
     return {
-      seed: Number(this.meta("seed")),
       settings: { share_view: this.meta("share_view") !== "0", show_activity: this.meta("show_activity") !== "0" },
       grants: this.grants().map((g) => ({ ...g, pin: this.focusRow(g.id) })),
       tour: this.tour(),
@@ -773,7 +756,7 @@ export class Sandbox extends DurableObject<Env> {
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
-    registerPulseTools(server, data, grant, origin, this.env.APC_V2 === "1" ? (await import("../model/market.ts")).buildMarket(data).signupCodes : undefined);
+    registerPulseTools(server, data, grant, origin, this.env.APC_V2 === "1" ? demoMarket().signupCodes : undefined);
     // The agent introduces itself (TIN-356). The person's own name for it stays on top.
     const { z } = await import("zod");
     server.registerTool(

@@ -27,7 +27,7 @@ const later = () => new Promise((resolve) => setTimeout(resolve, 5));
 function feeds() {
   const owners = new Map<string, string>();
   const stub = (sid: string) => ({
-    async init(_seed: number) {
+    async init() {
       await later();
       if (!owners.has(sid)) owners.set(sid, hex());
       return { owner: owners.get(sid)! };
@@ -79,7 +79,7 @@ const quick = () => {
   for (const tab of [tabA, tabB]) Object.assign(tab.sessionLimits, { requestMs: 50, openMs: 150, waitMs: 2000 });
 };
 
-// The page reads ?seed= from its location.
+// A page location, as in a browser (the open no longer reads ?seed= from it, TIN-621).
 Object.defineProperty(globalThis, "location", { value: { search: "" }, configurable: true });
 
 const realFetch = globalThis.fetch;

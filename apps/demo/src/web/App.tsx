@@ -1,7 +1,8 @@
 import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@tineira/apc-protocol";
 import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, loadApcProfiles, markState, mergePins, type DockUnsupported } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
+import { LAST_MONTH, MONTHS, PLANS, REGIONS, type Plan, type Region } from "../model/seed.ts";
+import { demoDataset } from "../model/demo-world.ts";
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
@@ -31,6 +32,12 @@ function readRoute(): { route: Route; filters: Filters } {
     ...(plan && (PLANS as readonly string[]).includes(plan) ? { plan: plan as Plan } : {}),
     ...(region && (REGIONS as readonly string[]).includes(region) ? { region: region as Region } : {}),
   };
+  // Old links from a dock carry the world they were opened on (?seed=, TIN-393). There is one world now
+  // (TIN-621): the link opens, and the parameter goes from the address so it is not shared on.
+  if (q.has("seed")) {
+    q.delete("seed");
+    history.replaceState(history.state, "", `${url.pathname}${q.size ? `?${q}` : ""}${url.hash}`);
+  }
   const customer = url.pathname.match(/^\/customers\/(cus_\d{4})$/);
   if (customer) return { route: { screen: "customer", id: customer[1]! }, filters };
   if (url.pathname.startsWith("/customers")) return { route: { screen: "customers" }, filters };
@@ -84,7 +91,9 @@ function SandboxGate() {
 function Sandbox({ sid }: { sid: string }) {
   const api: Api = useMemo(() => createApi(sid), [sid]);
   const [state, setState] = useState<SandboxState | null>(null);
-  const [data, setData] = useState<Dataset | null>(null);
+  // The demo's one world (TIN-621): the page builds it with the same function the sandbox uses,
+  // instead of downloading it (the heaviest call in the load test).
+  const data = useMemo(demoDataset, []);
   const [{ route, filters }, setNav] = useState(readRoute);
   const [pulse, setPulse] = useState<Record<string, number>>({});
   // When each agent started a wait_for_focus that has not ended, and when it last read a pin: what its icon does.
@@ -107,12 +116,6 @@ function Sandbox({ sid }: { sid: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  // The data is deterministic from the sandbox's seed: the page rebuilds it with the same function
-  // the sandbox uses, instead of downloading it (the heaviest call in the load test).
-  const seed = state?.seed;
-  useEffect(() => {
-    if (seed !== undefined) setData(generateDataset(seed));
-  }, [seed]);
 
   const navigate = useCallback((nextRoute: Route, nextFilters: Filters) => {
     writeRoute(nextRoute, nextFilters);
@@ -191,7 +194,7 @@ function Sandbox({ sid }: { sid: string }) {
   }, [report, route, filters]);
 
   // Drag a mark onto anything with data-focus. A restricted agent cannot be dropped outside its regions.
-  const regionOf = useMemo(() => new Map((data?.customers ?? []).map((c) => [c.id, c.region])), [data]);
+  const regionOf = useMemo(() => new Map(data.customers.map((c) => [c.id, c.region])), [data]);
   useEffect(
     () =>
       enablePinning({
@@ -269,7 +272,7 @@ function Sandbox({ sid }: { sid: string }) {
     });
   };
 
-  if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
+  if (!state) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   // The standard agent bar's agents (TIN-394), on Pulse's v2 deploy. Each shows the path it came by;
   // an agent linked across both (apc_link, APC 0.4) is one entry, under its Direct grant.
   const dockGrants = new Set((state.hub_links ?? []).map((l) => l.grant_id));
