@@ -7,6 +7,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
+import { clipFallback, type ClipError } from "./clip-fallback.ts";
 import { FOCUS_EXAMPLE } from "./landing-example.ts";
 import { APPS, DESKTOP } from "./setup.tsx";
 
@@ -42,7 +43,7 @@ const AGENTS = [
 ];
 
 const TRY_STEPS = [
-  { title: "Open your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie, nothing to install." },
+  { title: "Your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie, nothing to install." },
   { title: "Connect your agent", text: "Add one MCP server to Claude, ChatGPT, Cursor or Grok. That single connection is all it needs." },
   { title: "Open Pulse or Signals", text: "From this page, below. Drop your agent on something there, and allow it in the app and in your dock." },
   { title: "Point and ask", text: "Drag your agent from the dock onto a bar, a customer or a headline, and ask about \"this\". Point at something in the other app and ask how the two connect." },
@@ -92,7 +93,8 @@ function useReducedMotion(): boolean {
 /** The muted loop of the drag; under reduced motion, its poster frame and no video at all. */
 function HeroClip() {
   const reduce = useReducedMotion();
-  const [paused, setPaused] = useState(false);
+  // The button follows the video itself: a blocked autoplay leaves it paused, and the button then says Play.
+  const [paused, setPaused] = useState(true);
   const [failed, setFailed] = useState(false);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   useEffect(() => {
@@ -101,28 +103,44 @@ function HeroClip() {
     video.muted = true;
     video.defaultMuted = true;
     video.setAttribute("muted", "");
-    if (paused) video.pause();
-    else void video.play().catch(() => undefined);
-  }, [video, paused]);
+    setPaused(video.paused);
+    if (video.paused) void video.play().catch(() => undefined);
+  }, [video]);
+  const fallBack = (error: ClipError) => {
+    const next = clipFallback(error);
+    if (next === "poster") setFailed(true);
+    else if (next === "mp4" && video) {
+      video.src = CLIP.mp4;
+      void video.play().catch(() => undefined);
+    }
+  };
   return (
     <figure className="landing-stage">
       {reduce || failed ? (
         <img src={CLIP.poster} width={CLIP.width} height={CLIP.height} alt={CLIP_ALT} />
       ) : (
         <>
-          <video ref={setVideo} autoPlay muted loop playsInline preload="auto" poster={CLIP.poster} width={CLIP.width} height={CLIP.height} aria-label={CLIP_ALT} onError={(e) => {
-            // A browser that says it plays WebM but cannot decode it gets the MP4; one that cannot play either, the poster.
-            const v = e.currentTarget;
-            if (v.currentSrc.endsWith(".webm")) {
-              v.src = CLIP.mp4;
-              void v.play().catch(() => undefined);
-            } else setFailed(true);
-          }}>
-            <source src={CLIP.webm} type="video/webm" />
-            <source src={CLIP.mp4} type="video/mp4" />
+          <video
+            ref={setVideo}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            poster={CLIP.poster}
+            width={CLIP.width}
+            height={CLIP.height}
+            aria-label={CLIP_ALT}
+            onPlay={() => setPaused(false)}
+            onPause={() => setPaused(true)}
+            // React bubbles a <source>'s error up to here, unlike the DOM: only the video's own error counts.
+            onError={(e) => e.target === e.currentTarget && fallBack({ on: "video", currentSrc: e.currentTarget.currentSrc })}
+          >
+            <source src={CLIP.webm} type="video/webm" onError={() => fallBack({ on: "source", last: false })} />
+            <source src={CLIP.mp4} type="video/mp4" onError={() => fallBack({ on: "source", last: true })} />
           </video>
-          <button type="button" className="landing-stage-toggle" aria-pressed={paused} onClick={() => setPaused((p) => !p)}>
-            {paused ? "Play" : "Pause"}
+          <button type="button" className="landing-stage-toggle" onClick={() => (video?.paused ? void video.play().catch(() => undefined) : video?.pause())}>
+            {paused ? "Play animation" : "Pause animation"}
           </button>
         </>
       )}
@@ -202,7 +220,7 @@ export function Landing() {
       <div className="landing-paths">
         <div className="landing-path">
           <span className="landing-who">For people using an AI agent</span>
-          <h2>Try it</h2>
+          <h3>Try it</h3>
           <p>Use your own agent on two demo apps. A few minutes, made-up data, no account.</p>
           <div className="row">
             <a className="landing-cta" href="#try">Try the demo →</a>
@@ -210,7 +228,7 @@ export function Landing() {
         </div>
         <div className="landing-path">
           <span className="landing-who">For people building an app</span>
-          <h2>Build it</h2>
+          <h3>Build it</h3>
           <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app to their agent, never through us.</p>
           <div className="row">
             <a className="landing-cta ghost" href="#build">Add APC to your app →</a>
@@ -220,8 +238,8 @@ export function Landing() {
       </div>
 
       <section id="try">
-        <span className="landing-eyebrow">Try it</span>
-        <h2 className="landing-title">Your agent, two demo apps, one drag</h2>
+        <h2 className="landing-eyebrow">Try it</h2>
+        <p className="landing-title">Your agent, two demo apps, one drag</p>
         <p className="landing-sub">You need an agent that can add a remote MCP server. The demo is free and its data is made up.</p>
         <Steps steps={TRY_STEPS} />
         <div className="row landing-try-cta">
@@ -266,8 +284,8 @@ export function Landing() {
       </section>
 
       <section id="build">
-        <span className="landing-eyebrow">Build it</span>
-        <h2 className="landing-title">Make your app pointable</h2>
+        <h2 className="landing-eyebrow">Build it</h2>
+        <p className="landing-title">Make your app pointable</p>
         <p className="landing-sub">
           APC is an open standard over MCP. Your app keeps its data and answers the person's agent with just what they pointed at, through its own tools.
         </p>
