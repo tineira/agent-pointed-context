@@ -1,7 +1,9 @@
 /**
  * The landing of apc.tineira.com (TIN-420, TIN-605): the APC standard, its two ways to connect side by side,
- * how the dock works, the demo apps, and the way in. A visitor who already has a dock never sees it: the Worker sends them on to /dock.
+ * how the dock works, the demo apps, and the way in. Everyone sees it (TIN-610); a visitor who already has a dock
+ * also gets "Open your dock" in the top bar and the hero.
  */
+import { useEffect, useState } from "react";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { APPS, DESKTOP } from "./setup.tsx";
 
@@ -64,12 +66,32 @@ function Picture() {
   );
 }
 
+/** Whether this visitor already has a dock (the Worker answers by cookie, TIN-610); false until it says so, and if it fails. */
+function useHasDock(): boolean {
+  const [has, setHas] = useState(false);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/dock/mine", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { has_dock?: unknown } | null) => live && setHas(body?.has_dock === true))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  return has;
+}
+
 export function Landing() {
+  const hasDock = useHasDock();
   return (
     <main className="landing">
       <header className="landing-head">
         <span className="kicker">Agent Pointed Context</span>
-        <a href={REPO}>GitHub</a>
+        <span className="row small">
+          {hasDock && <Cta />}
+          <a href={REPO}>GitHub</a>
+        </span>
       </header>
 
       <section className="landing-hero">
@@ -79,7 +101,7 @@ export function Landing() {
             Agent Pointed Context is a standard for pointing an AI agent at a chart, a row or a paragraph in an app and asking about "this", without sharing the screen. Connect your agent once, or app by app: you choose.
           </p>
           <div className="row">
-            <a className="landing-cta big" href="#ways">Choose how to connect</a>
+            {hasDock ? <Cta big /> : <a className="landing-cta big" href="#ways">Choose how to connect</a>}
             <span className="muted">You need an agent that can add a remote MCP server. Free demo, made-up data.</span>
           </div>
           <div className="landing-brands" aria-label="Works with any agent that takes an MCP server">

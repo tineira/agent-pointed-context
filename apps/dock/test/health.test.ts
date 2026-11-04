@@ -64,3 +64,44 @@ test("a request for /v1 that reaches the dock is sent on or refused, never the d
     assert.equal(response.status, 404, path);
   }
 });
+
+test("the root is always the landing; /api/dock/mine says whether the visitor has a dock (TIN-610)", async () => {
+  const live = `apc_dock=${"a".repeat(32)}.${"b".repeat(32)}`;
+  const expired = `apc_dock=${"c".repeat(32)}.${"d".repeat(32)}`;
+  const env = {
+    HUB: { idFromName: (name: string) => name, get: (name: string) => ({ isOwner: async (secret: string) => name === "a".repeat(32) && secret === "b".repeat(32) }) },
+    ASSETS: { fetch: async (req: Request) => new Response(`asset ${new URL(req.url).pathname}`, { headers: { "content-type": "text/html" } }) },
+  };
+  // The landing, for a visitor with a dock, an expired one and none: 200, never a redirect.
+  for (const cookie of [live, expired, ""]) {
+    const response = await app.request("https://example.com/", { headers: { cookie } }, env);
+    assert.equal(response.status, 200, cookie);
+    assert.equal(await response.text(), "asset /", cookie);
+    assert.equal(response.headers.get("location"), null, cookie);
+  }
+  // The flag the landing reads: a yes or no behind the cookie, uncached, with nothing else in it.
+  const mine = async (cookie: string) => {
+    const response = await app.request("https://example.com/api/dock/mine", { headers: { cookie } }, env);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("set-cookie"), null);
+    return response.json();
+  };
+  assert.deepEqual(await mine(live), { has_dock: true });
+  assert.deepEqual(await mine(expired), { has_dock: false });
+  assert.deepEqual(await mine(""), { has_dock: false });
+  assert.deepEqual(await mine("apc_dock=not-a-session"), { has_dock: false });
+  // ?start_over=1 (a link from another site's dialog) still reaches the dock for a visitor who has one, query kept.
+  const startOver = await app.request("https://example.com/?start_over=1", { headers: { cookie: live } }, env);
+  assert.equal(startOver.status, 302);
+  assert.equal(startOver.headers.get("location"), "/dock?start_over=1");
+  // Without a dock there is nothing to start over: the landing.
+  assert.equal((await app.request("https://example.com/?start_over=1", {}, env)).status, 200);
+  // /dock is untouched: the static page, as before.
+  const dock = await app.request("https://example.com/dock", { headers: { cookie: live } }, env);
+  assert.equal(dock.status, 200);
+  assert.equal(await dock.text(), "asset /dock");
+  // The frame protection holds for all of it.
+  assert.equal(startOver.headers.get("x-frame-options"), "DENY");
+  assert.equal((await app.request("https://example.com/api/dock/mine", {}, env)).headers.get("x-frame-options"), "DENY");
+});

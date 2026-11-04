@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The root of apc.tineira.com is always the landing (2026-11-04, TIN-610)
+
+- **A visitor who already has a dock now sees the standard's landing at `/` too, with "Open your dock" in the top bar and the hero.** Before, the Worker redirected them to `/dock`, so returning visitors never saw the landing. The landing asks the new `GET /api/dock/mine` (`{ "has_dock": true | false }`, by the dock cookie, uncached, no id or secret in the answer). The one redirect left is `/?start_over=1` for a visitor with a dock, which goes to `/dock?start_over=1`. `/dock`, the installed app's start URL and every link into the dock are unchanged. (`apps/dock/src/worker/index.ts`, `apps/dock/src/web/landing.tsx`, `apps/dock/test/health.test.ts`)
+
 ### Open pairing, with a warning in the dock (2026-11-04, TIN-581)
 
 - **Any APC app can pair with the dock, after the person approves a warning in the dock.** `OPEN_PAIRING` is gone: an app outside `APP_ORIGINS` asks like any other, and its request becomes a pairing only through the warning's Approve (`approve_unverified`; a plain approve is refused as `warning_required`, so an older dock page cannot skip it). The warning shows the domain first and big, **Not verified**, what the app calls itself only as its own word, and the risk ("Your agent will read whatever this app tells it, and that could lead your agent to move data out of your other apps."), with Deny first and focused; it shows once per domain per dock, and a Deny, Unpair or Remove on an unverified app takes the domain's approval back. Verified apps keep their consent flow. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/trust.ts`, `apps/dock/src/web/unverified.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/web/pet.tsx`, `apps/dock/src/web/dock.css`)
