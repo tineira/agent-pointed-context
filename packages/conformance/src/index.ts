@@ -6,7 +6,9 @@
  * the presence the app shows them, Revoke in the agent bar) comes through a small adapter the app
  * provides, since only the app knows its page. Since 0.5 it also reads the app's `apc.json`
  * (`GET {origin}/.well-known/apc.json`, through the adapter's `fetch`): its shape, its origin, the
- * standard, and that its profiles and `mcp.path` match what the app serves.
+ * standard, and that its profiles and `mcp.path` match what the app serves. Since 0.6 an adapter may
+ * also give `page.mobile` (the page on a phone): the suite then checks that every agent is shown in the
+ * page, that the bar cannot be collapsed, and that a finger can pin and unpin with no mouse drag.
  *
  * Framework-free: `apcConformance(app)` returns named checks that throw `ConformanceError`, for any
  * test runner (`for (const c of apcConformance(app)) test(c.name, c.run)` under `node --test`), and
@@ -16,6 +18,7 @@ import {
   APC_AGENT_CLIENT_META,
   APC_JSON_MAX_BYTES,
   APC_JSON_PATH,
+  APC_MOBILE_VIEWPORT,
   APC_STANDARD_VERSION,
   APC_LINK_KEY,
   APC_LINK_TOOL,
@@ -59,6 +62,24 @@ export interface ApcLinkAdapter {
   expireCodes?(): Promise<void>;
 }
 
+/**
+ * The person's page on a phone (APC 0.6): a viewport of `APC_MOBILE_VIEWPORT` with a touch pointer and no
+ * mouse. Optional in the adapter; with it the suite runs the mobile checks. An app's own test can model
+ * the page with the pieces of @apc/web (the bar's collapse rule, tap to pin); the real thing is a browser
+ * with touch emulation (`scripts/mobile-e2e.mjs` does that for Pulse and Signals).
+ */
+export interface ApcMobilePage {
+  /**
+   * What the page shows at that viewport, with these agents connected: the grants whose mark is visible in
+   * the page and can be pinned from, and whether the person can collapse or hide the agent bar there.
+   */
+  agentBar(): Promise<{ visible: string[]; collapsible: boolean }>;
+  /** The person pins with a finger, with no mouse drag: taps the agent's mark, then the target. False when the app refuses the pin. */
+  pinByTouch(grantId: string, target: FocusTarget): Promise<boolean>;
+  /** The person removes the agent's pin with a finger (the × beside the agent in the bar). False when the page offers no way. */
+  unpinByTouch(grantId: string): Promise<boolean>;
+}
+
 /** What the suite needs from an app. */
 export interface ApcAppAdapter {
   /** The app's name, for the report. */
@@ -84,6 +105,8 @@ export interface ApcAppAdapter {
     takePresence(): PresenceEvent[];
     /** The person's Revoke in the agent bar; false when the app refuses. */
     revoke(grantId: string): Promise<boolean>;
+    /** The page on a phone (APC 0.6). Left out: the mobile checks are skipped. */
+    mobile?: ApcMobilePage;
   };
   /** An app that offers both profiles: the `apc_link` checks run too. */
   link?: ApcLinkAdapter;
@@ -414,7 +437,41 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(!("focus" in d) && !("view" in d) && r.structuredContent === undefined, "it carries no focus, view or other data");
       expect(ms < 9000, `it ended at ${ms} ms, not soon after the revoke`);
     }),
+    ...(app.page.mobile ? mobileChecks(app, app.page.mobile) : []),
     ...(app.link ? linkChecks(app, app.link) : []),
+  ];
+}
+
+/** The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin. */
+function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage): ConformanceCheck[] {
+  const [first, second] = app.targets;
+  const { width, height } = APC_MOBILE_VIEWPORT;
+  const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (${app.profile}): mobile ${width}x${height}: ${name}`, run });
+  return [
+    check("every agent is shown in the page, and the agent bar cannot be collapsed or hidden", async () => {
+      const a = await app.connect();
+      const b = await app.connect();
+      await app.page.setOpen(true);
+      const bar = await mobile.agentBar();
+      for (const { grantId } of [a, b]) expect(bar.visible.includes(grantId), `the agent ${grantId} is not shown in the page on a phone: the page shows ${JSON.stringify(bar.visible)}`);
+      expect(bar.collapsible === false, "the agent bar can be collapsed or hidden on a phone: there the agent in the page is the only way to point it");
+    }),
+
+    check("a person pins with a finger, no mouse drag, and the agent reads the pin; unpin works by touch too", async () => {
+      const { mcpUrl, grantId } = await app.connect();
+      await app.page.setOpen(true);
+      await app.page.showView();
+      expect(await mobile.pinByTouch(grantId, first), "the page refused a pin made by tapping the agent and then the target");
+      const r = await call(app, mcpUrl, "get_current_view");
+      expect(!r.isError, "get_current_view failed");
+      checkFocus(data(r).focus, first, "get_current_view after a pin by touch");
+      // The same again on another target: one pin per grant, replaced.
+      expect(await mobile.pinByTouch(grantId, second), "the page refused a second pin by touch");
+      checkFocus(data(await call(app, mcpUrl, "get_current_view")).focus, second, "get_current_view after a second pin by touch");
+      expect(await mobile.unpinByTouch(grantId), "the page offers no way to remove the pin with a finger");
+      const after = await call(app, mcpUrl, "get_current_view");
+      expect(data(after).focus === null, "the pin is still there after the person removed it by touch");
+    }),
   ];
 }
 

@@ -10,6 +10,7 @@ import { test, type TestContext } from "node:test";
 import { apcConformance, runConformance, type ApcAppAdapter } from "@apc/conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
 import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@apc/protocol";
+import { barCanCollapse, createTapPin, type BarAgent } from "@apc/web";
 import { generateDataset, LAST_MONTH } from "../src/model/seed.ts";
 
 installWorkersStandIn();
@@ -100,6 +101,24 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       pin: async (grantId, target) => (await sandbox.pin(grantId, target)).ok,
       takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceEvent),
       revoke: async (grantId) => (options.revoke === false ? true : (await sandbox.revokeGrant(grantId)).ok),
+      // The page on a phone (APC 0.6), modelled with @apc/web's own pieces: the bar's collapse rule on mobile and
+      // the tap-to-pin controller `enablePinning` runs, which pins through the sandbox like the page's onPin does.
+      // The real page, at 375x812 with a touch pointer, is scripts/mobile-e2e.mjs.
+      mobile: {
+        async agentBar() {
+          const grants = (await sandbox.state()).grants as Array<{ id: string }>;
+          const bar: BarAgent[] = grants.map((g) => ({ id: g.id, name: g.id, state: "idle", paths: [profile] }));
+          return { visible: bar.map((a) => a.id), collapsible: barCanCollapse(bar, true) };
+        },
+        async pinByTouch(grantId, target) {
+          const pins: Array<Promise<{ ok: boolean }>> = [];
+          const tap = createTapPin({ onPin: (id, t) => void pins.push(sandbox.pin(id, t)) });
+          tap.toggle(grantId);
+          assert.equal(tap.tap({ element: {} as Element, target }), "pinned");
+          return pins.length === 1 && (await pins[0]!).ok;
+        },
+        unpinByTouch: async (grantId) => (await sandbox.unpin(grantId), true),
+      },
     },
   };
   return { app, sandbox, room };
@@ -170,6 +189,24 @@ test("the suite catches an app whose Revoke does nothing", async () => {
   const { app } = await pulse("direct", { revoke: false });
   const check = apcConformance(app).find((c) => c.name.includes("revoke from the app"))!;
   await assert.rejects(check.run(), /HTTP 200, expected 403/);
+});
+
+test("the suite catches a page that collapses its agent bar, hides an agent or cannot pin by touch on a phone (APC 0.6)", async () => {
+  const { app } = await pulse("dock");
+  const mobile = app.page.mobile!;
+  const run = async (over: Partial<typeof mobile>, which: string) => {
+    const page = { ...app.page, mobile: { ...mobile, ...over } };
+    await apcConformance({ ...app, page }).find((c) => c.name.includes(which))!.run();
+  };
+  await assert.rejects(run({ agentBar: async () => ({ ...(await mobile.agentBar()), collapsible: true }) }, "cannot be collapsed"), /can be collapsed or hidden on a phone/);
+  await assert.rejects(run({ agentBar: async () => ({ visible: [], collapsible: false }) }, "cannot be collapsed"), /is not shown in the page on a phone/);
+  await assert.rejects(run({ pinByTouch: async () => false }, "pins with a finger"), /refused a pin made by tapping/);
+  await assert.rejects(run({ unpinByTouch: async () => false }, "pins with a finger"), /no way to remove the pin with a finger/);
+  // A page that says it removed the pin but did not.
+  await assert.rejects(run({ unpinByTouch: async () => true }, "pins with a finger"), /still there after the person removed it by touch/);
+  // Left out, the mobile checks are skipped.
+  assert.equal(apcConformance({ ...app, page: { ...app.page, mobile: undefined } }).filter((c) => c.name.includes("mobile")).length, 0);
+  assert.equal(apcConformance(app).filter((c) => c.name.includes("mobile")).length, 2);
 });
 
 test("runConformance reports each check", async () => {

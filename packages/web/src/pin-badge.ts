@@ -47,6 +47,7 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
 .apc-pin__unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--apc-line, #d6dce5);
   background: var(--apc-pin-unpin-bg, var(--apc-chip, #ffffff)); color: var(--apc-muted, #56627a); font-size: 12px; line-height: 13px; cursor: pointer; opacity: 0.85; }
 .apc-pin__unpin:hover { color: var(--apc-ink, #141a24); opacity: 1; }
+@media (pointer: coarse), (max-width: 640px) { .apc-pin__unpin::after { content: ""; position: absolute; inset: -14px; } }
 @keyframes apc-pin-breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }
 @media (prefers-reduced-motion: reduce) { apc-pin .apc-pin__mark { animation: none !important; } }
 `;

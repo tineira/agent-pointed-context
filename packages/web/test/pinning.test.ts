@@ -36,3 +36,33 @@ test("the agent bar's words: the mark, and the pin's dot (TIN-394)", async () =>
   assert.equal(agentLabels({ ...a, pin: { label: "active_customers 2026-03", seen: true, here: true } }).dot, "Pinned to active_customers 2026-03: your agent read it");
   assert.match(agentLabels({ ...a, pin: { label: "cus_0042", seen: false, here: false } }).dot!, /waiting for your agent's next call\. Click to open it\.$/);
 });
+
+test("tap to pin: tap an agent, then a target; the armed one again lets go (APC 0.6)", async () => {
+  const { createTapPin } = await import("../src/pinning.ts");
+  const pins: Array<[string, string]> = [];
+  const changes: Array<string | null> = [];
+  const el = {} as Element;
+  const tap = createTapPin({
+    canTarget: (grant, target) => !(grant === "g_restricted" && target.id === "cus_9"),
+    onPin: (grant, target) => pins.push([grant, `${target.kind}:${target.id}`]),
+    onChange: (armed) => changes.push(armed),
+  });
+  const at = (id: string) => ({ element: el, target: { kind: "customer", id, part: null, params: null } });
+  assert.equal(tap.tap(at("cus_1")), "idle", "a tap with no agent armed pins nothing");
+  assert.equal(tap.toggle("g_1"), "g_1");
+  assert.equal(tap.tap(null), "no_target", "a tap on something that is no target keeps the agent armed");
+  assert.equal(tap.armed, "g_1");
+  assert.equal(tap.toggle("g_1"), null, "tapping the armed mark again lets go");
+  tap.toggle("g_1");
+  tap.toggle("g_restricted");
+  assert.equal(tap.armed, "g_restricted", "arming another agent replaces the first");
+  assert.equal(tap.tap(at("cus_9")), "refused", "a target the agent may not point at is refused, and it stays armed");
+  assert.equal(tap.armed, "g_restricted");
+  assert.equal(tap.tap(at("cus_2")), "pinned");
+  assert.equal(tap.armed, null, "a pin lets go");
+  tap.toggle("g_1");
+  tap.cancel();
+  assert.equal(tap.armed, null);
+  assert.deepEqual(pins, [["g_restricted", "customer:cus_2"]]);
+  assert.deepEqual(changes, ["g_1", null, "g_1", "g_restricted", null, "g_1", null]);
+});
