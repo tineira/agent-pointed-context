@@ -69,7 +69,7 @@ export class Feed extends DurableObject<Env> {
   private waiting = new Set<string>();
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
   private links!: ApcLinks;
-  /** Consent in the app, checked here (APC 0.6): the nonce the page shows its consent with. */
+  /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
   private pairing = new Set<string>();
@@ -289,7 +289,7 @@ export class Feed extends DurableObject<Env> {
   /**
    * The person dropped an agent from a dock here (DESIGN.md 12.1, as in Pulse's v2): a grant for it,
    * handed to the dock's hub server to server with the drag's ticket, and the pin. An agent Signals holds
-   * no grant for gets one only with the person's yes on this page, checked here (APC 0.6, TIN-606): the
+   * no grant for gets one only with the person's yes on this page, checked here (APC 0.7, TIN-606): the
    * answer is `consent_required` with a nonce, and only a request that brings the nonce back pairs.
    */
   async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string }> {

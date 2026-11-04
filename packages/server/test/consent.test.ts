@@ -1,5 +1,5 @@
 /**
- * Consent in the app, checked by its server (APC 0.6, TIN-606): `DockConsent` gives the page a nonce to show
+ * Consent in the app, checked by its server (APC 0.7, TIN-606): `DockConsent` gives the page a nonce to show
  * its consent with, and takes it back once, for the same dock and agent, before it expires.
  */
 import assert from "node:assert/strict";

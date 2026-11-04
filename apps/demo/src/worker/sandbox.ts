@@ -83,7 +83,7 @@ export class Sandbox extends DurableObject<Env> {
   private cached: Dataset | null = null;
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. Its table is made again with the others (migrate). */
   private links!: ApcLinks;
-  /** Consent in the app, checked here (APC 0.6): the nonce the page shows its consent with. In the same table as the links. */
+  /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. In the same table as the links. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
   private pairing = new Set<string>();
@@ -466,7 +466,7 @@ export class Sandbox extends DurableObject<Env> {
    * drag's single-use ticket, and pins the agent where it was dropped. The hub reads Pulse only after the
    * person says yes in the dock too. Only on the v2 deploy.
    *
-   * The person's yes here is checked here, not on the page (APC 0.6, TIN-606): a page decides from the state
+   * The person's yes here is checked here, not on the page (APC 0.7, TIN-606): a page decides from the state
    * it last loaded, and one that missed a revoke would pair without asking. So an agent Pulse holds no grant
    * for gets `consent_required` and a nonce; the page shows its consent with it, and only a request that
    * brings it back (once, for the same dock and agent, within two minutes) makes a grant.

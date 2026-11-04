@@ -1,7 +1,7 @@
 import type { ApcKv } from "./kv.ts";
 
 /**
- * Consent in the app, checked by the app's server (the Dock profile, APC 0.6, `core.ts` in @apc/protocol).
+ * Consent in the app, checked by the app's server (the Dock profile, APC 0.7, `core.ts` in @apc/protocol).
  * A dock agent dropped on an app that holds no grant for it gets one only after the person allowed it on
  * the app's own page. The page cannot be the judge of that: it decides from the state it last loaded, and
  * a page that missed an update (a revoke, a dock that forgot the pairing) would pair without asking. So the
