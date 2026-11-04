@@ -139,6 +139,7 @@ test("the hooks are POSIX sh, executable, and never block git", () => {
   assert.ok(lib.includes("CI=true pnpm install --frozen-lockfile < /dev/null"), "pnpm never waits for an answer nobody sees");
   assert.ok(lib.includes("APC extension rebuilt into apps/extension/dist: reload it on chrome://extensions"));
   assert.ok(!/\bexit 1\b|return 1\b/.test(lib), "a failed build warns and returns 0");
+  assert.match(lib, /"\$status" = "2"[\s\S]*apps\/extension\/dist was only partly updated: close what holds it and run node apps\/extension\/build\.mjs again/, "a partial update is never called unchanged");
   assert.match(lib, /--git-dir[\s\S]*--git-common-dir[\s\S]*\[ "\$git_dir" = "\$common_dir" \] \|\| return 0/, "a linked worktree (an agent's) never rebuilds");
   assert.match(lib, /APC_HOOKS_IN_WORKTREES/);
 });

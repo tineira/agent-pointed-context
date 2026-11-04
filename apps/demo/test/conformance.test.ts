@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { apcConformance, runConformance, type ApcAppAdapter } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { APC_JSON_PATH, APC_STANDARD_VERSION, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { generateDataset, LAST_MONTH } from "../src/model/seed.ts";
 
@@ -175,6 +175,11 @@ test("the suite catches an apc.json that leaves out a profile the app serves, na
   await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, origin: "https://pulse.example" }) })).app).run(), /apc_json_wrong_origin/);
   await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, mcp: { path: "/agents/" } }) })).app).run(), /mcp\.path/);
   await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, standard: "9.0.0" }) })).app).run(), /standard is 9\.0\.0/);
+  const [major, minor, patch] = APC_STANDARD_VERSION.split(".").map(Number) as [number, number, number];
+  const newerPatch = checkOf((await pulse("direct", { apcJson: served({ ...base, standard: `${major}.${minor}.${patch + 1}` }) })).app);
+  await newerPatch.run();
+  assert.match(newerPatch.note ?? "", /newer patch .* never changes the contract/, "a newer patch passes, and the note is kept");
+  await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, standard: `${major}.${minor + 1}.0` }) })).app).run(), /newer than/);
   await assert.rejects(checkOf((await pulse("direct", { apcJson: async () => Response.json({ error: "not_found" }, { status: 404 }) })).app).run(), /HTTP 404/);
 });
 

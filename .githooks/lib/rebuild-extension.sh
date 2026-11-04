@@ -26,9 +26,14 @@ rebuild_extension() {
       return 0
     fi
   fi
-  # build.mjs swaps the new build in only when it all succeeded, so a failure leaves the previous dist loadable.
-  if (cd "$top" && node apps/extension/build.mjs < /dev/null > /dev/null 2>&1); then
+  # build.mjs swaps the new build in only when it all succeeded: status 1 leaves the previous dist loadable. Status 2:
+  # dist was held open and could only be partly overwritten.
+  (cd "$top" && node apps/extension/build.mjs < /dev/null > /dev/null 2>&1)
+  status=$?
+  if [ "$status" = "0" ]; then
     echo "APC extension rebuilt into apps/extension/dist: reload it on chrome://extensions"
+  elif [ "$status" = "2" ]; then
+    echo "warning: apps/extension/dist was only partly updated: close what holds it and run node apps/extension/build.mjs again" >&2
   else
     echo "warning: APC extension rebuild failed (apps/extension/dist is unchanged). Run it by hand: node apps/extension/build.mjs" >&2
   fi

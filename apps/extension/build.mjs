@@ -7,10 +7,13 @@
 // and chrome://extensions show.
 // The build is all or nothing: it reads the version first, builds into a sibling folder, and only when every step
 // succeeded swaps it in for the output folder. A failed build (a hook's rebuild after a pull, say) leaves the
-// previous build in place and loadable. APC_EXTENSION_BUILD_FAIL_AFTER=<n> makes it fail after n entries (tests).
-import { cpSync, renameSync, rmSync } from "node:fs";
+// previous build in place and loadable (exit 1). If the output folder cannot be swapped (a file in it held open), it
+// is overwritten file by file, manifest.json last; if even that fails, the build says the folder was only partly
+// updated (exit 2). For tests: APC_EXTENSION_BUILD_FAIL_AFTER=<n> fails after n entries, APC_EXTENSION_BUILD_NO_RENAME=1
+// takes the file-by-file path, APC_EXTENSION_BUILD_FAIL_COPY=<file> fails writing that file.
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { build } from "vite";
@@ -72,19 +75,53 @@ try {
   process.exit(1);
 }
 
-// Swap the new build in: rename the old one aside, the new one into place, then drop the old one. If the old
-// folder cannot be renamed (a file held open on Windows), copy the new files over it instead.
+// Swap the new build in: rename the old one aside, the new one into place, then drop the old one. When the old
+// folder cannot be renamed (a file in it held open, on Windows), overwrite it file by file instead (overwrite()).
 const old = `${outDir}.old-${process.pid}`;
-try {
-  renameSync(outDir, old);
-} catch {
-  // No previous build, or it is held open: handled below.
+const forceInPlace = process.env.APC_EXTENSION_BUILD_NO_RENAME === "1";
+let swapped = false;
+if (!forceInPlace) {
+  let aside = false;
+  try {
+    if (existsSync(outDir)) {
+      renameSync(outDir, old);
+      aside = true;
+    }
+    renameSync(work, outDir);
+    swapped = true;
+  } catch {
+    // Put the old build back if it was moved aside, then overwrite it in place below.
+    if (aside && !existsSync(outDir)) renameSync(old, outDir);
+  }
 }
-try {
-  renameSync(work, outDir);
-} catch {
-  cpSync(work, outDir, { recursive: true, force: true });
+if (!swapped) {
+  try {
+    overwrite(work, outDir);
+  } catch (error) {
+    rmSync(work, { recursive: true, force: true });
+    const shown = relative(fileURLToPath(new URL("../..", import.meta.url)), outDir).split(sep).join("/");
+    console.error(`${shown} was only partly updated: close what holds it and run node apps/extension/build.mjs again (${error instanceof Error ? error.message : error})`);
+    process.exit(2);
+  }
   rmSync(work, { recursive: true, force: true });
 }
 rmSync(old, { recursive: true, force: true });
 console.log(`built ${outDir}: ${manifest.version_name}`);
+
+/**
+ * Overwrites `to` with the files of `from`, one by one, manifest.json last (so Chrome never reads a new manifest
+ * over old scripts), then removes what the new build does not have. Throws on the first file it cannot write or
+ * remove; the caller then says the folder was only partly updated. APC_EXTENSION_BUILD_FAIL_COPY=<file> makes
+ * writing that file fail (tests).
+ */
+function overwrite(from, to) {
+  const list = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile()) : []);
+  const fresh = list(from).sort((a, b) => (a === "manifest.json") - (b === "manifest.json") || (a < b ? -1 : 1));
+  for (const file of fresh) {
+    if (process.env.APC_EXTENSION_BUILD_FAIL_COPY === file) throw new Error(`could not write ${file} (APC_EXTENSION_BUILD_FAIL_COPY)`);
+    mkdirSync(dirname(join(to, file)), { recursive: true });
+    copyFileSync(join(from, file), join(to, file));
+  }
+  const keep = new Set(fresh);
+  for (const file of list(to)) if (!keep.has(file)) rmSync(join(to, file));
+}

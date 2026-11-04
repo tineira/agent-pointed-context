@@ -131,7 +131,22 @@ export interface ApcAppAdapter {
 
 export interface ConformanceCheck {
   name: string;
+  /** Throws when the check fails. */
   run(): Promise<void>;
+  /** Set by `run()` when the check passed with something worth saying (a newer patch of the standard, say). */
+  note?: string;
+}
+
+/** A check whose body may resolve to `{ note }`: the note lands on the check, and `run()` stays a test body. */
+function noted(name: string, body: () => Promise<void | { note: string }>): ConformanceCheck {
+  const check: ConformanceCheck = {
+    name,
+    async run() {
+      const out = await body();
+      if (out?.note) check.note = out.note;
+    },
+  };
+  return check;
 }
 
 export interface ConformanceReport {
@@ -139,7 +154,7 @@ export interface ConformanceReport {
   profile: ApcProfile;
   passed: number;
   failed: number;
-  results: Array<{ name: string; ok: boolean; error?: string }>;
+  results: Array<{ name: string; ok: boolean; error?: string; note?: string }>;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -185,7 +200,7 @@ async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
 /** The checks of the core, in order. Each makes its own agents, so any one can run alone. */
 export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
   const [first, second] = app.targets;
-  const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (${app.profile}): ${name}`, run });
+  const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
 
   return [
     check("serves apc.json from its own origin, naming the profiles it serves and where its MCP URLs live", async () => {
@@ -213,6 +228,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       if (app.link) expect(m.profiles.includes("direct") && m.profiles.includes("dock"), `profiles ${JSON.stringify(m.profiles)}: an app that links both paths offers both`);
       expect(declaresMcpUrl(m, mcpUrl), `the grant's MCP URL is not under ${origin}${m.mcp.path} (mcp.path)`);
       if (m.profiles.includes("direct")) expect(m.direct && new URL(m.direct.connect).origin === origin, "direct.connect is the app's own page");
+      if (support.note) return { note: support.note };
     }),
 
     check("lists the core tools, with their arguments", async () => {
@@ -550,7 +566,7 @@ export async function runConformance(app: ApcAppAdapter): Promise<ConformanceRep
   for (const c of apcConformance(app)) {
     try {
       await c.run();
-      results.push({ name: c.name, ok: true });
+      results.push({ name: c.name, ok: true, ...(c.note ? { note: c.note } : {}) });
     } catch (error) {
       results.push({ name: c.name, ok: false, error: error instanceof Error ? error.message : String(error) });
     }
