@@ -188,7 +188,7 @@ With the APC browser extension the person can drop a dock agent on any web page,
 
 The standard has its own [semver](https://semver.org), `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. Every change to the contract adds an entry to the [changelog](/docs/changelog) and bumps it; an app says which version it implements in its `apc.json`.
 
-- **0.x, now: a draft.** Any release may change the contract, compatible or not. The changelog says what changed and what an app must do. The suite checks an app that claims any version from 0.5.0 up to its own.
+- **0.x, now: a draft.** Any minor release may change the contract, compatible or not. The changelog says what changed and what an app must do. A patch release (0.7.0 to 0.7.1) never changes the contract: it fixes the software or the wording; any change to the contract is a new minor (0.x) or major version. The suite checks an app that claims any version from 0.5.0 up to its own, and passes a newer patch of its own minor with a note (its checks still apply); a newer minor fails until the suite is updated.
 - **1.0: the contract frozen.** From 1.0, a change that breaks a conforming app, agent or hub needs a new major version; a minor version only adds (a new optional key, a new tool, a new profile); a patch only clarifies.
 - **Deprecation (proposed for 1.0).** Something to be removed or changed incompatibly is first marked deprecated in a minor release, in the changelog and here, and keeps working for at least one more minor release **and** at least 3 months, whichever is longer, before a major release removes it. A security fix may shorten that window; the changelog then says why.
 

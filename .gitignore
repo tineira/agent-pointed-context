@@ -6,3 +6,5 @@ dist/
 apps/demo/user-side-out/
 apps/demo/worker-configuration.d.ts
 dist-dev/
+apps/extension/*.building-*/
+apps/extension/*.old-*/

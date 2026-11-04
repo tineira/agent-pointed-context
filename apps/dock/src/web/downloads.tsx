@@ -1,6 +1,6 @@
 import { APPS, appUrl, CopyRow, DESKTOP, DESKTOP_SHELL, DOCK_DESKTOP } from "./setup.tsx";
 import { downloadPlatform } from "./download-platform.ts";
-import { useExtensionInstalled } from "./extension.tsx";
+import { ExtensionOutdatedNotice, useExtensionInstalled, useExtensionOutdated } from "./extension.tsx";
 
 /** Small platform marks identify the downloads; their adjacent text supplies the accessible name. */
 function WindowsLogo() {
@@ -25,6 +25,8 @@ function BrowserLogos() {
 /** Permanent offers below the dock controls, separate from checklist completion. */
 export function Downloads({ seed }: { seed: number }) {
   const installed = useExtensionInstalled();
+  const { outdated } = useExtensionOutdated();
+  const extensionLabel = outdated ? "Extension out of date" : installed ? "Extension installed ✓" : "Browser extension";
   const platform = downloadPlatform(navigator.userAgent, DESKTOP_SHELL);
   if (!platform.computer) return <p className="download-note">Desktop apps and the browser extension need a computer.</p>;
   const pulse = DESKTOP.find((d) => d.label === "Windows");
@@ -38,10 +40,11 @@ export function Downloads({ seed }: { seed: number }) {
         <WindowsLogo /><span>Pulse for Windows</span>
         <small className="download-note">Unsigned for now</small>
       </a>}
-      <a className="download-button" href="/extension" target="_blank" rel="noreferrer" aria-label={installed ? "Extension installed ✓ — Chrome and Edge" : "Browser extension for Chrome and Edge"}>
-        <BrowserLogos /><span>{installed ? "Extension installed ✓" : "Browser extension"}</span>
+      <a className="download-button" href="/extension" target="_blank" rel="noreferrer" aria-label={installed ? `${extensionLabel} — Chrome and Edge` : "Browser extension for Chrome and Edge"}>
+        <BrowserLogos /><span>{extensionLabel}</span>
       </a>
     </nav>
+    <ExtensionOutdatedNotice />
     {platform.pulse && pulse && <div className="download-world">
       <p>In Pulse for Windows, paste this world link:</p>
       <CopyRow text={appUrl(APPS[0]!, seed)} label="Copy world link" />

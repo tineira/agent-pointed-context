@@ -15,6 +15,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The full history: the dock and extension builds count commits for the extension's version
+          # (scripts/lib/extension-version.mjs), and a shallow clone stops them.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -69,9 +73,11 @@ jobs:
 
   # Which app a push to main touches. V1 is frozen in apps/v1 with its own copy of the APC code (TIN-604): only a
   # change under apps/v1/ deploys it. The standard is the dock (apps/dock), Pulse for the standard (apps/demo, TIN-382), Signals
-  # (apps/signals), the packages they share and the lockfile. Pulse for desktop (apps/desktop*, TIN-396), the dock for
-  # Windows (apps/dock-desktop, #84) and the browser extension (apps/extension) deploy nothing here; a change to .github/
-  # alone redeploys nothing (the next app change runs the new deploy steps).
+  # (apps/signals), the packages they share and the lockfile. A change to the browser extension (apps/extension; its zip
+  # is published by extension.yml) redeploys the dock too: the dock bakes in the latest extension's version, so it can tell
+  # a person theirs is out of date. Pulse for desktop (apps/desktop*, TIN-396) and the dock for Windows
+  # (apps/dock-desktop, #84) deploy nothing here; a change to .github/ alone redeploys nothing (the next app change runs
+  # the new deploy steps).
   changes:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -92,7 +98,7 @@ jobs:
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
           echo "v1=$(echo "$files" | grep -qE '^apps/v1/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "standard=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "standard=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|apps/extension/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches apps/v1 goes live at apc.tineira.com/v1 (Worker apc-demo,
   # through zone routes; the root is the dock's). It builds apps/v1 alone: nothing else in the repo
@@ -145,6 +151,9 @@ jobs:
       url: https://apc.tineira.com
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The full history: the dock bakes in the latest extension's version, a commit count.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24

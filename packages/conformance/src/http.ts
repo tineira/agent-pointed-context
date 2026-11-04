@@ -16,13 +16,12 @@ import {
   APC_STANDARD_VERSION,
   CORE_TOOLS,
   REVOKED_HTTP_STATUS,
-  compareStandard,
   declaresMcpUrl,
   isRevokedAnswer,
   parseApcManifest,
   type ApcManifest,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
 
 export interface HttpConformanceOptions {
   /** The app's origin, e.g. `https://pulse.example` (a trailing slash is fine; no path). */
@@ -335,11 +334,12 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
     },
     {
       id: "apc-json-standard",
-      name: `its standard is one these checks know (0.5.0 to ${APC_STANDARD_VERSION})`,
+      name: `its standard is one these checks know (0.5.0 to ${APC_STANDARD_VERSION}, or a newer patch of it)`,
       async run() {
         if (!manifest) return "apc.json did not parse";
-        expect(compareStandard(manifest.standard, "0.5.0") >= 0, `standard is ${manifest.standard}: apc.json exists since 0.5.0`);
-        expect(compareStandard(manifest.standard, APC_STANDARD_VERSION) <= 0, `standard is ${manifest.standard}, newer than the ${APC_STANDARD_VERSION} these checks know: update @tineira/apc-conformance`);
+        const support = standardSupport(manifest.standard, APC_STANDARD_VERSION);
+        if (!support.ok) throw new ConformanceError(support.reason);
+        if (support.note) return { note: support.note };
       },
     },
     {

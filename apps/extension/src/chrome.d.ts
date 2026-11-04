@@ -14,6 +14,7 @@ declare namespace chrome {
     };
     const onInstalled: { addListener(callback: (details: { reason: "install" | "update" | "chrome_update" | "shared_module_update" }) => void): void };
     function getURL(path: string): string;
+    function getManifest(): { version: string; version_name?: string; name: string };
     const onStartup: { addListener(callback: () => void): void };
     const id: string;
   }

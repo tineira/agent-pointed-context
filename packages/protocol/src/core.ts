@@ -13,7 +13,7 @@
  *   Consent in the app is the app's server's to check (APC 0.7), never the page's alone: the server makes
  *   a grant for a dock agent it holds none for only on a request that proves the person allowed it on the
  *   app's page just now (the reference apps: a single-use nonce the page shows its consent with,
- *   `DockConsent` in @apc/server), whatever the page last loaded. A page that missed a revoke must not
+ *   `DockConsent` in `@tineira/apc-server`), whatever the page last loaded. A page that missed a revoke must not
  *   pair without asking.
  *
  * The core is the same on both, and per grant: the hub is one more holder of a grant.
@@ -36,7 +36,7 @@
  * 9. **Mobile** (APC 0.6): on a phone or any touch viewport (`APC_MOBILE_MEDIA`) the app shows its agents
  *    in its own page, on both profiles (below).
  *
- * `@apc/conformance` checks an app against this core, given its MCP endpoint and a small adapter for
+ * `@tineira/apc-conformance` checks an app against this core, given its MCP endpoint and a small adapter for
  * what happens in the page.
  */
 import type { FocusPayload, ViewPayload } from "./types.ts";

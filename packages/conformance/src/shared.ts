@@ -2,7 +2,7 @@
  * What the in-process suite (`index.ts`) and the HTTP checks (`http.ts`) share: the error a check
  * throws, how a JSON-RPC reply is read off Streamable HTTP, and the shapes of the core's view and focus.
  */
-import { parseParams, parseTarget, type FocusTarget } from "@tineira/apc-protocol";
+import { compareStandard, parseParams, parseTarget, type FocusTarget } from "@tineira/apc-protocol";
 
 export class ConformanceError extends Error {}
 
@@ -125,4 +125,22 @@ export function checkCoreToolList(listed: unknown, coreTools: readonly string[])
   const timeout = (wait.inputSchema?.properties as Record<string, Record<string, unknown>> | undefined)?.timeout_s;
   expect(timeout && (timeout.type === "integer" || timeout.type === "number") && timeout.minimum === 1, "wait_for_focus takes timeout_s, a whole number from 1");
   expect(!((wait.inputSchema?.required as unknown[] | undefined) ?? []).includes("timeout_s"), "timeout_s is optional");
+}
+
+/**
+ * Whether checks written for the standard `own` can judge an app that claims `claimed` in its apc.json:
+ * any version from 0.5.0 (apc.json exists since) up to `own`, and also a newer patch of the same minor
+ * (`own` 0.7.0, `claimed` 0.7.1), since a patch never changes the contract: that passes with a note. A newer
+ * minor or major may change the contract, so it fails: the checks need updating.
+ */
+export function standardSupport(claimed: string, own: string): { ok: true; note?: string } | { ok: false; reason: string } {
+  if (!/^\d+\.\d+\.\d+$/.test(claimed)) return { ok: false, reason: `standard is ${claimed}, not a version` };
+  if (compareStandard(claimed, "0.5.0") < 0) return { ok: false, reason: `standard is ${claimed}: apc.json exists since 0.5.0` };
+  if (compareStandard(claimed, own) <= 0) return { ok: true };
+  const [cMajor, cMinor] = claimed.split(".");
+  const [oMajor, oMinor] = own.split(".");
+  if (cMajor === oMajor && cMinor === oMinor) {
+    return { ok: true, note: `standard ${claimed} is a newer patch of the ${own} these checks know; a patch never changes the contract, so they apply (update @tineira/apc-conformance when you can)` };
+  }
+  return { ok: false, reason: `standard is ${claimed}, newer than the ${own} these checks know: update @tineira/apc-conformance` };
 }
