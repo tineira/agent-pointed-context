@@ -176,21 +176,28 @@ function secretsOf(urls: ReadonlyArray<string | URL | undefined>): string[] {
     if (!last) continue;
     out.add(last);
     try {
-      out.add(decodeURIComponent(last));
+      const decoded = decodeURIComponent(last);
+      out.add(decoded);
+      out.add(encodeURIComponent(decoded));
     } catch {
       // not decodable
     }
+    out.add(encodeURIComponent(last));
   }
   return [...out].filter((s) => s.length >= 4).sort((a, b) => b.length - a.length);
 }
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * Any text with every grant's secret (the last path segment of each URL in `urls`) replaced by `<secret>`,
- * wherever it appears: in a URL, a quoted body, an echoed error.
+ * wherever it appears (in a URL, a quoted body, an echoed error), in any letter case, as sent, decoded or
+ * percent-encoded.
  */
 export function redactSecrets(text: string, urls: ReadonlyArray<string | URL | undefined>): string {
   let out = text;
-  for (const s of secretsOf(urls)) out = out.split(s).join("<secret>");
+  // In any case (a server may echo it upper-cased) and in each of its encodings, longest first.
+  for (const s of secretsOf(urls)) out = out.replace(new RegExp(escapeRegExp(s), "gi"), "<secret>");
   return out;
 }
 

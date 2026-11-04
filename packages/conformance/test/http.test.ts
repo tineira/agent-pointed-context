@@ -49,7 +49,7 @@ function fakeApp(o: FakeOptions = {}): { fetch: (r: Request) => Promise<Response
       }
       if (url.href === REVOKED) return json(revokedAnswer("app.example", "2026-11-04T10:00:00.000Z"), o.revokedStatus ?? 403);
       if (url.href !== GRANT) return json({ error: "not_found" }, o.unknownStatus ?? 404);
-      if (o.echo500) return new Response(`internal error while serving ${request.url}`, { status: 500, headers: { "content-type": "text/plain" } });
+      if (o.echo500) return new Response(`internal error while serving ${request.url} (${request.url.toUpperCase()})`, { status: 500, headers: { "content-type": "text/plain" } });
       const rpc = (await request.json()) as { id: number; method: string; params: { name?: string; arguments?: Record<string, unknown> } };
       const reply = (result: unknown) => json({ jsonrpc: "2.0", id: rpc.id, result });
       if (rpc.method === "initialize") return reply({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } });
@@ -175,8 +175,16 @@ test("a 500 whose body echoes the grant URL does not print its secret", async ()
   const out = JSON.stringify(report);
   assert.match(out, /HTTP 500/);
   assert.match(out, /<secret>/);
-  assert.ok(!out.includes("live-secret"), out);
+  assert.ok(!out.toLowerCase().includes("live-secret"), out);
   assert.equal(redactSecrets(`x ${GRANT} y live-secret z`, [GRANT]), `x ${ORIGIN}/mcp/s1/<secret> y <secret> z`);
+});
+
+test("redaction catches the secret upper-cased, decoded or percent-encoded", () => {
+  assert.equal(redactSecrets("ERROR FOR /MCP/S1/LIVE-SECRET", [GRANT]), "ERROR FOR /MCP/S1/<secret>");
+  const spaced = `${ORIGIN}/mcp/s1/a%20b%2Fc-secret`;
+  const out = redactSecrets(`sent a%20b%2Fc-secret, read "a b/c-secret", again A%20B%2FC-SECRET`, [spaced]);
+  assert.equal(out, `sent <secret>, read "<secret>", again <secret>`);
+  assert.equal(redactSecrets("no (secret) here", ["https://app.example/mcp/s1/a.b+c"]), "no (secret) here", "regex characters in a secret are literal");
 });
 
 /** The CLI itself, against a local server (--allow-http), in text and in --json. */

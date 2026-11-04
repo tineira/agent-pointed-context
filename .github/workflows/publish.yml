@@ -48,16 +48,29 @@ jobs:
             echo "::error title=Not on main::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main. Tag a commit of main."
             exit 1
           fi
+      # No registry-url: with it, setup-node writes an .npmrc with an _authToken line and exports a placeholder
+      # token, which can stand in the way of OIDC. npm's default registry is registry.npmjs.org.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
       # Trusted publishing needs npm 11.5.1 or later (dist-tag commands over OIDC: 11.21.0 or 12.2.0); pinned.
       - run: npm install -g npm@12.2.1
       - name: Check Node and npm
         run: |
           node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<22||(a===22&&b<14)) { console.error("Node 22.14+ needed, got "+process.versions.node); process.exit(1) }'
           node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); if (a<11||(a===11&&(b<5||(b===5&&c<1)))) { console.error("npm 11.5.1+ needed, got "+process.argv[1]); process.exit(1) }' "$(npm --version)"
+      # OIDC only: no token in the environment or in npm's config (the value is never printed).
+      - name: No npm token configured
+        run: |
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error title=Token set::NODE_AUTH_TOKEN is set; trusted publishing uses OIDC and no token."
+            exit 1
+          fi
+          token="$(npm config get //registry.npmjs.org/:_authToken)"
+          case "$token" in
+            ""|undefined|null) echo "no npm token configured" ;;
+            *) echo "::error title=Token configured::npm has an _authToken for registry.npmjs.org; trusted publishing uses OIDC and no token."; exit 1 ;;
+          esac
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: node scripts/check-packages.mjs --tag "$GITHUB_REF_NAME"
@@ -84,7 +97,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
       - run: npm install -g npm@12.2.1
       - run: corepack enable
       - run: pnpm install --frozen-lockfile

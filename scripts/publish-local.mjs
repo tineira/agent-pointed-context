@@ -6,8 +6,8 @@
 //   node scripts/publish-local.mjs --dry-run         # everything but the upload
 //   node scripts/publish-local.mjs                   # npm publish per package, 2FA prompt each time
 //
-// It refuses to run on a working tree with changes, or when the four versions do not match each other and
-// APC_STANDARD_VERSION. It builds dist/, packs each package with pnpm (which rewrites workspace:^ and
+// It refuses to run on a working tree with changes, when HEAD is not exactly origin/main (fetched first; a dry
+// run only warns), or when the four versions do not match each other and APC_STANDARD_VERSION. It builds dist/, packs each package with pnpm (which rewrites workspace:^ and
 // publishConfig) into a temporary folder, and runs `npm publish <tarball> --tag next --access public` per tarball,
 // @tineira/apc-protocol first, stopping at the first failure.
 import { spawnSync } from "node:child_process";
@@ -41,7 +41,14 @@ function stop(message) {
 const status = run("git", ["status", "--porcelain"]);
 if (!status.ok) stop(`git status failed: ${status.err}`);
 if (status.out) stop(`the working tree has changes; commit or stash them first:\n${status.out}`);
-const head = run("git", ["rev-parse", "HEAD"]).out;
+const head = run("git", ["rev-parse", "HEAD"]).out.trim();
+
+// 1b. Exactly the tip of main: what the workflow will publish from later is main, so the first version is too.
+const fetched = run("git", ["fetch", "--no-tags", "origin", "main"]);
+const main = fetched.ok ? run("git", ["rev-parse", "FETCH_HEAD"]).out.trim() : "";
+const offMain = !fetched.ok ? `git fetch origin main failed: ${fetched.err}` : head !== main ? `HEAD is ${head.slice(0, 12)}, not origin/main (${main.slice(0, 12)}): check out main and pull, then run again` : "";
+if (offMain && !dryRun) stop(offMain);
+if (offMain) console.warn(`publish-local: warning (dry run): ${offMain}`);
 
 // 2. One version for all four, matching the standard, and manifests fit to publish.
 const manifests = PACKAGES.map((name) => JSON.parse(readFileSync(join(root, "packages", name, "package.json"), "utf8")));

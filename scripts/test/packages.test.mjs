@@ -55,7 +55,12 @@ test("each tarball is published with npm on next, public, protocol first, with n
   assert.deepEqual(npmPublishArgs("/t/x.tgz"), ["publish", "/t/x.tgz", "--tag", "next", "--access", "public"]);
   assert.deepEqual(npmPublishArgs("/t/x.tgz", { dryRun: true }).slice(-1), ["--dry-run"]);
   const workflow = readFileSync(repo(".github/workflows/publish.yml"), "utf8");
-  assert.ok(!/NPM_TOKEN|NODE_AUTH_TOKEN|--provenance/.test(workflow), "trusted publishing: no token, provenance is automatic");
+  assert.ok(!/NPM_TOKEN|--provenance|secrets\./.test(workflow), "trusted publishing: no token, provenance is automatic");
+  assert.ok(!/^\s*registry-url\s*:/m.test(workflow), "no registry-url: setup-node would write an _authToken line and a placeholder NODE_AUTH_TOKEN");
+  // A YAML env key (`NODE_AUTH_TOKEN: …`) or a shell assignment (`NODE_AUTH_TOKEN=…`); the guard's `${NODE_AUTH_TOKEN:-}` only reads it.
+  assert.ok(!/NODE_AUTH_TOKEN\s*(:\s|:$|=)/m.test(workflow) && !/_authToken\s*=/.test(workflow), "nothing sets NODE_AUTH_TOKEN or writes an _authToken");
+  assert.match(workflow, /if \[ -n "\$\{NODE_AUTH_TOKEN:-\}" \]/, "the tag job fails when NODE_AUTH_TOKEN is set");
+  assert.match(workflow, /npm config get \/\/registry\.npmjs\.org\/:_authToken/, "the tag job fails when npm has a token configured");
   assert.match(workflow, /id-token: write/);
   assert.match(workflow, /tags: \["apc-v\*"\]/);
   assert.ok(!/pull_request/.test(workflow), "never on a pull request");

@@ -41,7 +41,7 @@ import {
   type FocusTarget,
   type PresenceEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, rpcBody, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, text, type ToolCallResult } from "./shared.ts";
 
 export { ConformanceError } from "./shared.ts";
 export {
@@ -303,10 +303,12 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       const { mcpUrl } = await app.connect();
       await app.page.setOpen(true);
       const open = await call(app, mcpUrl, app.probe.tool, app.probe.args);
-      expect(typeof data(open).then === "string" && typeof text(open).then === "string", "with the page open, a result carries then, structured and in the text");
+      // resultKey: the same value in the structured result and the text (a text-only model follows the text).
+      const then = resultKey(open, "then");
+      expect(typeof then.value === "string" && typeof text(open).then === "string", "with the page open, a result carries then, structured and in the text");
       await app.page.setOpen(false);
       const closed = await call(app, mcpUrl, app.probe.tool, app.probe.args);
-      expect(data(closed).then === undefined && text(closed).then === undefined, "with no page open, no then");
+      expect(resultKey(closed, "then").value === undefined && text(closed).then === undefined, "with no page open, no then");
       await app.page.setOpen(true);
     }),
 
