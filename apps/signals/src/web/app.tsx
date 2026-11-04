@@ -13,6 +13,7 @@ import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
+import { openSession } from "./session.ts";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { DirectAgents } from "../../../demo/src/web/direct-agents.tsx";
 
@@ -55,11 +56,15 @@ export function App() {
   const [sid, setSid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    const seed = Number(new URLSearchParams(location.search).get("seed"));
-    call<{ sid?: string; error?: string }>("/api/session", Number.isInteger(seed) && seed > 0 ? { seed } : {}).then(
-      (r) => (r.sid ? setSid(r.sid) : setError(r.error ?? "error")),
-      (e: unknown) => setError(String(e)),
+    // The open is shared (TIN-490); an App that unmounted before it settled ignores the result.
+    let live = true;
+    openSession().then(
+      (id) => live && setSid(id),
+      (e: unknown) => live && setError(e instanceof Error ? e.message : String(e)),
     );
+    return () => {
+      live = false;
+    };
   }, []);
   if (error) return <Shell><p className="muted">Could not open Signals: {error}</p></Shell>;
   if (!sid) return <Shell><p className="muted">Opening Signals…</p></Shell>;
