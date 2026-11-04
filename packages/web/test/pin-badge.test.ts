@@ -23,6 +23,10 @@ class El {
     this.attrs.delete(k);
   }
   focus() {}
+  contains(n: El | null): boolean {
+    for (let x = n; x; x = x.parentElement) if (x === this) return true;
+    return false;
+  }
   matches(selector: string): boolean {
     const m = /^\[([\w-]+)\]$/.exec(selector);
     return !!m && this.attrs.has(m[1]!);
@@ -256,6 +260,18 @@ test("armed from the keyboard: a script's Enter or Space pins nothing; the perso
   let stopped = 0;
   press("click", { target: row, isTrusted: true, preventDefault() {}, stopImmediatePropagation: () => stopped++ });
   assert.equal(stopped, 1, "the following click is swallowed");
+  press("click", { target: row, isTrusted: true, preventDefault() {}, stopImmediatePropagation: () => stopped++ });
+  assert.equal(stopped, 1, "once: a second click within 500 ms is the person's own");
+  // A second Enter at once (to open the row just pinned) is not eaten: its click goes through.
+  press("keydown", { key: "Enter", target: row, isTrusted: true, preventDefault() {} });
+  press("click", { target: row, isTrusted: true, preventDefault() {}, stopImmediatePropagation: () => stopped++ });
+  assert.equal(stopped, 1, "a second Enter within 500 ms works");
+  // A pinned element's swallow does not reach another element.
+  const other = targetEl("customer:cus_6");
+  mark.fire("click", { detail: 0, isTrusted: true });
+  press("keydown", { key: "Enter", target: row, isTrusted: true, preventDefault() {} });
+  press("click", { target: other, isTrusted: true, preventDefault() {}, stopImmediatePropagation: () => stopped++ });
+  assert.equal(stopped, 1, "the swallow is for the pinned element only");
   stop();
   void pin;
 });

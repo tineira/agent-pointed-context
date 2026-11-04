@@ -30,23 +30,37 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 const profileDir = mkdtempSync(join(tmpdir(), "apc-mobile-"));
-const chrome = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${profileDir}`, "--headless=new", "--no-first-run", ...(process.platform === "linux" ? ["--no-sandbox"] : []), "--disable-gpu", `--window-size=${width},${height}`, "about:blank"], { stdio: "ignore" });
+const CHROME_ARGS = [`--remote-debugging-port=${PORT}`, `--user-data-dir=${profileDir}`, "--headless=new", "--no-first-run", "--disable-extensions", "--disable-dev-shm-usage", ...(process.platform === "linux" ? ["--no-sandbox"] : []), "--disable-gpu", `--window-size=${width},${height}`, "about:blank"];
 
-async function connect() {
-  for (let i = 0; i < 60; i++) {
-    try {
-      const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
-      const page = targets.find((t) => t.type === "page");
-      if (page) return page.webSocketDebuggerUrl;
-    } catch {
-      // not up yet
+/** Starts Chrome and waits for its DevTools page: up to 30 s, and one more try if it does not come; its stderr is printed when it fails. */
+async function startChrome() {
+  let last = "";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const proc = spawn(EXE, CHROME_ARGS, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
+    let exited = null;
+    proc.on("exit", (code) => (exited = code));
+    for (let i = 0; i < 150 && exited === null; i++) {
+      try {
+        const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
+        const page = targets.find((t) => t.type === "page");
+        if (page) return { proc, wsUrl: page.webSocketDebuggerUrl };
+      } catch {
+        // not up yet
+      }
+      await sleep(200);
     }
-    await sleep(200);
+    last = `attempt ${attempt}: ${exited === null ? "no DevTools page in 30 s" : `exited with ${exited}`}\n${stderr}`;
+    console.error(`Chrome did not start (${last})`);
+    proc.kill();
+    await sleep(1000);
   }
-  throw new Error("Chrome did not start");
+  throw new Error(`Chrome did not start (${EXE}): ${last}`);
 }
 
-const ws = new WebSocket(await connect());
+const { proc: chrome, wsUrl } = await startChrome();
+const ws = new WebSocket(wsUrl);
 await new Promise((r) => ws.addEventListener("open", r, { once: true }));
 let nextId = 0;
 const pending = new Map();

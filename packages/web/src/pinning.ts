@@ -333,7 +333,9 @@ export function enablePinning(options: PinningOptions): () => void {
   let drag: { grantId: string; mark: Element; ghost: HTMLElement; current: { element: Element; target: FocusTarget } | null; x: number; y: number; moved: number; touch: boolean } | null = null;
   // Tap to pin: the agent armed by a tap on its mark, and the note that says so.
   let note: { box: HTMLElement; say: (text: string) => void } | null = null;
+  // The one click that follows a pinning (or refused) tap or key: swallowed once, and only on the element that was pinned.
   let swallowClickUntil = 0;
+  let swallowOn: Element | null = null;
   const trusted = options.trusted ?? ((e: Event) => e.isTrusted === true);
   // Armed from the keyboard: targets can be focused and pinned with Enter or Space. What was changed is put back on let go.
   let restore: Array<[Element, string | null]> = [];
@@ -465,16 +467,20 @@ export function enablePinning(options: PinningOptions): () => void {
     press = null;
     if (!tapPin.armed || !start || !trusted(event) || inUi(start.target) || inUi(p.target)) return;
     if (Math.hypot(p.clientX - start.x, p.clientY - start.y) >= TAP_SLOP_PX) return;
-    const result = tapPin.tap(targetAt(p.clientX, p.clientY));
+    const hit = targetAt(p.clientX, p.clientY);
+    const result = tapPin.tap(hit);
     // A tap on something that is no target lets go and passes through: a link, tab or button works at once.
     if (result === "no_target") return tapPin.cancel();
     // The tap that pinned, or was refused, must not run the target's own action.
     swallowClickUntil = Date.now() + 500;
+    swallowOn = hit?.element ?? null;
     if (result === "refused") note?.say("This agent cannot point at that. Tap another outlined target, or Cancel.");
   };
   // Only the click that follows a pinning (or refused) tap is swallowed; every other click goes through.
   const onClickCapture = (event: Event) => {
     if (Date.now() > swallowClickUntil || inUi(event.target)) return;
+    if (swallowOn && !swallowOn.contains(event.target as Node)) return;
+    swallowClickUntil = 0; // one-shot: the next click is the person's own
     event.preventDefault();
     event.stopImmediatePropagation();
   };
@@ -587,6 +593,7 @@ export function enablePinning(options: PinningOptions): () => void {
     options.onPin(grantId, hit.target, hit.element);
   };
   const onKey = (event: KeyboardEvent) => {
+    swallowClickUntil = 0; // a new key press: nothing from before is swallowed
     if (event.key === "Escape") {
       end(false);
       tapPin.cancel();
@@ -599,6 +606,7 @@ export function enablePinning(options: PinningOptions): () => void {
       event.preventDefault();
       // The click the browser makes from this key (Space: on keyup) must not run the target's own action either.
       swallowClickUntil = Date.now() + 500;
+      swallowOn = hit.element;
       if (tapPin.tap(hit) === "refused") note?.say("This agent cannot point at that. Tab to another outlined item, or press Escape.");
     }
   };
