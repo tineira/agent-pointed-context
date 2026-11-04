@@ -1,40 +1,74 @@
 /**
- * The landing of apc.tineira.com (TIN-420, TIN-605): the APC standard, its two ways to connect side by side,
- * how the dock works, the demo apps, and the way in. Everyone sees it (TIN-610); a visitor who already has a dock
- * also gets "Open your dock" in the top bar and the hero.
+ * The landing of apc.tineira.com (TIN-420, TIN-605, TIN-620): what APC is, from the hero alone (a line and a
+ * short silent clip of the drag), then two paths. Try it is for people using an AI agent: the dock, the two demo
+ * apps and the direct way in a note. Build it is for people building an app: Direct from the app's side, a real
+ * focus, and the docs. Everyone sees it (TIN-610); a visitor who already has a dock also gets "Your dock" in the
+ * top bar.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
+import { FOCUS_EXAMPLE } from "./landing-example.ts";
 import { APPS, DESKTOP } from "./setup.tsx";
 
 const DOCK = "/dock";
 /** The standard's docs (TIN-611): spec, integration guide, conformance. */
 const DOCS = "/docs";
 const REPO = "https://github.com/tineira/agent-pointed-context";
+const PAPER = "https://doi.org/10.5281/zenodo.23382909";
+/** The companion record: the design records and the payload specification. */
+const RECORDS = "https://doi.org/10.5281/zenodo.23383101";
+const VIDEO = "https://youtu.be/pb46Sd0UOtM";
 const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
-/** "Connect app by app" leads to a live Direct app: Signals, with its Connect panel open. */
+/** A live Direct app (TIN-578): Signals, with its Connect panel open. */
 const DIRECT_TRY = `${SIGNALS.url}?connect`;
-/** A few of the agents that connect, by their logos (products.ts). */
-const BRANDS = ["claude", "openai", "gemini", "grok", "cursor", "kimi", "zai"];
+/** The cross-app question in the demos' fixed shared world (TIN-621): an offer in Signals, a customer who left in Pulse. */
+const TRY_POST = `${SIGNALS.url}?post=post_013`;
+const TRY_CUSTOMER = PULSE.url.replace(/overview$/, "customers/cus_0048");
 
-const STEPS = [
-  { title: "Open your dock", text: "Your agent dock is a small page that holds your agents. It is yours alone: no account, one cookie, nothing to install first." },
-  { title: "Connect your agent", text: "Add one MCP server to your agent (Claude, ChatGPT, Cursor, Grok…). That single connection is all it ever needs." },
-  { title: "Try an example app", text: "The checklist opens Pulse on a ready-made demo world. Drop your agent on a bar, allow it in Pulse and then in your dock, and ask: what is this?" },
-  { title: "Point", text: "Drag your agent from the dock onto a bar, a customer, a headline. Ask about \"this\". Point somewhere else in another app, and ask how the two connect." },
+/**
+ * The hero clip: rendered from the November 2026 promo's own Remotion scene (the media repo), silent, without
+ * captions; served from the dock's assets (public/media) with their usual headers. Never a YouTube embed: its
+ * cookies would break the one-cookie promise.
+ */
+const CLIP = { webm: "/media/apc-hero.webm", mp4: "/media/apc-hero.mp4", poster: "/media/apc-hero-poster.jpg", width: 1280, height: 640 };
+const CLIP_ALT = "An agent is dragged onto the March bar of a revenue chart. Asked what is behind the bar, it reads every customer in it and answers: $41,200 from 38 customers.";
+
+/** The agents named under the hero, by their logos (products.ts). */
+const AGENTS = [
+  { brand: "claude", name: "Claude" },
+  { brand: "openai", name: "ChatGPT" },
+  { brand: "cursor", name: "Cursor" },
+  { brand: "grok", name: "Grok" },
 ];
 
-const DIRECT_STEPS = [
-  { title: "The app gives you a connection", text: "An app that speaks the standard shows an MCP address of its own for your agent. Nothing sits between the two." },
-  { title: "Add it to your agent", text: "Paste that one address into your agent, as you would any remote MCP server. Each app you want your agent to read gets its own." },
-  { title: "Point", text: "In the app, drag your agent's mark onto a chart, a row or a paragraph and ask about \"this\". The app answers your agent directly with just what you pointed at, and the content never passes through us." },
+const TRY_STEPS = [
+  { title: "Open your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie, nothing to install." },
+  { title: "Connect your agent", text: "Add one MCP server to Claude, ChatGPT, Cursor or Grok. That single connection is all it needs." },
+  { title: "Open Pulse or Signals", text: "From this page, below. Drop your agent on something there, and allow it in the app and in your dock." },
+  { title: "Point and ask", text: "Drag your agent from the dock onto a bar, a customer or a headline, and ask about \"this\". Point at something in the other app and ask how the two connect." },
 ];
 
-function Cta(props: { big?: boolean }) {
+const BUILD_STEPS = [
+  { title: "Serve your own MCP endpoint", text: <>Each agent gets its own grant and MCP URL from your app: <code>get_current_view</code> and <code>wait_for_focus</code> beside your own tools. Nothing sits between your app and the agent.</> },
+  { title: "Make things pointable", text: <>Charts, rows and paragraphs carry <code>data-focus</code>, ids and keys only. A drop becomes a focus that names the exact tool call that reads it.</> },
+  { title: "Pass the conformance suite", text: <><code>@tineira/apc-conformance</code> checks the view, the pin, the focus format and revoke through your MCP endpoint.</> },
+];
+
+const REFS = [
+  { title: "Docs", text: "The standard, in five pages", href: DOCS },
+  { title: "Integration guide", text: "Integrate your app in an afternoon", href: `${DOCS}/integrate` },
+  { title: "Spec", text: "The core, the Direct and Dock profiles, the focus format", href: `${DOCS}/spec` },
+  { title: "Payload specification", text: "With the design records, on Zenodo", href: RECORDS },
+  { title: "Design record", text: "What is built and why: DESIGN.md", href: `${REPO}/blob/main/DESIGN.md` },
+  { title: "Paper", text: "Letting a person point an AI agent at what they see", href: PAPER },
+  { title: "Code", text: "github.com/tineira/agent-pointed-context, MIT", href: REPO },
+];
+
+function Cta() {
   return (
-    <a className={`landing-cta${props.big ? " big" : ""}`} href={DOCK} onClick={(e) => {
+    <a className="landing-cta big" href={DOCK} onClick={(e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 || screen.availWidth < 820) return;
-      // One window per click: the next click in the checklist opens Pulse beside this compact dock.
+      // A compact dock beside this page, so Pulse or Signals opens from here next to it.
       if (window.open(DOCK, "apc-dock", "popup,width=420,height=780,left=0,top=0")) e.preventDefault();
     }}>
       Open your dock
@@ -42,29 +76,57 @@ function Cta(props: { big?: boolean }) {
   );
 }
 
-/** The idea in one picture: a dock with an agent, dragged onto two apps. */
-function Picture() {
+/** Whether the visitor asks for less motion, kept current. */
+function useReducedMotion(): boolean {
+  const query = "(prefers-reduced-motion: reduce)";
+  const [reduce, setReduce] = useState(() => matchMedia(query).matches);
+  useEffect(() => {
+    const list = matchMedia(query);
+    const on = () => setReduce(list.matches);
+    list.addEventListener("change", on);
+    return () => list.removeEventListener("change", on);
+  }, []);
+  return reduce;
+}
+
+/** The muted loop of the drag; under reduced motion, its poster frame and no video at all. */
+function HeroClip() {
+  const reduce = useReducedMotion();
+  const [paused, setPaused] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (!video) return;
+    // React sets `muted` as a property only; some browsers autoplay only with the attribute.
+    video.muted = true;
+    video.defaultMuted = true;
+    video.setAttribute("muted", "");
+    if (paused) video.pause();
+    else void video.play().catch(() => undefined);
+  }, [video, paused]);
   return (
-    <div className="landing-picture" aria-hidden="true">
-      <div className="landing-dock">
-        <span className="kicker">Agent dock</span>
-        <span className="landing-agent">
-          <AgentIcon clientName={null} brandId="claude" motion="waiting" size={34} />
-        </span>
-      </div>
-      <svg className="landing-arrows" viewBox="0 0 120 120" preserveAspectRatio="none">
-        <path d="M4 60 C 50 60, 60 22, 114 22" />
-        <path d="M4 60 C 50 60, 60 98, 114 98" />
-      </svg>
-      <div className="landing-apps">
-        {APPS.map((app) => (
-          <div key={app.name} className="landing-app">
-            {app.glyph}
-            <span>{app.name}</span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <figure className="landing-stage">
+      {reduce || failed ? (
+        <img src={CLIP.poster} width={CLIP.width} height={CLIP.height} alt={CLIP_ALT} />
+      ) : (
+        <>
+          <video ref={setVideo} autoPlay muted loop playsInline preload="auto" poster={CLIP.poster} width={CLIP.width} height={CLIP.height} aria-label={CLIP_ALT} onError={(e) => {
+            // A browser that says it plays WebM but cannot decode it gets the MP4; one that cannot play either, the poster.
+            const v = e.currentTarget;
+            if (v.currentSrc.endsWith(".webm")) {
+              v.src = CLIP.mp4;
+              void v.play().catch(() => undefined);
+            } else setFailed(true);
+          }}>
+            <source src={CLIP.webm} type="video/webm" />
+            <source src={CLIP.mp4} type="video/mp4" />
+          </video>
+          <button type="button" className="landing-stage-toggle" aria-pressed={paused} onClick={() => setPaused((p) => !p)}>
+            {paused ? "Play" : "Pause"}
+          </button>
+        </>
+      )}
+    </figure>
   );
 }
 
@@ -84,101 +146,87 @@ function useHasDock(): boolean {
   return has;
 }
 
+function Steps(props: { steps: { title: string; text: ReactNode }[] }) {
+  return (
+    <ol className="landing-steps">
+      {props.steps.map((s, i) => (
+        <li key={s.title}>
+          <span className="landing-n">{i + 1}</span>
+          <div>
+            <b>{s.title}</b>
+            <p>{s.text}</p>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function Landing() {
   const hasDock = useHasDock();
   return (
     <main className="landing">
       <header className="landing-head">
         <span className="kicker">Agent Pointed Context</span>
-        <span className="row small">
-          {hasDock && <Cta />}
+        <nav className="landing-nav" aria-label="Site">
+          {hasDock && <a href={DOCK}>Your dock</a>}
+          <a href="#try">Try it</a>
+          <a href="#build">Build it</a>
           <a href={DOCS}>Docs</a>
           <a href={REPO}>GitHub</a>
-        </span>
+        </nav>
       </header>
 
       <section className="landing-hero">
-        <div>
-          <h1>Point your own AI agent at what you see</h1>
-          <p>
-            Agent Pointed Context is a standard for pointing an AI agent at a chart, a row or a paragraph in an app and asking about "this", without sharing the screen. Connect your agent once, or app by app: you choose.
-          </p>
-          <div className="row">
-            {hasDock ? <Cta big /> : <a className="landing-cta big" href="#ways">Choose how to connect</a>}
-            <span className="muted">You need an agent that can add a remote MCP server. Free demo, made-up data.</span>
-          </div>
-          <div className="landing-brands" aria-label="Works with any agent that takes an MCP server">
-            {BRANDS.map((b) => (
-              <AgentIcon key={b} clientName={null} brandId={b} size={20} />
-            ))}
-            <span className="muted">and any agent that takes an MCP server</span>
-          </div>
-        </div>
-        <Picture />
-      </section>
-
-      <section id="ways">
-        <h2>Two ways to connect</h2>
-        <div className="landing-cards">
-          <div className="landing-card">
-            <div className="row">
-              <b>Connect once</b>
-            </div>
-            <p>Dock: one connection in your agent, to your agent dock. Drag it onto any app you paired and it follows your focus from app to app.</p>
-            <div className="row">
-              <Cta />
-              <a className="small" href="#dock">How the dock works</a>
-            </div>
-          </div>
-          <div className="landing-card">
-            <div className="row">
-              <b>Connect app by app</b>
-            </div>
-            <p>Direct: each app gives your agent its own connection. The content goes from the app to your agent and never passes through us.</p>
-            <div className="row">
-              {/* A live Direct app (TIN-578): Signals opens with its Connect panel. */}
-              <a className="landing-cta" href={DIRECT_TRY}>Connect to Signals</a>
-              <a className="small" href="#direct">How Direct works</a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="dock">
-        <h2>How Connect once works</h2>
-        <ol className="landing-steps">
-          {STEPS.map((s, i) => (
-            <li key={s.title}>
-              <span className="landing-n">{i + 1}</span>
-              <div>
-                <b>{s.title}</b>
-                <p>{s.text}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section id="direct">
-        <h2>How Connect app by app works</h2>
-        <ol className="landing-steps">
-          {DIRECT_STEPS.map((s, i) => (
-            <li key={s.title}>
-              <span className="landing-n">{i + 1}</span>
-              <div>
-                <b>{s.title}</b>
-                <p>{s.text}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-        <p className="muted small-note">
-          Try it on <a href={DIRECT_TRY}>Signals</a> or Pulse: both demo apps below take agents both ways, and the same agent connected both ways shows as one. The details are in the <a href={`${REPO}/blob/main/DESIGN.md`}>design record</a>.
+        <h1>Point your AI agent at what you see</h1>
+        <p className="landing-lede">
+          Drag your agent onto a chart, a row or a paragraph and ask about "this". It reads the data underneath, through access it already has. No screen sharing.
         </p>
+        <HeroClip />
+        <a className="landing-watch" href={VIDEO}>
+          <span aria-hidden="true">▶</span> Watch the full video
+        </a>
+        <ul className="landing-agents" aria-label="Works with">
+          {AGENTS.map((a) => (
+            <li key={a.brand}>
+              <span aria-hidden="true">
+                <AgentIcon clientName={null} brandId={a.brand} size={16} />
+              </span>
+              {a.name}
+            </li>
+          ))}
+          <li>any agent that takes an MCP server</li>
+        </ul>
       </section>
 
-      <section>
-        <h2>The demo apps</h2>
+      <div className="landing-paths">
+        <div className="landing-path">
+          <span className="landing-who">For people using an AI agent</span>
+          <h2>Try it</h2>
+          <p>Use your own agent on two demo apps. A few minutes, made-up data, no account.</p>
+          <div className="row">
+            <a className="landing-cta" href="#try">Try the demo →</a>
+          </div>
+        </div>
+        <div className="landing-path">
+          <span className="landing-who">For people building an app</span>
+          <h2>Build it</h2>
+          <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app to their agent, never through us.</p>
+          <div className="row">
+            <a className="landing-cta ghost" href="#build">Add APC to your app →</a>
+            <a className="small" href={`${DOCS}/integrate`}>Integration guide</a>
+          </div>
+        </div>
+      </div>
+
+      <section id="try">
+        <span className="landing-eyebrow">Try it</span>
+        <h2 className="landing-title">Your agent, two demo apps, one drag</h2>
+        <p className="landing-sub">You need an agent that can add a remote MCP server. The demo is free and its data is made up.</p>
+        <Steps steps={TRY_STEPS} />
+        <div className="row landing-try-cta">
+          <Cta />
+        </div>
         <div className="landing-cards">
           <div className="landing-card">
             <div className="row">
@@ -187,7 +235,7 @@ export function Landing() {
             </div>
             <p>Product analytics for a SaaS: customers, plans, seats, monthly activity. On the web, or as a Windows app: the same drag works on the desktop.</p>
             <div className="row small">
-              <a href={PULSE.url.replace(/overview$/, "")}>Open on the web</a>
+              <a href={PULSE.url.replace(/overview$/, "")}>Open Pulse</a>
               {DESKTOP.map((d) => (
                 <a key={d.label} href={d.url}>
                   Download for {d.label}
@@ -202,16 +250,52 @@ export function Landing() {
             </div>
             <p>A market feed: what competitors launch, price and say. Point your agent at a headline here and a customer in Pulse, and ask what it means for them.</p>
             <div className="row small">
-              <a href={SIGNALS.url}>Open on the web</a>
+              <a href={SIGNALS.url}>Open Signals</a>
             </div>
           </div>
         </div>
-        <p className="muted small-note">Open them from your dock: it sets up the same world in both.</p>
+        <p className="landing-note">
+          <b>A question to start with.</b> In Signals, drop your agent on <a href={TRY_POST}>Tallyfin's offer to Team teams in North America</a> and ask "Which of our customers did this offer take?". Then point it at <a href={TRY_CUSTOMER}>Deep Harbor Logistics</a> in Pulse, a customer who left, and ask how the two connect.
+        </p>
+        <p className="landing-note">
+          <b>Any web page, too.</b> With the <a href="/extension">browser extension</a>, you can drop your agent on a page that knows nothing of APC: it reads the part you pointed at.
+        </p>
+        <p className="landing-note">
+          <b>An app gave you its own MCP address?</b> Add it to your agent directly instead, with no dock in between: <a href={DIRECT_TRY}>Signals has one</a>. Same drag, and the same agent connected both ways shows as one.
+        </p>
+      </section>
+
+      <section id="build">
+        <span className="landing-eyebrow">Build it</span>
+        <h2 className="landing-title">Make your app pointable</h2>
+        <p className="landing-sub">
+          APC is an open standard over MCP. Your app keeps its data and answers the person's agent with just what they pointed at, through its own tools.
+        </p>
+        <Steps steps={BUILD_STEPS} />
+        <p className="landing-sub landing-example-caption">
+          What an agent connected to Pulse receives when the person drops it on March in the chart of active customers: <a href={`${DOCS}/spec#the-pin-and-the-focus-format`}>the focus</a>, ids and keys only, and the call that reads it.
+        </p>
+        <pre className="landing-code">
+          <code>{JSON.stringify(FOCUS_EXAMPLE, null, 2)}</code>
+        </pre>
+        <p className="landing-note">
+          <b>Works with the dock too.</b> An app that speaks the standard can also be paired with a person's dock, which relays its tools, so they connect their agent once. <a href={`${DOCS}/integrate#12-dock-agents-dragged-from-a-dock`}>Pairing with a dock</a>
+        </p>
+        <ul className="landing-refs">
+          {REFS.map((r) => (
+            <li key={r.title}>
+              <a href={r.href}>
+                <b>{r.title}</b>
+                <span>{r.text}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section>
-        <h2>What your agent can and cannot see</h2>
-        <ul className="landing-list">
+        <h2 className="landing-title">What your agent can and cannot see</h2>
+        <ul className="landing-see">
           <li>Only what you pointed at, in apps you paired, after you allowed it in the app and in the dock.</li>
           <li>No screenshots and no screen sharing: each app answers with its own data, through its own tools.</li>
           <li>Each app keeps its data. The agent does the joining, in your conversation.</li>
@@ -219,27 +303,9 @@ export function Landing() {
         </ul>
       </section>
 
-      <section>
-        <h2>Read more</h2>
-        <ul className="landing-list">
-          <li>
-            The docs: <a href={DOCS}>the standard, how to integrate your app, and its conformance suite</a>
-          </li>
-          <li>
-            The paper: <a href="https://doi.org/10.5281/zenodo.23382909">Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen</a>
-          </li>
-          <li>
-            The design records and payload specification: <a href="https://doi.org/10.5281/zenodo.23383101">Zenodo</a>, and <a href={`${REPO}/blob/main/DESIGN.md`}>DESIGN.md</a>
-          </li>
-          <li>
-            The code: <a href={REPO}>github.com/tineira/agent-pointed-context</a>
-          </li>
-        </ul>
-      </section>
-
       <footer className="landing-foot">
-        <Cta />
         <a href={DOCS}>Docs: the spec and how to integrate an app</a>
+        <a href={REPO}>GitHub</a>
         <a className="muted" href="/v1/">Version 1, as described in the paper →</a>
       </footer>
     </main>
