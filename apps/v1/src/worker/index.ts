@@ -3,8 +3,8 @@
  * (owner only: the session cookie carries the owner secret), and each agent's MCP URL (the secret in
  * the URL is the grant). The page and its files are static assets under v1/ in the assets directory, so
  * the platform serves them before the Worker runs; a request that matches none reaches the Worker. Under
- * /v1/, an app route ("/v1/how-to") gets the page, v1/index.html. Outside /v1, / redirects to /v1/ and
- * everything else is a 404.
+ * /v1/, an app route ("/v1/how-to") gets the page, v1/index.html. Outside /v1 everything
+ * is a 404 (the root belongs to the dock, TIN-605); /v1 itself redirects to /v1/.
  */
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
@@ -185,9 +185,8 @@ app.all("*", async (c) => {
   return c.env.ASSETS.fetch(new Request(new URL(`${BASE}/`, c.req.url), { method: c.req.method, headers: c.req.raw.headers }));
 });
 
-/** The host's root, until phase 0c puts the standard's landing there: V1 is the only thing served. */
+/** Only /v1 is V1's (the zone routes in wrangler.jsonc send nothing else here). */
 const host = new Hono<{ Bindings: Env }>();
-host.get("/", (c) => c.redirect(`${BASE}/`, 302));
 host.get(BASE, (c) => c.redirect(`${BASE}/`, 302));
 host.route("/", app);
 host.all("*", (c) => c.json({ error: "not_found" }, 404));

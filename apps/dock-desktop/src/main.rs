@@ -1,4 +1,4 @@
-//! The APC dock for Windows (#84): the web dock (v2.apc.tineira.com/dock) in a window of its own,
+//! The APC dock for Windows (#84): the web dock (apc.tineira.com/dock) in a window of its own,
 //! and its agents as desktop pets (TIN-479, pets.rs): each agent's character in a small window of
 //! its own on top of every window, moved by a grip shown on hover (TIN-484), all shown and hidden
 //! with a global shortcut or from the tray. The pages are the web dock's own, so the hub, pairing
@@ -28,7 +28,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const SHORTCUT: &str = "Alt+Shift+Space";
 
 /// The deployed dock: the only origin a release build lets the pets' page call the app (pets.rs).
-const DOCK_ORIGIN: &str = "https://v2.apc.tineira.com";
+const DOCK_ORIGIN: &str = "https://apc.tineira.com";
 
 fn origin() -> Url {
     let dock = std::env::var("APC_DOCK_ORIGIN").unwrap_or_else(|_| DOCK_ORIGIN.into());

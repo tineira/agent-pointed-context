@@ -7,18 +7,14 @@ import { AgentIcon } from "./agent-icon.tsx";
 import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
-import { openDock, useDockBridge } from "./dock-bridge.ts";
 import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
-import { Chooser } from "./landing/chooser.tsx";
-import { Landing } from "./landing/landing.tsx";
 import { AppLink, LogoMark, SiteFooter, ThemeToggle } from "./ui.tsx";
 import { Agents, CustomerDetail, Customers, Overview, type Filters } from "./pages.tsx";
 import { PinBadges, isSeen, pinLabel } from "./pin-badges.tsx";
 import { presenceEffects } from "./presence.ts";
-import { entryPage } from "./entry-page.ts";
 import { Tour } from "./tour.tsx";
 
 type Screen = "howto" | "overview" | "customers" | "agents";
@@ -56,28 +52,11 @@ function writeRoute(route: Route, filters: Filters): void {
   if (next !== `${location.pathname}${location.search}`) history.pushState(null, "", next);
 }
 
-/** APC v2 features stay off in v1 unless the page was opened with ?apc=v2 (remembered for the tab). */
-function v2Enabled(): boolean {
-  try {
-    if (new URLSearchParams(location.search).get("apc") === "v2") sessionStorage.setItem("apc-v2", "1");
-    return sessionStorage.getItem("apc-v2") === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** The chooser and V1 landing are public; entering the demo opens or resumes a sandbox. */
+/** Pulse opens a sandbox for the visitor; it is paired with a dock, whose hub the page names. */
 export function App() {
-  const [path, setPath] = useState(location.pathname);
-  useEffect(() => {
-    const onPop = () => setPath(location.pathname);
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-  const page = entryPage(path);
   return (
     <div className="flex min-h-svh flex-col">
-      {page === "chooser" ? <Chooser /> : page === "v1" ? <div className="v1-landing flex flex-1 flex-col"><Landing /></div> : <SandboxGate />}
+      <SandboxGate />
       <SiteFooter />
     </div>
   );
@@ -111,11 +90,9 @@ function Sandbox({ sid }: { sid: string }) {
   const [, tick] = useState(0);
   const stateRef = useRef<SandboxState | null>(null);
   stateRef.current = state;
-  // APC v2 features (TIN-369, TIN-370), off unless the tab was opened with ?apc=v2. Pulse's v2 deploy
-  // (TIN-382) has them on, and pairs with a dock's hub instead of feeding the bridge dock.
-  const flagged = useMemo(v2Enabled, []);
+  // Pulse pairs with a dock's hub (TIN-382); the page has the dock's features on once the sandbox says so.
   const hubMode = !!state?.v2;
-  const v2 = flagged || hubMode;
+  const v2 = hubMode;
   const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
 
   const refresh = useCallback(() => api.state().then(setState), [api]);
@@ -272,19 +249,6 @@ function Sandbox({ sid }: { sid: string }) {
       now: Date.now(),
     });
   };
-  // APC v2 (TIN-370): a dock window opened from here shows these agents and drags them back.
-  useDockBridge(
-    v2 && !hubMode,
-    state?.grants.map((g) => ({
-      handle: g.id,
-      name: names.get(g.id) ?? g.label,
-      client_name: g.client_name,
-      client_ua: g.client_ua,
-      client_icon: g.client_icon,
-      motion: motionOf(g.id),
-      pin: g.pin ? { label: pinLabel(g.pin), seen: isSeen(g.pin) } : null,
-    })) ?? null,
-  );
 
   if (!state || !data) return <p className="py-12 text-center text-sm text-muted">Loading…</p>;
   // The standard agent bar's agents (TIN-394), on Pulse's v2 deploy.
@@ -385,17 +349,6 @@ function Sandbox({ sid }: { sid: string }) {
               );
             })}
             </div>
-          )}
-          {/* The v1 dock prototype (TIN-370). On the v2 deploy the person comes from the dock (TIN-402). */}
-          {v2 && !hubMode && (
-            <button
-              type="button"
-              onClick={() => openDock()}
-              className="cursor-pointer rounded-md border border-line px-2.5 py-1 text-sm text-muted hover:text-foreground"
-              title="APC v2: open a dock window with your agents, and drag them back onto Pulse from there"
-            >
-              Dock
-            </button>
           )}
           <ThemeToggle />
         </div>

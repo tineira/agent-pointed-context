@@ -6,7 +6,7 @@
  */
 import { agoLabel, sizeLabel, type ReadingRow } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { ANY_PAGE, grantedAlone, hubAllowed, hubPatterns, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { ANY_PAGE, grantedAlone, devHubHosts, hubAllowed, isDockPage, isSensitive, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}) => Object.assign(document.createElement(tag), props);
@@ -70,7 +70,7 @@ async function setChoice(origin: string, choice: SiteChoice | null): Promise<voi
 async function render(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const site = sitePattern(tab?.url);
-  const docks = new Set(hubPatterns(__APC_DEV__));
+  const docks = new Set(devHubHosts(__APC_DEV__));
   const { origins = [] } = await chrome.permissions.getAll();
   const anyPage = ANY_PAGE.every((o) => origins.includes(o));
   const alone = origins.filter((o) => !docks.has(o) && !ANY_PAGE.includes(o));
@@ -81,7 +81,7 @@ async function render(): Promise<void> {
   // This site: its choice, or how to let the agent be dropped here.
   const here = $("here");
   here.replaceChildren();
-  if (!site || docks.has(site.pattern)) {
+  if (!site || isDockPage(tab?.url, __APC_DEV__)) {
     here.append(el("p", { className: "muted", textContent: site ? "This is your dock: drag your agent from here onto other pages." : "Open a web page to drop your agent on it." }));
   } else if (!anyPage && !grantedAlone(site.origin, alone)) {
     here.append(el("p", { textContent: `Your agent cannot be dropped on ${hostOf(site.origin)} yet.` }), el("div", { className: "row" }));

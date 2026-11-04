@@ -13,7 +13,7 @@ test("an app's id: short, from its name, numbered on a collision (TIN-382)", () 
 
 test("the hub's focus reads through call_app_tool and says which app", () => {
   const focus = { kind: "figure", id: null, part: null, params: { key: "active_customers", month: "2026-03" }, app_url: "https://p/overview", pinned_at: "2026-10-25T10:00:00.000Z", next: "get_figure", next_args: { key: "active_customers", params: { month: "2026-03" } } };
-  const app = { id: "pulse", name: "Pulse", origin: "https://pulse.v2.apc.tineira.com" };
+  const app = { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" };
   const f = hubFocus(focus, app);
   assert.equal(f.next, "call_app_tool");
   assert.deepEqual(f.next_args, { app: "pulse", tool: "get_figure", args: focus.next_args });
@@ -49,14 +49,14 @@ test("attendance across apps: any page open, none known, or closed", () => {
 });
 
 test("the hub pairs only with allowed app origins, and the MCP URL must be on that origin", () => {
-  const allowed = ["https://pulse.v2.apc.tineira.com"];
-  assert.ok(appAllowed("https://pulse.v2.apc.tineira.com", "https://pulse.v2.apc.tineira.com/mcp/a/b", allowed, false));
-  assert.equal(appAllowed("https://pulse.v2.apc.tineira.com", "https://evil.example/mcp", allowed, false), false, "URL on another origin");
+  const allowed = ["https://pulse.apc.tineira.com"];
+  assert.ok(appAllowed("https://pulse.apc.tineira.com", "https://pulse.apc.tineira.com/mcp/a/b", allowed, false));
+  assert.equal(appAllowed("https://pulse.apc.tineira.com", "https://evil.example/mcp", allowed, false), false, "URL on another origin");
   assert.equal(appAllowed("https://evil.example", "https://evil.example/mcp", allowed, false), false);
   assert.equal(appAllowed("http://localhost:5199", "http://localhost:5199/mcp/a/b", allowed, false), false, "localhost only in dev");
   assert.ok(appAllowed("http://localhost:5199", "http://localhost:5199/mcp/a/b", allowed, true));
-  assert.equal(appAllowed("https://pulse.v2.apc.tineira.com", "https://u:p@pulse.v2.apc.tineira.com/mcp", allowed, false), false);
-  assert.equal(appAllowed("https://pulse.v2.apc.tineira.com", "not a url", allowed, false), false);
+  assert.equal(appAllowed("https://pulse.apc.tineira.com", "https://u:p@pulse.apc.tineira.com/mcp", allowed, false), false);
+  assert.equal(appAllowed("https://pulse.apc.tineira.com", "not a url", allowed, false), false);
 });
 
 test("an agent's call reads the pin only when it is the call the focus names (TIN-419)", () => {

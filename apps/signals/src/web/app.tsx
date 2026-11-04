@@ -29,7 +29,7 @@ interface FeedState {
 }
 type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget };
 
-const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://v2.apc.tineira.com/dock";
+const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
 const PLAN_NAME: Record<string, string> = { starter: "Starter", team: "Team", business: "Business" };
 const MONTH_NAME = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -78,7 +78,7 @@ function Shell(props: { children: React.ReactNode; nav?: React.ReactNode; side?:
           <span>Signals</span>
         </div>
         {props.nav}
-        <p className="disclaimer">A fictional market feed, generated for your dock's demo world. APC v2 demo.</p>
+        <p className="disclaimer">A fictional market feed, generated for your dock's demo world.</p>
       </nav>
       <main className="timeline">
         <div className="mobile-bar">

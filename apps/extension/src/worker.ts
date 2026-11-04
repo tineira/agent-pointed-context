@@ -8,7 +8,7 @@
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -81,7 +81,7 @@ async function pinCall(what: "state" | "clear", hub: string, agent: string): Pro
 
 /** The content script runs on the sites the person granted, and never on a dock. */
 async function syncScripts(): Promise<void> {
-  const docks = new Set(hubPatterns(__APC_DEV__));
+  const docks = new Set(devHubHosts(__APC_DEV__));
   const { origins = [] } = await chrome.permissions.getAll();
   const matches = origins.filter((o) => !docks.has(o));
   const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] });
@@ -89,13 +89,13 @@ async function syncScripts(): Promise<void> {
     if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
     return;
   }
-  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: [...docks], runAt: "document_idle" as const, allFrames: false, persistAcrossSessions: true };
+  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: hubPatterns(__APC_DEV__), runAt: "document_idle" as const, allFrames: false, persistAcrossSessions: true };
   await (existing.length ? chrome.scripting.updateContentScripts([script]) : chrome.scripting.registerContentScripts([script]));
 }
 
 /** Inject the content script into the open tabs on granted sites (all granted sites when none are given). */
 async function injectOpenTabs(origins?: string[]): Promise<void> {
-  const docks = new Set(hubPatterns(__APC_DEV__));
+  const docks = new Set(devHubHosts(__APC_DEV__));
   const patterns = (origins ?? (await chrome.permissions.getAll()).origins ?? []).filter((o) => !docks.has(o));
   if (!patterns.length) return;
   for (const tab of await chrome.tabs.query({ url: patterns })) {

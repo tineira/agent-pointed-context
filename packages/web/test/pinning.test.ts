@@ -18,13 +18,13 @@ test("anything that is not an agent payload is refused", () => {
 });
 
 test("a drag from a hub names the hub and a pairing ticket (TIN-382)", () => {
-  const text = agentDragPayload("ag_1a2b3c4d", { hub: "https://v2.apc.tineira.com", ticket: "0123456789abcdef.0123456789abcdef" });
-  assert.deepEqual(parseAgentDrag(text), { v: 1, agent: "ag_1a2b3c4d", hub: "https://v2.apc.tineira.com", ticket: "0123456789abcdef.0123456789abcdef" });
+  const text = agentDragPayload("ag_1a2b3c4d", { hub: "https://apc.tineira.com", ticket: "0123456789abcdef.0123456789abcdef" });
+  assert.deepEqual(parseAgentDrag(text), { v: 1, agent: "ag_1a2b3c4d", hub: "https://apc.tineira.com", ticket: "0123456789abcdef.0123456789abcdef" });
   assert.equal(parseAgentDragPayload(text), "ag_1a2b3c4d", "a v1 reader still gets the handle");
   const odd = (hub: string, ticket = "0123456789abcdef0") => parseAgentDrag(JSON.stringify({ v: 1, agent: "ag_1", hub, ticket }));
-  assert.deepEqual(odd("https://v2.apc.tineira.com/mcp/x"), { v: 1, agent: "ag_1" }, "a hub with a path is not an origin");
+  assert.deepEqual(odd("https://apc.tineira.com/mcp/x"), { v: 1, agent: "ag_1" }, "a hub with a path is not an origin");
   assert.deepEqual(odd("javascript:alert(1)"), { v: 1, agent: "ag_1" });
-  assert.deepEqual(odd("https://v2.apc.tineira.com", "short"), { v: 1, agent: "ag_1" }, "no usable ticket, no pairing");
+  assert.deepEqual(odd("https://apc.tineira.com", "short"), { v: 1, agent: "ag_1" }, "no usable ticket, no pairing");
   assert.deepEqual(odd("http://localhost:5200"), { v: 1, agent: "ag_1", hub: "http://localhost:5200", ticket: "0123456789abcdef0" });
 });
 

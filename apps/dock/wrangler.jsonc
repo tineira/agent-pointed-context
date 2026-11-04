@@ -1,8 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // APC v2: its own Worker and domain, so v1 (apps/demo, apc.tineira.com) is never touched (TIN-376).
+  // The APC standard's dock: its own Worker, on the root host apc.tineira.com (TIN-605). V1 (apps/v1, Worker apc-demo) keeps only apc.tineira.com/v1* through zone routes, which run before this Custom Domain.
   // The dock page (src/web, built by Vite) and the attention hub (src/worker): one Durable Object per dock (TIN-382).
-  "name": "apc-v2",
+  "name": "apc-dock",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -10,7 +10,7 @@
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
+    "run_worker_first": ["/", "/v1", "/v1/*", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "Hub" }]
@@ -19,10 +19,10 @@
   // The apps a hub may pair with (comma-separated origins); under vite dev, localhost too.
   // READER_ORIGINS: the APC browser extensions that may send page readings (TIN-421): the unpacked build (its id comes from the key
   // in apps/extension/manifest.json); add the store ids once published.
-  "vars": { "APP_ORIGINS": "https://pulse.v2.apc.tineira.com,https://signals.v2.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj" },
+  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com,https://signals.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj" },
   // Agent sessions, in Pulse v1's dataset and shape, marked "dock" (TIN-416). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
-  "routes": [{ "pattern": "v2.apc.tineira.com", "custom_domain": true }],
+  "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
   "observability": { "enabled": true }
 }

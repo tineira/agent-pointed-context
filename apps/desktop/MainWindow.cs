@@ -22,7 +22,7 @@ public sealed class MainWindow : Window
     static readonly IBrush Ok = new SolidColorBrush(Color.Parse("#1f7a4d"));
     static readonly IBrush Line = new SolidColorBrush(Color.Parse("#7f8a99"), 0.35);
     static readonly IBrush Muted = new SolidColorBrush(Color.Parse("#7f8a99"));
-    static readonly string DockUrl = "https://v2.apc.tineira.com/dock";
+    static readonly string DockUrl = "https://apc.tineira.com/dock";
 
     /// <summary>PULSE_DESKTOP_DEBUG=1 logs every drag's formats to stderr, to see what a source hands over.</summary>
     static readonly bool Debug = Environment.GetEnvironmentVariable("PULSE_DESKTOP_DEBUG") == "1";
@@ -44,7 +44,7 @@ public sealed class MainWindow : Window
         Height = 760;
         MinWidth = 760;
         MinHeight = 520;
-        var origin = Arg(args, "--pulse") ?? Environment.GetEnvironmentVariable("PULSE_URL") ?? "https://pulse.v2.apc.tineira.com";
+        var origin = Arg(args, "--pulse") ?? Environment.GetEnvironmentVariable("PULSE_URL") ?? "https://pulse.apc.tineira.com";
         client = NewClient(new Uri(origin));
         if (Arg(args, "--world") is { } w) world.Text = w;
 
@@ -82,7 +82,7 @@ public sealed class MainWindow : Window
                         Children =
                         {
                             new TextBlock { Text = "Pulse", FontSize = 18, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center },
-                            new TextBlock { Text = "FOR DESKTOP · APC v2", FontSize = 11, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center },
+                            new TextBlock { Text = "FOR DESKTOP", FontSize = 11, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center },
                             world,
                             open,
                         },
@@ -419,7 +419,7 @@ public sealed class MainWindow : Window
     /// </summary>
     async Task StartOverAsync()
     {
-        const string disconnect = "Please remove the remote MCP server named \"APC\" (its URL starts with https://v2.apc.tineira.com/mcp/) from your connectors. If you can remove it yourself, do it now and tell me when it's gone. If you can't, tell me the exact steps to remove it in the app I'm using you in right now.";
+        const string disconnect = "Please remove the remote MCP server named \"APC\" (its URL starts with https://apc.tineira.com/mcp/) from your connectors. If you can remove it yourself, do it now and tell me when it's gone. If you can't, tell me the exact steps to remove it in the app I'm using you in right now.";
         var go = new Button { Content = "Delete and start over", Classes = { "accent" } };
         var cancel = new Button { Content = "Cancel", IsCancel = true, IsDefault = true };
         var copy = new Button { Content = "Copy", VerticalAlignment = VerticalAlignment.Top };
@@ -445,7 +445,7 @@ public sealed class MainWindow : Window
                     new TextBlock { Text = "Start over in Pulse for desktop?", FontSize = 17, FontWeight = FontWeight.Bold },
                     new TextBlock { Text = "This deletes this app's Pulse sandbox: the agents your dock paired here and their pins, your view, and the event log. The app forgets its session.", TextWrapping = TextWrapping.Wrap },
                     new TextBlock { Text = "To start from zero everywhere, do the same on the other sites (each opens in your browser and asks you there):", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold },
-                    new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl), Link("Pulse (web)", "https://pulse.v2.apc.tineira.com/agents"), Link("Signals", "https://signals.v2.apc.tineira.com/") } },
+                    new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl), Link("Pulse (web)", "https://pulse.apc.tineira.com/agents"), Link("Signals", "https://signals.apc.tineira.com/") } },
                     new TextBlock { Text = "And remove the \"APC\" server from your agent. Paste this to your agent:", TextWrapping = TextWrapping.Wrap },
                     new DockPanel
                     {
