@@ -33,26 +33,56 @@ export function openSession(): Promise<string> {
 /** resumeOrOpen, settled by `openMs` at the latest (a request that ignores its abort included). */
 function bounded(): Promise<string> {
   const deadline = Date.now() + sessionLimits.openMs;
+  // Given up (the deadline, or settled): no pause continues and no request starts after it.
+  const stop = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("/api/session: timed out")), sessionLimits.openMs);
+    timer = setTimeout(() => {
+      stop.abort();
+      reject(new Error("/api/session: timed out"));
+    }, sessionLimits.openMs);
   });
-  return Promise.race([resumeOrOpen(deadline), late]).finally(() => clearTimeout(timer));
+  return Promise.race([resumeOrOpen(deadline, stop.signal), late]).finally(() => {
+    clearTimeout(timer);
+    stop.abort();
+  });
 }
 
-async function resumeOrOpen(deadline: number): Promise<string> {
+async function resumeOrOpen(deadline: number, stop: AbortSignal): Promise<string> {
   // A dock opens Pulse's v2 deploy with ?seed= (TIN-393); apc.tineira.com ignores it.
   const seed = Number(new URLSearchParams(location.search).get("seed"));
   const body = Number.isInteger(seed) && seed > 0 ? { seed } : {};
   for (let attempt = 1; ; attempt++) {
+    // Never a request once the open is given up: it could set the cookie to a sandbox no page holds,
+    // after another tab, let in by the released lock, opened the one its page uses (TIN-490).
+    if (stop.aborted || Date.now() >= deadline) throw new Error("/api/session: timed out");
+    const request = new AbortController();
+    const abort = () => request.abort();
+    const timer = setTimeout(abort, Math.min(sessionLimits.requestMs, deadline - Date.now()));
+    stop.addEventListener("abort", abort);
     try {
-      const signal = AbortSignal.timeout(Math.max(1, Math.min(sessionLimits.requestMs, deadline - Date.now())));
-      const response = await fetch("/api/session", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal });
+      const response = await fetch("/api/session", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: request.signal });
       if (!response.ok) throw new Error(`/api/session: ${response.status}`);
       return ((await response.json()) as { sid: string }).sid;
     } catch (error) {
-      if (attempt >= 4 || Date.now() + 250 * attempt >= deadline) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      if (attempt >= 4 || stop.aborted || Date.now() + 250 * attempt >= deadline) throw error;
+    } finally {
+      clearTimeout(timer);
+      stop.removeEventListener("abort", abort);
     }
+    await pause(250 * attempt, stop);
   }
+}
+
+/** A pause between attempts that ends at once when the open is given up (a background tab may wake it late). */
+function pause(ms: number, stop: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      stop.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    stop.addEventListener("abort", done);
+  });
 }

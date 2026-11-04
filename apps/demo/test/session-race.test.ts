@@ -151,6 +151,37 @@ test("when the stuck open did reach the Worker, the waiting tab resumes the sand
   assert.equal((await b.state(sid)).status, 200);
 });
 
+test("an open given up at the deadline sends no request after it, even when its pause between attempts wakes late", async () => {
+  quick();
+  for (const tab of [tabA, tabB]) Object.assign(tab.sessionLimits, { openMs: 300 });
+  const { owners, env } = sandboxes();
+  const b = browser(env);
+  // The first tab's first attempt fails at once; its 250 ms pause, throttled as in a background tab,
+  // would wake at 1 s, long after the 300 ms deadline let the second tab in.
+  const through = globalThis.fetch;
+  let posts = 0;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).endsWith("/api/session")) return through(input, init);
+    if (++posts === 1) return new Response("{}", { status: 503 });
+    return through(input, init);
+  };
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void, ms?: number) => realSetTimeout(fn, ms === 250 ? 1000 : ms)) as typeof setTimeout;
+  try {
+    const stuck = tabA.openSession();
+    const waiting = tabB.openSession();
+    await assert.rejects(stuck);
+    const sid = await waiting;
+    await new Promise((resolve) => realSetTimeout(resolve, 1200));
+    assert.equal(posts, 2, "the first tab sent nothing after its deadline");
+    assert.equal(owners.size, 1);
+    assert.equal(b.cookie(), `apc_session=${sid}.${owners.get(sid)}`);
+    assert.equal((await b.state(sid)).status, 200);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});
+
 test("a tab that waits longer than waitMs for another's open gives up with an error instead of hanging", async () => {
   let release = () => {};
   const held = navigator.locks.request("apc-pulse-session", () => new Promise<void>((resolve) => (release = resolve)));
