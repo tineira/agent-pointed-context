@@ -41,10 +41,12 @@ test("the question across apps holds: the competitor's post, and the Pulse custo
   assert.deepEqual(churned, [...CROSS_APP.churned].sort());
   const customer = demoDataset().customers.find((c) => c.id === CROSS_APP.customer)!;
   assert.equal(customer.name, CROSS_APP.customerName);
-  // The largest of them, by the seats it had the month before.
-  const before = MONTHS[MONTHS.indexOf(CROSS_APP.month) - 1];
+  // What the how-to says of it: the seats it had the month before it left (the most of the five, though no figure ranks them).
+  const before = MONTHS[MONTHS.indexOf(CROSS_APP.month) - 1]!;
+  assert.equal(before, CROSS_APP.monthBefore);
   const seats = (id: string) => demoDataset().activity.find((a) => a.customer_id === id && a.month === before)!.seats;
-  assert.equal([...CROSS_APP.churned].sort((a, b) => seats(b) - seats(a))[0], CROSS_APP.customer);
+  assert.equal(seats(CROSS_APP.customer), CROSS_APP.seatsBefore);
+  assert.ok(CROSS_APP.churned.every((id) => seats(id) <= CROSS_APP.seatsBefore));
 });
 
 test("the deep links are stable paths", () => {
@@ -59,7 +61,9 @@ test("a sandbox made before TIN-621, with a seed of its own, shows the demo worl
   room.db.exec("insert into meta (key, value) values ('seed', '12345') on conflict(key) do update set value = excluded.value");
   const fresh = new Sandbox(room.ctx, DEPLOY);
   assert.deepEqual(await fresh.dataset(), demoDataset());
-  assert.equal("seed" in (await fresh.state()), false, "the state names no world");
+  // The state still names the seed, always the demo world's, for Pulse for Windows builds already installed:
+  // they read the state into a record with `seed` as a constructor parameter.
+  assert.equal((await fresh.state()).seed, DEMO_SEED);
 });
 
 test("an old dock link's seed opens Pulse and changes nothing", async () => {

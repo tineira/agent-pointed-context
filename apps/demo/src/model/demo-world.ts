@@ -24,7 +24,7 @@ export function demoMarket(): Market {
  * The question across both apps that works every time (TIN-621), written in the apps' how-to: a
  * competitor's offer in Signals and the Pulse customers it took. Tallyfin's post targets Team teams in
  * North America in Aug and Sep 2026; in Sep 2026 five of Pulse's eight churned customers are Team teams
- * in North America, Deep Harbor Logistics the largest. A test checks it holds (demo-world.test.ts).
+ * in North America, among them Deep Harbor Logistics, with 25 seats in August. A test checks it holds (demo-world.test.ts).
  */
 export const CROSS_APP = {
   /** Signals: the competitor's post, and its author. */
@@ -35,9 +35,11 @@ export const CROSS_APP = {
   region: "na",
   plan: "team",
   month: "2026-09",
-  /** Pulse: the largest customer it took. */
+  /** Pulse: one customer it took, and the seats it had the month before it left (the most of the five). */
   customer: "cus_0048",
   customerName: "Deep Harbor Logistics",
+  seatsBefore: 25,
+  monthBefore: "2026-08",
   /** The Team customers in North America that churned that month. */
   churned: ["cus_0048", "cus_0138", "cus_0144", "cus_0150", "cus_0162"],
   question: "Which of our customers did this offer take?",

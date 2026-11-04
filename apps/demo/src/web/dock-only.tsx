@@ -28,7 +28,7 @@ export function CrossApp() {
           and drop your agent on it.
         </li>
         <li>
-          Ask: <strong>"{CROSS_APP.question}"</strong> It reads the offer in Signals and the churn here: in Sep 2026, five Team customers in North America left Pulse, <AppLink href={pulseCustomerPath(CROSS_APP.customer)}>{CROSS_APP.customerName}</AppLink> ({CROSS_APP.customer}) the largest.
+          Ask: <strong>"{CROSS_APP.question}"</strong> It reads the offer in Signals and the churn here: in Sep 2026, five Team customers in North America left Pulse, among them <AppLink href={pulseCustomerPath(CROSS_APP.customer)}>{CROSS_APP.customerName}</AppLink> ({CROSS_APP.customer}), which had {CROSS_APP.seatsBefore} seats in Aug 2026.
         </li>
         <li>
           Or the other way round: drop your agent on <AppLink href={pulseCustomerPath(CROSS_APP.customer)}>{CROSS_APP.customerName}</AppLink> here and ask why they left.

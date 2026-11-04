@@ -8,7 +8,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
 import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
-import { REGIONS, type Dataset, type Region } from "../model/seed.ts";
+import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
@@ -313,6 +313,9 @@ export class Sandbox extends DurableObject<Env> {
 
   async state() {
     return {
+      // The demo world's seed, always DEMO_SEED (TIN-621). Nothing new reads it: Pulse for Windows builds from before
+      // read the state into a record with `seed` as a constructor parameter, so it stays in the answer for them.
+      seed: DEMO_SEED,
       settings: { share_view: this.meta("share_view") !== "0", show_activity: this.meta("show_activity") !== "0" },
       grants: this.grants().map((g) => ({ ...g, pin: this.focusRow(g.id) })),
       tour: this.tour(),

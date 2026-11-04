@@ -70,7 +70,8 @@ test("activating the dock's service worker waits on no client, so no fetch of th
 
 test("the service worker carries a version, so a deploy that must reach open pages changes the file", () => {
   assert.match(source, /const VERSION = "[^"]+";/);
-  assert.match(source, /2026-11-04\.tin-609/);
+  // TIN-621: open docks must reload, so they stop offering the demo apps and calling the gone /world route.
+  assert.match(source, /2026-11-04\.tin-621/);
 });
 
 test("the service worker caches nothing and leaves V1 alone: only the dock's navigations are answered, offline with a note", async () => {

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_SEED, MONTHS } from "../../../demo/src/model/seed.ts";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { CROSS_APP, demoMarket, pulseCustomerPath, signalsPostPath } from "../../../demo/src/model/demo-world.ts";
+import { feedSearch, readFeedLink, shows, type FeedLink } from "./link.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
@@ -46,30 +47,15 @@ const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://a
 const PULSE_URL = import.meta.env.DEV ? "http://localhost:5199" : "https://pulse.apc.tineira.com";
 /** The demo's one world: the same posts on every visit, for everyone. */
 const POSTS = demoMarket().posts;
-const KIND_TABS = ["competitor_offer", "our_ad"] as const;
 
 /**
- * The feed's address (TIN-621): ?post= opens it on one post, ?kind= and ?month= set the filters. A ?seed=
- * from an old dock link means nothing now (one world): it is dropped from the address, and the link opens.
+ * The feed's address (TIN-621, link.ts): ?post= opens it on one post, shown whatever filters the link also
+ * names; ?kind= and ?month= set the filters. A ?seed= from an old dock link means nothing now (one world): it is
+ * dropped from the address, and the link opens.
  */
-function readLink(): { kind: "" | Post["kind"]; month: string; post: string | null } {
-  const q = new URLSearchParams(location.search);
-  const kind = q.get("kind");
-  const month = q.get("month");
-  const post = q.get("post");
-  return {
-    kind: (KIND_TABS as readonly (string | null)[]).includes(kind) ? (kind as Post["kind"]) : "",
-    month: month && MONTHS.includes(month) ? month : "",
-    post: post && POSTS.some((p) => p.id === post) ? post : null,
-  };
-}
-function writeLink(link: { kind: string; month: string; post: string | null }): void {
-  const q = new URLSearchParams(location.search);
-  for (const key of ["seed", "kind", "month", "post"]) q.delete(key);
-  if (link.kind) q.set("kind", link.kind);
-  if (link.month) q.set("month", link.month);
-  if (link.post) q.set("post", link.post);
-  const next = `${location.pathname}${q.size ? `?${q}` : ""}${location.hash}`;
+const readLink = (): FeedLink => readFeedLink(location.search, POSTS);
+function writeLink(link: FeedLink): void {
+  const next = `${location.pathname}${feedSearch(location.search, link)}${location.hash}`;
   if (next !== `${location.pathname}${location.search}${location.hash}`) history.replaceState(history.state, "", next);
 }
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
@@ -171,7 +157,9 @@ function Feed({ sid }: { sid: string }) {
   }, [base, refresh]);
 
   const posts = POSTS;
-  const shown = posts.filter((p) => (!kind || p.kind === kind) && (!month || p.month === month));
+  const shown = posts.filter((p) => shows({ kind, month }, p));
+  // The selected post, while the filters show it: what is highlighted, in the address and in the view the agents read.
+  const shownPost = selected && shown.some((p) => p.id === selected) ? selected : null;
 
   const say = (text: string) => {
     setNotice(text);
@@ -180,8 +168,8 @@ function Feed({ sid }: { sid: string }) {
 
   // The view, as identifiers.
   const report = useMemo(() => createViewReporter((view) => void call(`${base}/view`, view)), [base]);
-  useEffect(() => report({ screen: "feed", params: { ...(kind ? { kind } : {}), ...(month ? { month } : {}) }, selection: selected ? { kind: "post", id: selected } : null }), [report, kind, month, selected]);
-  useEffect(() => writeLink({ kind, month, post: selected }), [kind, month, selected]);
+  useEffect(() => report({ screen: "feed", params: { ...(kind ? { kind } : {}), ...(month ? { month } : {}) }, selection: shownPost ? { kind: "post", id: shownPost } : null }), [report, kind, month, shownPost]);
+  useEffect(() => writeLink({ kind, month, post: shownPost }), [kind, month, shownPost]);
   // A link to a post opens the feed on it, once the feed is drawn.
   const loaded = !!state;
   useEffect(() => {
@@ -421,7 +409,7 @@ function Feed({ sid }: { sid: string }) {
         const st = stats(p, DEMO_SEED);
         const parts = p.kind === "our_ad" ? p.text.split(p.code) : [p.text];
         return (
-          <article key={p.id} className={`post ${p.kind}${selected === p.id ? " selected" : ""}`} {...focusAttrs({ kind: "post", id: p.id })}>
+          <article key={p.id} className={`post ${p.kind}${shownPost === p.id ? " selected" : ""}`} {...focusAttrs({ kind: "post", id: p.id })}>
             <Avatar author={p.author} />
             <div className="post-body">
               <div className="post-head">
