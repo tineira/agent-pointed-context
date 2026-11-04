@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { PACKAGES, checkManifest, checkVersions, npmPublishArgs, standardVersionOf, tarballName } from "./lib/packages.mjs";
+import { DIST_TAG, PACKAGES, checkManifest, checkVersions, npmPublishArgs, standardVersionOf, tarballName } from "./lib/packages.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { values } = parseArgs({ options: { "dry-run": { type: "boolean", default: false } } });
@@ -73,17 +73,21 @@ const tarballs = PACKAGES.map((dir) => join(out, tarballName(dir, version)));
 for (const t of tarballs) if (!existsSync(t)) stop(`pnpm pack made no ${t}`);
 console.log(`publish-local: ${version} at ${head.slice(0, 12)}, packed into ${out}${dryRun ? " (dry run)" : ""}`);
 
-// 5. npm publish per tarball, protocol first; npm asks for 2FA each time.
+// 5. npm publish per tarball, protocol first; npm asks for 2FA each time. The dist-tag is this explicit flag
+// (npm and pnpm ignore publishConfig.tag and default to latest): no command without `--tag next` runs.
 const done = [];
 for (const [i, t] of tarballs.entries()) {
   const name = `@tineira/apc-${PACKAGES[i]}@${version}`;
-  console.log(`\npublish-local: npm ${npmPublishArgs(t, { dryRun }).join(" ")}`);
-  if (!run("npm", npmPublishArgs(t, { dryRun }), { interactive: true }).ok) stop(`npm publish failed for ${name}${done.length ? `; already published: ${done.join(", ")}` : ""}`);
+  const args = npmPublishArgs(t, { dryRun });
+  const tagAt = args.indexOf("--tag");
+  if (tagAt < 0 || args[tagAt + 1] !== DIST_TAG) stop(`refusing to publish ${name} without --tag ${DIST_TAG}: it would go out as latest`);
+  console.log(`\npublish-local: npm ${args.join(" ")}`);
+  if (!run("npm", args, { interactive: true }).ok) stop(`npm publish failed for ${name}${done.length ? `; already published: ${done.join(", ")}` : ""}`);
   done.push(name);
 }
 console.log(`\npublish-local: ${dryRun ? "dry run of" : "published"} ${done.join(", ")} on the "next" tag.`);
 if (!dryRun) {
   console.log(
-    "Next, on npmjs.com, for each of the four packages: Settings > Trusted Publisher > GitHub Actions, organization or user `tineira`, repository `agent-pointed-context`, workflow filename `publish.yml`, no environment. From then on a tag apc-v<version> publishes through .github/workflows/publish.yml.",
+    "Next, on npmjs.com, for each of the four packages: Settings > Trusted Publisher > GitHub Actions, organization or user `tineira`, repository `agent-pointed-context`, workflow filename `publish.yml`, environment `npm-publish`. From then on a tag apc-v<version> on a commit of main publishes through .github/workflows/publish.yml.",
   );
 }

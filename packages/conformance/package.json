@@ -20,7 +20,6 @@
   },
   "publishConfig": {
     "access": "public",
-    "tag": "next",
     "exports": {
       ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
       "./workers": { "types": "./dist/workers.d.ts", "import": "./dist/workers.js" }

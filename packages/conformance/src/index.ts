@@ -49,6 +49,7 @@ export {
   IN_PROCESS_ONLY,
   httpConformance,
   redactGrantUrl,
+  redactSecrets,
   runHttpConformance,
   type HttpCheck,
   type HttpCheckResult,

@@ -1,12 +1,16 @@
 name: Publish @tineira/apc-* to npm
 
 # The four packages (@tineira/apc-protocol, @tineira/apc-server, @tineira/apc-web, @tineira/apc-conformance) go to
-# npm as 0.x pre-releases on the `next` dist-tag (TIN-612), never `latest` before the standard is 1.0. A tag
-# `apc-v<version>` publishes that version (the four package.json versions, which scripts/check-packages.mjs holds to
-# APC_STANDARD_VERSION); running it by hand (workflow_dispatch) is a dry run that publishes nothing.
+# npm as 0.x pre-releases on the `next` dist-tag (TIN-612), never `latest` before the standard is 1.0. The dist-tag is
+# the explicit `--tag next` below: pnpm and npm ignore publishConfig.tag.
 #
-# npm trusted publishing (OIDC): no npm token anywhere. npm trusts this workflow file (publish.yml in
-# tineira/agent-pointed-context) for each package, set once on npmjs.com after the bootstrap publish
+# - A tag `apc-v<version>` on a commit of main publishes that version (job `publish`, in the GitHub environment
+#   `npm-publish`). The four package.json versions must be that version and match APC_STANDARD_VERSION
+#   (scripts/check-packages.mjs), and the tagged commit must be on main.
+# - Running it by hand (workflow_dispatch) is a dry run (job `dry-run`): no OIDC token, nothing published.
+#
+# npm trusted publishing (OIDC): no npm token anywhere. On npmjs.com each package trusts this file (publish.yml in
+# tineira/agent-pointed-context) in the environment `npm-publish`, set once after the bootstrap publish
 # (scripts/publish-local.mjs; README "Using the packages"). It needs npm CLI 11.5.1+ on Node 22.14+, a GitHub-hosted
 # runner, `id-token: write`, and each package.json's repository.url exactly https://github.com/tineira/agent-pointed-context.
 # Provenance comes with it. pnpm builds and packs (it rewrites workspace:^ and publishConfig); npm publishes the
@@ -26,16 +30,24 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/apc-v')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write
-    env:
-      # A real publish only for a pushed apc-v* tag; anything else (a manual run) is a dry run.
-      DRY_RUN: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/apc-v')) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error title=Not on main::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main. Tag a commit of main."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -45,27 +57,46 @@ jobs:
       - name: Check Node and npm
         run: |
           node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<22||(a===22&&b<14)) { console.error("Node 22.14+ needed, got "+process.versions.node); process.exit(1) }'
-          npm --version
           node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); if (a<11||(a===11&&(b<5||(b===5&&c<1)))) { console.error("npm 11.5.1+ needed, got "+process.argv[1]); process.exit(1) }' "$(npm --version)"
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - name: Check the versions (and the tag)
-        run: |
-          if [ "$DRY_RUN" = "false" ]; then
-            node scripts/check-packages.mjs --tag "$GITHUB_REF_NAME"
-          else
-            node scripts/check-packages.mjs
-          fi
+      - run: node scripts/check-packages.mjs --tag "$GITHUB_REF_NAME"
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
       - name: Pack with pnpm
         run: pnpm -r --filter "./packages/*" pack --pack-destination "$RUNNER_TEMP/apc-tarballs"
-      - name: Publish with npm (a dry run unless this is an apc-v* tag)
+      - name: Publish with npm, on next
         run: |
           version=$(node -p 'require("./packages/protocol/package.json").version')
-          flag=""
-          if [ "$DRY_RUN" = "true" ]; then flag="--dry-run"; fi
           for p in protocol server web conformance; do
-            npm publish "$RUNNER_TEMP/apc-tarballs/tineira-apc-$p-$version.tgz" --tag next --access public $flag
+            npm publish "$RUNNER_TEMP/apc-tarballs/tineira-apc-$p-$version.tgz" --tag next --access public
+          done
+
+  dry-run:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@12.2.1
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-packages.mjs
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Pack with pnpm
+        run: pnpm -r --filter "./packages/*" pack --pack-destination "$RUNNER_TEMP/apc-tarballs"
+      - name: Publish with npm, on next (dry run)
+        run: |
+          version=$(node -p 'require("./packages/protocol/package.json").version')
+          for p in protocol server web conformance; do
+            npm publish "$RUNNER_TEMP/apc-tarballs/tineira-apc-$p-$version.tgz" --tag next --access public --dry-run
           done

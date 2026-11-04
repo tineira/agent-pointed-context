@@ -82,12 +82,36 @@ export function checkView(view: unknown, where: string): void {
   expect(view.next === null || typeof view.next === "string", `${where}: next is neither null nor a tool name`);
 }
 
-/** The attention key, where the model sees it: in the structured result and in the text. */
+/** The same JSON value, whatever the order of object keys. */
+export function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => sameJson(x, b[i]));
+  if (!isObject(a) || !isObject(b)) return false;
+  const ka = Object.keys(a).sort();
+  const kb = Object.keys(b).sort();
+  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && sameJson(a[k], b[k]));
+}
+
+/**
+ * A top-level key of a tool result where the model sees it: when the result has `structuredContent`, the key is
+ * in both or in neither, with the same value in the structured result and the text (a text that says something
+ * else is what a text-only model would follow). With no `structuredContent` there is only the text to read; the
+ * caller can tell by `structured`.
+ */
+export function resultKey(r: ToolCallResult, key: string): { value: unknown; structured: boolean } {
+  const inText = text(r)[key];
+  if (!r.structuredContent) return { value: inText, structured: false };
+  const inData = r.structuredContent[key];
+  expect((inText === undefined) === (inData === undefined), `${key} is in the structured result or the text, not both`);
+  if (inData !== undefined && !sameJson(inData, inText)) {
+    throw new ConformanceError(`${key} differs between the structured result and the text: ${String(JSON.stringify(inData)).slice(0, 120)} vs ${String(JSON.stringify(inText)).slice(0, 120)}`);
+  }
+  return { value: inData, structured: true };
+}
+
+/** The attention key, where the model sees it: in the structured result and in the text, the same. */
 export function attentionOf(r: ToolCallResult): unknown {
-  const inText = text(r).attention;
-  const inData = data(r).attention;
-  expect((inText === undefined) === (inData === undefined), "attention is in the structured result or the text, not both");
-  return inData;
+  return resultKey(r, "attention").value;
 }
 
 /** What `tools/list` must say about the core tools (shared by the suite and the CLI). */

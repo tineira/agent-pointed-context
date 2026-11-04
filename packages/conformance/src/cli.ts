@@ -8,7 +8,7 @@
  */
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { HttpConformanceUsageError, runHttpConformance, type HttpConformanceReport } from "./http.ts";
+import { HttpConformanceUsageError, redactSecrets, runHttpConformance, type HttpConformanceReport } from "./http.ts";
 
 const HELP = `apc-conformance: checks a live APC app over HTTP (https://apc.tineira.com/docs)
 
@@ -20,7 +20,7 @@ Usage:
                       initialize, tools/list, get_current_view, wait_for_focus, unknown grant 404.
   --revoked <mcp-url> The MCP URL of a grant you revoked in the app: checks the revoked answer.
   --json              Print the report as JSON.
-  --allow-http        Allow http:, for a dev server on a loopback host only (localhost, 127.0.0.1, [::1]).
+  --allow-http        Allow http:, for a dev server on the host localhost, 127.0.0.1 or [::1] only (not *.localhost).
   --timeout <s>       Seconds per request (default 15).
   --version, --help
 
@@ -50,6 +50,7 @@ function format(report: HttpConformanceReport): string {
     const tag = r.status === "pass" ? "PASS" : r.status === "fail" ? "FAIL" : "SKIP";
     lines.push(`${tag}  ${r.name}${r.status === "pass" && r.ms !== undefined ? ` (${r.ms} ms)` : ""}`);
     if (r.detail) lines.push(`      ${r.detail}`);
+    if (r.note) lines.push(`      note: ${r.note}`);
   }
   lines.push("", `${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped`);
   return lines.join("\n");
@@ -72,7 +73,8 @@ async function main(argv: string[]): Promise<number> {
       },
     });
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n\n${HELP}\n`);
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${redactSecrets(message, argv.filter((a) => a.includes("://")))}\n\n${HELP}\n`);
     return 2;
   }
   const { values, positionals } = parsed;
@@ -122,7 +124,8 @@ main(process.argv.slice(2)).then(
     process.exitCode = code;
   },
   (error: unknown) => {
-    process.stderr.write(`apc-conformance: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`apc-conformance: ${redactSecrets(message, process.argv.slice(2).filter((a) => a.includes("://")))}\n`);
     process.exitCode = 1;
   },
 );

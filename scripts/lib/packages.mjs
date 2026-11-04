@@ -76,7 +76,9 @@ export function checkManifest(manifest) {
   if (manifest.private) problems.push(`${name} is private`);
   if (manifest.license !== "MIT") problems.push(`${name}: license is not MIT`);
   if (pc.access !== "public") problems.push(`${name}: publishConfig.access is not public`);
-  if (pc.tag !== DIST_TAG) problems.push(`${name}: publishConfig.tag is not ${DIST_TAG}`);
+  // pnpm and npm ignore publishConfig.tag (pnpm/npm publish default to latest): the dist-tag is the explicit
+  // `--tag next` the workflow and scripts/publish-local.mjs pass. A tag here would only look like a guarantee.
+  if ("tag" in pc) problems.push(`${name}: publishConfig.tag is ignored by pnpm and npm publish; leave it out (the tag is the explicit --tag ${DIST_TAG})`);
   if (!pc.exports || typeof pc.exports !== "object") problems.push(`${name}: no publishConfig.exports`);
   for (const target of distTargets(manifest)) if (!target.startsWith("./dist/")) problems.push(`${name}: ${target} is not in dist/`);
   for (const f of ["dist", "README.md", "LICENSE"]) if (!manifest.files?.includes(f)) problems.push(`${name}: files leaves out ${f}`);

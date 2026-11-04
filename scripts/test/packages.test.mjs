@@ -39,7 +39,7 @@ test("a manifest that would publish wrong is caught", () => {
   const good = JSON.parse(readFileSync(repo("packages/server/package.json"), "utf8"));
   assert.deepEqual(checkManifest(good), []);
   assert.match(checkManifest({ ...good, dependencies: { "@tineira/apc-protocol": "workspace:*" } }).join(), /workspace:\^/);
-  assert.match(checkManifest({ ...good, publishConfig: { ...good.publishConfig, tag: "latest" } }).join(), /tag is not next/);
+  assert.match(checkManifest({ ...good, publishConfig: { ...good.publishConfig, tag: "next" } }).join(), /publishConfig\.tag is ignored/, "no tag that only looks like a guarantee");
   assert.match(checkManifest({ ...good, publishConfig: { ...good.publishConfig, exports: { ".": "./src/index.ts" } } }).join(), /not in dist/);
   assert.match(checkManifest({ ...good, files: ["dist"] }).join(), /README\.md/);
   assert.match(checkManifest({ ...good, private: true }).join(), /private/);
@@ -60,6 +60,13 @@ test("each tarball is published with npm on next, public, protocol first, with n
   assert.match(workflow, /tags: \["apc-v\*"\]/);
   assert.ok(!/pull_request/.test(workflow), "never on a pull request");
   assert.match(workflow, /npm publish "\$RUNNER_TEMP\/apc-tarballs\/tineira-apc-\$p-\$version\.tgz" --tag next --access public/);
+  const publishes = workflow.split("\n").filter((l) => /^\s*npm publish /.test(l));
+  assert.equal(publishes.length, 2, "the tag job and the dry run");
+  for (const l of publishes) assert.match(l, /--tag next/, "every publish names its dist-tag: npm would default to latest");
+  assert.equal(publishes.filter((l) => !l.includes("--dry-run")).length, 1);
+  assert.equal(workflow.match(/^\s+id-token: write\s*$/gm)?.length, 1, "only the tag job gets an OIDC token");
+  assert.match(workflow, /environment: npm-publish/);
+  assert.match(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/, "a tag publishes only a commit of main");
 });
 
 test("declarations import .js, not the .ts the sources import", () => {
