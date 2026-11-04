@@ -159,7 +159,7 @@ test("enablePinning drags a pin badge onto another target; Esc and a drop outsid
   const post = targetEl("post:p_7");
   const pinned: Array<[string, FocusTarget]> = [];
   // enablePinning listens for pointerdown on its root; the badge's events bubble up to it.
-  const stop = enablePinning({ root: doc.body as unknown as HTMLElement, onPin: (grantId, target) => void pinned.push([grantId, target]) });
+  const stop = enablePinning({ root: doc.body as unknown as HTMLElement, trusted: () => true, onPin: (grantId, target) => void pinned.push([grantId, target]) });
   const drag = (to: El | null, end: () => void) => {
     pin.mark.fire("pointerdown", { clientX: 5, clientY: 5 });
     assert.ok(pin.classes.has("apc-pin--dragging"), "the badge dims while it is dragged");
@@ -180,6 +180,32 @@ test("enablePinning drags a pin badge onto another target; Esc and a drop outsid
   stop();
 });
 
+test("events a page's script makes cannot drag, pin or unpin: only the person's own (isTrusted) do (APC 0.6)", () => {
+  const pin = badge({ id: "g_script", name: "Claude", seen: true });
+  const post = targetEl("post:p_8");
+  const pinned: string[] = [];
+  const stop = enablePinning({ root: doc.body as unknown as HTMLElement, onPin: (g) => void pinned.push(g) });
+  // A script dispatches a whole drag: pointerdown on the mark, move over a target, pointerup. isTrusted is false.
+  pin.mark.fire("pointerdown", { clientX: 5, clientY: 5, isTrusted: false });
+  assert.ok(!doc.body.classes.has("apc-dragging"), "a synthetic pointerdown starts nothing");
+  hovered = post;
+  press("pointermove", { clientX: 40, clientY: 40, isTrusted: false });
+  press("pointerup", { isTrusted: false });
+  assert.deepEqual(pinned, [], "and pins nothing");
+  // A real drag begun by the person is not ended by a script's pointerup.
+  pin.mark.fire("pointerdown", { clientX: 5, clientY: 5, isTrusted: true });
+  press("pointerup", { isTrusted: false });
+  assert.ok(doc.body.classes.has("apc-dragging"), "a synthetic pointerup does not drop it");
+  press("pointerup", { isTrusted: true });
+  assert.equal(pinned.length, 0, "dropped with no target under it");
+  // element.click() on the badge's ×.
+  const seen: string[] = [];
+  pin.addEventListener("apc-unpin", ((e: CustomEvent<{ id: string }>) => void seen.push(e.detail.id)) as (e: unknown) => void);
+  pin.children.find((c) => c.className === "apc-pin__unpin")!.fire("click", { isTrusted: false });
+  assert.deepEqual(seen, [], "a synthetic click does not unpin");
+  stop();
+});
+
 test("an agent set before the element was upgraded is taken in on connect; the mark is named", () => {
   definePinBadge();
   const el = new (defined.get("apc-pin")!)() as Pin;
@@ -196,6 +222,6 @@ test("× asks the app to remove the pin (apc-unpin)", () => {
   pin.addEventListener("apc-unpin", ((e: CustomEvent<{ id: string }>) => void seen.push(e.detail.id)) as (e: unknown) => void);
   const unpin = pin.children.find((c) => c.className === "apc-pin__unpin")!;
   assert.equal(unpin.getAttribute("aria-label"), "Remove Claude's pin");
-  unpin.fire("click");
+  unpin.fire("click", { isTrusted: true });
   assert.deepEqual(seen, ["g_x"]);
 });

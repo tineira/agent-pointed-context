@@ -94,6 +94,12 @@ export interface PinningOptions {
   direct?: { name: string; connect: string | null };
   /** A dock agent dropped on an app that does not offer Dock. Without it, `showDockUnsupported` tells the person in the page. */
   onDockUnsupported?: (answer: DockUnsupported) => void;
+  /**
+   * Which events may arm, tap, pin or drag (APC 0.6). By default only the person's own: `event.isTrusted`,
+   * so a script in the page (`element.click()`, a dispatched PointerEvent) cannot point an agent at data.
+   * A test that sends events of its own passes `() => true`; nothing in a page can reach this.
+   */
+  trusted?: (event: Event) => boolean;
 }
 
 /** The answer to a dock agent dropped on a Direct-only app: who it was, what to tell the person, and where they connect instead. */
@@ -127,7 +133,7 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
   const box = document.createElement("div");
   box.setAttribute("role", "status");
   box.setAttribute("data-apc-dock-unsupported", "");
-  Object.assign(box.style, { position: "fixed", zIndex: "2147483647", right: "16px", bottom: "calc(16px + var(--apc-bar-height, 0px))", maxWidth: "340px", padding: "12px 14px", borderRadius: "10px", background: "#1f1f1f", color: "#fff", font: "13px/1.45 system-ui, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.25)" });
+  Object.assign(box.style, { position: "fixed", zIndex: "2147483647", right: "16px", bottom: "calc(16px + max(var(--apc-bar-height, 0px), env(safe-area-inset-bottom, 0px)))", maxWidth: "340px", padding: "12px 14px", borderRadius: "10px", background: "#1f1f1f", color: "#fff", font: "13px/1.45 system-ui, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.25)" });
   const text = document.createElement("p");
   text.textContent = answer.message;
   Object.assign(text.style, { margin: "0 0 8px" });
@@ -211,7 +217,12 @@ export function parseAgentDragPayload(text: string): string | null {
 
 /** The innermost pointable element at a point, with its parsed target. */
 export function targetAt(x: number, y: number): { element: Element; target: FocusTarget } | null {
-  let node: Element | null = document.elementFromPoint(x, y);
+  return targetOf(document.elementFromPoint(x, y));
+}
+
+/** The innermost pointable element at or above a node, with its parsed target. */
+export function targetOf(start: Element | null): { element: Element; target: FocusTarget } | null {
+  let node: Element | null = start;
   while (node) {
     const host: Element | null = node.closest("[data-focus]");
     if (!host) return null;
@@ -284,7 +295,7 @@ function armedNote(name: string, onCancel: () => void): { box: HTMLElement; say:
   const box = document.createElement("div");
   box.setAttribute("role", "status");
   box.setAttribute("data-apc-tap-pin", "");
-  Object.assign(box.style, { position: "fixed", zIndex: "2147483646", left: "12px", right: "12px", bottom: "calc(var(--apc-bar-height, 0px) + 12px)", display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "12px", background: "#1f1f1f", color: "#fff", font: "14px/1.35 system-ui, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.3)" });
+  Object.assign(box.style, { position: "fixed", zIndex: "2147483646", left: "12px", right: "12px", bottom: "calc(max(var(--apc-bar-height, 0px), env(safe-area-inset-bottom, 0px)) + 12px)", display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "12px", background: "#1f1f1f", color: "#fff", font: "14px/1.35 system-ui, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.3)" });
   const text = document.createElement("span");
   text.style.flex = "1";
   const say = (t: string) => {
@@ -323,12 +334,20 @@ export function enablePinning(options: PinningOptions): () => void {
   // Tap to pin: the agent armed by a tap on its mark, and the note that says so.
   let note: { box: HTMLElement; say: (text: string) => void } | null = null;
   let swallowClickUntil = 0;
+  const trusted = options.trusted ?? ((e: Event) => e.isTrusted === true);
+  // Armed from the keyboard: targets can be focused and pinned with Enter or Space. What was changed is put back on let go.
+  let restore: Array<[Element, string | null]> = [];
+  let watch: ReturnType<typeof setInterval> | null = null;
   const tapPin = createTapPin({
     canTarget: options.canTarget,
     onPin: options.onPin,
     onChange: (armed) => {
       note?.box.remove();
       note = null;
+      for (const [el, prev] of restore) (prev === null ? el.removeAttribute("tabindex") : el.setAttribute("tabindex", prev));
+      restore = [];
+      if (watch) clearInterval(watch);
+      watch = null;
       for (const m of document.querySelectorAll(markSelector)) m.removeAttribute("aria-pressed");
       if (!armed) {
         document.body.classList.remove("apc-armed", "apc-dragging");
@@ -347,6 +366,11 @@ export function enablePinning(options: PinningOptions): () => void {
         document.body.classList.add("apc-armed", "apc-dragging");
         document.documentElement.setAttribute("data-apc-armed", armed);
         mark?.setAttribute("aria-pressed", "true");
+        // A route change (pushState too) or a hidden page lets go: the person is never left armed on another screen.
+        const href = location.href;
+        watch = setInterval(() => {
+          if (location.href !== href || document.visibilityState === "hidden") tapPin.cancel();
+        }, 250);
       }
       window.dispatchEvent(new CustomEvent(APC_ARMED_EVENT, { detail: { id: armed } }));
     },
@@ -354,6 +378,19 @@ export function enablePinning(options: PinningOptions): () => void {
   /** A tap on a mark of the agent bar (not a pin badge) arms its agent. */
   const armFromMark = (mark: Element, grantId: string) => {
     if (!mark.closest("apc-pin")) tapPin.toggle(grantId);
+  };
+  /** From the keyboard: arm, make every target focusable, move focus to the first and say how to pin. */
+  const armFromKey = (mark: Element, grantId: string) => {
+    if (mark.closest("apc-pin")) return;
+    if (tapPin.toggle(grantId) !== grantId) return;
+    const targets = [...document.querySelectorAll("[data-focus]")].filter((el) => targetOf(el)?.element === el);
+    for (const el of targets) {
+      if (el.hasAttribute("tabindex")) continue;
+      restore.push([el, null]);
+      el.setAttribute("tabindex", "0");
+    }
+    note?.say("Pointing your agent: Tab to an outlined item, then press Enter or Space to pin it. Escape cancels.");
+    (targets[0] as HTMLElement | undefined)?.focus();
   };
 
   const setCurrent = (next: { element: Element; target: FocusTarget } | null) => {
@@ -375,6 +412,7 @@ export function enablePinning(options: PinningOptions): () => void {
   };
 
   const onDown = (event: Event) => {
+    if (!trusted(event)) return;
     const pointer = event as PointerEvent;
     const mark = (pointer.target as Element | null)?.closest?.(markSelector);
     const grantId = mark?.getAttribute("data-grant");
@@ -389,7 +427,7 @@ export function enablePinning(options: PinningOptions): () => void {
   };
 
   const onMove = (event: PointerEvent) => {
-    if (!drag) return;
+    if (!drag || !trusted(event)) return;
     drag.moved = Math.max(drag.moved, Math.hypot(event.clientX - drag.x, event.clientY - drag.y));
     drag.ghost.style.left = `${event.clientX - 12}px`;
     drag.ghost.style.top = `${event.clientY - 12}px`;
@@ -398,18 +436,19 @@ export function enablePinning(options: PinningOptions): () => void {
     setCurrent(allowed ? hit : null);
   };
 
-  const onUp = () => {
+  const onUp = (event: Event) => {
+    if (!trusted(event)) return;
     // A touch or pen press on a mark that did not move is a tap: arm the agent (or let go of it).
     if (drag && drag.touch && drag.moved < TAP_SLOP_PX) {
       const { grantId, mark } = drag;
       end(false);
-      swallowClickUntil = Date.now() + 500;
       armFromMark(mark, grantId);
       return;
     }
     end(true);
   };
   const onCancel = () => end(false);
+  const letGo = () => tapPin.cancel();
 
   // Armed: a tap on a target pins the agent there. The press is watched on the window, so a scroll
   // (the browser cancels the pointer) or a move past the slop is not a tap.
@@ -417,32 +456,34 @@ export function enablePinning(options: PinningOptions): () => void {
   const inUi = (node: EventTarget | null) => !!(node as Element | null)?.closest?.("[data-apc-tap-pin], [data-apc-mark], apc-agents");
   const onAnyDown = (event: Event) => {
     const p = event as PointerEvent;
-    press = tapPin.armed ? { x: p.clientX, y: p.clientY, target: p.target } : null;
+    swallowClickUntil = 0; // a new press: only the click of the tap that pins is swallowed
+    press = tapPin.armed && trusted(event) ? { x: p.clientX, y: p.clientY, target: p.target } : null;
   };
   const onAnyUp = (event: Event) => {
     const p = event as PointerEvent;
     const start = press;
     press = null;
-    if (!tapPin.armed || !start || inUi(start.target) || inUi(p.target)) return;
+    if (!tapPin.armed || !start || !trusted(event) || inUi(start.target) || inUi(p.target)) return;
     if (Math.hypot(p.clientX - start.x, p.clientY - start.y) >= TAP_SLOP_PX) return;
     const result = tapPin.tap(targetAt(p.clientX, p.clientY));
+    // A tap on something that is no target lets go and passes through: a link, tab or button works at once.
+    if (result === "no_target") return tapPin.cancel();
+    // The tap that pinned, or was refused, must not run the target's own action.
     swallowClickUntil = Date.now() + 500;
-    if (result === "no_target") note?.say("Nothing to point at there. Tap something that is outlined, or Cancel.");
-    else if (result === "refused") note?.say("This agent cannot point at that. Tap another outlined target, or Cancel.");
+    if (result === "refused") note?.say("This agent cannot point at that. Tap another outlined target, or Cancel.");
   };
-  // The click after a tap that armed, pinned or was refused must not run the target's own action; while armed, no click does.
+  // Only the click that follows a pinning (or refused) tap is swallowed; every other click goes through.
   const onClickCapture = (event: Event) => {
-    if (!tapPin.armed && Date.now() > swallowClickUntil) return;
-    if (inUi(event.target)) return;
+    if (Date.now() > swallowClickUntil || inUi(event.target)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   // A keyboard (or assistive technology) activation of a mark arms it too: no pointer was involved.
   const onClick = (event: Event) => {
-    if ((event as MouseEvent).detail !== 0) return;
+    if ((event as MouseEvent).detail !== 0 || !trusted(event)) return;
     const mark = (event.target as Element | null)?.closest?.(markSelector);
     const grantId = mark?.getAttribute("data-grant");
-    if (mark && grantId) armFromMark(mark, grantId);
+    if (mark && grantId) armFromKey(mark, grantId);
   };
 
   // Native drops from another window (opt-in). During dragover only the types are readable, so the
@@ -549,6 +590,14 @@ export function enablePinning(options: PinningOptions): () => void {
     if (event.key === "Escape") {
       end(false);
       tapPin.cancel();
+      return;
+    }
+    // Armed from the keyboard: Enter or Space on a focused target pins there.
+    if ((event.key === "Enter" || event.key === " ") && tapPin.armed && trusted(event) && !inUi(event.target)) {
+      const hit = targetOf(event.target as Element | null);
+      if (!hit) return;
+      event.preventDefault();
+      if (tapPin.tap(hit) === "refused") note?.say("This agent cannot point at that. Tab to another outlined item, or press Escape.");
     }
   };
 
@@ -556,6 +605,10 @@ export function enablePinning(options: PinningOptions): () => void {
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
   window.addEventListener("pointercancel", onCancel);
+  window.addEventListener("popstate", letGo);
+  window.addEventListener("hashchange", letGo);
+  window.addEventListener("pagehide", letGo);
+  window.addEventListener("visibilitychange", letGo);
   window.addEventListener("keydown", onKey);
   window.addEventListener("pointerdown", onAnyDown, true);
   window.addEventListener("pointerup", onAnyUp, true);
@@ -581,6 +634,10 @@ export function enablePinning(options: PinningOptions): () => void {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
     window.removeEventListener("pointercancel", onCancel);
+    window.removeEventListener("popstate", letGo);
+    window.removeEventListener("hashchange", letGo);
+    window.removeEventListener("pagehide", letGo);
+    window.removeEventListener("visibilitychange", letGo);
     window.removeEventListener("keydown", onKey);
     window.removeEventListener("pointerdown", onAnyDown, true);
     window.removeEventListener("pointerup", onAnyUp, true);

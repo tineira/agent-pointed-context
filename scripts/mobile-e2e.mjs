@@ -23,14 +23,14 @@ const APPS = [
   { name: "Pulse", url: opt("pulse", "http://localhost:5301"), path: "/customers" },
   { name: "Signals", url: opt("signals", "http://localhost:5302"), path: "/" },
 ];
-const EXE = args.find((a) => !a.startsWith("--")) ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const EXE = args.find((a) => !a.startsWith("--")) ?? (process.platform === "win32" ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" : "google-chrome");
 const PORT = 9347;
 const { width, height } = APC_MOBILE_VIEWPORT;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 const profileDir = mkdtempSync(join(tmpdir(), "apc-mobile-"));
-const chrome = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${profileDir}`, "--headless=new", "--no-first-run", "--disable-gpu", `--window-size=${width},${height}`, "about:blank"], { stdio: "ignore" });
+const chrome = spawn(EXE, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${profileDir}`, "--headless=new", "--no-first-run", ...(process.platform === "linux" ? ["--no-sandbox"] : []), "--disable-gpu", `--window-size=${width},${height}`, "about:blank"], { stdio: "ignore" });
 
 async function connect() {
   for (let i = 0; i < 60; i++) {
@@ -201,7 +201,7 @@ for (const app of APPS) {
   };
 
   const checks = apcConformance(adapter).filter((c) => c.name.includes("mobile"));
-  if (checks.length !== 2) throw new Error(`${app.name}: expected 2 mobile checks, got ${checks.length}`);
+  if (checks.length !== 3) throw new Error(`${app.name}: expected 3 mobile checks, got ${checks.length}`);
   for (const check of checks) {
     try {
       await check.run();
@@ -214,7 +214,7 @@ for (const app of APPS) {
     }
   }
 
-  // Beyond the suite: Cancel and Escape let go, a touch drag pins, and a tap on something that is no target keeps the agent armed.
+  // Beyond the suite: Cancel and Escape let go, a touch drag pins, a tap elsewhere lets go and passes through, scripts and route changes do nothing or let go, and the keyboard pins.
   const first = [...grants.keys()][0];
   const mark = await evaluate(visibleMark(first));
   const extra = async (name, run) => {
@@ -254,14 +254,47 @@ for (const app of APPS) {
     await tap(mark.x, mark.y);
     if ((await armedNow()) !== null) throw new Error("still armed");
   });
-  await extra("a tap on something that is no target keeps the agent armed and pins nothing", async () => {
+  await extra("a tap on something that is no target lets go and passes through to a button; nothing is pinned", async () => {
+    await evaluate(`(() => { const b = document.createElement("button"); b.id = "apc-probe"; b.textContent = "probe"; Object.assign(b.style, { position: "fixed", top: "100px", left: "10px", width: "100px", height: "50px", zIndex: "2147483000" }); b.onclick = () => { window.__probeClicks = (window.__probeClicks || 0) + 1; }; document.body.append(b); })()`);
     await tap(mark.x, mark.y);
-    await tap(width - 3, 4);
+    if ((await armedNow()) !== first) throw new Error("not armed");
+    await tap(60, 125);
+    const clicks = await evaluate(`window.__probeClicks || 0`);
     const still = await armedNow();
-    const before = (await stateOf()).grants.find((g) => g.id === first)?.pin;
+    await evaluate(`document.getElementById("apc-probe").remove()`);
+    if (clicks !== 1) throw new Error(`the button got ${clicks} clicks, expected 1 (the tap must pass through)`);
+    if (still !== null) throw new Error("still armed after a tap on something that is no target");
+    if ((await stateOf()).grants.find((g) => g.id === first)?.pin) throw new Error("a pin was made");
+  });
+  await extra("a script cannot arm or pin: element.click() and synthetic pointer events do nothing", async () => {
+    const out = await evaluate(`(() => {
+      const mark = [...document.querySelectorAll("[data-apc-mark]")].find((e) => !e.closest("apc-pin") && e.getBoundingClientRect().width > 0);
+      mark.click();
+      const armedAfterClick = document.documentElement.dataset.apcArmed ?? null;
+      const fire = (el, type) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerType: "touch", pointerId: 7, clientX: 20, clientY: 20, button: 0 }));
+      fire(mark, "pointerdown");
+      fire(window, "pointerup");
+      return { armedAfterClick, armedAfterPointer: document.documentElement.dataset.apcArmed ?? null, drag: document.body.classList.contains("apc-dragging") };
+    })()`);
+    if (out.armedAfterClick !== null || out.armedAfterPointer !== null || out.drag) throw new Error(JSON.stringify(out));
+    // Armed by the person, a script's pointer events on a target pin nothing.
     await tap(mark.x, mark.y);
-    if (still !== first) throw new Error("let go after a tap on nothing");
-    if (before) throw new Error("a pin was made");
+    const point = await evaluate(`(${POINT_FOR})(${JSON.stringify(want(targets[0]))})`);
+    await evaluate(`(() => { const el = document.elementFromPoint(${point.x}, ${point.y}); for (const t of ["pointerdown", "pointerup", "click"]) el.dispatchEvent(new PointerEvent(t, { bubbles: true, cancelable: true, pointerType: "touch", clientX: ${point.x}, clientY: ${point.y}, button: 0 })); })()`);
+    await sleep(300);
+    const pin = (await stateOf()).grants.find((g) => g.id === first)?.pin;
+    if ((await armedNow()) === first) await tap(mark.x, mark.y);
+    await reload(first); // the app's own handler for the script's click may have navigated
+    if (pin) throw new Error(`a script pinned: ${JSON.stringify(pin)}`);
+  });
+  await extra("a route change lets go", async () => {
+    await tap(mark.x, mark.y);
+    if ((await armedNow()) !== first) throw new Error("not armed");
+    await evaluate(`history.pushState({}, "", location.pathname + location.search + "#route-change")`);
+    await sleep(600);
+    const still = await armedNow();
+    await evaluate(`history.replaceState({}, "", location.pathname + location.search)`);
+    if (still !== null) throw new Error("still armed after the URL changed");
   });
   await extra("a finger can also drag the mark onto a target", async () => {
     const point = await evaluate(`(${POINT_FOR})(${JSON.stringify(want(targets[1]))})`);
@@ -275,6 +308,27 @@ for (const app of APPS) {
     await sleep(500);
     const pin = (await stateOf()).grants.find((g) => g.id === first)?.pin;
     if (!pin || pin.id !== targets[1].id) throw new Error(`pin is ${JSON.stringify(pin)}`);
+  });
+  await extra("from the keyboard: Enter on the mark arms, focus moves to a target, Enter on it pins", async () => {
+    const key = async (type, k, code, vk, text) => send("Input.dispatchKeyEvent", { type, key: k, code, windowsVirtualKeyCode: vk, ...(text ? { text } : {}) });
+    const press = async (k, code, vk, text) => {
+      await key(text ? "keyDown" : "rawKeyDown", k, code, vk, text);
+      await key("keyUp", k, code, vk);
+      await sleep(300);
+    };
+    await evaluate(`[...document.querySelectorAll('[data-apc-mark][data-grant="${first}"]')].find((e) => !e.closest("apc-pin") && e.getBoundingClientRect().width > 0).focus()`);
+    await press("Enter", "Enter", 13, "\r");
+    if ((await armedNow()) !== first) throw new Error("Enter on the mark did not arm it");
+    const where = await evaluate(`JSON.stringify({ on: document.activeElement?.closest?.("[data-focus]")?.getAttribute("data-focus") ?? null, say: document.querySelector("[data-apc-tap-pin]")?.textContent })`);
+    const { on, say } = JSON.parse(where);
+    if (!on) throw new Error("focus did not move to a target");
+    if (!/Enter or Space/.test(say)) throw new Error(`the note does not say how to pin: ${say}`);
+    await press("Tab", "Tab", 9);
+    await press("Enter", "Enter", 13, "\r");
+    const pin = (await stateOf()).grants.find((g) => g.id === first)?.pin;
+    if (!pin) throw new Error("Enter on a focused target did not pin");
+    if ((await armedNow()) !== null) throw new Error("still armed after the pin");
+    if ((await evaluate(`document.querySelectorAll('[data-focus][tabindex="0"]').length`)) > 0 && !(await evaluate(`[...document.querySelectorAll("[data-focus]")].every((e) => e.getAttribute("tabindex") !== "0" || e.matches("a, button, input"))`))) throw new Error("targets keep the tabindex the pin mode gave them");
   });
 }
 

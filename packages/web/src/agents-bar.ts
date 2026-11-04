@@ -465,7 +465,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
         unpin.className = "apc-agents__unpin";
         unpin.textContent = "×";
         unpin.setAttribute("aria-label", `Remove ${a.name}'s pin`);
-        unpin.addEventListener("click", () => this.emit("apc-unpin", a.id));
+        unpin.addEventListener("click", (e) => e.isTrusted && this.emit("apc-unpin", a.id));
         pin.append(dot, unpin);
         parts.push(pin);
       }
@@ -484,7 +484,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
           unlink.textContent = "unlink";
           unlink.title = `Show ${a.name}'s two connections as two agents again. Nothing else changes.`;
           unlink.setAttribute("aria-label", `Unlink ${a.name}`);
-          unlink.addEventListener("click", () => this.emit("apc-unlink", a.id));
+          unlink.addEventListener("click", (e) => e.isTrusted && this.emit("apc-unlink", a.id));
           parts.push(unlink);
         }
       }
@@ -495,7 +495,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
       revoke.textContent = armed ? "Revoke?" : "⊘";
       revoke.title = armed ? labels.revokeArmed : labels.revoke;
       revoke.setAttribute("aria-label", armed ? labels.revokeArmed : `Revoke ${a.name}`);
-      revoke.addEventListener("click", () => this.revokeClicked(a.id));
+      revoke.addEventListener("click", (e) => e.isTrusted && this.revokeClicked(a.id));
       revoke.addEventListener("keydown", (e) => e.key === "Escape" && this.disarm(a.id));
       parts.push(revoke);
       node.root.replaceChildren(...parts);

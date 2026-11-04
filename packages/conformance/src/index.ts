@@ -437,18 +437,28 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(!("focus" in d) && !("view" in d) && r.structuredContent === undefined, "it carries no focus, view or other data");
       expect(ms < 9000, `it ended at ${ms} ms, not soon after the revoke`);
     }),
-    ...(app.page.mobile ? mobileChecks(app, app.page.mobile) : []),
+    ...mobileChecks(app, app.page.mobile),
     ...(app.link ? linkChecks(app, app.link) : []),
   ];
 }
 
 /** The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin. */
-function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage): ConformanceCheck[] {
+function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): ConformanceCheck[] {
   const [first, second] = app.targets;
   const { width, height } = APC_MOBILE_VIEWPORT;
   const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (${app.profile}): mobile ${width}x${height}: ${name}`, run });
   return [
+    check("the page adapter for a phone is given (required of an app that claims 0.6.0 or later)", async () => {
+      if (mobile) return;
+      const { mcpUrl } = await app.connect();
+      const request = new Request(`${new URL(mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
+      const response = await (app.fetch ? app.fetch(request) : fetch(request));
+      const claimed = ((await response.json().catch(() => ({}))) as { standard?: unknown }).standard;
+      expect(typeof claimed === "string" && compareStandard(claimed, "0.6.0") < 0, `apc.json claims standard ${String(claimed)}, which requires the mobile rule to be checked: give page.mobile in the adapter (ApcMobilePage: agentBar, pinByTouch, unpinByTouch)`);
+    }),
+
     check("every agent is shown in the page, and the agent bar cannot be collapsed or hidden", async () => {
+      if (!mobile) return;
       const a = await app.connect();
       const b = await app.connect();
       await app.page.setOpen(true);
@@ -458,6 +468,7 @@ function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage): ConformanceChe
     }),
 
     check("a person pins with a finger, no mouse drag, and the agent reads the pin; unpin works by touch too", async () => {
+      if (!mobile) return;
       const { mcpUrl, grantId } = await app.connect();
       await app.page.setOpen(true);
       await app.page.showView();

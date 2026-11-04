@@ -204,9 +204,9 @@ test("the suite catches a page that collapses its agent bar, hides an agent or c
   await assert.rejects(run({ unpinByTouch: async () => false }, "pins with a finger"), /no way to remove the pin with a finger/);
   // A page that says it removed the pin but did not.
   await assert.rejects(run({ unpinByTouch: async () => true }, "pins with a finger"), /still there after the person removed it by touch/);
-  // Left out, the mobile checks are skipped.
-  assert.equal(apcConformance({ ...app, page: { ...app.page, mobile: undefined } }).filter((c) => c.name.includes("mobile")).length, 0);
-  assert.equal(apcConformance(app).filter((c) => c.name.includes("mobile")).length, 2);
+  // Left out, an app that claims 0.6.0 or later fails (apc.json says what it claims); the others have nothing to check.
+  await assert.rejects(apcConformance({ ...app, page: { ...app.page, mobile: undefined } }).find((c) => c.name.includes("adapter for a phone is given"))!.run(), /requires the mobile rule to be checked: give page.mobile/);
+  assert.equal(apcConformance(app).filter((c) => c.name.includes("mobile")).length, 3);
 });
 
 test("runConformance reports each check", async () => {

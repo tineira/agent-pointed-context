@@ -135,7 +135,7 @@ export function definePinBadge(tag = "apc-pin"): void {
         unpin.type = "button";
         unpin.className = "apc-pin__unpin";
         unpin.textContent = "×";
-        unpin.addEventListener("click", () => this.value && this.dispatchEvent(new CustomEvent("apc-unpin", { detail: { id: this.value.id }, bubbles: true })));
+        unpin.addEventListener("click", (e) => e.isTrusted && this.value && this.dispatchEvent(new CustomEvent("apc-unpin", { detail: { id: this.value.id }, bubbles: true })));
         // The badge dims from the press until the drop or Esc (the drag itself is enablePinning's).
         mark.addEventListener("pointerdown", (e) => (e as PointerEvent).button === 0 && this.dim());
         this.parts = { mark, icon, check, unpin };

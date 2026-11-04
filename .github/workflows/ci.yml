@@ -24,6 +24,30 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  # The mobile rule (APC 0.6, TIN-608) in a real browser: Chrome at 375x812 with real touch events against Pulse and
+  # Signals (their dev servers), running the conformance mobile checks. There is no DOM library in `pnpm test`, so the
+  # real rendered bar is checked here, not in the node tests. It gates nothing: a deploy does not wait for it.
+  mobile-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Start Pulse and Signals
+        run: |
+          (cd apps/demo && nohup node node_modules/vite/bin/vite.js --port 5301 --strictPort > /tmp/pulse.log 2>&1 &)
+          (cd apps/signals && nohup node node_modules/vite/bin/vite.js --port 5302 --strictPort > /tmp/signals.log 2>&1 &)
+          for p in 5301 5302; do
+            for i in $(seq 1 60); do curl -sf "http://localhost:$p/" > /dev/null && break; sleep 1; done
+          done
+      - run: node scripts/mobile-e2e.mjs
+      - if: failure()
+        run: tail -n 40 /tmp/pulse.log /tmp/signals.log
+
   # A PR that changes more than docs adds an entry to CHANGELOG.md (or the standard's changelog), or carries the
   # no-changelog label (AGENTS.md, TIN-603). Pull requests only: it never runs on a push to main and gates no deploy.
   changelog:
