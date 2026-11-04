@@ -11,7 +11,7 @@
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/", "/v1", "/v1/*", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*", "/media/*"]
+    "run_worker_first": ["/", "/v1", "/v1/*", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*", "/media", "/media/*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "Hub" }]

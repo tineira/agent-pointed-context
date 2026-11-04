@@ -54,6 +54,92 @@ export function ifRangeMatches(ifRange: string | null, headers: Headers): boolea
   return modified !== null && value === modified.trim();
 }
 
+type Bytes = ReadableStream<Uint8Array>;
+
+/**
+ * At most this much of a file is read to learn its size when the asset layer does not give it (inside workerd its
+ * GET has no Content-Length header). A larger file is sent whole, as 200 without Accept-Ranges.
+ */
+export const MAX_COUNTED = 16 * 1024 * 1024;
+
+/**
+ * The bytes from..to (exclusive) of a stream, streamed: the bytes before `from` are skipped, and once `to` is
+ * reached the rest of the source is cancelled. Memory stays at one chunk whatever the file's size.
+ */
+export function sliceStream(source: Bytes, from: number, to: number): Bytes {
+  const reader = source.getReader();
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (;;) {
+        if (offset >= to) {
+          controller.close();
+          await reader.cancel();
+          return;
+        }
+        const { done, value } = await reader.read();
+        if (done) return controller.close();
+        const at = offset;
+        offset += value.byteLength;
+        const [a, b] = [Math.max(from - at, 0), Math.min(to - at, value.byteLength)];
+        if (b > a) return controller.enqueue(value.subarray(a, b));
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
+
+/** A stream that sends its length (workerd drops a Content-Length header set on a plain stream body). */
+function fixedLength(stream: Bytes, length: number): Bytes {
+  const Fixed = (globalThis as { FixedLengthStream?: new (length: number) => TransformStream<Uint8Array, Uint8Array> }).FixedLengthStream;
+  if (!Fixed) return stream;
+  const fixed = new Fixed(length);
+  void stream.pipeTo(fixed.writable).catch(() => undefined);
+  return fixed.readable;
+}
+
+/** A stream of chunks already read, then the rest of the reader (if any). */
+function replay(chunks: Uint8Array[], reader?: ReadableStreamDefaultReader<Uint8Array>): Bytes {
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const next = chunks.shift();
+      if (next) return controller.enqueue(next);
+      const read = reader ? await reader.read() : { done: true as const, value: undefined };
+      if (read.done) controller.close();
+      else controller.enqueue(read.value);
+    },
+    cancel: (reason) => reader?.cancel(reason),
+  });
+}
+
+/**
+ * Counts a body of unknown size, reading at most `max` bytes: its size and its bytes again as a stream (none
+ * when `keep` is false), or, past `max`, the whole body as a stream (null when not kept).
+ */
+async function count(body: Bytes, max: number, keep: boolean): Promise<{ size: number; body: Bytes | null } | { over: Bytes | null }> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { size, body: keep ? replay(chunks) : null };
+    size += value.byteLength;
+    if (keep) chunks.push(value);
+    if (size > max) {
+      if (keep) return { over: replay(chunks, reader) };
+      await reader.cancel();
+      return { over: null };
+    }
+  }
+}
+
+/** The asset's answer as it is, without a body for a HEAD (the Worker asks the asset layer with GET). */
+async function asIs(request: Request, asset: Response): Promise<Response> {
+  if (request.method !== "HEAD" || asset.body === null) return asset;
+  await asset.body.cancel();
+  return new Response(null, { status: asset.status, statusText: asset.statusText, headers: asset.headers });
+}
+
 /**
  * The response for a GET or HEAD of a media file, given the asset's own response to the same request. Anything
  * but a plain 200 (a 304, a 404, a redirect) and the SPA's HTML fallback for a missing file pass through as
@@ -63,45 +149,47 @@ export function ifRangeMatches(ifRange: string | null, headers: Headers): boolea
  * For a HEAD, `asset` may be the asset's answer to a GET (the asset layer's HEAD has no Content-Length, so the
  * Worker asks with GET): its body is never sent, only counted when the asset gives no length.
  */
-export async function withByteRanges(request: Request, asset: Response): Promise<Response> {
-  if (asset.status !== 200 || (request.method !== "GET" && request.method !== "HEAD")) return asset;
-  if (/^text\/html\b/i.test(asset.headers.get("content-type") ?? "")) return asset;
-  const encoding = asset.headers.get("content-encoding");
-  if (encoding && encoding.toLowerCase() !== "identity") return asset;
+export async function withByteRanges(request: Request, asset: Response, maxCounted = MAX_COUNTED): Promise<Response> {
   const head = request.method === "HEAD";
+  if (!head && request.method !== "GET") return asset;
+  const encoding = asset.headers.get("content-encoding");
+  const html = /^text\/html\b/i.test(asset.headers.get("content-type") ?? "");
+  if (asset.status !== 200 || html || (encoding && encoding.toLowerCase() !== "identity")) return asIs(request, asset);
   const headers = new Headers(asset.headers);
   headers.set("accept-ranges", "bytes");
   const header = request.headers.get("range");
   const ranged = header !== null && ifRangeMatches(request.headers.get("if-range"), asset.headers);
   if (!head && !ranged) return new Response(asset.body, { status: 200, statusText: asset.statusText, headers });
 
-  // The file's size: its Content-Length, or else its bytes, counted (inside the runtime a fetched body's length
-  // is not always a header). The media files are small (well under a MB): a range is cut from the body in memory.
+  // The file's size: its Content-Length, or else its bytes, counted up to maxCounted.
   const length = asset.headers.get("content-length");
   let size = length !== null && /^\d+$/.test(length) ? Number(length) : null;
-  let bytes: Uint8Array<ArrayBuffer> | null = null;
-  if (size === null && asset.body) {
-    bytes = new Uint8Array(await asset.arrayBuffer());
-    size = bytes.byteLength;
-  }
-  /** The bytes from..to (exclusive) to send: none for a HEAD, the asset's own stream for the whole file. */
-  const body = async (from: number, to: number) => {
-    if (head || to === from) {
-      if (!bytes) await asset.body?.cancel();
-      return null;
+  let body: Bytes | null = asset.body;
+  if (size === null && body) {
+    const counted = await count(body, maxCounted, !head);
+    if ("over" in counted) {
+      headers.delete("accept-ranges");
+      return new Response(counted.over, { status: 200, statusText: asset.statusText, headers });
     }
-    if (!bytes && from === 0 && to === size) return asset.body;
-    bytes ??= new Uint8Array(await asset.arrayBuffer());
-    return from === 0 && to === bytes.byteLength ? bytes : bytes.slice(from, to);
-  };
+    ({ size, body } = counted);
+  }
   // No size at all (a HEAD the asset answered without one): say what the asset said.
   if (size === null) return new Response(null, { status: 200, statusText: asset.statusText, headers });
+
+  /** The bytes from..to (exclusive), streamed; none for a HEAD. */
+  const send = async (from: number, to: number): Promise<Bytes | null> => {
+    if (head || !body || to === from) {
+      await body?.cancel();
+      return null;
+    }
+    return fixedLength(from === 0 && to === size ? body : sliceStream(body, from, to), to - from);
+  };
   headers.set("content-length", String(size));
   const range = ranged ? parseRange(header, size) : null;
-  if (range === null) return new Response(await body(0, size), { status: 200, statusText: asset.statusText, headers });
+  if (range === null) return new Response(await send(0, size), { status: 200, statusText: asset.statusText, headers });
 
   if (range === "unsatisfiable") {
-    await body(0, 0);
+    await send(0, 0);
     headers.delete("content-type");
     headers.set("content-range", `bytes */${size}`);
     headers.set("content-length", "0");
@@ -109,5 +197,5 @@ export async function withByteRanges(request: Request, asset: Response): Promise
   }
   headers.set("content-range", `bytes ${range.start}-${range.end}/${size}`);
   headers.set("content-length", String(range.end - range.start + 1));
-  return new Response(await body(range.start, range.end + 1), { status: 206, headers });
+  return new Response(await send(range.start, range.end + 1), { status: 206, headers });
 }

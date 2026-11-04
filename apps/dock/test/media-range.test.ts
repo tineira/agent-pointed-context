@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { test } from "node:test";
 import type { Hono } from "hono";
-import { ifRangeMatches, parseRange, withByteRanges } from "../src/worker/range.ts";
+import { ifRangeMatches, MAX_COUNTED, parseRange, sliceStream, withByteRanges } from "../src/worker/range.ts";
 
 const ETAG = '"124963edbe64372348f02f396f07e851"';
 const MODIFIED = "Tue, 03 Nov 2026 12:00:00 GMT";
@@ -144,6 +144,92 @@ test("without a Content-Length the body is counted; the asset's other answers pa
   assert.equal(await withByteRanges(get({ range: "bytes=0-9" }), gzipped), gzipped);
 });
 
+test("a HEAD that passes through has no body, and the GET the Worker made for it is cancelled", async () => {
+  const notFound = synthetic(10_000);
+  const missing = await withByteRanges(get({ range: "bytes=0-9" }, "HEAD"), new Response(notFound.stream, { status: 404, statusText: "Not Found", headers: { "x-kept": "yes" } }));
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get("x-kept"), "yes");
+  assert.equal(missing.body, null);
+  assert.equal(notFound.cancelled(), true);
+  const spa = synthetic(10_000);
+  const html = await withByteRanges(get({}, "HEAD"), new Response(spa.stream, { headers: { "content-type": "text/html" } }));
+  assert.equal(html.status, 200);
+  assert.equal(html.body, null);
+  assert.equal(spa.cancelled(), true);
+});
+
+/** A body of `size` bytes, made as it is read (byte i is i % 251), that says how far it was read and whether it was cancelled. */
+function synthetic(size: number, chunk = 64 * 1024) {
+  let sent = 0;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= size) return controller.close();
+      const n = Math.min(chunk, size - sent);
+      const out = new Uint8Array(n);
+      for (let i = 0; i < n; i++) out[i] = (sent + i) % 251;
+      sent += n;
+      controller.enqueue(out);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  return { stream, read: () => sent, cancelled: () => cancelled };
+}
+const expected = (from: number, to: number) => Uint8Array.from({ length: to - from }, (_, i) => (from + i) % 251);
+
+test("sliceStream skips to the range, stops at its end, and cancels the rest of the source", async () => {
+  for (const [from, to] of [[0, 10], [5, 70], [63, 64], [64, 128], [100, 300], [290, 300]] as const) {
+    const source = synthetic(300, 64);
+    const out = new Uint8Array(await new Response(sliceStream(source.stream, from, to)).arrayBuffer());
+    assert.deepEqual(out, expected(from, to), `${from}-${to}`);
+    assert.ok(source.read() < to + 64, `${from}-${to} read no further than the chunk holding its end`);
+    if (to < 300) assert.equal(source.cancelled(), true, `${from}-${to} cancelled the rest`);
+  }
+});
+
+test("a large file with a Content-Length: the range is streamed, never the whole file held or read", async () => {
+  const size = 48 * 1024 * 1024;
+  const source = synthetic(size);
+  const big = new Response(source.stream, { headers: { "content-type": "video/mp4", "content-length": String(size) } });
+  const from = 20 * 1024 * 1024 + 7;
+  const r = await withByteRanges(get({ range: `bytes=${from}-${from + 999}` }), big);
+  assert.equal(r.status, 206);
+  assert.equal(r.headers.get("content-range"), `bytes ${from}-${from + 999}/${size}`);
+  assert.equal(r.headers.get("content-length"), "1000");
+  assert.deepEqual(await bytes(r), expected(from, from + 1000));
+  assert.ok(source.read() < from + 1000 + 64 * 1024, "nothing past the range is read");
+  assert.equal(source.cancelled(), true);
+});
+
+test("a file with no Content-Length over the counting limit is sent whole, 200, without Accept-Ranges", async () => {
+  const unsized = (size: number) => {
+    const source = synthetic(size, 256);
+    return { source, response: new Response(source.stream, { headers: { "content-type": "video/mp4", etag: ETAG } }) };
+  };
+  const over = unsized(5000);
+  const whole = await withByteRanges(get({ range: "bytes=0-9" }), over.response, 1000);
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get("accept-ranges"), null);
+  assert.equal(whole.headers.get("content-range"), null);
+  assert.equal(whole.headers.get("etag"), ETAG);
+  assert.deepEqual(await bytes(whole), expected(0, 5000), "the bytes read to count come first, then the rest");
+  const head = unsized(5000);
+  const headOver = await withByteRanges(get({ range: "bytes=0-9" }, "HEAD"), head.response, 1000);
+  assert.equal(headOver.status, 200);
+  assert.equal(headOver.headers.get("accept-ranges"), null);
+  assert.equal(headOver.body, null);
+  assert.equal(head.source.cancelled(), true);
+  assert.ok(head.source.read() <= 1000 + 256, "a HEAD stops counting at the limit");
+  // Under the limit, the counted body is sliced as before.
+  const under = await withByteRanges(get({ range: "bytes=4990-" }), unsized(5000).response, 10_000);
+  assert.equal(under.status, 206);
+  assert.equal(under.headers.get("content-range"), "bytes 4990-4999/5000");
+  assert.deepEqual(await bytes(under), expected(4990, 5000));
+  assert.equal(MAX_COUNTED, 16 * 1024 * 1024);
+});
+
 // The Worker itself: Node has no Workers runtime; importing the app must not construct a Durable Object.
 const hooks = registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -196,5 +282,5 @@ test("the Worker answers /media/apc-hero.mp4 with byte ranges, and the clip runs
   // Without run_worker_first the asset layer would serve /media/* itself, and ignore the Range.
   const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
   const first = JSON.parse(wrangler.match(/"run_worker_first":\s*(\[[^\]]*\])/)![1]!) as string[];
-  assert.ok(first.includes("/media/*"), "/media/* runs the Worker first");
+  assert.ok(first.includes("/media/*") && first.includes("/media"), "/media and /media/* run the Worker first");
 });
