@@ -123,7 +123,8 @@ const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>You
 <p id="intro">Orders placed before noon ship the same day.</p>
 <form><fieldset><legend>Shipping method</legend>
 <label><input type="radio" name="ship" value="dhl"> DHL Express</label>
-<label><input type="radio" name="ship" value="post" checked> Registered post</label></fieldset>
+<label><input type="radio" name="ship" value="post" checked> Registered post</label>
+<label for="saved-sel">Saved</label><select id="saved-sel" style="position:absolute;left:-9999px"><option>４１１１１１１１１１１１１１１１</option></select></fieldset>
 <label><input type="checkbox" name="insurance" checked> Insurance</label>
 <label><input type="checkbox" name="saved" checked> Visa 4111 1111 1111 1111</label>
 <label>Country <select name="country"><option>Peru</option><option selected>Chile</option></select></label>
@@ -132,8 +133,9 @@ const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>You
 <label>Password <input type="password" value="hunter2"></label>
 <label>Ingresa tu RUN <input id="run" name="run" value="12.345.678-5"></label>
 <label>Reference <input id="ref" name="ref" value="de89 3704 0044 0532 0130 00"></label>
-<input type="hidden" name="csrf" value="HIDDENTOKEN">
-<p id="promo" style="position:relative">Promo codes apply at the end.<input id="bait" name="data" value="BAITVALUE" style="opacity:0;position:absolute;left:0;top:0;width:100%;height:100%"></p>
+<input type="hidden" name="csrf" value="HIDDENTOKEN">${'<input type="hidden" name="tracking" value="t">'.repeat(20)}
+<label for="rt" id="rt-label">Promo note</label> <input id="rt" role="textbox" value="ROLEVALUE" style="opacity:0;position:absolute">
+<p id="promo" style="position:relative">Promo codes apply at the end.<input id="bait" name="data" value="BAITVALUE" style="opacity:0.02;position:absolute;left:0;top:0;width:100%;height:100%"></p>
 <p id="total">Total: $42.00</p></form>
 <cvv-box id="cvv" style="display:block;width:200px"></cvv-box>
 <script>
@@ -324,6 +326,22 @@ try {
     await fresh.drop("#b");
     await reads(/SPRING/, "fresh.localhost");
     console.log("C6. Never ask sends every drop at once, sensitive sites included");
+
+    // C7. Not here sticks under Never ask (TIN-571): on a site set to Not here, and when chosen on the card that
+    // asks once more after an update (an install has seen it: undone here, as an update from before would be).
+    await other.drop("#a");
+    assert.equal((await other.buttons()).size, 0, "no card on a Not here site under Never ask");
+    assert.match((await latest()).page_text, /SPRING/, "and nothing sent");
+    await cdp("Runtime.evaluate", { expression: "chrome.storage.local.set({ formNoticeAll: false, formNoticeSites: [] })", awaitPromise: true }, swSession);
+    const updated = await open("updated.localhost");
+    await updated.drop("#a");
+    const offered = await until("the card that asks once more", async () => ((await updated.buttons()).size ? [...(await updated.buttons()).keys()].sort() : null), 10_000);
+    assert.deepEqual(offered, ["always", "never", "once"]);
+    await updated.click("never");
+    await updated.drop("#a");
+    assert.equal((await updated.buttons()).size, 0, "Not here on that card sticks");
+    assert.match((await latest()).page_text, /SPRING/, "and nothing was sent");
+    console.log("C7. under Never ask, Not here sticks, also when chosen on the card that asks once more");
     console.log("all passed");
   } else {
     // 1. First drop: the extension asks the dock; the person allows it; the reading arrives.
@@ -573,7 +591,7 @@ try {
         return r?.reading?.taken_at && r.reading.taken_at !== before ? r.page_text : null;
       });
     };
-    const SECRETS = ["4111", "hunter2", "HIDDENTOKEN", "12.345", "de89", "BAITVALUE", "123\n"];
+    const SECRETS = ["4111", "４１１１", "hunter2", "HIDDENTOKEN", "12.345", "de89", "BAITVALUE", "ROLEVALUE", "123\n"];
     const noSecret = (text) => {
       for (const secret of SECRETS) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
     };
@@ -603,10 +621,15 @@ try {
     const cvv = await dropOnCheckout('(document.querySelector("#cvv").shadowRoot.querySelector("input"))');
     assert.match(cvv, /- CVV: \(left out as sensitive\) \(pointed at\)/);
     noSecret(cvv);
-    // A field the person cannot see (opacity 0) over a paragraph: nothing of it.
+    // A field the person can hardly see (opacity 0.02) laid over a paragraph, and a transparent role=textbox reached
+    // through its visible label: left out. The off-screen select with a fullwidth card number was never a choice.
     const bait = await dropOnCheckout("#promo");
-    assert.doesNotMatch(bait, /\(pointed at\)/);
+    assert.match(bait, /- data: \(left out as sensitive\) \(pointed at\)/);
     noSecret(bait);
+    const role = await dropOnCheckout("#rt-label");
+    assert.match(role, /- Promo note: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(role);
+    assert.doesNotMatch(filled, /Saved/, "an off-screen select is not a choice");
     await cdp("Target.closeTarget", { targetId: checkoutId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));

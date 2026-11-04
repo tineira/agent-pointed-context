@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, LEFT_OUT, shapeReading } from "../../dock/src/worker/reading.ts";
-import { formState, pickScope, SCOPE_MAX, visuallyHidden, type Control, type Seen } from "../src/read.ts";
+import { controlVisible, countable, formState, pickScope, SCOPE_MAX, visuallyHidden, type Control, type Seen } from "../src/read.ts";
+
+const shown: Seen = { checkVisible: true, opacity: 1, textAlpha: 1, width: 200, height: 24, left: 10, top: 10, right: 210, bottom: 34, pageWidth: 1200, pageHeight: 900, position: "static", clip: "auto", clipPath: "none", ariaHidden: false };
 
 const control = (over: Partial<Control>): Control => ({ kind: "text", type: "text", label: null, group: null, groupKey: null, name: null, id: null, autocomplete: null, placeholder: null, checked: false, value: "", pointed: false, visible: true, ...over });
 const radio = (label: string, checked: boolean, over: Partial<Control> = {}) => control({ kind: "radio", type: "radio", label, group: "Shipping method", groupKey: "name:ship", name: "ship", checked, ...over });
@@ -90,11 +92,12 @@ test("the review's examples are all held back (TIN-571)", () => {
 });
 
 test("a field the person cannot see is never read: transparent, of no size, off the page, clipped, hidden from assistive technology", () => {
-  const shown: Seen = { checkVisible: true, opacity: 1, width: 200, height: 24, left: 10, top: 10, right: 210, bottom: 34, pageWidth: 1200, pageHeight: 900, position: "static", clip: "auto", clipPath: "none", ariaHidden: false };
   assert.equal(visuallyHidden(shown), false);
   for (const [why, over] of [
     ["opacity: 0 (checkVisibility)", { checkVisible: false }],
     ["near-zero opacity", { opacity: 0.001 }],
+    ["opacity 0.02, the second review's covering input", { opacity: 0.02 }],
+    ["opacity 0.099", { opacity: 0.099 }],
     ["zero size", { width: 0, height: 0 }],
     ["1 px (screen reader only)", { width: 1, height: 1 }],
     ["off the page to the left", { left: -10010, right: -9810 }],
@@ -103,8 +106,44 @@ test("a field the person cannot see is never read: transparent, of no size, off 
     ["clip-path inset", { clipPath: "inset(50%)" }],
     ["aria-hidden", { ariaHidden: true }],
   ] as const) assert.equal(visuallyHidden({ ...shown, ...over }), true, why);
-  // The bait field: a text field under the pointer that the person cannot see sends nothing.
-  assert.equal(formState([typed("Promo", "BAITVALUE", { visible: false })]), null);
+  // Transparent text counts for a field one types in, not for a radio.
+  assert.equal(visuallyHidden({ ...shown, textAlpha: 0 }, true), true);
+  assert.equal(visuallyHidden({ ...shown, textAlpha: 0 }), false);
+  // The bait field: a text field under the pointer that the person cannot see sends its label and "left out", never its value.
+  assert.deepEqual(formState([typed("Promo", "BAITVALUE", { visible: false })])!.fields, [{ label: "Promo", value: LEFT_OUT, kind: "typed", pointed: true }]);
+});
+
+test("only a native radio or checkbox is seen through a label the person sees; a select, a typed field or a role never is (second review)", () => {
+  const hidden: Seen = { ...shown, opacity: 0 };
+  // A custom-styled radio: the native input is transparent under a styled label.
+  assert.equal(controlVisible(true, false, hidden, [shown]), true);
+  assert.equal(controlVisible(true, false, { ...hidden, ariaHidden: true }, [shown]), false, "aria-hidden on the input itself");
+  assert.equal(controlVisible(true, false, hidden, [hidden]), false);
+  // An <input role="textbox" style="opacity:0"> reached through its visible label: not seen, so left out.
+  assert.equal(controlVisible(false, true, hidden, [shown]), false);
+  assert.deepEqual(formState([typed("Promo note", "ROLEVALUE", { visible: controlVisible(false, true, hidden, [shown]) })])!.fields[0]!.value, LEFT_OUT);
+  // An off-screen <select> with a visible label and a fullwidth card number: not a choice at all.
+  const offscreen: Seen = { ...shown, left: -9999, right: -9799 };
+  const select = control({ kind: "select", type: "select", label: "Saved", value: "４１１１１１１１１１１１１１１１", visible: controlVisible(false, false, offscreen, [shown]) });
+  assert.equal(select.visible, false);
+  assert.deepEqual(formState([radio("Registered post", true), select])!.fields, [{ label: "Shipping method", value: "Registered post", kind: "choice", pointed: false }]);
+  // Seen, its number is still held back.
+  assert.equal(formState([{ ...select, visible: true }])!.left_out, 1);
+});
+
+test("only controls a reading could speak of count toward the 25: not hidden inputs, buttons or ones not seen (second review)", () => {
+  assert.equal(countable(control({ type: "hidden" })), false);
+  for (const type of ["submit", "button", "reset", "image", "file"]) assert.equal(countable(control({ type })), false, type);
+  assert.equal(countable(control({ visible: false })), false);
+  for (const c of [control({}), control({ type: "password" }), radio("A", false), checkbox("B", true), control({ kind: "select", type: "select" })]) assert.equal(countable(c), true, c.type);
+  // A checkout of 10 fields with 20 hidden tracking inputs still fits.
+  const form = [...Array.from({ length: 10 }, () => control({})), ...Array.from({ length: 20 }, () => control({ type: "hidden" }))];
+  assert.equal(pickScope([{ kind: "wider", controls: form.filter(countable).length }]), 0);
+});
+
+test("a field named only Code with a short number is held back by its markup too", () => {
+  assert.equal(pointedValue(typed(null, "123456", { name: "code" })), LEFT_OUT);
+  assert.equal(pointedValue(typed("Postal code", "8320000", { name: "postal_code" })), "8320000");
 });
 
 test("choices come from the control's own group; a form or role=group only when it holds at most 25 controls", () => {

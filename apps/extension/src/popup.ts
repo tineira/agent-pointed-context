@@ -91,7 +91,7 @@ async function render(): Promise<void> {
     const byDomain = isSensitive(hostOf(site.origin));
     const choice = sites[site.origin] ?? (grantedAlone(site.origin, alone) ? "always" : undefined);
     const asksAlways = byDomain || choice === "sensitive";
-    here.append(el("p", { textContent: `On ${hostOf(site.origin)}: ${mode === "never_ask" ? "every drop is sent (Never ask is on)." : choice === "never" ? "drops are not sent." : byDomain ? "a government or regulated domain, so every drop asks." : asksAlways ? "every drop asks." : choice === "always" ? "every drop is sent." : "the first drop asks."}` }));
+    here.append(el("p", { textContent: `On ${hostOf(site.origin)}: ${choice === "never" ? "drops are not sent." : mode === "never_ask" ? "every drop is sent (Never ask is on)." : byDomain ? "a government or regulated domain, so every drop asks." : asksAlways ? "every drop asks." : choice === "always" ? "every drop is sent." : "the first drop asks."}` }));
     const row = el("div", { className: "row" });
     if (!byDomain) row.append(button("Always", () => void setChoice(site.origin, "always"), choice === "always"));
     row.append(button("Ask once", () => void setChoice(site.origin, null), !choice && !byDomain));

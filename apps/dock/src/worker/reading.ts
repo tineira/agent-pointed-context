@@ -88,7 +88,7 @@ export const LEFT_OUT = "(left out as sensitive)";
 const SECRET_AUTOCOMPLETE = /^(current-password|new-password|one-time-code|one-time-password|cc-[a-z-]+)$/;
 /** Words that, alone, name a secret or an identity field: a card's code, an account, a national id, a password, a one-time code. */
 const SECRET_WORDS = new Set([
-  "cvv", "cvv2", "cvc", "cvc2", "cvn", "csc", "cid", "ccv", "iban", "clabe", "account", "acct", "ssn", "pin", "otp", "totp", "mfa", "2fa", "tin", "rut", "run", "dni", "cpf", "nif", "nie", "curp", "cedula",
+  "cvv", "cvv2", "cvc", "cvc2", "cvn", "csc", "cid", "ccv", "iban", "clabe", "account", "acct", "ssn", "pin", "otp", "totp", "mfa", "2fa", "tin", "rut", "run", "dni", "cuenta", "cpf", "nif", "nie", "curp", "cedula",
   "password", "passwd", "pass", "pwd", "passcode", "contrasena", "clave", "senha",
 ]);
 /**
@@ -102,6 +102,8 @@ const SECRET_PHRASES =
 
 const wordsOf = (text: string) =>
   text
+    .normalize("NFKC")
+    .replace(/\p{Cf}/gu, "")
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
@@ -147,45 +149,86 @@ function ibanValid(iban: string): boolean {
   return rest === 1;
 }
 
-/** Whether a run of digits passes Luhn, as every payment card number does. */
-function luhn(digits: string): boolean {
-  let sum = 0;
-  for (let i = 0; i < digits.length; i++) {
-    let d = Number(digits[digits.length - 1 - i]);
-    if (i % 2 === 1) d = d * 2 > 9 ? d * 2 - 9 : d * 2;
-    sum += d;
+/** A Chilean RUT or RUN, with or without its dots and dash: 12.345.678-5, 1.234.567-K, 12345678K. On normalized text. */
+const RUT = /(?<![\dA-Za-z])\d{1,2}\.?\d{3}\.?\d{3}\s?-?\s?[\dkK](?![\dA-Za-z])/;
+
+/** Each Unicode decimal digit's value: they come in runs of ten, from 0 (Unicode keeps them so). */
+const digitValues = new Map<string, string>();
+function asciiDigit(d: string): string {
+  let value = digitValues.get(d);
+  if (value === undefined) {
+    let back = 0;
+    for (let cp = d.codePointAt(0)! - 1; /\p{Nd}/u.test(String.fromCodePoint(cp)); cp--) back++;
+    value = String(back % 10);
+    digitValues.set(d, value);
   }
-  return sum % 10 === 0;
+  return value;
 }
 
-/** A Chilean RUT or RUN, with or without its dots and dash: 12.345.678-5, 1.234.567-K, 12345678K. */
-const RUT = /(?<![\dA-Za-z])\d{1,2}\.?\d{3}\.?\d{3}-?[\dkK](?![\dA-Za-z])/;
+/**
+ * Text as the secret checks read it: compatibility forms folded (fullwidth, mathematical letters and
+ * digits, NFKC), every decimal digit of any script as 0 to 9 (Arabic-Indic included), format and
+ * zero-width characters removed, and every dash or minus as "-".
+ */
+export function secretForm(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/\p{Cf}/gu, "")
+    .replace(/[\p{Pd}−‑]/gu, "-")
+    .replace(/\p{Nd}/gu, (d) => (d >= "0" && d <= "9" ? d : asciiDigit(d)));
+}
+
+/** At most this many digits in a value, whatever separates them: 12 is the shortest card number. */
+const DIGITS_MAX = 11;
+/** In a block of page text, the same, within any stretch this long: a card number split by letters. */
+const DIGITS_SPAN = 24;
 
 /**
- * Whether a text holds what looks like a secret number, whatever field it is in: once everything but
- * letters and digits is removed and it is uppercased, a run of 8 or more digits (a card, an account, an
- * id, a phone number or a date written without words), a Luhn-valid run of 12 to 19 digits, or a valid
- * IBAN of its country's length (in any case, with any separators); or a RUT or RUN as written.
+ * Whether a text holds what looks like a secret number, whatever field it is in (secretForm first): once
+ * everything but letters and digits is removed, a run of 8 or more digits (a card, an account, an id, a
+ * phone number or a date written as digits); 12 or more digits in all, whatever separates them (in a
+ * block of page text, `block`, within any 24 characters); a valid IBAN of its country's length, in any
+ * case; or a RUT or RUN, with any dash.
  */
-export function textSecret(text: string | null | undefined): boolean {
+export function textSecret(text: string | null | undefined, block = false): boolean {
   if (!text) return false;
-  const flat = text.normalize("NFD").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  for (const run of flat.match(/\d+/g) ?? []) {
-    if (run.length >= 8) return true;
-    if (run.length >= 12 && run.length <= 19 && luhn(run)) return true;
+  const norm = secretForm(text);
+  const flat = norm.replace(/[^\p{L}\p{N}]/gu, "").toUpperCase();
+  if (/\d{8}/.test(flat)) return true;
+  if (block) {
+    const digits = [...norm].map((ch, i) => (ch >= "0" && ch <= "9" ? i : -1)).filter((i) => i >= 0);
+    for (let k = DIGITS_MAX; k < digits.length; k++) if (digits[k]! - digits[k - DIGITS_MAX]! < DIGITS_SPAN) return true;
+  } else if ((norm.match(/\d/g)?.length ?? 0) > DIGITS_MAX) {
+    return true;
   }
   for (const at of flat.matchAll(/[A-Z]{2}(?=\d{2})/g)) {
     const length = IBAN_LENGTHS[at[0]];
     const candidate = length ? flat.slice(at.index, at.index + length) : "";
     if (candidate.length === length && /^[A-Z0-9]+$/.test(candidate) && ibanValid(candidate)) return true;
   }
-  return RUT.test(text);
+  return RUT.test(norm);
+}
+
+/**
+ * "Code" or "código" alone, with a short number in it: a one-time code or a card's code. Not a postal,
+ * zip, promo, discount, coupon, country, area, product, tracking or referral code.
+ */
+const CODE_WORDS = new Set(["code", "codigo", "cod"]);
+const CODE_KINDS = new Set(["postal", "zip", "post", "promo", "promotional", "promocion", "promocional", "discount", "descuento", "coupon", "cupon", "voucher", "country", "pais", "area", "product", "producto", "tracking", "seguimiento", "referral", "referido", "invite", "invitation", "sku", "item", "color", "colour", "source", "html"]);
+export function codeSecret(value: string, ...texts: Array<string | null | undefined>): boolean {
+  if (!/^\d{3,8}$/.test(secretForm(value).replace(/[\s-]/g, ""))) return false;
+  return texts.some((text) => {
+    if (!text) return false;
+    const words = wordsOf(text).map((w) => w.toLowerCase());
+    return words.some((w) => CODE_WORDS.has(w)) && !words.some((w) => CODE_KINDS.has(w));
+  });
 }
 
 /** Whitespace folded and capped, or null when nothing is left. */
 function clean(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
-  const text = value.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
+  // Format and zero-width characters go: as spaces they would split a number the secret checks must see whole.
+  const text = value.replace(/\p{Cf}/gu, "").replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
   return text ? text.slice(0, max) : null;
 }
 
@@ -221,7 +264,7 @@ export function shapeReading(raw: unknown): PageReading | null {
     // A block the person did not drop on: held back when it holds what looks like a secret number.
     const heading = clean(c.heading, NAME_MAX);
     const text = clean(c.text, CONTEXT_MAX);
-    const safe = { heading: textSecret(heading) ? null : heading, text: textSecret(text) ? null : text };
+    const safe = { heading: textSecret(heading, true) ? null : heading, text: textSecret(text, true) ? null : text };
     if (safe.heading || safe.text) selectionContext = safe;
   }
   return { url, title: clean(r.title, NAME_MAX) ?? "", element, selection, selection_context: selectionContext, form: shapeForm(r.form) };
@@ -259,7 +302,7 @@ export function shapeFields(candidates: readonly FieldCandidate[], leftOut = 0, 
     const value = clean(c.value, FIELD_VALUE_MAX);
     if (!value) continue;
     const labelHolds = textSecret(label);
-    const secret = c.secret === true || labelHolds || namesSecret("label", label) || textSecret(value);
+    const secret = c.secret === true || labelHolds || namesSecret("label", label) || textSecret(value) || codeSecret(value, label);
     let field: FormField;
     if (c.kind === "choice") {
       if (secret) {

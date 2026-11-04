@@ -61,7 +61,8 @@ test("a drop is sent, asks or is refused by mode, site choice and sensitivity (T
   assert.equal(decide("ask", "never", false, true), "blocked");
   assert.equal(decide("ask", "always", true, true), "ask_sensitive", "a sensitive site always asks");
   assert.equal(decide("ask", "never", true, false), "blocked");
-  assert.equal(decide("never_ask", "never", true, false), "send", "never ask sends everything");
+  assert.equal(decide("never_ask", "never", true, false), "blocked", "Not here sticks under Never ask (TIN-571)");
+  assert.equal(decide("never_ask", "never", false, true), "blocked");
   assert.equal(decide("never_ask", undefined, true, false), "send");
 });
 

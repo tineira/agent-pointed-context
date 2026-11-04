@@ -243,13 +243,14 @@ export function grantedAlone(origin: string, patterns: readonly string[]): boole
 }
 
 /**
- * Whether a drop is sent, asks, or is refused. "Never ask" sends everything. A site the person said
- * "Not here" to never sends. A sensitive site, by its domain or marked by the person, always asks. A
+ * Whether a drop is sent, asks, or is refused. A site the person said "Not here" to never sends,
+ * under Never ask too (TIN-571). Otherwise "Never ask" sends everything. A sensitive site, by its domain or marked by the person, always asks. A
  * site marked Always, or granted by itself from the popup, sends. Any other site asks.
  */
 export function decide(mode: Mode, choice: SiteChoice | undefined, sensitive: boolean, grantedAlone: boolean): Decision {
-  if (mode === "never_ask") return "send";
+  // A site the person said Not here to never sends, under Never ask too: the card offers Not here then (TIN-571).
   if (choice === "never") return "blocked";
+  if (mode === "never_ask") return "send";
   if (sensitive || choice === "sensitive") return "ask_sensitive";
   if (choice === "always" || grantedAlone) return "send";
   return "ask";

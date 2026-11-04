@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agoLabel, autocompleteSecret, CONTEXT_MAX, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, namesSecret, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel, textSecret } from "../src/worker/reading.ts";
+import { agoLabel, autocompleteSecret, codeSecret, CONTEXT_MAX, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, namesSecret, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel, textSecret } from "../src/worker/reading.ts";
 
 const raw = {
   url: "https://en.wikipedia.org/wiki/Churn_rate?session=s3cr3t#History",
@@ -131,6 +131,43 @@ test("secret numbers are found in any case and with any separators, and ordinary
     "12.345.678-5", "12345678-5", "1.234.567-K", "1234567k", "123456789012", "+56 9 1234 5678", "2026-11-04",
   ]) assert.equal(textSecret(text), true, text);
   for (const text of ["Registered post", "DHL Express (3-5 days)", "Total: $1,234.56", "Order 1234", "Size XL 42", "AB12 costs 4 dollars more than the old one", "Chile", "Leave at the door", null, ""]) assert.equal(textSecret(text), false, String(text));
+});
+
+test("the second review's bypasses are held back: any dash, zero-width characters, digits of any script, fullwidth IBANs, letters between digits (TIN-571)", () => {
+  for (const [why, text] of [
+    ["RUN with an en dash", "1.234.567–K"],
+    ["RUN with a minus sign", "1.234.567−K"],
+    ["RUN with a non-breaking hyphen", "1.234.567‑K"],
+    ["RUN with a zero-width space before K", "1.234.567-​K"],
+    ["RUN with a figure dash", "12.345.678‒5"],
+    ["fullwidth PAN", "４１１１１１１１１１１１１１１１"],
+    ["mathematical bold PAN", "𝟒𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏𝟏"],
+    ["Arabic-Indic PAN", "٤١١١١١١١١١١١١١١١"],
+    ["Devanagari account", "१२३४५६७८९"],
+    ["fullwidth IBAN", "ｄｅ８９ ３７０４ ００４４ ０５３２ ０１３０ ００"],
+    ["PAN split by letters", "4111a1111a1111a1111"],
+    ["PAN split by zero-width spaces", "4111​1111​1111​1111"],
+  ] as const) {
+    assert.equal(textSecret(text), true, why);
+    // The hub holds it back as the typed value of the field dropped on, under an ordinary label, and as a choice.
+    const typed = shapeReading({ ...raw, form: { fields: [{ label: "Documento", value: text, kind: "typed", pointed: true }] } })!;
+    assert.equal(typed.form!.fields[0]!.value, "(left out as sensitive)", why);
+    assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Saved", value: text, kind: "choice" }] } })!.form!.left_out, 1, why);
+  }
+  // In a block of page text, 12 digits count within 24 characters, so an article with dates and figures still goes.
+  assert.equal(textSecret("Card 4111 then a1111 b1111 c1111 at the end", true), true);
+  assert.equal(textSecret("In 2025 sales rose 12% to 340 units; in 2026 they reached 512 units across 7 regions and 19 stores.", true), false);
+  const held = shapeReading({ ...raw, selection: "Pay", selection_context: { heading: "Payment", text: "Pay to ｄｅ８９ ３７０４ ００４４ ０５３２ ０１３０ ００" } })!;
+  assert.deepEqual(held.selection_context, { heading: "Payment", text: null });
+});
+
+test("a short number in a field named only Code or Código is held back; a postal, promo or country code is not", () => {
+  for (const label of ["Code", "Código", "Enter the code we sent you", "codigo"]) assert.equal(codeSecret("123456", label), true, label);
+  assert.equal(codeSecret("123", "Code"), true);
+  for (const label of ["Postal code", "Código postal", "Zip code", "Promo code", "Country code", "Código de descuento", "Notes"]) assert.equal(codeSecret("8320000", label), false, label);
+  assert.equal(codeSecret("SPRING25", "Code"), false, "not a number");
+  assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Code", value: "123456", kind: "typed", pointed: true }] } })!.form!.fields[0]!.value, "(left out as sensitive)");
+  assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Código postal", value: "8320000", kind: "typed", pointed: true }] } })!.form!.fields[0]!.value, "8320000");
 });
 
 test("secrets are named by markup or label, in English, Spanish and Portuguese, not by a word inside an ordinary one", () => {

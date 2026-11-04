@@ -4,7 +4,7 @@
  * (TIN-571). Typed by what they touch rather than by the DOM, so the tests run them on plain objects.
  */
 
-import { autocompleteSecret, namesSecret, shapeFields, type FieldCandidate, type FormReading } from "../../dock/src/worker/reading.ts";
+import { autocompleteSecret, codeSecret, namesSecret, shapeFields, type FieldCandidate, type FormReading } from "../../dock/src/worker/reading.ts";
 
 /** Said in an image's place when it has no alternative text, so the agent knows something is missing. */
 export const NO_ALT = "[image with no alt text]";
@@ -106,10 +106,7 @@ export interface Control {
   value: string;
   /** The control the person dropped on. */
   pointed: boolean;
-  /**
-   * Whether the person sees it (visuallyHidden). A radio or checkbox also counts as seen through a label
-   * they see, as custom widgets hide the native input under a styled label; a typed field never does.
-   */
+  /** Whether the person sees it (controlVisible). */
   visible: boolean;
 }
 
@@ -117,17 +114,27 @@ export interface Control {
 export const TEXT_TYPES = new Set(["", "text", "email", "tel", "url", "search", "number", "date", "time", "datetime-local", "month", "week", "textarea"]);
 
 /** Whether a control's markup says it holds a secret: a password, a card, a one-time code, an account, an id. */
-export function secretControl(c: Pick<Control, "kind" | "type" | "label" | "group" | "name" | "id" | "autocomplete" | "placeholder">): boolean {
+export function secretControl(c: Pick<Control, "kind" | "type" | "label" | "group" | "name" | "id" | "autocomplete" | "placeholder" | "value">): boolean {
   if (c.type === "password") return true;
   if (autocompleteSecret(c.autocomplete)) return true;
+  if (codeSecret(c.value, c.name, c.id, c.placeholder)) return true;
   return namesSecret("name", c.name, c.id) || namesSecret("label", c.label, c.placeholder, c.kind === "radio" ? c.group : null);
+}
+
+/** Whether a control counts toward a wider group's size (pickScope): one formState could say something of. */
+export function countable(c: Pick<Control, "kind" | "type" | "visible">): boolean {
+  if (c.type === "hidden" || !c.visible) return false;
+  return c.kind !== "text" || TEXT_TYPES.has(c.type) || c.type === "password";
 }
 
 /** What the content script measured of an element, for visuallyHidden. */
 export interface Seen {
   /** checkVisibility with display, visibility and opacity: false when none of it shows. */
   checkVisible: boolean;
+  /** Its effective opacity: its own times its ancestors'. */
   opacity: number;
+  /** The alpha of its text colour (color, -webkit-text-fill-color): 0 when its text is transparent. */
+  textAlpha: number;
   width: number;
   height: number;
   /** The box in page coordinates, and the page's size. */
@@ -145,17 +152,32 @@ export interface Seen {
   ariaHidden: boolean;
 }
 
+/** Below this effective opacity, an element is taken as not seen. */
+export const OPACITY_MIN = 0.1;
+
 /**
- * Whether the person cannot see an element (TIN-571): not rendered, transparent, of no size (or 1 px,
- * the screen-reader-only pattern), off the page, clipped away, or hidden from assistive technology.
- * These are how a page keeps a field it does not show; a reading never reads such a field.
+ * Whether the person cannot see an element (TIN-571): not rendered, nearly transparent (an effective
+ * opacity under 0.1), of no size (or 1 px, the screen-reader-only pattern), off the page, clipped away,
+ * or hidden from assistive technology; for a field they type in (typed), also text in a transparent
+ * colour. These are how a page keeps a field it does not show; a reading never reads such a field.
  */
-export function visuallyHidden(s: Seen): boolean {
-  if (!s.checkVisible || s.ariaHidden || s.opacity <= 0.01) return true;
+export function visuallyHidden(s: Seen, typed = false): boolean {
+  if (!s.checkVisible || s.ariaHidden || s.opacity < OPACITY_MIN) return true;
+  if (typed && s.textAlpha < OPACITY_MIN) return true;
   if (s.width <= 1 || s.height <= 1) return true;
   if (s.right <= 0 || s.bottom <= 0 || s.left >= s.pageWidth || s.top >= s.pageHeight) return true;
   if ((s.position === "absolute" || s.position === "fixed") && s.clip !== "auto" && s.clip !== "") return true;
   return /inset\(\s*(50|100)%|circle\(\s*0|polygon\(\s*0px 0px\s*\)/.test(s.clipPath);
+}
+
+/**
+ * Whether the person sees a control. Only a native radio or checkbox may be seen through a label they
+ * see, since custom widgets hide that input under a styled label; a select, a field they type in and any
+ * element with a role must be seen themselves.
+ */
+export function controlVisible(nativeChoice: boolean, typed: boolean, self: Seen, labels: readonly Seen[]): boolean {
+  if (!visuallyHidden(self, typed)) return true;
+  return nativeChoice && !self.ariaHidden && labels.some((l) => !visuallyHidden(l));
 }
 
 /** The most controls a wider group (a form, a role=group) may hold for its choices to go along. */
@@ -185,14 +207,16 @@ export function formState(controls: readonly Control[]): FormReading | null {
   const groupsTaken = new Set<string>();
   const candidates: FieldCandidate[] = [];
   for (const c of ordered) {
-    if (c.type === "hidden" || !c.visible) continue;
+    if (c.type === "hidden") continue;
     if (c.kind === "text") {
       if (!c.pointed || (!TEXT_TYPES.has(c.type) && c.type !== "password")) continue;
       // A password is said to be there, never read; another empty field says nothing.
       if (!c.value.trim() && c.type !== "password") continue;
-      candidates.push({ kind: "typed", label: c.label ?? c.placeholder ?? c.name, value: c.value || "-", pointed: true, secret: secretControl(c) });
+      // A field dropped on that the person cannot see (a transparent field laid over the page): left out.
+      candidates.push({ kind: "typed", label: c.label ?? c.placeholder ?? c.name, value: c.value || "-", pointed: true, secret: !c.visible || secretControl(c) });
       continue;
     }
+    if (!c.visible) continue;
     if (c.kind === "radio" && !c.checked && !c.pointed) continue;
     if (c.kind === "radio" && c.checked && c.groupKey) {
       if (groupsTaken.has(c.groupKey)) continue;

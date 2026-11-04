@@ -13,7 +13,7 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX, type FormReading } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState } from "./drop.ts";
-import { altText, formState, pickScope, tableContext, visuallyHidden, type Control, type Seen } from "./read.ts";
+import { altText, controlVisible, countable, formState, pickScope, tableContext, type Control, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
@@ -357,7 +357,8 @@ function formAt(x: number, y: number): FormReading | null {
   const ancestors: Array<{ el: Element; kind: "own" | "wider"; controls: number }> = [];
   for (let el = from.parentElement; el; el = el.parentElement) {
     if (el.matches(OWN_GROUP)) ancestors.push({ el, kind: "own", controls: 0 });
-    else if (el.matches(WIDER_GROUP)) ancestors.push({ el, kind: "wider", controls: el.querySelectorAll(CONTROLS).length });
+    // Only controls the reading could say something of count: not hidden inputs, buttons or ones the person cannot see.
+    else if (el.matches(WIDER_GROUP)) ancestors.push({ el, kind: "wider", controls: countControls(el) });
   }
   const scope = ancestors[pickScope(ancestors)]?.el ?? null;
   const found = scope ? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED) : [];
@@ -373,6 +374,32 @@ function formAt(x: number, y: number): FormReading | null {
   return formState(controls);
 }
 
+/** How many controls in a group the reading could say something of (countable); past CONTROLS_SCANNED in all, too many. */
+function countControls(group: Element): number {
+  const all = group.querySelectorAll(CONTROLS);
+  if (all.length > CONTROLS_SCANNED) return Infinity;
+  return [...all].filter((el) => {
+    const c = describe(el, false);
+    return !!c && countable(c);
+  }).length;
+}
+
+/** An element's opacity times its ancestors', across shadow roots. */
+function effectiveOpacity(el: Element): number {
+  let opacity = 1;
+  for (let at: Element | null = el; at && opacity > 0; at = at.parentElement ?? ((at.getRootNode() as ShadowRoot).host ?? null)) opacity *= Number(getComputedStyle(at).opacity);
+  return opacity;
+}
+
+/** A computed colour's alpha: rgb() is 1, rgba() and color() say it, transparent is 0. */
+function alpha(color: string): number {
+  if (color === "transparent") return 0;
+  // rgb(0 0 0 / 0.5), rgba(0, 0, 0, 0.5), color(srgb 0 0 0 / 50%); four numbers in rgba() means the last is alpha.
+  const m = /\/\s*([\d.]+%?)\s*\)$/.exec(color) ?? /^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+%?)\s*\)$/.exec(color);
+  if (!m) return 1;
+  return m[1]!.endsWith("%") ? Number(m[1]!.slice(0, -1)) / 100 : Number(m[1]);
+}
+
 /** What visuallyHidden needs of an element. */
 function seenOf(el: Element): Seen {
   const style = getComputedStyle(el);
@@ -380,7 +407,8 @@ function seenOf(el: Element): Seen {
   const page = document.documentElement;
   return {
     checkVisible: el.checkVisibility({ visibilityProperty: true, opacityProperty: true }),
-    opacity: Number(style.opacity),
+    opacity: effectiveOpacity(el),
+    textAlpha: Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)),
     width: box.width,
     height: box.height,
     left: box.left + scrollX,
@@ -400,10 +428,11 @@ function seenOf(el: Element): Seen {
 function describe(el: Element, pointed: boolean): Control | null {
   if (el instanceof HTMLInputElement && el.type === "hidden") return null;
   const labels = "labels" in el ? [...((el as HTMLInputElement).labels ?? [])] : [];
-  const shown = !visuallyHidden(seenOf(el));
+  const nativeChoice = el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox");
+  const typed = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !nativeChoice);
   // A choice is seen through a label the person sees; a typed field only by itself.
-  const choice = (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) || el instanceof HTMLSelectElement || el.hasAttribute("role");
-  const visible = shown || (choice && !el.closest('[aria-hidden="true"]') && labels.some((l) => !visuallyHidden(seenOf(l))));
+  // Only a native radio or checkbox may be seen through its label (custom widgets); anything else must be seen itself.
+  const visible = controlVisible(nativeChoice, typed, seenOf(el), nativeChoice ? labels.map(seenOf) : []);
   const attr = (name: string) => el.getAttribute(name);
   const base = { label: labelOf(el, labels), group: null, groupKey: null, name: attr("name"), id: el.id || null, autocomplete: attr("autocomplete"), placeholder: attr("placeholder"), checked: false, value: "", pointed, visible };
   if (el instanceof HTMLInputElement) {
