@@ -3,10 +3,10 @@
  * of its own). Every post, and each of its parts (offer, audience, code, text), is a target. Agents
  * come both ways (TIN-578): from the agent dock (the first drop asks the person here, then in the dock;
  * later drops pin at once), or connected directly, each with its own URL, from the Connect panel (the
- * Direct profile's list from @apc/web). The same agent both ways shows as one.
+ * Direct profile's list from @tineira/apc-web). The same agent both ways shows as one.
  */
-import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, loadApcProfiles, mergePins, type AgentDrag, type BarAgent } from "@apc/web";
+import { canonicalTarget, focusAttrs, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
+import { createViewReporter, enablePinning, loadApcProfiles, mergePins, type AgentDrag, type BarAgent } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, MONTHS } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
@@ -437,7 +437,7 @@ function Feed({ sid }: { sid: string }) {
 }
 
 /**
- * Agents pinned here, drawn by their mark (TIN-388): the standard pin badge, `<apc-pin>` from @apc/web
+ * Agents pinned here, drawn by their mark (TIN-388): the standard pin badge, `<apc-pin>` from @tineira/apc-web
  * (TIN-482). It is a mark, so dragging it onto another part of a post moves the pin through the
  * same enablePinning as the agent bar's marks. Where it sits is Signals': inline next to a post part.
  */

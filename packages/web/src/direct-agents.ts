@@ -2,7 +2,7 @@
  * The Direct profile's page part (APC 0.4, TIN-578): the list where the person makes and names the
  * agents that connect to this app directly, each with its own MCP URL, and the connect instructions
  * (the URL, and a prompt to paste to the agent). Revoke is the agent bar's (core). The server side is
- * in @apc/server (direct.ts).
+ * in @tineira/apc-server (direct.ts).
  *
  * A custom element in light DOM, like `<apc-agents>`: the app's fonts apply, styles are injected once,
  * scoped by class prefix and themed through --apc-* custom properties. Set `agents` and `appName`;

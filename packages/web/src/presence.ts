@@ -1,4 +1,4 @@
-import type { PresenceEvent } from "@apc/protocol";
+import type { PresenceEvent } from "@tineira/apc-protocol";
 
 export const IDLE_AFTER_MS = 2 * 60_000;
 export const GONE_AFTER_MS = 5 * 60_000;

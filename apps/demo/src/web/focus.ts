@@ -1,4 +1,4 @@
-import { focusAttrs, type FocusAttrs } from "@apc/protocol";
+import { focusAttrs, type FocusAttrs } from "@tineira/apc-protocol";
 import type { FigureKey } from "../model/figures.ts";
 
 /**

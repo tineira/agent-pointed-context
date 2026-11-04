@@ -1,7 +1,7 @@
-import { APC_DEFAULT_MCP_PATH, APC_STANDARD_VERSION, type ApcManifest, type ApcProfile } from "@apc/protocol";
+import { APC_DEFAULT_MCP_PATH, APC_STANDARD_VERSION, type ApcManifest, type ApcProfile } from "@tineira/apc-protocol";
 
 /**
- * An app's `apc.json` (APC 0.5, `ApcManifest` in @apc/protocol), from what it already declares: its
+ * An app's `apc.json` (APC 0.5, `ApcManifest` in @tineira/apc-protocol), from what it already declares: its
  * name, its origin, the profiles it offers (`parseProfiles(env.APC_PROFILES)`), where its MCP URLs
  * live, and, with the Direct profile, the page where the person connects an agent directly.
  */

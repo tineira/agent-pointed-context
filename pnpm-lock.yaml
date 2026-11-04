@@ -200,21 +200,21 @@ importers:
 
   apps/demo:
     dependencies:
-      '@apc/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      '@apc/server':
-        specifier: workspace:*
-        version: link:../../packages/server
-      '@apc/web':
-        specifier: workspace:*
-        version: link:../../packages/web
       '@cfworker/json-schema':
         specifier: 4.1.1
         version: 4.1.1
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.7)
+      '@tineira/apc-protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@tineira/apc-server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@tineira/apc-web':
+        specifier: workspace:*
+        version: link:../../packages/web
       hono:
         specifier: 4.13.13
         version: 4.13.13
@@ -231,9 +231,6 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@apc/conformance':
-        specifier: workspace:*
-        version: link:../../packages/conformance
       '@cloudflare/vite-plugin':
         specifier: 1.64.0
         version: 1.64.0(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))(wrangler@4.151.0(@cloudflare/workers-types@5.20261012.1)(@types/node@24.19.2))
@@ -243,6 +240,9 @@ importers:
       '@tailwindcss/vite':
         specifier: 4.3.3
         version: 4.3.3(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+      '@tineira/apc-conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
@@ -264,21 +264,21 @@ importers:
 
   apps/dock:
     dependencies:
-      '@apc/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      '@apc/server':
-        specifier: workspace:*
-        version: link:../../packages/server
-      '@apc/web':
-        specifier: workspace:*
-        version: link:../../packages/web
       '@cfworker/json-schema':
         specifier: 4.1.1
         version: 4.1.1
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.7)
+      '@tineira/apc-protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@tineira/apc-server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@tineira/apc-web':
+        specifier: workspace:*
+        version: link:../../packages/web
       hono:
         specifier: 4.13.13
         version: 4.13.13
@@ -292,15 +292,15 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@apc/conformance':
-        specifier: workspace:*
-        version: link:../../packages/conformance
       '@cloudflare/vite-plugin':
         specifier: 1.64.0
         version: 1.64.0(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))(wrangler@4.151.0(@cloudflare/workers-types@5.20261012.1)(@types/node@24.19.2))
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@tineira/apc-conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
@@ -319,7 +319,7 @@ importers:
 
   apps/extension:
     dependencies:
-      '@apc/protocol':
+      '@tineira/apc-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
     devDependencies:
@@ -329,21 +329,21 @@ importers:
 
   apps/signals:
     dependencies:
-      '@apc/protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-      '@apc/server':
-        specifier: workspace:*
-        version: link:../../packages/server
-      '@apc/web':
-        specifier: workspace:*
-        version: link:../../packages/web
       '@cfworker/json-schema':
         specifier: 4.1.1
         version: 4.1.1
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
         version: 1.32.1(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.7)
+      '@tineira/apc-protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@tineira/apc-server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@tineira/apc-web':
+        specifier: workspace:*
+        version: link:../../packages/web
       hono:
         specifier: 4.13.13
         version: 4.13.13
@@ -357,15 +357,15 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
     devDependencies:
-      '@apc/conformance':
-        specifier: workspace:*
-        version: link:../../packages/conformance
       '@cloudflare/vite-plugin':
         specifier: 1.64.0
         version: 1.64.0(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))(wrangler@4.151.0(@cloudflare/workers-types@5.20261012.1)(@types/node@24.19.2))
       '@cloudflare/workers-types':
         specifier: 5.20261012.1
         version: 5.20261012.1
+      '@tineira/apc-conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
@@ -436,16 +436,16 @@ importers:
 
   packages/conformance:
     dependencies:
-      '@apc/protocol':
-        specifier: workspace:*
+      '@tineira/apc-protocol':
+        specifier: workspace:^
         version: link:../protocol
 
   packages/protocol: {}
 
   packages/server:
     dependencies:
-      '@apc/protocol':
-        specifier: workspace:*
+      '@tineira/apc-protocol':
+        specifier: workspace:^
         version: link:../protocol
     devDependencies:
       '@modelcontextprotocol/sdk':
@@ -457,8 +457,8 @@ importers:
 
   packages/web:
     dependencies:
-      '@apc/protocol':
-        specifier: workspace:*
+      '@tineira/apc-protocol':
+        specifier: workspace:^
         version: link:../protocol
 
 packages:

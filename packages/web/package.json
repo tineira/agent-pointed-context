@@ -1,11 +1,26 @@
 {
-  "name": "@apc/web",
+  "name": "@tineira/apc-web",
   "version": "0.7.0",
+  "description": "Agent Pointed Context (APC) for an app's page, in the browser: pinning agents to what the person sees, the agent bar (<apc-agents>), the pin badge, presence and the Direct agents list.",
+  "keywords": ["apc", "agent-pointed-context", "mcp", "ai-agents", "web-components", "browser"],
+  "homepage": "https://apc.tineira.com/docs",
+  "bugs": { "url": "https://github.com/tineira/agent-pointed-context/issues" },
+  "repository": { "type": "git", "url": "https://github.com/tineira/agent-pointed-context", "directory": "packages/web" },
   "license": "MIT",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
+  "files": ["dist", "README.md", "LICENSE"],
   "sideEffects": false,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "prepack": "node ../../scripts/check-packages.mjs --dist"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+    "types": "./dist/index.d.ts"
+  },
   "dependencies": {
-    "@apc/protocol": "workspace:*"
+    "@tineira/apc-protocol": "workspace:^"
   }
 }

@@ -1,8 +1,8 @@
 /**
- * The standard agent bar (TIN-394, `<apc-agents>` from @apc/web) in React: icons are the agents' marks.
+ * The standard agent bar (TIN-394, `<apc-agents>` from @tineira/apc-web) in React: icons are the agents' marks.
  * Each shows the path it came by (APC 0.4); a linked one has Unlink.
  */
-import { defineAgentBar, type ApcAgentsElement, type BarAgent } from "@apc/web";
+import { defineAgentBar, type ApcAgentsElement, type BarAgent } from "@tineira/apc-web";
 import { createElement, useEffect, useRef } from "react";
 
 defineAgentBar();

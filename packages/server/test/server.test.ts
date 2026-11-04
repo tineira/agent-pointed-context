@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { FocusPayload, FocusRow, PresenceEvent } from "@apc/protocol";
+import type { FocusPayload, FocusRow, PresenceEvent } from "@tineira/apc-protocol";
 import {
   THEN_NOTE,
   WAIT_PAGE_CLOSED_NOTE,

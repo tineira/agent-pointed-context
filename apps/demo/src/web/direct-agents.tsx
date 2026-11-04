@@ -1,9 +1,9 @@
 /**
- * The Direct profile's agent list (`<apc-direct-agents>` from @apc/web, TIN-578) in React: where the
+ * The Direct profile's agent list (`<apc-direct-agents>` from @tineira/apc-web, TIN-578) in React: where the
  * person makes and names the agents that connect to this app directly, each with its own MCP URL and
  * the prompt to paste to it. Shared by Pulse and Signals.
  */
-import { defineDirectAgents, type ApcDirectAgentsElement, type DirectAgent } from "@apc/web";
+import { defineDirectAgents, type ApcDirectAgentsElement, type DirectAgent } from "@tineira/apc-web";
 import { createElement, useEffect, useRef } from "react";
 
 defineDirectAgents();

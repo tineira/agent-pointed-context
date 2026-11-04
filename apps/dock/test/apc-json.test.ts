@@ -5,8 +5,8 @@
  */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { durableObjectRoom, installWorkersStandIn } from "@apc/conformance/workers";
-import { APC_JSON_PATH, APC_STANDARD_VERSION, parseApcManifest } from "@apc/protocol";
+import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
+import { APC_JSON_PATH, APC_STANDARD_VERSION, parseApcManifest } from "@tineira/apc-protocol";
 import { generateDataset } from "../../demo/src/model/seed.ts";
 import { LIMITS } from "../src/worker/trust.ts";
 

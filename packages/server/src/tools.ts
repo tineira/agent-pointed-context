@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { FocusPayload, ViewPayload } from "@apc/protocol";
+import type { FocusPayload, ViewPayload } from "@tineira/apc-protocol";
 import { z } from "zod";
 import { toolResult } from "./envelope.ts";
 

@@ -1,4 +1,4 @@
-import type { ApcProfile, FocusRow, FocusTarget, PresenceEvent } from "@apc/protocol";
+import type { ApcProfile, FocusRow, FocusTarget, PresenceEvent } from "@tineira/apc-protocol";
 import type { Region } from "../model/seed.ts";
 import type { CompatRow } from "../worker/compat.ts";
 import { HEARTBEAT_MS } from "../worker/page.ts";

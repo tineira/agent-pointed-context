@@ -1,4 +1,4 @@
-import { APC_LINK_KEY, type ApcLinkOffer, type Attention, type FocusPayload, type FocusRow } from "@apc/protocol";
+import { APC_LINK_KEY, type ApcLinkOffer, type Attention, type FocusPayload, type FocusRow } from "@tineira/apc-protocol";
 
 export const ATTENTION_NOTE = "The person pinned you to something on their screen. Call get_current_view to read it and mark it seen.";
 

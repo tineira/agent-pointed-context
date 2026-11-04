@@ -3,10 +3,10 @@
  * breathing ring while the agent has not read the pin, a check once it has.
  * The badges float above the page (fixed, under the sticky header) and follow their targets on
  * scroll, resize and re-render. Only the icon and the unpin button take the pointer. The badge itself
- * is the standard <apc-pin> from @apc/web (TIN-482), a mark like the top bar's (data-apc-mark), so
+ * is the standard <apc-pin> from @tineira/apc-web (TIN-482), a mark like the top bar's (data-apc-mark), so
  * dragging it to another target moves the pin (TIN-354); this file only places it.
  */
-import { canonicalTarget, parseFocusAttrs, type FocusRow } from "@apc/protocol";
+import { canonicalTarget, parseFocusAttrs, type FocusRow } from "@tineira/apc-protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { displayNames, type AgentMotion } from "./agent-brands.ts";

@@ -4,7 +4,7 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { apcJsonResponse, apcManifest, parseProfiles, profilesRefusal } from "@apc/server";
+import { apcJsonResponse, apcManifest, parseProfiles, profilesRefusal } from "@tineira/apc-server";
 import { FEED_TTL_MS, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";

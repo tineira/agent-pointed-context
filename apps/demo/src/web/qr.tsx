@@ -3,7 +3,7 @@
  * shows, in Pulse (connect.tsx) and in the agent dock (TIN-403). No imports of Pulse's page code, so
  * the dock can use it.
  */
-import { connectPrompt } from "@apc/web";
+import { connectPrompt } from "@tineira/apc-web";
 import { encode } from "uqr";
 import { useMemo } from "react";
 
@@ -33,7 +33,7 @@ export const SCAN_HINT = "Scan with a phone, then paste the URL into the agent. 
  * name the person will recognise, and for the steps only if the agent cannot (TIN-408).
  */
 export function askYourAgentPrompt(url: string, name = "Pulse"): string {
-  // The Direct profile's connect instructions, from @apc/web (TIN-578): one text for every app.
+  // The Direct profile's connect instructions, from @tineira/apc-web (TIN-578): one text for every app.
   return connectPrompt(url, name);
 }
 

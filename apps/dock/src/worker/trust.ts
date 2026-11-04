@@ -5,7 +5,7 @@
  * unverified, only after the person approves that warning in the dock, and not at all while the
  * operator's kill switch (UNVERIFIED_PAIRING=closed) is on. Pure, so the tests run it.
  */
-import { parseTarget, type FocusPayload } from "@apc/protocol";
+import { parseTarget, type FocusPayload } from "@tineira/apc-protocol";
 import type { AppTool } from "./app-client.ts";
 
 /** The hub's limits on the apps it reads. Tests shorten the times; nothing else changes them. */

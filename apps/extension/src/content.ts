@@ -33,7 +33,7 @@ const apcApp = () => !!document.querySelector("[data-focus], apc-agents, [data-a
 
 /**
  * One exception (APC 0.5): an APC app that connects agents only directly (its apc.json lists no
- * "dock") and does not answer a dock agent's drop itself (no APC_DROPS_ATTR, which @apc/web sets).
+ * "dock") and does not answer a dock agent's drop itself (no APC_DROPS_ATTR, which @tineira/apc-web sets).
  * There a drop would be lost, so the extension takes it and tells the person how to connect directly.
  * The service worker reads the app's apc.json on the first drag of an agent over it; while it is on its
  * way the drop is taken too, and answered when it comes back (directOnlyGate). A lookup that told
@@ -124,7 +124,7 @@ function listen(): void {
       // The extension took the drop on dragover, so the browser's own action (opening what was dropped) never runs.
       e.preventDefault();
       if ("now" in answer) {
-        // Known Direct-only: the extension answers, and a page with an older @apc/web does not answer it a second time.
+        // Known Direct-only: the extension answers, and a page with an older @tineira/apc-web does not answer it a second time.
         e.stopImmediatePropagation();
         return answerDirectOnly(answer.now, e.clientX, e.clientY);
       }

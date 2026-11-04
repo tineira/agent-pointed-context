@@ -280,7 +280,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
   const linked = new Set((state.links ?? []).flat());
   return (
     <>
-      {/* On the standard's deploy, the agents connected directly (the Direct profile, @apc/web): the dock's are managed in the dock (TIN-410). */}
+      {/* On the standard's deploy, the agents connected directly (the Direct profile, @tineira/apc-web): the dock's are managed in the dock (TIN-410). */}
       {state.v2 && state.profiles?.includes("direct") && (
         <section className="card">
           <h2>Agents connected directly</h2>

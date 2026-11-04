@@ -6,8 +6,8 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { APC_STANDARD_VERSION, type ApcManifest } from "@apc/protocol";
-import { apcJsonResponse } from "@apc/server";
+import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
+import { apcJsonResponse } from "@tineira/apc-server";
 import { DOCK_TTL_MS, type Env, type Hub } from "./hub.ts";
 
 /** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */

@@ -3,7 +3,7 @@
  * HTTP, no session (APC apps are stateless). The app's grant is the secret in its MCP URL, kept by
  * the hub only.
  */
-import { APC_AGENT_CLIENT_META, APC_JSON_MAX_BYTES, APC_JSON_PATH } from "@apc/protocol";
+import { APC_AGENT_CLIENT_META, APC_JSON_MAX_BYTES, APC_JSON_PATH } from "@tineira/apc-protocol";
 import { LIMITS } from "./trust.ts";
 
 export interface AppToolResult {

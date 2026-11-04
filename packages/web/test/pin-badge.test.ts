@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { FocusTarget } from "@apc/protocol";
+import type { FocusTarget } from "@tineira/apc-protocol";
 import { pinBadgeLabels } from "../src/pin-badge.ts";
 
 /**

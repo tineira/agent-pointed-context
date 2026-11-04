@@ -29,7 +29,7 @@
  *   while an agent that came only directly is connected, until the person dismisses or follows it (once
  *   per browser). On by default; an app turns it off with `dockHint = null` or `dock-hint="off"`.
  */
-import { APC_MOBILE_MEDIA, type ApcProfile } from "@apc/protocol";
+import { APC_MOBILE_MEDIA, type ApcProfile } from "@tineira/apc-protocol";
 import { APC_ARMED_EVENT } from "./pinning.ts";
 
 export type AgentState = "off" | "idle" | "waiting" | "busy" | "seen";

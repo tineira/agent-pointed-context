@@ -9,7 +9,7 @@
     "build:dev": "node build.mjs --dev"
   },
   "dependencies": {
-    "@apc/protocol": "workspace:*"
+    "@tineira/apc-protocol": "workspace:*"
   },
   "devDependencies": {
     "vite": "8.3.4"

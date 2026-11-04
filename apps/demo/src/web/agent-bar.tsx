@@ -1,10 +1,10 @@
 /**
- * The standard agent bar (TIN-394, `<apc-agents>` from @apc/web) in React, with Pulse's own logos:
+ * The standard agent bar (TIN-394, `<apc-agents>` from @tineira/apc-web) in React, with Pulse's own logos:
  * the bar calls renderIcon with an element it keeps per agent, and Pulse draws AgentIcon there.
  * Each agent shows the path it came by, a linked one both with Unlink (APC 0.4), and the bar offers
  * the dock to a Direct user (on by default).
  */
-import { defineAgentBar, type ApcAgentsElement, type BarAgent } from "@apc/web";
+import { defineAgentBar, type ApcAgentsElement, type BarAgent } from "@tineira/apc-web";
 import { createElement, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "./agent-icon.tsx";

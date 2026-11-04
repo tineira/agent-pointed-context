@@ -6,7 +6,7 @@
  * Each agent's drag carries its public handle, this hub's origin and a single-use ticket (60 s),
  * never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once.
  */
-import { APC_AGENT_TYPE, agentDragPayload } from "@apc/web";
+import { APC_AGENT_TYPE, agentDragPayload } from "@tineira/apc-web";
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
