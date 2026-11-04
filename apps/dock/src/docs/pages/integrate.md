@@ -6,22 +6,24 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are being published to npm as 0.x pre-releases, under the `next` tag (`latest` waits for 1.0). Once they are there:
+The packages are 0.x pre-releases on npm's `next` dist-tag (never `latest` before the standard is 1.0), and their version follows the standard's: 0.7.x ships APC 0.7.
 
 ```sh
-npm install @apc/protocol@next @apc/server@next @apc/web@next
-npm install @modelcontextprotocol/sdk zod
-npm install --save-dev @apc/conformance@next
+npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
+npm i @tineira/apc-protocol@next @tineira/apc-web@next         # the page
+npm i -D @tineira/apc-conformance@next                         # the tests
 ```
 
-Until they are on npm, take them from the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance) are small TypeScript sources you can add to your workspace or copy.
+The first publish is pending: until the packages appear on npm, these lines are what you will run, and meanwhile the sources are in the repo, [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
+
+They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-web` have no Node imports (`@tineira/apc-web` is browser code for any bundler); `@tineira/apc-server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@tineira/apc-conformance` needs Node 22.15+.
 
 | Package | Gives you |
 |---|---|
-| `@apc/protocol` | the types, the target grammar (`parseTarget`), `focusAttrs`, `apc.json` |
-| `@apc/server` | the two APC tools, `attention` and `then`, presence, grants, revoke, consent, `apc_link`, `apc.json` |
-| `@apc/web` | pinning (drag and tap), the agent bar `<apc-agents>`, the Direct agent list, presence, the view reporter |
-| `@apc/conformance` | the suite that checks your app |
+| `@tineira/apc-protocol` | the types, the target grammar (`parseTarget`), `focusAttrs`, `apc.json` |
+| `@tineira/apc-server` | the two APC tools, `attention` and `then`, presence, grants, revoke, consent, `apc_link`, `apc.json` |
+| `@tineira/apc-web` | pinning (drag and tap), the agent bar `<apc-agents>`, the Direct agent list, presence, the view reporter |
+| `@tineira/apc-conformance` | the suite that checks your app |
 
 The server's imports:
 
@@ -105,7 +107,7 @@ The page's event stream is how the server knows a page is open, and how presence
 
 <!-- include orders-page.ts#pinning -->
 
-On a phone, `@apc/web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile)).
+On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile)).
 
 ## 10. Revoke
 

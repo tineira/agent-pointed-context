@@ -1,9 +1,9 @@
 /**
- * Orders' page: the browser side of the guide at apc.tineira.com/docs/integrate, with @apc/web. Plain DOM, so
+ * Orders' page: the browser side of the guide at apc.tineira.com/docs/integrate, with @tineira/apc-web. Plain DOM, so
  * it fits any framework: React, Vue or none. It talks to the server in orders-app.ts (`/api/*`, `/api/events`).
  */
 // #region imports
-import { focusAttrs, type FocusTarget } from "@apc/protocol";
+import { focusAttrs, type FocusTarget } from "@tineira/apc-protocol";
 import {
   createViewReporter,
   defineAgentBar,
@@ -15,7 +15,7 @@ import {
   type AgentDrag,
   type ApcAgentsElement,
   type ApcDirectAgentsElement,
-} from "@apc/web";
+} from "@tineira/apc-web";
 import type { AgentRow, Order } from "./orders-app.ts";
 // #endregion
 

@@ -161,6 +161,15 @@ for (const { page, blocks } of pages) {
   });
 }
 
+test("the docs and their examples name the packages as published: @tineira/apc-*, never @apc/*", () => {
+  const examples = ["orders-app.ts", "orders-page.ts", "orders-conformance.ts"].map((f) => `${EXAMPLES_DIR}/${f}`);
+  for (const file of [...DOC_PAGES.filter((p) => p.file.startsWith("apps/dock/")).map((p) => p.file), ...examples, "apps/dock/src/web/docs.tsx"]) {
+    assert.doesNotMatch(read(file), /@apc\//, `${file} still names @apc/`);
+  }
+  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server@next/);
+  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance@next https:\/\/\S+ --grant /);
+});
+
 test("the docs page has a source for every page, and says on every page that the standard is a draft", () => {
   const docs = read("apps/dock/src/web/docs.tsx");
   for (const { path } of DOC_PAGES) assert.match(docs, new RegExp(`"${path}": \\w+,`), `${path} has no source in docs.tsx`);

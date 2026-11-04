@@ -1,8 +1,8 @@
 # The APC specification
 
-This is the contract an app, an agent and a dock share in Agent Pointed Context, at the version in the banner above. It is a draft: see [versioning and deprecation](#versioning-and-deprecation). The reference is the code in [`@apc/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol) (types and constants) and the [conformance suite](/docs/conformance); this page says the same in words. Every change is in the [changelog](/docs/changelog).
+This is the contract an app, an agent and a dock share in Agent Pointed Context, at the version in the banner above. It is a draft: see [versioning and deprecation](#versioning-and-deprecation). The reference is the code in [`@tineira/apc-protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol) (types and constants) and the [conformance suite](/docs/conformance); this page says the same in words. Every change is in the [changelog](/docs/changelog).
 
-**MUST** and **MUST NOT** mark what the reference code enforces: `@apc/protocol` refuses it, the reference hub refuses it, or the conformance suite fails an app that does not. Everything else describes how the reference apps behave and what a reader can rely on.
+**MUST** and **MUST NOT** mark what the reference code enforces: `@tineira/apc-protocol` refuses it, the reference hub refuses it, or the conformance suite fails an app that does not. Everything else describes how the reference apps behave and what a reader can rely on.
 
 ## Terms
 
@@ -37,7 +37,7 @@ The person drops the agent's mark on a **target**: `{ kind, id, part, params }`.
 - `kind` and every param key match `[a-z][a-z0-9_]{0,31}`; `id` matches `[A-Za-z0-9_.:-]{1,80}`.
 - `part` names a piece of the target (`total`, `step:new`): a word, optionally followed by `:` and a token.
 - `params` **MUST** carry keys only: string tokens, or lists of at most 20, in at most 1 KB. A bare number is an amount, never a key, and is refused (a month such as `2026-03` passes). Free text never travels.
-- In the page, a pointable element carries `data-focus="kind:id"`, with `data-focus-part` and `data-focus-params` (JSON) when needed (`focusAttrs` in `@apc/protocol`).
+- In the page, a pointable element carries `data-focus="kind:id"`, with `data-focus-part` and `data-focus-params` (JSON) when needed (`focusAttrs` in `@tineira/apc-protocol`).
 
 The app keeps **one pin per grant**: a new drop replaces it, unread. It is **unread** while it was dropped after the last read that returned it. What the agent receives is the **focus** (`FocusPayload`): the target plus `app_url`, `pinned_at`, and `next` and `next_args`, the exact tool call that reads it. It may carry `part_note`, `trimmed` (what the grant may not see was left out) and `gone` (the row no longer exists).
 
@@ -55,7 +55,7 @@ Takes no arguments. Returns `{ view, focus }`: the view (or null) and the focus 
 
 ### `wait_for_focus` and `then`
 
-`wait_for_focus({ timeout_s })` holds the call until the person pins the agent, or `timeout_s` passes (a whole number from 1 to the app's ceiling; optional, 25 by default in `@apc/server`).
+`wait_for_focus({ timeout_s })` holds the call until the person pins the agent, or `timeout_s` passes (a whole number from 1 to the app's ceiling; optional, 25 by default in `@tineira/apc-server`).
 
 - A pin dropped during the wait is returned, marked seen: `{ focus, timed_out: false }`.
 - With none, it returns `focus: null` with a `note`, and `timed_out: true` at the timeout, or `timed_out: false, page_open: false` as soon as the app knows the person's page is closed. `page_open` is left out while the person does not share their view (an app without that switch always shares).
@@ -83,8 +83,8 @@ The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims
 
 The agent connects to the app's own MCP URL.
 
-- **A grant per agent.** The person makes an agent in the app's page; the app makes a grant with a secret of 128 random bits, which is the last segment of the agent's MCP URL (`newDirectGrant` in `@apc/server`).
-- **The agent list**: where the person makes and names agents and copies the URL, or a prompt that asks the agent to add it (`<apc-direct-agents>` in `@apc/web`). An agent names itself on `initialize` (`clientInfo.name`) until the person renames it.
+- **A grant per agent.** The person makes an agent in the app's page; the app makes a grant with a secret of 128 random bits, which is the last segment of the agent's MCP URL (`newDirectGrant` in `@tineira/apc-server`).
+- **The agent list**: where the person makes and names agents and copies the URL, or a prompt that asks the agent to add it (`<apc-direct-agents>` in `@tineira/apc-web`). An agent names itself on `initialize` (`clientInfo.name`) until the person renames it.
 - **The agent bar** shows Direct agents in full, always: the app is the only place the person sees and points them.
 
 ## The Dock profile
@@ -97,7 +97,7 @@ The dock puts the agent on a drag with the type `application/x-apc-agent` and th
 
 ### Consent in the app
 
-Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent ("Let your agent from the dock at … read Orders?") with that nonce, and the Allow sends it back. The server makes a grant only for a request that brings the nonce back. In the reference apps (`DockConsent` in `@apc/server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress`.
+Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent ("Let your agent from the dock at … read Orders?") with that nonce, and the Allow sends it back. The server makes a grant only for a request that brings the nonce back. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress`.
 
 ### Pairing: `POST {hub}/apc/pair`
 
@@ -186,7 +186,7 @@ With the APC browser extension the person can drop a dock agent on any web page,
 
 ## Versioning and deprecation
 
-The standard has its own [semver](https://semver.org), `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. Every change to the contract adds an entry to the [changelog](/docs/changelog) and bumps it; an app says which version it implements in its `apc.json`.
+The standard has its own [semver](https://semver.org), `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. Every change to the contract adds an entry to the [changelog](/docs/changelog) and bumps it; an app says which version it implements in its `apc.json`.
 
 - **0.x, now: a draft.** Any release may change the contract, compatible or not. The changelog says what changed and what an app must do. The suite checks an app that claims any version from 0.5.0 up to its own.
 - **1.0: the contract frozen.** From 1.0, a change that breaks a conforming app, agent or hub needs a new major version; a minor version only adds (a new optional key, a new tool, a new profile); a patch only clarifies.
@@ -196,4 +196,4 @@ Comments on this policy, and any proposal to change the contract, go in a [contr
 
 ## Licence
 
-The text of this specification and of these docs is licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), like the paper: you may share and adapt it with credit to "Agent Pointed Context, apc.tineira.com". The code (`@apc/*`, the examples, the reference apps) is [MIT](https://github.com/tineira/agent-pointed-context/blob/main/LICENSE). See [LICENSE-spec](https://github.com/tineira/agent-pointed-context/blob/main/LICENSE-spec).
+The text of this specification and of these docs is licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), like the paper: you may share and adapt it with credit to "Agent Pointed Context, apc.tineira.com". The code (`@tineira/apc-*`, the examples, the reference apps) is [MIT](https://github.com/tineira/agent-pointed-context/blob/main/LICENSE). See [LICENSE-spec](https://github.com/tineira/agent-pointed-context/blob/main/LICENSE-spec).

@@ -11,7 +11,7 @@
  * `apps/dock/test/docs-examples.test.ts` runs the conformance suite against this file, on both profiles.
  */
 // #region imports
-import { parseParams, parseTarget, type ApcProfile, type FocusPayload, type FocusRow, type PresenceEvent, type ViewPayload } from "@apc/protocol";
+import { parseParams, parseTarget, type ApcProfile, type FocusPayload, type FocusRow, type PresenceEvent, type ViewPayload } from "@tineira/apc-protocol";
 import {
   APC_INSTRUCTIONS,
   ApcLinks,
@@ -37,7 +37,7 @@ import {
   toolError,
   toolResult,
   type ToolResult,
-} from "@apc/server";
+} from "@tineira/apc-server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";

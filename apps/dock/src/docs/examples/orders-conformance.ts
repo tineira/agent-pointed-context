@@ -5,9 +5,9 @@
  * runs it under `node --test`.
  */
 // #region imports
-import { apcConformance, runConformance, type AgentConnection, type ApcAppAdapter } from "@apc/conformance";
-import type { ApcProfile, FocusTarget, PresenceEvent } from "@apc/protocol";
-import { barCanCollapse, createTapPin, type BarAgent } from "@apc/web";
+import { apcConformance, runConformance, type AgentConnection, type ApcAppAdapter } from "@tineira/apc-conformance";
+import type { ApcProfile, FocusTarget, PresenceEvent } from "@tineira/apc-protocol";
+import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { OrdersApp } from "./orders-app.ts";
 // #endregion
 
@@ -115,7 +115,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
       pin: async (grantId, target) => (await call(`/api/agents/${grantId}/pin`, { target })).ok === true,
       takePresence: () => presence.splice(0),
       revoke: async (grantId) => (await call(`/api/agents/${grantId}/revoke`)).ok === true,
-      // The page on a phone (APC 0.6), modelled with @apc/web's own pieces: the agent bar's collapse rule and
+      // The page on a phone (APC 0.6), modelled with @tineira/apc-web's own pieces: the agent bar's collapse rule and
       // the tap-to-pin controller that enablePinning runs. A browser with touch emulation is the real check.
       mobile: {
         async agentBar() {

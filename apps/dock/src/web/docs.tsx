@@ -5,7 +5,7 @@
  * in src/docs/examples. Static, like the landing: the Worker never runs for /docs.
  */
 import { useEffect, useMemo, type ReactNode } from "react";
-import { APC_STANDARD_VERSION } from "@apc/protocol";
+import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { exampleRegion, fragmentTarget, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "../docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, type DocPage } from "../docs/pages.ts";
 import overview from "../docs/pages/overview.md?raw";

@@ -5,7 +5,7 @@ title: "Contract change: "
 ---
 
 <!--
-The contract is what apc.tineira.com/docs/spec describes and @apc/protocol types: the view, the pin and the focus
+The contract is what apc.tineira.com/docs/spec describes and @tineira/apc-protocol types: the view, the pin and the focus
 format, presence, the tools, the drag payload, pairing, apc_link, apc.json, revoke. The standard is a 0.x draft:
 changes are welcome, and each one gets an entry in packages/protocol/CHANGELOG.md and a new version.
 -->
@@ -37,4 +37,4 @@ See "Versioning and deprecation" at apc.tineira.com/docs/spec.
 
 ## Test plan
 
-<!-- How the conformance suite (@apc/conformance) or the reference apps would show it holds: new or changed checks. -->
+<!-- How the conformance suite (@tineira/apc-conformance) or the reference apps would show it holds: new or changed checks. -->
