@@ -28,16 +28,25 @@ const hostOf = (origin: string) => new URL(origin).host;
 /** The most readings the popup lists; the dock's agent page has them all. */
 const READINGS_SHOWN = 20;
 
-/** The dock's answer for one reader token, or null when it did not answer or no longer knows the token. */
+/**
+ * The dock's answer for one reader token, or null when it did not answer or no longer knows the token. A network
+ * error or a 5xx is tried once more, as the service worker's send is (TIN-583): listing and Clear can both be repeated,
+ * and one failed call would otherwise say "Could not reach your dock" right after a Clear that went through.
+ */
 async function logCall(key: string, token: string, path: string): Promise<{ agent?: string; readings?: ReadingRow[] } | null> {
   const hub = key.split(" ")[0]!;
   if (!hubAllowed(hub, __APC_DEV__)) return null;
-  try {
-    const r = await fetch(`${hub}/apc/reading/${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: "{}" });
-    return r.ok ? ((await r.json()) as { agent?: string; readings?: ReadingRow[] }) : null;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 500));
+    try {
+      const r = await fetch(`${hub}/apc/reading/${path}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: "{}" });
+      if (r.status >= 500) continue;
+      return r.ok ? ((await r.json()) as { agent?: string; readings?: ReadingRow[] }) : null;
+    } catch {
+      // network: try again
+    }
   }
+  return null;
 }
 
 /** The readings this browser sent, across its docks and agents, newest first. The list lives at the dock. */
