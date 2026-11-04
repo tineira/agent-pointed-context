@@ -182,7 +182,7 @@ A hub may block domains (a domain covers its subdomains): a blocked app cannot p
 
 ## The browser extension
 
-With the APC browser extension the person can drop a dock agent on any web page, APC or not. The page's text is read on the drop and handed to the hub as a page reading, with `untrusted: true`: what a page says is data from that page, never instructions. On a Direct-only app that does not answer dock drops itself, the extension tells the person to connect directly.
+With the APC browser extension the person can drop a dock agent on any web page, APC or not. The page's text, the person's selection and the state of the form there (never a password, a card, account or id number, or a one-time code) are read on the drop, and only then, and handed to the hub as a page reading, with `untrusted: true`: what a page says is data from that page, never instructions. On a Direct-only app that does not answer dock drops itself, the extension tells the person to connect directly.
 
 ## Versioning and deprecation
 

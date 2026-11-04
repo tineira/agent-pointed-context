@@ -117,7 +117,8 @@ async function syncScripts(): Promise<void> {
     if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
     return;
   }
-  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: hubPatterns(__APC_DEV__), runAt: "document_idle" as const, allFrames: false, persistAcrossSessions: true };
+  // document_start: its capture listeners on window come before any of the page's own (TIN-573).
+  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: hubPatterns(__APC_DEV__), runAt: "document_start" as const, allFrames: false, persistAcrossSessions: true };
   await (existing.length ? chrome.scripting.updateContentScripts([script]) : chrome.scripting.registerContentScripts([script]));
 }
 

@@ -29,6 +29,8 @@ const reading = (site: string, words = "Churn rose") => ({
     title: `Title ${CANARY}`,
     element: { tag: "td", text: `${words} ${CANARY}`, name: `Name ${CANARY}`, heading: `Heading ${CANARY}`, column: `Column ${CANARY}`, row: `Row ${CANARY}` },
     selection: `Selected ${CANARY}`,
+    selection_context: { heading: `Selection heading ${CANARY}`, text: `Selection block ${CANARY}` },
+    form: { fields: [{ label: `Shipping ${CANARY}`, value: `Registered post ${CANARY}`, pointed: true }], left_out: 1, more: 0 },
   },
 });
 
@@ -108,6 +110,10 @@ test("the hub never logs a reading's text: only the reader's own row holds it, u
   assert.equal((await hub.reading(reading("example.com"), token, BROWSER)).ok, true);
   const got = await callTool("page__get_reading");
   assert.match(got.structuredContent.page_text, new RegExp(`Table column: Column ${CANARY}`));
+  // The form state and the selection's place reach the agent in page_text, marked untrusted with the rest (TIN-571).
+  assert.equal(got.structuredContent.untrusted, true);
+  assert.match(got.structuredContent.page_text, new RegExp(`- Shipping ${CANARY}: Registered post ${CANARY} \\(pointed at\\)\n1 field left out as sensitive\\.`));
+  assert.match(got.structuredContent.page_text, new RegExp(`The selection is in: Selection block ${CANARY}`));
 
   // The address also goes into the focus, for as long as the reading lives. Nothing else holds a word of it.
   assert.ok(!everything(["readers", "pointer"]).includes(CANARY));

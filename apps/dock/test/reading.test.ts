@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agoLabel, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel } from "../src/worker/reading.ts";
+import { agoLabel, autocompleteSecret, CONTEXT_MAX, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, namesSecret, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel, valueSecret } from "../src/worker/reading.ts";
 
 const raw = {
   url: "https://en.wikipedia.org/wiki/Churn_rate?session=s3cr3t#History",
@@ -53,6 +53,62 @@ test("a table cell comes with its column and row (TIN-422)", () => {
   assert.match(readingText(r), /Under the heading: Countries\nTable column: Population\nTable row: Chile\nPointed at \(td\): 19\.6/);
   const big = shapeReading({ ...raw, element: { tag: "td", text: "x", column: "c".repeat(5000), row: "r".repeat(5000) } })!;
   assert.ok(big.element!.column!.length <= 200 && big.element!.row!.length <= 200);
+});
+
+test("the form state goes into page_text with its labels, after what was pointed at, and says what was left out (TIN-571)", () => {
+  const form = { fields: [{ label: "Shipping", value: "Registered post", pointed: true }, { label: "Insurance", value: "checked" }, { label: null, value: "Chile" }], left_out: 2, more: 1 };
+  const r = shapeReading({ ...raw, form })!;
+  assert.deepEqual(r.form, { fields: [{ label: "Shipping", value: "Registered post", pointed: true }, { label: "Insurance", value: "checked", pointed: false }, { label: null, value: "Chile", pointed: false }], left_out: 2, more: 1 });
+  assert.match(
+    readingText(r),
+    /Pointed at \(p\): Churn rate is widely applied in SaaS\.\nForm fields, as filled in on the page:\n- Shipping: Registered post \(pointed at\)\n- Insurance: checked\n- \(no label\): Chile\n1 field more not included\.\n2 fields left out as sensitive\.$/,
+  );
+  // A drop on a field: no block of text, but the field.
+  assert.match(readingText(shapeReading({ url: raw.url, title: "Checkout", form })!), /Pointed at: a form field, marked \(pointed at\) below\./);
+  // Only what was left out: still said.
+  assert.match(readingText(shapeReading({ ...raw, form: { fields: [], left_out: 1 } })!), /\n1 field left out as sensitive\.$/);
+  assert.equal(shapeReading({ ...raw, form: { fields: [] } })!.form, null);
+  assert.equal(shapeReading({ ...raw, form: "nope" })!.form, null);
+  assert.equal(shapeReading(raw)!.form, null);
+});
+
+test("the hub holds the form to its caps and leaves out secrets whatever the extension sent", () => {
+  const fields = [
+    { label: "Card number", value: "4111 1111 1111 1111" },
+    { label: "Reference", value: "4242424242424242" },
+    { label: "Bank", value: "GB82WEST12345698765432" },
+    { label: "CVC", value: "123" },
+    ...Array.from({ length: 40 }, (_, i) => ({ label: `Field ${i}`, value: "v".repeat(500) })),
+    { label: 5, value: { x: 1 } },
+  ];
+  const r = shapeReading({ ...raw, form: { fields, left_out: -3, more: "many" } })!;
+  assert.equal(r.form!.left_out, 4);
+  assert.ok(r.form!.fields.length <= FIELDS_MAX);
+  assert.ok(r.form!.fields.every((f) => f.value.length <= FIELD_VALUE_MAX && (f.label?.length ?? 0) <= FIELD_LABEL_MAX));
+  assert.ok(r.form!.fields.reduce((n, f) => n + (f.label?.length ?? 0) + f.value.length, 0) <= FORM_TEXT_MAX);
+  assert.equal(r.form!.fields.length + r.form!.more, 40);
+  assert.doesNotMatch(JSON.stringify(r), /4111|4242|GB82|123/);
+  assert.ok(readingText(r).length <= PAGE_TEXT_MAX);
+});
+
+test("a selection elsewhere on the page comes with its heading and block; inside the pointed block it adds nothing (TIN-571)", () => {
+  const r = shapeReading({ ...raw, selection: "4.2% in March", selection_context: { heading: "EU-West", text: "Churn in EU-West rose 4.2% in March." } })!;
+  assert.match(readingText(r), /\nSelected: 4\.2% in March\nThe selection is under the heading: EU-West\nThe selection is in: Churn in EU-West rose 4\.2% in March\.$/);
+  // No selection, no context; and an empty one is none.
+  assert.equal(shapeReading({ ...raw, selection_context: { heading: "EU-West", text: "x" } })!.selection_context, null);
+  assert.equal(shapeReading({ ...raw, selection: "x", selection_context: { heading: " ", text: "" } })!.selection_context, null);
+  assert.ok(shapeReading({ ...raw, selection: "x", selection_context: { text: "w".repeat(5000) } })!.selection_context!.text!.length <= CONTEXT_MAX);
+});
+
+test("secrets are recognised by name, autocomplete and value, not by a word inside an ordinary one", () => {
+  for (const name of ["cardNumber", "card_number", "cc-num", "CVV", "cvc2", "security code", "IBAN", "accountNo", "routing number", "SSN", "national id", "tax_id", "passport", "RUT", "DNI", "Número de tarjeta", "Contraseña", "PIN"]) assert.equal(namesSecret(name), true, name);
+  for (const name of ["Shipping", "Business name", "Spin", "Tinted", "Account holder", "Card message", "Notes", null, ""]) assert.equal(namesSecret(name), false, String(name));
+  for (const ac of ["cc-number", "cc-csc", "shipping cc-exp", "current-password", "new-password", "one-time-code"]) assert.equal(autocompleteSecret(ac), true, ac);
+  for (const ac of ["email", "shipping street-address", "off", null]) assert.equal(autocompleteSecret(ac), false, String(ac));
+  assert.equal(valueSecret("4111-1111-1111-1111"), true);
+  assert.equal(valueSecret("4111 1111 1111 1112"), false, "fails Luhn");
+  assert.equal(valueSecret("DE89 3704 0044 0532 0130 00"), true);
+  assert.equal(valueSecret("Order 1234"), false);
 });
 
 test("the log's entry is the site, the time and the size, never a word of the reading (TIN-422)", () => {
