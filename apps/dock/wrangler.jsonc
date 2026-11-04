@@ -7,10 +7,11 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   // "/" is the landing, or the dock for a visitor who has one (TIN-420): the Worker decides.
+  // /media/* (the landing's clip) runs the Worker too, which answers Range requests: the asset layer does not (TIN-623).
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/", "/v1", "/v1/*", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
+    "run_worker_first": ["/", "/v1", "/v1/*", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*", "/media", "/media/*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "HUB", "class_name": "Hub" }]
