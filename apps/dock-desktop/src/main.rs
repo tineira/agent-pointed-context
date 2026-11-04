@@ -3,12 +3,14 @@
 //! its own on top of every window, moved by a grip shown on hover (TIN-484), all shown and hidden
 //! with a global shortcut or from the tray. The pages are the web dock's own, so the hub, pairing
 //! and the drag are unchanged; only the windows are native. Closing a window hides it; Quit is in
-//! the tray.
+//! the tray. The tray names the build and checks for updates; a little after it starts the app checks
+//! too, and updates itself on the person's yes (TIN-615, update.rs).
 //!
 //! APC_DOCK_ORIGIN points it at another dock (a local `pnpm --dir apps/dock dev`, say).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod pets;
+mod update;
 
 use std::{
     fs,
@@ -133,18 +135,26 @@ fn toggle_float(app: &AppHandle) {
 }
 
 fn tray(app: &AppHandle, shown: bool) -> tauri::Result<()> {
+    // The build, greyed out at the top: "APC dock 0.2.N (abc1234)" (TIN-615).
+    let build = update::label(&app.package_info().version.to_string());
+    let about = MenuItem::with_id(app, "build", &build, false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open dock", true, None::<&str>)?;
     let float = CheckMenuItem::with_id(app, "float", format!("Float agents\t{SHORTCUT}"), true, shown, None::<&str>)?;
+    let updates = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit APC Dock", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &float, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&about, &PredefinedMenuItem::separator(app)?, &open, &float, &PredefinedMenuItem::separator(app)?, &updates, &quit],
+    )?;
     app.manage(float);
     let mut builder = TrayIconBuilder::with_id("tray")
-        .tooltip("APC Dock")
+        .tooltip(&build)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_dock(app),
             "float" => toggle_float(app),
+            "update" => update::check_now(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -165,6 +175,9 @@ fn main() {
         // A second launch brings the running dock to the front.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show_dock(app)))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // The update's question (update.rs); plugins.updater in tauri.conf.json: the endpoint, the key, passive.
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // No opener plugin: its script takes over clicks on target=_blank links to open them over IPC,
         // which the dock page (remote, with no capability in the dock's window) cannot use, so the
         // links did nothing. Without it a click is a new window request, and on_new_window opens the
@@ -187,6 +200,7 @@ fn main() {
             }) {
                 eprintln!("{SHORTCUT} is taken: {e}");
             }
+            update::start(app);
             Ok(())
         })
         .on_window_event(|window, event| match event {
