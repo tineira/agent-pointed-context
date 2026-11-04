@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { test, type TestContext } from "node:test";
 import { decisionNotice } from "../src/web/request-state.ts";
 import { LIMITS, NOT_VERIFIED, splitHost, UNVERIFIED_RISK, unverifiedWarning } from "../src/worker/trust.ts";
-import { DOCK, fakeApp, PULSE, SID, world, type Json } from "./hostile-world.ts";
+import { fakeApp, PULSE, world, type Json } from "./hostile-world.ts";
 
 const SHOP = "https://shop.example";
 
@@ -150,6 +150,8 @@ test("a pending pairing nobody decides goes after its time, frees its place unde
   // The next request counts only live ones: the expired went first, each told its grant is not wanted.
   assert.equal((await w.pairApp(fakeApp("https://late.example", "Late"), { approve: false })).ok, true);
   assert.deepEqual((await w.agent()).pairings.map((p: Json) => (p.app as Json).origin), ["https://late.example"]);
+  // The grants go back after the request answered (TIN-609).
+  await w.hub.idle();
   for (const app of apps) assert.deepEqual(app.calls, ["/apc/revoke"]);
   // An answer that comes too late finds nothing to approve.
   assert.deepEqual(await w.hub.decide(stale, "approve_unverified"), { ok: false, error: "unknown_pairing" });
@@ -165,8 +167,7 @@ test("a verified app's request expires too, and its consent flow is otherwise un
   const w = await world(t);
   quickPending(t, 1_000);
   const { ticket } = await w.hub.ticket((await w.agent()).id);
-  const customers = w.customers;
-  const paired = await w.pulse.pairHub(SID, PULSE, { hub: DOCK, agent: (await w.agent()).id, ticket, target: { kind: "customer", id: customers[0]!.id } });
+  const paired = await w.dropOnPulse({ agent: (await w.agent()).id, ticket });
   assert.equal(paired.ok, true);
   const pending = (await w.agent()).pairings.find((p: Json) => (p.app as Json).origin === PULSE);
   assert.equal(pending.warning, undefined);
@@ -479,6 +480,7 @@ test("an approval left half-way whose domain lost its approval meanwhile goes: t
   leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: LIMITS.approvingMs + 1_000, approved: false });
   assert.equal(await w.pairingOf(SHOP), undefined);
   assert.equal(storedStatus(w, pending.pairing_id!), null);
+  await w.hub.idle();
   assert.deepEqual(shop.calls, ["/apc/revoke"], "the app may be called, so it gets its grant back; no initialize, no tools");
 });
 
@@ -565,4 +567,70 @@ test("a long host never leaves a trusted-looking prefix alone: the registered do
   assert.match(css, /\.host-name \{[^}]*white-space: nowrap/);
   assert.match(css, /\.host-head \{[^}]*text-overflow: ellipsis[^}]*direction: rtl/);
   assert.doesNotMatch(css, /\.unverified-domain \{[^}]*overflow-wrap: anywhere/);
+});
+
+// ---- Follow-ups from GLM's final review of #120 (TIN-609) ----
+
+test("an Approve whose approval the alarm settled as paired while the hub was introducing itself answers ok and keeps the approval", async (t) => {
+  const w = await world(t);
+  const held = heldApp(SHOP);
+  const pending = await w.pairApp(held.app, { approve: false });
+  const approving = w.hub.decide(pending.pairing_id!, "approve_unverified");
+  await held.initializeAsked;
+  // The introduction stalls past LIMITS.approvingMs, and the alarm settles the approval meanwhile: paired.
+  w.hub.ctx.storage.sql.exec("update pairings set approved_at = ? where id = ?", new Date(Date.now() - LIMITS.approvingMs - 1_000).toISOString(), pending.pairing_id);
+  await w.hub.alarm();
+  assert.equal(storedStatus(w, pending.pairing_id!), "paired");
+  held.release();
+  assert.deepEqual(await approving, { ok: true }, "not approval_withdrawn: the app is paired");
+  assert.equal(storedStatus(w, pending.pairing_id!), "paired");
+  assert.equal(approvalOf(w, SHOP), true, "the domain's approval stands with its pairing");
+  assert.equal((await w.callHub("shop_example__get_figure")).structuredContent.untrusted, true);
+});
+
+test("an Approve the alarm settled, then held by the kill switch: app_blocked, still stored paired, nothing taken back", async (t) => {
+  const w = await world(t);
+  const held = heldApp(SHOP);
+  const pending = await w.pairApp(held.app, { approve: false });
+  const approving = w.hub.decide(pending.pairing_id!, "approve_unverified");
+  await held.initializeAsked;
+  w.hub.ctx.storage.sql.exec("update pairings set approved_at = ? where id = ?", new Date(Date.now() - LIMITS.approvingMs - 1_000).toISOString(), pending.pairing_id);
+  await w.hub.alarm();
+  w.hubEnv.UNVERIFIED_PAIRING = "closed";
+  held.release();
+  assert.deepEqual(await approving, { ok: false, error: "app_blocked" });
+  assert.equal(storedStatus(w, pending.pairing_id!), "paired", "the pairing the alarm made stays, held");
+  assert.equal(approvalOf(w, SHOP), true);
+  w.hubEnv.UNVERIFIED_PAIRING = "open";
+  assert.equal((await w.pairingOf(SHOP)).status, "paired");
+});
+
+test("the dock's state and an app's /apc/pair never wait on another app's give-back after a request expired", async (t) => {
+  const w = await world(t);
+  quickPending(t, 300);
+  const stuck = fakeApp(SHOP, "Shop");
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  // The app never answers its /apc/revoke until released.
+  stuck.revoke = () => released.then(() => Response.json({ ok: true }));
+  assert.equal((await w.pairApp(stuck, { approve: false })).ok, true);
+  await sleep(350);
+
+  const quick = <T>(work: Promise<T>) => Promise.race([work, sleep(1_000).then(() => "stuck" as const)]);
+  const state = await quick(w.state());
+  assert.notEqual(state, "stuck", "state() answers while the give-back hangs");
+  assert.equal(await w.pairingOf(SHOP), undefined, "the expired request went at once");
+  assert.equal(stuck.calls.filter((c) => c === "/apc/revoke").length, 1, "its grant is being given back");
+  // An app asking to pair now is not held up either, and neither is a decide.
+  const asked = await quick(w.pairApp(fakeApp("https://other.example", "Other"), { approve: false }));
+  assert.notEqual(asked, "stuck");
+  assert.equal((asked as { ok: boolean }).ok, true);
+
+  let idle = false;
+  const waiting = w.hub.idle().then(() => (idle = true));
+  await sleep(50);
+  assert.equal(idle, false, "the give-back is still running");
+  release();
+  await waiting;
+  assert.equal(idle, true);
 });

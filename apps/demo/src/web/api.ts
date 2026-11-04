@@ -70,7 +70,8 @@ export function createApi(sid: string) {
     addAgent: () => post<GrantState>("/grants/agent", {}),
     reset: () => post<{ ok: boolean }>("/reset", {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
-    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget }) => post<{ ok: boolean; error?: string; grant_id?: string; status?: string }>("/hub/pair", body),
+    /** A dock agent's drop (TIN-382). Without `consent` the server pairs only an agent it holds a grant for; otherwise it answers consent_required with the nonce the consent sends back (TIN-606). */
+    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget; consent?: string }) => post<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }>("/hub/pair", body),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),

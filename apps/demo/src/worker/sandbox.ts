@@ -6,7 +6,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, type ApcProfile, type FocusRow, type FocusTarget } from "@apc/protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@apc/server";
 import { generateDataset, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
@@ -83,6 +83,10 @@ export class Sandbox extends DurableObject<Env> {
   private cached: Dataset | null = null;
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. Its table is made again with the others (migrate). */
   private links!: ApcLinks;
+  /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. In the same table as the links. */
+  private consent!: DockConsent;
+  /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
+  private pairing = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -122,6 +126,7 @@ export class Sandbox extends DurableObject<Env> {
       }
     }
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Pulse", grants: () => this.linkGrants() });
+    this.consent = new DockConsent(sqlKv(this.sql));
     // A deploy without the Direct profile takes agents only from a dock (TIN-402): a grant with no
     // dock link is a leftover from before (the old default agent), and goes with its pins (TIN-410).
     if (this.env.APC_V2 === "1" && !this.offers("direct")) {
@@ -456,49 +461,73 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   /**
-   * APC v2 (TIN-382, DESIGN.md 12.1): the person dropped an agent from a dock here and said yes.
-   * Pulse makes a grant for it (full, or one region), hands that grant's MCP URL to the dock's hub
-   * server to server with the drag's single-use ticket, and pins the agent where it was dropped. The
-   * hub reads Pulse only after the person says yes in the dock too. Only on the v2 deploy.
+   * APC v2 (TIN-382, DESIGN.md 12.1): the person dropped an agent from a dock here. Pulse makes a grant
+   * for it (full, or one region), hands that grant's MCP URL to the dock's hub server to server with the
+   * drag's single-use ticket, and pins the agent where it was dropped. The hub reads Pulse only after the
+   * person says yes in the dock too. Only on the v2 deploy.
+   *
+   * The person's yes here is checked here, not on the page (APC 0.7, TIN-606): a page decides from the state
+   * it last loaded, and one that missed a revoke would pair without asking. So an agent Pulse holds no grant
+   * for gets `consent_required` and a nonce; the page shows its consent with it, and only a request that
+   * brings it back (once, for the same dock and agent, within two minutes) makes a grant.
    */
-  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string }> {
+  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }> {
     if (this.env.APC_V2 !== "1" || !this.offers("dock")) return { ok: false, error: "not_available" };
-    const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; region?: unknown; target?: unknown } | null;
+    const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; region?: unknown; target?: unknown; consent?: unknown } | null;
     const hub = typeof b?.hub === "string" ? b.hub : "";
     const allowed = (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
     const dev = !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
     if (!allowed.includes(hub) && !(dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
     if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
-    const linked = this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, b.agent).toArray()[0];
+    const agent = b.agent;
+    // One drop of an agent at a time (Grok on #123): a second request while the first waits on the hub (a double-clicked
+    // Allow) changes nothing, so it can neither ask for consent again nor drop the grant the first is making.
+    const key = `${hub} ${agent}`;
+    if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
+    this.pairing.add(key);
+    try {
+      return await this.pairHubOnce(sid, origin, hub, agent, b.ticket, b.region, b.target, b.consent);
+    } finally {
+      this.pairing.delete(key);
+    }
+  }
+
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }> {
+    /** The person has not said yes here for this agent: the page asks, with this nonce. */
+    const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
+    const linked = this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, agent).toArray()[0];
     if (linked) {
       // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
       const grant = this.grants().find((g) => g.id === linked.grant_id);
-      const answer = grant ? await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent: b.agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : { ok: false, error: "not_paired" };
+      const answer = grant ? await hubCall(hub, "/apc/confirm", { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : { ok: false, error: "not_paired" };
       if (!answer.ok) {
-        if (answer.error === "not_paired") await this.dropHubGrant(linked.grant_id);
-        return { ok: false, error: answer.error ?? "hub_refused" };
+        if (answer.error !== "not_paired") return { ok: false, error: answer.error ?? "hub_refused" };
+        // The dock no longer pairs them: the grant goes, and the ticket is still good, so the person can say yes here and pair at once.
+        await this.dropHubGrant(linked.grant_id);
+        return askFirst();
       }
       this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: answer.agent?.icon }]), linked.grant_id);
-      return { ...(await this.pin(linked.grant_id, b.target)), grant_id: linked.grant_id, status: answer.status ?? "paired" };
+      return { ...(await this.pin(linked.grant_id, target)), grant_id: linked.grant_id, status: answer.status ?? "paired" };
     }
-    const region = (REGIONS as readonly string[]).includes(b.region as string) ? (b.region as Region) : null;
-    const id = `g_${randomHex(4)}`;
-    const secret = randomHex(16);
+    // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
+    if (!this.consent.take(consent, hub, agent)) return askFirst();
+    const region = (REGIONS as readonly string[]).includes(rawRegion as string) ? (rawRegion as Region) : null;
+    const { id, secret, created_at } = newDirectGrant();
     this.sql.exec(
       "insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, ?, ?)",
-      id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, new Date().toISOString(),
+      id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, created_at,
     );
-    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent: b.agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
+    const answer = await hubCall(hub, "/apc/pair", { ticket, agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };
     }
-    this.sql.exec("insert into hub_links (hub, agent, grant_id, pairing_id, created_at) values (?, ?, ?, ?, ?)", hub, b.agent, id, answer.pairing_id ?? null, new Date().toISOString());
+    this.sql.exec("insert into hub_links (hub, agent, grant_id, pairing_id, created_at) values (?, ?, ?, ?, ?)", hub, agent, id, answer.pairing_id ?? null, new Date().toISOString());
     // The agent's mark from the hub (TIN-388), so its first pin shows its logo; initialize keeps it current.
     this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", cleanName(answer.agent?.name), pickClientIcon([{ src: answer.agent?.icon }]), id);
-    this.log("hub_paired", id, { hub, agent: b.agent });
+    this.log("hub_paired", id, { hub, agent });
     this.broadcast({ type: "grants" });
-    const pinned = await this.pin(id, b.target);
+    const pinned = await this.pin(id, target);
     return { ok: pinned.ok, ...(pinned.error ? { error: pinned.error } : {}), grant_id: id, status: "pending" };
   }
 
@@ -553,12 +582,17 @@ export class Sandbox extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** When the person revoked this grant in the app, or null: by its id (a call in flight) or its secret's hash (a new request). */
-  private revokedAt(by: { grantId: string } | { hash: string }): string | null {
-    const row = "grantId" in by
-      ? this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where grant_id = ?", by.grantId).toArray()[0]
-      : this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where secret_hash = ?", by.hash).toArray()[0];
-    return row?.revoked_at ?? null;
+  /**
+   * When the person revoked the grant with this secret in the app, or null. Always by the secret's hash, for a
+   * new request and for a call in flight alike (TIN-606): a grant id is short, and a later grant may reuse a
+   * revoked one's, so an id never says whether this grant was revoked.
+   */
+  private revokedAt(hash: string): string | null {
+    return this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where secret_hash = ?", hash).toArray()[0]?.revoked_at ?? null;
+  }
+  /** The grant with this secret is still live: this grant, never a later one that took its id. */
+  private holds(secret: string): boolean {
+    return this.sql.exec("select 1 from grants where secret = ?", secret).toArray().length > 0;
   }
 
   /** A dock's grant goes with its pins and its link: given back by the hub, or no longer paired there. */
@@ -614,11 +648,13 @@ export class Sandbox extends DurableObject<Env> {
 
   private async mcp(request: Request, sid: string, secret: string, origin: string): Promise<Response> {
     if (!(await this.alive())) return Response.json({ error: "sandbox_expired" }, { status: 404 });
+    // The secret's hash, before the grant is looked up: what says whether this grant was revoked, now and during its calls.
+    const hash = await secretHash(secret);
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant) {
       // Revoked in the app (APC 0.2): 403 with the answer, whatever the method (checked before the
       // method), so the holder (an agent, or a dock's hub) can say so.
-      const revokedAt = this.revokedAt({ hash: await secretHash(secret) });
+      const revokedAt = this.revokedAt(hash);
       if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
       return Response.json({ error: "unknown_grant" }, { status: 404 });
     }
@@ -700,7 +736,7 @@ export class Sandbox extends DurableObject<Env> {
     );
     // Which tool this request runs, so a "seen" stamp records how the pin was read.
     const call = { tool: "" };
-    this.instrument(server, grant, data, origin, call);
+    this.instrument(server, grant, hash, data, origin, call);
     registerApcTools(server, {
       readView: async () => trimView(this.storedView(), grant, data, origin),
       readFocus: async () => resolveFocus(this.focusRow(grant.id), grant, data, origin),
@@ -714,7 +750,7 @@ export class Sandbox extends DurableObject<Env> {
         this.broadcast({ type: "pin", grant_id: grant.id, pin: this.focusRow(grant.id) });
       },
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
-      pageOpen: async () => (this.grants().some((g) => g.id === grant.id) ? this.attendance() : false),
+      pageOpen: async () => (this.holds(grant.secret) ? this.attendance() : false),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
@@ -769,15 +805,16 @@ export class Sandbox extends DurableObject<Env> {
    * loop hint while a page is open and the view is shared, measure bytes and latency, and announce
    * the call on the presence channel.
    */
-  private instrument(server: McpServer, grant: Grant, data: Dataset, origin: string, call: { tool: string }): void {
+  private instrument(server: McpServer, grant: Grant, hash: string, data: Dataset, origin: string, call: { tool: string }): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>
       register(name, config, async (args: Record<string, unknown>, extra: unknown) => {
         // Revoke from the app (APC 0.2): a call of a grant revoked since its request came in (one of a
-        // batch, or the next poll of a wait) gets the revoked answer and nothing of Pulse's.
+        // batch, or the next poll of a wait) gets the revoked answer and nothing of Pulse's. By the grant's
+        // secret and its hash, never its id, which a later grant may reuse (TIN-606).
         const cut = (): ToolResult | null => {
-          if (this.grants().some((g) => g.id === grant.id)) return null;
-          const revokedAt = this.revokedAt({ grantId: grant.id });
+          if (this.holds(grant.secret)) return null;
+          const revokedAt = this.revokedAt(hash);
           return revokedAt ? revokedToolResult(new URL(origin).host, revokedAt) : toolError("unknown_grant", "This grant no longer exists.");
         };
         const before = cut();

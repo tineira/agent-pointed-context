@@ -60,7 +60,11 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       return { grantId: made.grant_id as string, mcpUrl: urlOf(made.grant_id) };
     }
     agents++;
-    const paired = await feed.pairHub(SID, ORIGIN, { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] });
+    const drop = { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] };
+    // Signals asks the person on its page first (TIN-606); their Allow brings the nonce back.
+    const asked = await feed.pairHub(SID, ORIGIN, drop);
+    assert.equal(asked.error, "consent_required");
+    const paired = await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     await feed.unpin(paired.grant_id);
     return { grantId: paired.grant_id as string, mcpUrl: urlOf(paired.grant_id) };
@@ -181,6 +185,87 @@ test("revoking an agent in Signals calls nobody; the URL answers revoked with Si
   const response = await feed.fetch(new Request(mcpUrl, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
   assert.equal(response.status, 403);
   assert.equal((await response.json()).revoked_by, "signals.test");
+});
+
+test("Signals makes a grant for a dock agent only with the nonce its consent was shown with, even when the page thinks it is linked (TIN-606)", async (t) => {
+  const { app, feed } = await signals();
+  const hub = standInHub(t);
+  const { grantId } = await app.connect();
+  assert.deepEqual(await feed.revokeGrant(grantId), { ok: true });
+  // The page missed the revoke and sends the drop as a pin: the server asks for consent; nothing reaches the dock.
+  const calls = hub.calls.length;
+  const drop = { hub: HUB, agent: "ag_1", ticket: `${"d".repeat(32)}.${"1".repeat(16)}`, target: { kind: "post", id: buildMarket(generateDataset(SEED)).posts[0]!.id } };
+  const asked = await feed.pairHub(SID, ORIGIN, drop);
+  assert.equal(asked.error, "consent_required");
+  assert.match(asked.consent, /^cn_[0-9a-f]{32}$/);
+  assert.equal(hub.calls.length, calls);
+  assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: `cn_${"0".repeat(32)}` })).error, "consent_required");
+  assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, agent: "ag_2", consent: asked.consent })).error, "consent_required", "another agent's drop");
+  assert.equal(hub.calls.length, calls);
+  const again = await feed.pairHub(SID, ORIGIN, drop);
+  assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: again.consent })).ok, true);
+  assert.deepEqual(hub.calls.slice(calls), [`${HUB}/apc/pair`]);
+});
+
+test("a double-clicked Allow in Signals pairs once: the second request changes nothing, and the grant the first made stays (Grok on #123)", async (t) => {
+  const { feed } = await signals();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const calls: string[] = [];
+  let pairAsked!: () => void;
+  const asked = new Promise<void>((resolve) => (pairAsked = resolve));
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url === `${HUB}/apc/pair`) {
+      pairAsked();
+      // The hub takes its time (it reads the app's apc.json first).
+      await held;
+      return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null } });
+    }
+    // Were the second request to ask the hub, it would hear the pairing does not exist yet.
+    if (url === `${HUB}/apc/confirm`) return Response.json({ ok: false, error: "not_paired" });
+    throw new Error(`no network in this test: ${url}`);
+  });
+  const drop = { hub: HUB, agent: "ag_7", ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: buildMarket(generateDataset(SEED)).posts[0]!.id } };
+  const { consent } = await feed.pairHub(SID, ORIGIN, drop);
+  const first = feed.pairHub(SID, ORIGIN, { ...drop, consent });
+  await asked;
+  // The grant exists while the hub answers, but it is not yet this agent's link.
+  const during = (await feed.state()).grants as Array<{ id: string; agent: string | null }>;
+  assert.deepEqual(during.map((g) => g.agent), [null]);
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  release();
+  const done = await first;
+  assert.equal(done.ok, true, done.error);
+  assert.deepEqual(calls, [`${HUB}/apc/pair`], "no confirm, no second pairing");
+  const grants = (await feed.state()).grants as Array<{ id: string; agent: string | null }>;
+  assert.deepEqual(grants.map((g) => [g.id, g.agent]), [[done.grant_id, "ag_7"]], "the grant the hub got is still there, linked");
+});
+
+test("a running call in Signals is cut by its own grant, never by a grant id a later grant reuses (TIN-606)", async () => {
+  const { app, feed, room } = await signals("direct");
+  room.openPage();
+  const { grantId, mcpUrl } = await app.connect();
+  const waitOn = async (url: string) => {
+    const response = await feed.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "wait_for_focus", arguments: { timeout_s: 8 } } }) }));
+    const { result } = (await response.json()) as { result: { isError?: boolean; content: Array<{ text: string }> } };
+    return { isError: result.isError, body: JSON.parse(result.content[0]!.text) as Record<string, unknown> };
+  };
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const started = Date.now();
+  const waiting = waitOn(mcpUrl);
+  await sleep(100);
+  assert.deepEqual(await feed.revokeGrant(grantId), { ok: true });
+  const reused = "e".repeat(32);
+  room.db.prepare("insert into grants (id, secret, created_at) values (?, ?, ?)").run(grantId, reused, new Date().toISOString());
+  const cut = await waiting;
+  assert.ok(Date.now() - started < 5_000, "it ended at its next poll");
+  assert.equal(cut.body.error, "revoked");
+  const second = waitOn(`${ORIGIN}/mcp/${SID}/${reused}`);
+  await sleep(100);
+  room.db.prepare("delete from grants where id = ?").run(grantId);
+  assert.equal((await second).body.error, "unknown_grant", "the later grant went without a revoke");
 });
 
 test("Signals ends the loop like Pulse: no then on a wait that came back empty", async () => {

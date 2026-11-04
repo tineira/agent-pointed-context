@@ -2,12 +2,29 @@ import { createRoot } from "react-dom/client";
 import { HubDock } from "./hub.tsx";
 import { Landing } from "./landing.tsx";
 import { ExtensionInstall } from "./extension.tsx";
+import { keepDockCurrent } from "./sw-reload.ts";
 import "./dock.css";
 
 // /: the landing of the APC standard (TIN-420; always, even for a visitor who has a dock: it offers "Open your dock", TIN-610). /dock: the dock
 // with its hub (TIN-382).
 // Installable (TIN-392): the service worker, and a compact window the first time the installed app opens.
-if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+// A page asks for a new service worker whenever it comes back into view, and a dock page reloads itself once a
+// new one takes over, so it runs the new deploy's code (TIN-609, sw-reload.ts).
+if ("serviceWorker" in navigator) {
+  let storage: Storage | null = null;
+  try {
+    storage = sessionStorage;
+  } catch {
+    // storage refused: one reload per page still holds
+  }
+  keepDockCurrent({
+    path: location.pathname,
+    sw: navigator.serviceWorker,
+    onVisible: (listener) => document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && listener()),
+    reload: () => location.reload(),
+    storage,
+  });
+}
 if (matchMedia("(display-mode: standalone)").matches) {
   try {
     if (!localStorage.getItem("apc-dock-sized")) {

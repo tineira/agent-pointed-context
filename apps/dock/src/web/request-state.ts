@@ -67,7 +67,7 @@ export function decisionNotice(error: unknown): string {
     case "unknown_pairing":
       return "That request is no longer waiting: it was answered elsewhere, removed, or it expired. Drop your agent on the app again to ask again.";
     case "warning_required":
-      return "This app is not verified: approve it from its warning. Drop your agent on the app again to see it.";
+      return "This app is not verified, so it needs its warning: its request now shows it. Read it, then approve or deny.";
     case "app_blocked":
       return "The dock does not pair with this app right now, so it was not paired.";
     case "revoked":

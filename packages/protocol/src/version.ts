@@ -7,4 +7,4 @@
  * and becomes 1.0.0 when the standard is published. Every change to the
  * contract adds an entry to `packages/protocol/CHANGELOG.md` and bumps this.
  */
-export const APC_STANDARD_VERSION = "0.6.0";
+export const APC_STANDARD_VERSION = "0.7.0";

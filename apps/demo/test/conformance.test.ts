@@ -58,7 +58,11 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
     } else {
       // A dock agent dropped on Pulse, the person said yes: Pulse makes the grant and hands it to the hub.
       agents++;
-      const paired = await sandbox.pairHub(SID, ORIGIN, { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] });
+      const drop = { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] };
+      // Pulse asks the person on its page first (TIN-606); their Allow brings the nonce back.
+      const asked = await sandbox.pairHub(SID, ORIGIN, drop);
+      assert.equal(asked.error, "consent_required");
+      const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
       assert.equal(paired.ok, true, `pairing: ${paired.error}`);
       grantId = paired.grant_id!;
       await sandbox.unpin(grantId);
@@ -249,4 +253,84 @@ test("revoking a dock agent in Pulse calls nobody, and its URL answers revoked w
 test("revoking an unknown grant changes nothing", async () => {
   const { sandbox } = await pulse("direct");
   assert.deepEqual(await sandbox.revokeGrant("g_nobody"), { ok: false, error: "unknown_grant" });
+});
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A wait_for_focus on a grant's URL, as an agent sends it: the tool's answer, parsed. */
+async function waitOn(sandbox: { fetch(request: Request): Promise<Response> }, mcpUrl: string, timeoutS: number): Promise<{ isError?: boolean; body: Record<string, unknown> }> {
+  const response = await sandbox.fetch(new Request(mcpUrl, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "wait_for_focus", arguments: { timeout_s: timeoutS } } }) }));
+  const { result } = (await response.json()) as { result: { isError?: boolean; content: Array<{ text: string }> } };
+  return { isError: result.isError, body: JSON.parse(result.content[0]!.text) as Record<string, unknown> };
+}
+
+test("a running call is cut by its own grant, never by a grant id a later grant reuses (TIN-606)", async () => {
+  const { app, sandbox, room } = await pulse("direct");
+  room.openPage();
+  const { grantId, mcpUrl } = await app.connect();
+
+  // Revoked while it waits, and a new grant takes the same id at once: the wait still ends, revoked, at its next poll.
+  const started = Date.now();
+  const waiting = waitOn(sandbox, mcpUrl, 8);
+  await sleep(100);
+  assert.deepEqual(await sandbox.revokeGrant(grantId), { ok: true });
+  const reused = "e".repeat(32);
+  room.db.prepare("insert into grants (id, secret, label, created_at) values (?, ?, ?, ?)").run(grantId, reused, "Agent 9", new Date().toISOString());
+  const cut = await waiting;
+  assert.ok(Date.now() - started < 5_000, "it ended at its next poll, not at its timeout");
+  assert.equal(cut.isError, true);
+  assert.equal(cut.body.error, "revoked");
+
+  // The grant that took the id goes without a revoke (as a dock's give-back drops one) while it waits: its call ends
+  // unknown_grant, not "revoked", although a revoked grant once had its id.
+  const second = waitOn(sandbox, `${ORIGIN}/mcp/${SID}/${reused}`, 8);
+  await sleep(100);
+  room.db.prepare("delete from grants where id = ?").run(grantId);
+  const gone = await second;
+  assert.equal(gone.isError, true);
+  assert.equal(gone.body.error, "unknown_grant");
+});
+
+test("a double-clicked Allow in Pulse pairs once: the second request changes nothing (Grok on #123)", async (t) => {
+  const { sandbox } = await pulse("dock");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let pairAsked!: () => void;
+  const asked = new Promise<void>((resolve) => (pairAsked = resolve));
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url === `${HUB}/apc/pair`) {
+      pairAsked();
+      await held;
+      return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null } });
+    }
+    throw new Error(`no network in this test: ${url}`);
+  });
+  const drop = { hub: HUB, agent: "ag_8", ticket: `${"d".repeat(32)}.${"8".repeat(16)}`, target: { kind: "customer", id: generateDataset(SEED).customers[0]!.id } };
+  const { consent } = await sandbox.pairHub(SID, ORIGIN, drop);
+  const first = sandbox.pairHub(SID, ORIGIN, { ...drop, consent });
+  await asked;
+  assert.deepEqual(await sandbox.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  release();
+  const done = await first;
+  assert.equal(done.ok, true, done.error);
+  assert.deepEqual(calls, [`${HUB}/apc/pair`]);
+  const state = await sandbox.state();
+  assert.deepEqual(state.grants.map((g: { id: string }) => g.id), [done.grant_id]);
+  assert.deepEqual(state.hub_links.map((l: { grant_id: string }) => l.grant_id), [done.grant_id]);
+});
+
+test("Pulse makes a grant for a dock agent only with the nonce its consent was shown with (TIN-606)", async (t) => {
+  const { sandbox } = await pulse("dock");
+  const hub = standInHub(t);
+  const drop = { hub: HUB, agent: "ag_9", ticket: `${"d".repeat(32)}.${"9".repeat(16)}`, target: { kind: "customer", id: generateDataset(SEED).customers[0]!.id } };
+  const asked = await sandbox.pairHub(SID, ORIGIN, drop);
+  assert.deepEqual(Object.keys(asked).sort(), ["consent", "error", "ok"]);
+  assert.equal(asked.error, "consent_required");
+  assert.equal(hub.calls.length, 0, "no grant and no call to the dock without the person's yes");
+  assert.equal((await sandbox.state()).grants.length, 0);
+  assert.equal((await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent })).ok, true);
+  assert.deepEqual(hub.calls, [`${HUB}/apc/pair`]);
+  assert.equal((await sandbox.state()).grants.length, 1);
 });

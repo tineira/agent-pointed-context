@@ -36,7 +36,8 @@ interface FeedState {
   profiles: ApcProfile[];
   grants: GrantState[];
 }
-type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget };
+/** A dock agent to ask about; `consent` is the nonce the server asked with, sent back with the Allow (TIN-606). */
+type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: FocusTarget; consent: string };
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
 const REGION_NAME: Record<string, string> = { latam: "Latin America", na: "North America", emea: "Europe" };
@@ -158,12 +159,12 @@ function Feed({ sid }: { sid: string }) {
           setConnectOpen(true);
           say(answer.message);
         },
+        // Every dock drop goes to the server, which decides (TIN-606): an agent with no grant here comes back
+        // consent_required with a nonce, and the person is asked, never on this page's last-loaded state.
         onUnknownAgent: async (drag, target) => {
-          const paired = stateRef.current?.grants.some((g) => g.hub === drag.hub && g.agent === drag.agent);
-          if (!paired) return setPending({ drag, target });
-          const r = await call<{ ok: boolean; error?: string; grant_id?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
-          if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
-          else if (r.error === "not_paired") setPending({ drag, target });
+          const r = await call<{ ok: boolean; error?: string; grant_id?: string; consent?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
+          if (r.error === "consent_required" && r.consent) setPending({ drag, target, consent: r.consent });
+          else if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
           else say(`Not pinned: ${r.error}`);
           refresh();
         },
@@ -408,12 +409,15 @@ function Feed({ sid }: { sid: string }) {
       })}
       {pending && (
         <Consent
+          key={pending.consent}
           pending={pending}
           onDone={async (allow) => {
-            setPending(null);
-            if (!allow) return;
-            const r = await call<{ ok: boolean; error?: string }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target });
-            say(r.ok ? `Paired with the dock at ${new URL(pending.drag.hub).host}. Allow it there too, then ask your agent about "this".` : `Not paired: ${r.error === "ticket_expired" ? "the drag is too old (60 s); drag the agent from the dock again" : r.error}`);
+            if (!allow) return setPending(null);
+            // The dialog stays, its buttons off, until the pairing answers (Grok on #123): one Allow, one request.
+            const r = await call<{ ok: boolean; error?: string }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target, consent: pending.consent }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+            // A newer drop's consent, shown meanwhile, stays.
+            setPending((p) => (p === pending ? null : p));
+            say(r.ok ? `Paired with the dock at ${new URL(pending.drag.hub).host}. Allow it there too, then ask your agent about "this".` : `Not paired: ${r.error === "ticket_expired" || r.error === "consent_required" ? "the drag is too old; drag the agent from the dock again" : r.error}`);
             refresh();
           }}
         />
@@ -438,8 +442,17 @@ function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void 
   );
 }
 
-function Consent(props: { pending: Pending; onDone: (allow: boolean) => void }) {
+function Consent(props: { pending: Pending; onDone: (allow: boolean) => Promise<void> | void }) {
   const host = new URL(props.pending.drag.hub).host;
+  // One answer per consent: the ref holds before the re-render that turns the buttons off (a double click).
+  const answered = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const answer = (allow: boolean) => {
+    if (answered.current) return;
+    answered.current = true;
+    setBusy(true);
+    void props.onDone(allow);
+  };
   return (
     <div className="backdrop" role="dialog" aria-modal="true" aria-labelledby="consent-title">
       <div className="modal">
@@ -448,10 +461,10 @@ function Consent(props: { pending: Pending; onDone: (allow: boolean) => void }) 
           You dropped an agent from the dock at <b>{host}</b>. If you allow it, Signals gives that dock its own access to this feed, the dock asks you once more, and from then on that agent reads Signals when you point it here.
         </p>
         <div className="actions">
-          <button type="button" className="primary" onClick={() => props.onDone(true)}>
-            Allow
+          <button type="button" className="primary" disabled={busy} onClick={() => answer(true)}>
+            {busy ? "Pairing…" : "Allow"}
           </button>
-          <button type="button" onClick={() => props.onDone(false)}>
+          <button type="button" disabled={busy} onClick={() => answer(false)}>
             Not now
           </button>
         </div>
