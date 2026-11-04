@@ -16,9 +16,10 @@ import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
-import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult } from "./app-client.ts";
-import { appAllowed, appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
+import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
+import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
+import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, untrustedResult, unverifiedView } from "./trust.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
 const TICKET_TTL_MS = 60_000;
@@ -32,8 +33,15 @@ const READINGS_KEPT = 50;
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
   ASSETS: Fetcher;
-  /** Comma-separated origins of the apps a hub may pair with. */
+  /** Comma-separated origins of the apps a hub may pair with: the verified apps (TIN-580). */
   APP_ORIGINS?: string;
+  /**
+   * "1" lets an app outside APP_ORIGINS pair, as unverified, under every limit in trust.ts (TIN-580).
+   * Unset in every deploy: until the dock asks the person to approve a warning first, only verified apps pair.
+   */
+  OPEN_PAIRING?: string;
+  /** Comma-separated domains we block (TIN-580): never paired, never called; a pairing with one shows as blocked. Empty by default. */
+  BLOCKED_APPS?: string;
   /** Comma-separated origins of the browser extensions that may send page readings (chrome-extension://<id>, TIN-421). */
   READER_ORIGINS?: string;
   /** Analytics Engine dataset of agent sessions, shared with Pulse v1 (TIN-416). Written only when ANALYTICS_SALT is set too. */
@@ -75,8 +83,15 @@ interface Pairing {
   app_name: string;
   app_origin: string;
   mcp_url: string;
-  /** revoked: the person revoked the grant in the app itself (APC 0.2); kept to say so, never used again. */
-  status: "pending" | "paired" | "revoked";
+  /**
+   * revoked: the person revoked the grant in the app itself (APC 0.2); kept to say so, never used again.
+   * blocked: the app's domain is on BLOCKED_APPS (TIN-580); never stored, read as such while it is listed.
+   */
+  status: "pending" | "paired" | "revoked" | "blocked";
+  /** In APP_ORIGINS when it paired (TIN-580). An unverified app is named by its host and held to trust.ts's limits. */
+  verified: boolean;
+  /** The name an unverified app gave itself, shown only as secondary text; null for a verified app. */
+  declared_name: string | null;
   created_at: string;
   approved_at: string | null;
   /** When the hub learned that the app revoked the grant. */
@@ -121,7 +136,11 @@ interface Reader {
 /** The app id and name a reader has for the agent; no app can take the id (see pair). */
 const PAGE_APP = { id: "page", name: "This browser" };
 
-const appRef = (p: Pairing): AppRef => ({ id: p.app_id, name: p.app_name, origin: p.app_origin });
+const appRef = (p: Pairing): AppRef => ({ id: p.app_id, name: p.app_name, origin: p.app_origin, ...(p.verified ? {} : { unverified: true as const, declared_name: p.declared_name }) });
+/** How the hub talks to a pairing's app: a verified app's limits, or the strict ones (TIN-580). */
+const transport = (p: Pairing): AppTransport => ({ verified: p.verified });
+/** A grant the hub gives back when it lets go: not one the app revoked itself, and never to a blocked domain, which the hub does not call. */
+const givesBack = (p: Pairing) => p.status !== "revoked" && p.status !== "blocked";
 
 /** How long an agent shows as calling tools after its last call ended: long enough for the dock to see it (TIN-483). */
 const BUSY_TAIL_MS = 1500;
@@ -188,7 +207,7 @@ export class Hub extends DurableObject<Env> {
         origin text not null, at text not null, site text not null, bytes integer not null);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -211,7 +230,12 @@ export class Hub extends DurableObject<Env> {
   private agent(id: string): Agent | null {
     return this.agents().find((a) => a.id === id) ?? null;
   }
+  /** The domains we block (TIN-580). */
+  private blocked(): string[] {
+    return envList(this.env.BLOCKED_APPS);
+  }
   private pairings(agentId?: string, status?: Pairing["status"]): Pairing[] {
+    const blocked = this.blocked();
     return this.sql
       .exec<Record<string, string | number | null>>("select * from pairings order by created_at")
       .toArray()
@@ -222,7 +246,11 @@ export class Hub extends DurableObject<Env> {
         app_name: r.app_name as string,
         app_origin: r.app_origin as string,
         mcp_url: r.mcp_url as string,
-        status: r.status as Pairing["status"],
+        // A blocked domain's pairing reads as blocked while the domain is listed, so every "paired" query skips it (TIN-580).
+        status: (r.status !== "revoked" && blocked.length && isBlocked(r.app_origin as string, blocked) ? "blocked" : r.status) as Pairing["status"],
+        // Rows from before TIN-580 could only pair from APP_ORIGINS.
+        verified: r.verified !== 0,
+        declared_name: (r.declared_name as string | null) ?? null,
         created_at: r.created_at as string,
         approved_at: (r.approved_at as string | null) ?? null,
         revoked_at: (r.revoked_at as string | null) ?? null,
@@ -263,9 +291,18 @@ export class Hub extends DurableObject<Env> {
       }))
       .filter((r) => (!agentId || r.agent_id === agentId) && (!status || r.status === status));
   }
+  /** What the hub kept from a blocked app goes: its view, its tools, the pin it took (TIN-580). */
+  private forgetBlocked(): void {
+    if (!this.blocked().length) return;
+    for (const p of this.pairings(undefined, "blocked")) {
+      this.sql.exec("update pairings set view = null, tools = null, page_open = null where id = ?", p.id);
+      this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+    }
+  }
   private pointer(agentId: string): PointerRow | null {
     // An alarm can ring late, and a focus on an ended reading still holds the page's address.
     this.expireReadings();
+    this.forgetBlocked();
     const r = this.sql.exec<Record<string, string | null>>("select * from pointer where agent_id = ?", agentId).toArray()[0];
     return r ? { agent_id: r.agent_id!, pairing_id: r.pairing_id!, app: JSON.parse(r.app!) as AppRef, focus: JSON.parse(r.focus!) as FocusPayload, seen_at: r.seen_at ?? null } : null;
   }
@@ -297,7 +334,15 @@ export class Hub extends DurableObject<Env> {
   }
   /** then rides on a hub result while the dock is open and the person is on a paired app's page. */
   private attendance(agentId: string): boolean {
-    return this.dockOpen() && combineAttendance(this.pairings(agentId, "paired").map((p) => p.page_open)) === true;
+    return this.dockOpen() && this.presence(agentId) === true;
+  }
+  /**
+   * Whether the person is on a paired app's page, as the verified apps say (TIN-580). An unverified app's
+   * then or page_open never counts: one that claimed the person was always there would keep the agent in
+   * the wait loop, each round a wait the app can hold. Its pins still reach the agent; only its say on presence is ignored.
+   */
+  private presence(agentId: string): boolean | null {
+    return combineAttendance(this.pairings(agentId, "paired").filter((p) => p.verified).map((p) => p.page_open));
   }
   private async touch(): Promise<void> {
     this.setMeta("expires_at", String(Date.now() + DOCK_TTL_MS));
@@ -321,7 +366,7 @@ export class Hub extends DurableObject<Env> {
    * everything, as when the dock expires.
    */
   async reset(): Promise<void> {
-    await Promise.allSettled(this.pairings().filter((p) => p.status !== "revoked").map((p) => revokeGrant(p.mcp_url)));
+    await Promise.allSettled(this.pairings().filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
     await this.wipe();
   }
 
@@ -377,7 +422,7 @@ export class Hub extends DurableObject<Env> {
    */
   async removeAgent(agentId: string): Promise<{ ok: boolean }> {
     if (!this.agent(agentId)) return { ok: false };
-    await Promise.allSettled(this.pairings(agentId).filter((p) => p.status !== "revoked").map((p) => revokeGrant(p.mcp_url)));
+    await Promise.allSettled(this.pairings(agentId).filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
     this.sql.exec("delete from readers where agent_id = ?", agentId);
@@ -449,7 +494,8 @@ export class Hub extends DurableObject<Env> {
           },
           pairings: [
             // A revoked pairing says who revoked it: the app's host, as the hub paired it (APC 0.2).
-            ...this.pairings(a.id).map((p) => ({ id: p.id, kind: "app" as const, app: appRef(p), status: p.status, created_at: p.created_at, page_open: p.page_open, error: p.error, ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}) })),
+            // An unverified app (TIN-580) is named by its host; app.declared_name is what it calls itself, secondary text only.
+            ...this.pairings(a.id).map((p) => ({ id: p.id, kind: "app" as const, app: appRef(p), verified: p.verified, status: p.status, created_at: p.created_at, page_open: p.page_open, error: p.error, ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}) })),
             // A browser sending page readings (TIN-421) is listed with the apps, under its own label.
             ...this.readers(a.id).map((r) => ({ id: r.id, kind: "reader" as const, app: { id: PAGE_APP.id, name: r.label, origin: r.origin }, status: r.status, created_at: r.created_at, page_open: null, error: null })),
           ],
@@ -504,6 +550,7 @@ export class Hub extends DurableObject<Env> {
     }
     const p = this.pairings().find((x) => x.id === pairingId);
     if (!p) return { ok: false, error: "unknown_pairing" };
+    if (action === "approve" && p.status === "blocked") return { ok: false, error: "app_blocked" };
     if (action === "approve" && p.status === "pending") {
       this.sql.exec("update pairings set status = 'paired', approved_at = ? where id = ?", new Date().toISOString(), p.id);
       this.broadcast();
@@ -516,8 +563,8 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);
       this.broadcast();
       // And the app gets its grant back, so a later drop there asks the person again (TIN-388). A grant
-      // the app revoked itself is gone there already: removing the line is all that is left.
-      if (p.status !== "revoked") await revokeGrant(p.mcp_url);
+      // the app revoked itself is gone there already: removing the line is all that is left. A blocked domain is never called.
+      if (givesBack(p)) await revokeGrant(p.mcp_url, transport(p));
       return { ok: true };
     }
     return { ok: false, error: "invalid_action" };
@@ -592,9 +639,12 @@ export class Hub extends DurableObject<Env> {
   /** On approval: tell the app who reads it, and learn its tools. A failure is shown in the dock and retried on use. */
   private async introduce(p: Pairing): Promise<void> {
     const agent = this.agent(p.agent_id);
+    if (p.status === "blocked") return;
     try {
-      await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null);
-      const tools = (await listAppTools(p.mcp_url)).filter((t) => !HIDDEN_TOOLS.has(t.name));
+      await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null, transport(p));
+      const listed = (await listAppTools(p.mcp_url, transport(p))).filter((t) => !HIDDEN_TOOLS.has(t.name));
+      // An unverified app's tools are kept small and plain, with no annotations (TIN-580).
+      const tools = p.verified ? listed : shapeUnverifiedTools(listed);
       this.sql.exec("update pairings set tools = ?, error = null where id = ?", JSON.stringify(tools), p.id);
     } catch (error) {
       this.failed(p, error);
@@ -618,16 +668,28 @@ export class Hub extends DurableObject<Env> {
     const t = this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray()[0];
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
-    const allowed = (this.env.APP_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    if (!name || !appAllowed(origin, b.mcp_url, allowed, dev())) return { ok: false, error: "app_not_allowed" };
+    if (!name) return { ok: false, error: "app_not_allowed" };
+    // Verified (APP_ORIGINS), unverified (only while pairing is open: HTTPS, a domain), blocked or refused (TIN-580).
+    const verdict = appVerdict(origin, b.mcp_url, { allowed: envList(this.env.APP_ORIGINS), blocked: this.blocked(), open: this.env.OPEN_PAIRING === "1", dev: dev() });
+    if (!verdict.ok) return { ok: false, error: verdict.error };
     // The person pairs again after revoking in the app (APC 0.2): the new pairing replaces the revoked one's line, and its app id.
     this.sql.exec("delete from pairings where agent_id = ? and app_origin = ? and status = 'revoked'", t.agent_id, origin);
-    // "page" is the browser's readings (TIN-421), never an app's id.
-    const taken = new Set([...this.pairings(t.agent_id).map((p) => p.app_id), PAGE_APP.id]);
+    // A cap on the apps one dock pairs, every agent and app counted, pending or paired (TIN-580).
+    // A blocked domain's pairing holds no place: it reads as blocked, never as pending or paired.
+    const held = this.pairings().filter((p) => p.status === "pending" || p.status === "paired").length;
+    if (held >= LIMITS.pairings) return { ok: false, error: "too_many_apps" };
+    const others = this.pairings(t.agent_id);
+    // A verified app's id comes from its name; an unverified app's from its domain, never from the name it declares,
+    // which it keeps only as secondary text (TIN-580). Verified ids are [a-z0-9] and "page" (TIN-421); a domain id
+    // always has a "_", so the two never meet.
+    const domainId = verdict.verified ? null : domainAppId(origin, others);
+    if (domainId && "error" in domainId) return { ok: false, error: domainId.error };
+    const appId = verdict.verified ? appIdFor(name, new Set([...others.map((p) => p.app_id), PAGE_APP.id])) : domainId!.id;
+    const declared = verdict.verified ? null : declaredName(name) || null;
     const id = `pr_${randomHex(6)}`;
     this.sql.exec(
-      "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at) values (?, ?, ?, ?, ?, ?, 'pending', ?)",
-      id, t.agent_id, appIdFor(name, taken), name, origin, b.mcp_url, new Date().toISOString(),
+      "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at, verified, declared_name) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+      id, t.agent_id, appId, verdict.verified ? name : host(origin), origin, b.mcp_url, new Date().toISOString(), verdict.verified ? 1 : 0, declared,
     );
     this.broadcast();
     // The agent's mark, so the app's first pin already shows who it is.
@@ -650,6 +712,8 @@ export class Hub extends DurableObject<Env> {
     const p = this.pairings(t.agent_id).find((x) => x.mcp_url === b.mcp_url && x.status !== "revoked");
     // Not paired: the ticket stays good, so the app can ask the person and pair with it right away.
     if (!p) return { ok: false, error: "not_paired" };
+    // A blocked domain's pairing is never confirmed; it could not pair again either (TIN-580).
+    if (p.status === "blocked") return { ok: false, error: "app_blocked" };
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
     const agent = this.agent(t.agent_id)!;
     return { ok: true, status: p.status, agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
@@ -802,8 +866,10 @@ export class Hub extends DurableObject<Env> {
     }
     const open = from === "wait" ? (typeof s.page_open === "boolean" ? s.page_open : s.focus ? true : p.page_open) : "then" in s;
     this.sql.exec("update pairings set page_open = ?, error = null where id = ?", open === null ? null : open ? 1 : 0, p.id);
-    if (from === "view") this.sql.exec("update pairings set view = ? where id = ?", s.view ? JSON.stringify(s.view) : null, p.id);
-    const f = s.focus as FocusPayload | null | undefined;
+    // An unverified app's view is kept only when small, and its pin only when well formed and not dated ahead (TIN-580).
+    const view = p.verified ? s.view : unverifiedView(s.view);
+    if (from === "view") this.sql.exec("update pairings set view = ? where id = ?", view ? JSON.stringify(view) : null, p.id);
+    const f = (p.verified ? s.focus : unverifiedFocus(s.focus, p.app_origin, Date.now())) as FocusPayload | null | undefined;
     if (!f || typeof f.pinned_at !== "string" || (p.taken_at && f.pinned_at <= p.taken_at)) return false;
     this.sql.exec("update pairings set taken_at = ? where id = ?", f.pinned_at, p.id);
     // One mark, one focus: the newest pin across apps wins.
@@ -838,15 +904,17 @@ export class Hub extends DurableObject<Env> {
       this.broadcast();
       return;
     }
-    this.sql.exec("update pairings set error = ? where id = ?", String(error).slice(0, 200), p.id);
+    // What the dock shows; for an unverified app, never the app's own words (TIN-580).
+    this.sql.exec("update pairings set error = ? where id = ?", (p.verified ? String(error) : failureReason(error)).slice(0, 200), p.id);
   }
 
   /** Ask every paired app what the person sees and where they pointed: the hub's quick look. */
   private async look(agentId: string): Promise<void> {
+    this.forgetBlocked();
     await Promise.all(
       this.pairings(agentId, "paired").map(async (p) => {
         try {
-          this.take(p, await callAppTool(p.mcp_url, "get_current_view", {}, 6_000), "view");
+          this.take(p, await callAppTool(p.mcp_url, "get_current_view", {}, LIMITS.lookMs, transport(p)), "view");
         } catch (error) {
           this.failed(p, error);
         }
@@ -867,10 +935,10 @@ export class Hub extends DurableObject<Env> {
       const finish = (got: boolean) => {
         if (done) return;
         done = true;
-        resolve({ got, open: combineAttendance(this.pairings(agentId, "paired").map((p) => p.page_open)) });
+        resolve({ got, open: this.presence(agentId) });
       };
       for (const p of paired) {
-        callAppTool(p.mcp_url, "wait_for_focus", { timeout_s: timeoutS }, (timeoutS + 15) * 1000)
+        callAppTool(p.mcp_url, "wait_for_focus", { timeout_s: timeoutS }, timeoutS * 1000 + LIMITS.waitGraceMs, transport(p))
           .then((result) => {
             // A pin that arrives after another app's ended the wait is still taken, unread, for next time.
             if (this.take(p, result, "wait")) finish(true);
@@ -1025,7 +1093,7 @@ export class Hub extends DurableObject<Env> {
     let inner: unknown = args;
     let via: CallEntry["via"] = "prefixed";
     if (name === "call_app_tool") {
-      app = typeof args.app === "string" ? args.app.slice(0, 16) : null;
+      app = typeof args.app === "string" ? args.app.slice(0, DOMAIN_ID_MAX) : null;
       tool = typeof args.tool === "string" ? args.tool.slice(0, 64) : "?";
       inner = args.args ?? {};
       via = "relay";
@@ -1052,7 +1120,9 @@ export class Hub extends DurableObject<Env> {
         const name = prefixed(p.app_id, t.name);
         if (name.length > 64) continue;
         const schema = t.inputSchema && typeof t.inputSchema === "object" ? (t.inputSchema as Record<string, unknown>) : { type: "object" };
-        out.push({ name, description: `[${p.app_name}, ${host(p.app_origin)}] ${t.description ?? t.title ?? t.name}`, inputSchema: schema, ...(t.annotations ? { annotations: t.annotations } : {}) });
+        // An unverified app's tool says so before its own words, and carries no annotations of the app's (TIN-580).
+        if (!p.verified) out.push({ name, description: `${unverifiedLabel(host(p.app_origin), p.declared_name)} ${t.description ?? t.name}`, inputSchema: schema });
+        else out.push({ name, description: `[${p.app_name}, ${host(p.app_origin)}] ${t.description ?? t.title ?? t.name}`, inputSchema: schema, ...(t.annotations ? { annotations: t.annotations } : {}) });
       }
     }
     if (this.readers(agentId, "paired").length) out.push({ ...PAGE_TOOL, name: prefixed(PAGE_APP.id, PAGE_TOOL.name) });
@@ -1074,7 +1144,7 @@ export class Hub extends DurableObject<Env> {
       const row = this.pointer(agentId);
       if (row && !row.seen_at) this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
       const views = this.pairings(agentId, "paired")
-        .map((p) => ({ app: appRef(p), view: p.view }))
+        .map((p) => ({ app: appRef(p), view: p.view, ...(p.verified ? {} : { untrusted: true }) }))
         .sort((a, b) => (b.view?.updated_at ?? "").localeCompare(a.view?.updated_at ?? ""));
       return toolResult({ focus: row ? this.render(agentId, row) : null, views });
     }
@@ -1125,13 +1195,19 @@ export class Hub extends DurableObject<Env> {
     }
     if (name === "list_app_tools") {
       await this.look(agentId);
-      const app = str(args.app, 16);
+      const app = str(args.app, DOMAIN_ID_MAX);
       const out = [];
       for (const p of this.pairings(agentId, "paired").filter((x) => !app || x.app_id === app)) {
         let tools = p.tools;
         if (!tools) {
           await this.introduce(p);
           tools = this.pairings(agentId).find((x) => x.id === p.id)?.tools ?? [];
+        }
+        if (!p.verified) {
+          // An unverified app's tools: labelled, and the entry marked untrusted (TIN-580).
+          const label = unverifiedLabel(host(p.app_origin), p.declared_name);
+          out.push({ app: appRef(p), untrusted: true, note: UNTRUSTED_NOTE, tools: tools.map((t) => ({ name: t.name, prefixed: prefixed(p.app_id, t.name), description: `${label} ${t.description ?? t.name}`, inputSchema: t.inputSchema })) });
+          continue;
         }
         out.push({ app: appRef(p), tools: tools.map((t) => ({ name: t.name, prefixed: prefixed(p.app_id, t.name), description: t.description, inputSchema: t.inputSchema })) });
       }
@@ -1142,7 +1218,7 @@ export class Hub extends DurableObject<Env> {
       return toolResult({ apps: out });
     }
     if (name === "call_app_tool") {
-      const app = str(args.app, 16);
+      const app = str(args.app, DOMAIN_ID_MAX);
       const tool = str(args.tool, 64);
       const inner = args.args === undefined ? {} : args.args;
       if (!app || !tool || !inner || typeof inner !== "object" || Array.isArray(inner)) return toolError("invalid_arguments", "Give app, tool and args (an object).");
@@ -1165,14 +1241,19 @@ export class Hub extends DurableObject<Env> {
     const p = this.pairings(agentId, "paired").find((x) => x.app_id === app);
     const revoked = p ? null : this.pairings(agentId, "revoked").find((x) => x.app_id === app);
     if (revoked) return toolError(REVOKED_ERROR, `The person revoked your access in ${revoked.app_name} (${host(revoked.app_origin)}). You cannot read it until they pair you again, by dropping you on it.`);
+    // A blocked domain is never called (TIN-580).
+    const blocked = p ? null : this.pairings(agentId, "blocked").find((x) => x.app_id === app);
+    if (blocked) return toolError("app_blocked", `The dock blocks ${host(blocked.app_origin)}: its tools are not available.`);
     if (!p) return toolError("unknown_app", `No paired app "${app}". Paired: ${this.pairings(agentId, "paired").map((x) => x.app_id).join(", ") || "none"}.`);
     if (HIDDEN_TOOLS.has(tool)) return toolError("hub_tool", `Call the dock's own ${tool}: it covers every app.`);
     let result: AppToolResult;
     try {
-      result = await callAppTool(p.mcp_url, tool, args);
+      result = await callAppTool(p.mcp_url, tool, args, LIMITS.callMs, transport(p));
     } catch (error) {
       this.failed(p, error);
-      return toolError("app_unreachable", `${p.app_name} did not answer: ${String(error).slice(0, 120)}`);
+      // An unverified app's failure is told in the hub's own words only: its JSON-RPC error text and its HTTP error
+      // body are the app's, and would reach the agent unmarked in a tool error (TIN-580).
+      return toolError("app_unreachable", `${p.app_name} did not answer: ${(p.verified ? String(error) : failureReason(error)).slice(0, 120)}`);
     }
     if (result.isError && isRevokedAnswer(structured(result))) {
       this.markRevoked(p);
@@ -1181,6 +1262,8 @@ export class Hub extends DurableObject<Env> {
     const { result: clean, had } = detachKeys(result, ["attention", "then"]);
     if (had.has("attention")) await this.look(agentId);
     this.sql.exec("update pairings set page_open = ? where id = ?", had.has("then") ? 1 : 0, p.id);
+    // An unverified app's result reaches the agent inside an envelope marked untrusted, as page_text does (TIN-580).
+    if (!p.verified) return untrustedResult(clean, appRef(p));
     return {
       content: (clean.content ?? []).filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string"),
       ...(clean.structuredContent ? { structuredContent: clean.structuredContent } : {}),
@@ -1221,13 +1304,13 @@ const HUB_TOOLS = [
     name: "call_app_tool",
     title: "Call a tool of a paired app",
     description: "Runs one tool of one app the person paired with this dock, with that app's own access. The same tools are also listed as <app>__<tool>; this works even when your tool list is older than the last pairing. list_app_tools gives each app's tools and their arguments.",
-    inputSchema: { type: "object", properties: { app: { type: "string", maxLength: 16 }, tool: { type: "string", maxLength: 64 }, args: { type: "object" } }, required: ["app", "tool"] },
+    inputSchema: { type: "object", properties: { app: { type: "string", maxLength: DOMAIN_ID_MAX }, tool: { type: "string", maxLength: 64 }, args: { type: "object" } }, required: ["app", "tool"] },
   },
   {
     name: "list_app_tools",
     title: "The tools of the paired apps",
     description: "The apps the person paired with this dock, each with its tools (name, prefixed name, description, input schema).",
-    inputSchema: { type: "object", properties: { app: { type: "string", maxLength: 16 } } },
+    inputSchema: { type: "object", properties: { app: { type: "string", maxLength: DOMAIN_ID_MAX } } },
     annotations: { readOnlyHint: true },
   },
 ];

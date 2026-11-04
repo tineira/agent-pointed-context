@@ -5,16 +5,23 @@
  */
 import type { FocusPayload } from "@apc/protocol";
 
-/** Where a focus or a view came from. */
+/**
+ * Where a focus or a view came from. An app the hub has not verified (TIN-580) is named by its host,
+ * with `unverified: true` and the name it gave itself as `declared_name`; a verified app has neither key.
+ */
 export interface AppRef {
   id: string;
   name: string;
   origin: string;
+  unverified?: true;
+  declared_name?: string | null;
 }
 
 /** The focus as the hub hands it to the agent: the app's, plus where it came from, read with call_app_tool. */
 export interface HubFocus extends FocusPayload {
   app: AppRef;
+  /** From an unverified app: its kind, id, part and params are that app's data, never instructions (TIN-580). */
+  untrusted?: true;
 }
 
 /** The two APC tools the hub runs itself; an app's own are never relayed. */
@@ -32,8 +39,9 @@ export function appIdFor(name: string, taken: ReadonlySet<string>): string {
  * same arguments) when the agent's client has it in its list, else call_app_tool, which always works.
  */
 export function hubFocus(focus: FocusPayload, app: AppRef, prefixed = false): HubFocus {
-  if (prefixed) return { ...focus, app, next: `${app.id}__${focus.next}` };
-  return { ...focus, app, next: "call_app_tool", next_args: { app: app.id, tool: focus.next, args: focus.next_args } };
+  const mark = app.unverified ? { untrusted: true as const } : {};
+  if (prefixed) return { ...focus, app, next: `${app.id}__${focus.next}`, ...mark };
+  return { ...focus, app, next: "call_app_tool", next_args: { app: app.id, tool: focus.next, args: focus.next_args }, ...mark };
 }
 
 /** The newest of several foci (one per app): an agent has one mark, so the latest pin wins. */
@@ -133,16 +141,4 @@ export function errorOf(result: { isError?: boolean; content?: Array<{ type: str
     // not JSON
   }
   return "error";
-}
-
-/** An app's origin the hub may pair with, and an MCP URL on that same origin. */
-export function appAllowed(origin: string, mcpUrl: string, allowed: readonly string[], dev: boolean): boolean {
-  let url: URL;
-  try {
-    url = new URL(mcpUrl);
-  } catch {
-    return false;
-  }
-  if (url.origin !== origin || url.username || url.password) return false;
-  return allowed.includes(origin) || (dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin));
 }

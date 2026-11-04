@@ -37,7 +37,7 @@ export interface DockAgent {
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
   /** Apps, and browsers sending page readings (kind "reader", TIN-421). */
   /** revoked: the app revoked the grant itself (APC 0.2); revoked_by is the app's host. */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null }>;
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 export interface DockState {
@@ -185,6 +185,8 @@ export function AgentPage(props: {
   const connected = !!a.client_name;
   const paired = a.pairings.filter((p) => p.status === "paired");
   const revoked = a.pairings.filter((p) => p.status === "revoked");
+  // On the blocklist the dock operates (TIN-580): never called, nothing relayed.
+  const blocked = a.pairings.filter((p) => p.status === "blocked");
   const names = new Map(a.pairings.map((p) => [p.app.id, p.app.name]));
   useEffect(() => {
     call<{ calls: CallEntry[] }>(`${base}/agents/${a.id}/calls`).then((r) => setCalls(r.calls ?? []), () => setCalls([]));
@@ -298,7 +300,7 @@ export function AgentPage(props: {
             </div>
           </div>
         ))}
-        {paired.length === 0 && revoked.length === 0 && props.requests.length === 0 ? (
+        {paired.length === 0 && revoked.length === 0 && blocked.length === 0 && props.requests.length === 0 ? (
           <p className="muted">None yet. Drag {a.name} onto an app to pair it.</p>
         ) : (
           <ul className="apps">
@@ -320,6 +322,16 @@ export function AgentPage(props: {
                   {p.app.name} <span className="warn">· Revoked by {p.revoked_by ?? host(p.app.origin)}</span>
                   {p.revoked_at ? <span className="muted"> · {when(p.revoked_at)}</span> : null}
                   <span className="muted"> · drop {a.name} on it again to ask for access</span>
+                </span>
+                <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
+                  Remove
+                </button>
+              </li>
+            ))}
+            {blocked.map((p) => (
+              <li key={p.id} className="revoked">
+                <span>
+                  {p.app.name} <span className="warn">· Blocked: the dock no longer reads {host(p.app.origin)}</span>
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
                   Remove
