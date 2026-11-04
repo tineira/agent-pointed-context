@@ -43,7 +43,7 @@ export interface DockAgent {
   /** revoked: the app revoked the grant itself (APC 0.2); revoked_by is the app's host. */
   /** warning: a pending unverified app whose domain the person has not approved in this dock asks with the warning (TIN-581). */
   /** blocked_by: our blocklist, or the kill switch that closes the dock to unverified apps. */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; blocked_by?: "blocklist" | "closed" }>;
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed" }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 export interface DockState {
@@ -178,7 +178,8 @@ function Readings(props: { agent: DockAgent; clear: () => void }) {
 export function AgentPage(props: {
   agent: DockAgent;
   base: string;
-  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean }>;
+  /** busy: an answer is on its way, or the hub is introducing itself to the app: the buttons are off. */
+  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; busy?: boolean }>;
   decide: (pairingId: string, action: "approve" | "approve_unverified" | "deny" | "unpair") => void;
   refresh: () => void;
   back: () => void;
@@ -293,7 +294,7 @@ export function AgentPage(props: {
         {props.requests.map((r) =>
           r.app.unverified ? (
             <div key={r.id} className="request unverified">
-              <UnverifiedRequest domain={host(r.app.origin)} declared={r.app.declared_name ?? null} agent={a.name} warning={!!r.warning} decide={(action) => props.decide(r.id, action)} />
+              <UnverifiedRequest domain={host(r.app.origin)} declared={r.app.declared_name ?? null} agent={a.name} warning={!!r.warning} busy={!!r.busy} decide={(action) => props.decide(r.id, action)} />
             </div>
           ) : (
           <div key={r.id} className="request">
@@ -309,10 +310,10 @@ export function AgentPage(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" disabled={!!r.busy} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
-              <button type="button" onClick={() => props.decide(r.id, "deny")}>
+              <button type="button" disabled={!!r.busy} onClick={() => props.decide(r.id, "deny")}>
                 Deny
               </button>
             </div>

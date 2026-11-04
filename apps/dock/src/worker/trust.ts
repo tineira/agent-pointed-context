@@ -31,6 +31,8 @@ export const LIMITS = {
   pairings: 20,
   /** A pending pairing nobody decides goes after this long, and frees its place (TIN-581). */
   pendingMs: 10 * 60_000,
+  /** Past this, an approval whose introduction never finished (the object was evicted mid-way) counts as paired. Longer than introducing takes (initializeMs + listMs). */
+  approvingMs: 60_000,
   /** What the hub keeps of an unverified app's tools and views. */
   unverifiedTools: 32,
   unverifiedDescription: 1_024,
@@ -216,6 +218,25 @@ export function untrustedResult<A>(result: { content?: Array<{ type: string; tex
   return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, ...(result.isError ? { isError: true } : {}) };
 }
 
+/** Second-level labels under a two-letter country code that people register beneath (example.co.uk). */
+const SECOND_LEVEL = new Set(["co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go"]);
+
+/**
+ * A host split for showing it where it may not fit (Review round 1 on #120): `site`, the domain someone
+ * registered (its last two labels, three under a country's second level such as co.uk, with the port),
+ * which the dock always shows whole; and `head`, the labels before it, which the dock may shorten from the
+ * left. Without it, `pulse.apc.tineira.com.evil.example` wrapped in a narrow bubble would put
+ * `pulse.apc.tineira.com` alone on the first line. Approximate (no public suffix list): `site` is never
+ * shorter than the last two labels, so the part the app's owner chose last is always in view.
+ */
+export function splitHost(host: string): { head: string; site: string } {
+  const m = host.match(/^(.*?)(:\d+)?$/)!;
+  const labels = m[1]!.split(".");
+  const n = labels.length >= 3 && labels.at(-1)!.length === 2 && SECOND_LEVEL.has(labels.at(-2)!) ? 3 : 2;
+  if (labels.length <= n) return { head: "", site: host };
+  return { head: labels.slice(0, -n).join("."), site: `${labels.slice(-n).join(".")}${m[2] ?? ""}` };
+}
+
 /** The badge the dock puts on every unverified app: on its requests, its line in an agent's apps, and where an agent points (TIN-581). */
 export const NOT_VERIFIED = "Not verified";
 /** What the person risks by approving one. */
@@ -225,6 +246,8 @@ export const UNVERIFIED_RISK = "Your agent will read whatever this app tells it,
 export interface UnverifiedWarning {
   /** The app's domain (its host, with a port if any): first and big, the only name the dock gives it. */
   domain: string;
+  /** The same, split so a narrow surface shortens `head` from the left and always shows `site` whole (splitHost). */
+  parts: { head: string; site: string };
   badge: string;
   /** What the app calls itself, marked as the app's own word; null when it gave no usable name. */
   declared: string | null;
@@ -243,6 +266,7 @@ export interface UnverifiedWarning {
 export function unverifiedWarning(domain: string, declared: string | null, agent: string): UnverifiedWarning {
   return {
     domain,
+    parts: splitHost(domain),
     badge: NOT_VERIFIED,
     declared: declared ? `It calls itself “${declared}”: that is what the app says about itself, and the dock has not checked it.` : null,
     ask: `This app wants to be read by ${agent}. The dock has not verified who runs it.`,

@@ -101,7 +101,13 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .request.unverified, .float-request.unverified { border-color: #c0392b; }
 .unverified-warning { display: flex; flex-direction: column; gap: 8px; }
 .unverified-warning p { margin: 0; color: var(--fg); }
-.unverified-warning .unverified-domain { font-size: 22px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.unverified-warning .unverified-domain { font-size: 22px; font-weight: 700; line-height: 1.2; min-width: 0; }
+/* A host on one line (Review round 1 on #120): the registered domain whole, the labels before it shortened from the left ("…tineira.com.evil.example"). */
+.host-name { display: inline-flex; max-width: 100%; min-width: 0; white-space: nowrap; vertical-align: bottom; }
+.unverified-domain .host-name { display: flex; }
+.host-head { flex: 0 1000 auto; min-width: 1.2em; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
+/* Only a registered domain wider than the card itself wraps, inside itself, once the head is down to its ellipsis. */
+.host-site { flex: 0 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .unverified-warning .unverified-declared { color: var(--muted); font-size: 12px; }
 .unverified-warning .unverified-risk { font-weight: 600; }
 .unverified-warning.compact { gap: 6px; }

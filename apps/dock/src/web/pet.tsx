@@ -52,6 +52,8 @@ export interface PetRequest {
   agent: string;
   /** An app outside APP_ORIGINS (TIN-581): what it calls itself, and whether this request shows the warning. */
   unverified?: { declared: string | null; warning: boolean };
+  /** An answer is on its way, or the hub is introducing itself to the app: the buttons are off. */
+  busy?: boolean;
 }
 
 /** One agent's pet, and the bubble of its pairing requests while any waits. */
@@ -84,7 +86,7 @@ export function PetView(props: {
         r.unverified ? (
           // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
           <div key={r.id} className="pet-request unverified">
-            <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} decide={(action) => props.decide(r.id, action)} compact />
+            <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} busy={!!r.busy} decide={(action) => props.decide(r.id, action)} compact />
           </div>
         ) : (
         <div key={r.id} className="pet-request">
@@ -100,10 +102,10 @@ export function PetView(props: {
             )}
           </p>
           <div className="row">
-            <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+            <button type="button" className="primary" disabled={!!r.busy} onClick={() => props.decide(r.id, "approve")}>
               Allow
             </button>
-            <button type="button" onClick={() => props.decide(r.id, "deny")}>
+            <button type="button" disabled={!!r.busy} onClick={() => props.decide(r.id, "deny")}>
               Deny
             </button>
           </div>

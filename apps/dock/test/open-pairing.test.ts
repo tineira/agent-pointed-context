@@ -7,8 +7,9 @@
  * domains (hostile-world.ts): every request to an app is counted, so "nothing called" is checked.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test, type TestContext } from "node:test";
-import { LIMITS, NOT_VERIFIED, UNVERIFIED_RISK, unverifiedWarning } from "../src/worker/trust.ts";
+import { LIMITS, NOT_VERIFIED, splitHost, UNVERIFIED_RISK, unverifiedWarning } from "../src/worker/trust.ts";
 import { DOCK, fakeApp, PULSE, SID, world, type Json } from "./hostile-world.ts";
 
 const SHOP = "https://shop.example";
@@ -208,4 +209,84 @@ test("the blocklist wins over an approval: an approved domain blocked later cann
   assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve"), { ok: false, error: "app_blocked" });
   assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: false, error: "app_blocked" });
   assert.deepEqual(await w.pairApp(shop, { approve: false }), { ok: false, error: "app_blocked" });
+});
+
+// ---- Review round 1 (Grok on #120) ----
+
+test("a Deny while the hub is introducing itself wins: no call after it, nothing paired, and the warning shows again", async (t) => {
+  const w = await world(t);
+  let answerInitialize!: () => void;
+  const initializing = new Promise<void>((resolve) => (answerInitialize = resolve));
+  let asked!: () => void;
+  const initializeAsked = new Promise<void>((resolve) => (asked = resolve));
+  const shop = fakeApp(SHOP, "Shop", {
+    respond: (method) => {
+      if (method !== "initialize") return null;
+      asked();
+      // The app takes its time to answer: the person clicks Deny meanwhile.
+      return initializing.then(() => Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "Shop", version: "1" } } }));
+    },
+  });
+  const pending = await w.pairApp(shop, { approve: false });
+  const approving = w.hub.decide(pending.pairing_id!, "approve_unverified");
+  await initializeAsked;
+
+  // While approving: still the request (buttons off), nothing relayed, and a second answer is not taken as an approval.
+  const line = await w.pairingOf(SHOP);
+  assert.equal(line.status, "pending");
+  assert.equal(line.approving, true);
+  assert.equal((await w.listHub()).some((x) => x.name.startsWith("shop_example__")), false);
+  assert.deepEqual(await w.hub.decide(pending.pairing_id!, "approve_unverified"), { ok: false, error: "invalid_action" });
+
+  assert.deepEqual(await w.hub.decide(pending.pairing_id!, "deny"), { ok: true });
+  const callsAtDeny = shop.calls.length;
+  answerInitialize();
+  assert.deepEqual(await approving, { ok: false, error: "unknown_pairing" }, "the approval finds the row gone");
+
+  assert.equal(await w.pairingOf(SHOP), undefined);
+  assert.deepEqual(shop.calls.slice(callsAtDeny), [], "no call to the app after the Deny: no tools/list");
+  assert.equal(shop.calls.includes("tools/list"), false);
+  assert.equal((await w.listHub()).some((x) => x.name.startsWith("shop_example__")), false);
+  // The origin's approval went with the Deny: the next request carries the warning, and a plain approve is refused.
+  assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
+  assert.equal((await w.pairingOf(SHOP)).warning, true);
+  assert.deepEqual(await w.hub.decide((await w.pairingOf(SHOP)).id, "approve"), { ok: false, error: "warning_required" });
+});
+
+test("a Deny on a pairing the warning's Approve just made clears the domain's approval; Unpair keeps it", async (t) => {
+  const w = await world(t);
+  const shop = fakeApp(SHOP, "Shop");
+  await w.pairApp(shop);
+  assert.equal((await w.pairingOf(SHOP)).status, "paired");
+  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "deny")).ok, true);
+  assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
+  assert.equal((await w.pairingOf(SHOP)).warning, true, "denied in any state: the warning again");
+  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "approve_unverified")).ok, true);
+  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "unpair")).ok, true);
+  assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
+  assert.equal((await w.pairingOf(SHOP)).warning, false, "Unpair, from the app's line, keeps the approval");
+});
+
+test("an approval whose introduction never finished counts as paired after a minute", async (t) => {
+  const w = await world(t);
+  const shop = fakeApp(SHOP, "Shop");
+  const pending = await w.pairApp(shop, { approve: false });
+  // As if the object had been evicted while introducing itself: the row is left approving.
+  w.hub.ctx.storage.sql.exec("update pairings set status = 'approving', approved_at = ? where id = ?", new Date(Date.now() - LIMITS.approvingMs - 1_000).toISOString(), pending.pairing_id);
+  assert.equal((await w.pairingOf(SHOP)).status, "paired");
+  assert.equal((await w.callHub("shop_example__get_figure")).structuredContent.untrusted, true, "its tools are read on first use");
+});
+
+test("a long host never leaves a trusted-looking prefix alone: the registered domain is shown whole, the rest shortened from the left", () => {
+  assert.deepEqual(splitHost("pulse.apc.tineira.com.evil.example"), { head: "pulse.apc.tineira.com", site: "evil.example" });
+  assert.deepEqual(unverifiedWarning("pulse.apc.tineira.com.evil.example", null, "Claude").parts, { head: "pulse.apc.tineira.com", site: "evil.example" });
+  assert.deepEqual(splitHost("shop.example"), { head: "", site: "shop.example" });
+  assert.deepEqual(splitHost("a.b.shop.example:8443"), { head: "a.b", site: "shop.example:8443" });
+  assert.deepEqual(splitHost("pulse.apc.tineira.com.evil.co.uk"), { head: "pulse.apc.tineira.com", site: "evil.co.uk" });
+  assert.deepEqual(splitHost("tineira.com.co.uk"), { head: "tineira", site: "com.co.uk" }, "approximate, and never less than the last two labels");
+  // The dock's style keeps it on one line: the head may shrink (from the left) and the site never gives way to it.
+  const css = readFileSync(new URL("../src/web/dock.css", import.meta.url), "utf8");
+  assert.match(css, /\.host-name \{[^}]*white-space: nowrap/);
+  assert.match(css, /\.host-head \{[^}]*text-overflow: ellipsis[^}]*direction: rtl/);
+  assert.doesNotMatch(css, /\.unverified-domain \{[^}]*overflow-wrap: anywhere/);
 });

@@ -88,8 +88,10 @@ interface Pairing {
   /**
    * revoked: the person revoked the grant in the app itself (APC 0.2); kept to say so, never used again.
    * blocked: the app's domain is on BLOCKED_APPS (TIN-580); never stored, read as such while it is listed.
+   * approving: the person said yes and the hub is introducing itself to the app; nothing is relayed yet, and a
+   * Deny still wins (TIN-581). The dock shows it as its request, with the buttons off.
    */
-  status: "pending" | "paired" | "revoked" | "blocked";
+  status: "pending" | "approving" | "paired" | "revoked" | "blocked";
   /** In APP_ORIGINS when it paired (TIN-580). An unverified app is named by its host and held to trust.ts's limits. */
   verified: boolean;
   /** The name an unverified app gave itself, shown only as secondary text; null for a verified app. */
@@ -376,6 +378,9 @@ export class Hub extends DurableObject<Env> {
    * again. Run by the alarm, and before anything that counts or decides pending pairings.
    */
   private async expirePending(): Promise<void> {
+    // An approval whose introduction never finished (the object was evicted mid-way) is the person's yes all the same:
+    // it is paired, and its tools are read on first use, as after a failed introduction.
+    this.sql.exec("update pairings set status = 'paired' where status = 'approving' and approved_at <= ?", new Date(Date.now() - LIMITS.approvingMs).toISOString());
     const cutoff = new Date(Date.now() - LIMITS.pendingMs).toISOString();
     // Every row still pending in storage, a blocked domain's too (it reads as blocked, and is never called), so the alarm never rings for one that stays.
     const ids = new Set(this.sql.exec<{ id: string }>("select id from pairings where status = 'pending' and created_at <= ?", cutoff).toArray().map((r) => r.id));
@@ -538,11 +543,13 @@ export class Hub extends DurableObject<Env> {
               kind: "app" as const,
               app: appRef(p),
               verified: p.verified,
-              status: p.status,
+              // Approving shows as its request still, with the buttons off: the hub is introducing itself to the app.
+              status: p.status === "approving" ? ("pending" as const) : p.status,
+              ...(p.status === "approving" ? { approving: true } : {}),
               created_at: p.created_at,
               page_open: p.page_open,
               error: p.error,
-              ...(p.status === "pending" && !p.verified ? { warning: !this.warned(p.app_origin) } : {}),
+              ...((p.status === "pending" || p.status === "approving") && !p.verified ? { warning: !this.warned(p.app_origin) } : {}),
               ...(p.status === "blocked" ? { blocked_by: isBlocked(p.app_origin, blocked) ? ("blocklist" as const) : ("closed" as const) } : {}),
               ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}),
             })),
@@ -618,14 +625,26 @@ export class Hub extends DurableObject<Env> {
       } else if (action === "approve_unverified") {
         return { ok: false, error: "invalid_action" };
       }
-      this.sql.exec("update pairings set status = 'paired', approved_at = ? where id = ?", new Date().toISOString(), p.id);
+      // Approving, not paired, until the hub has introduced itself (Review round 1 on #120): the introduction awaits
+      // the app, and a Deny can arrive meanwhile. While approving, nothing relays to the app, and a Deny wins: it
+      // deletes the row, introduce() stops before its next call, and the pairing never turns paired.
+      this.sql.exec("update pairings set status = 'approving', approved_at = ? where id = ? and status = 'pending'", new Date().toISOString(), p.id);
       this.broadcast();
-      await this.introduce(p);
+      await this.introduce({ ...p, status: "approving" });
+      const now = this.pairings().find((x) => x.id === p.id);
+      // Denied meanwhile (or the app answered 404 and the row went): nothing to pair.
+      if (!now) return { ok: false, error: "unknown_pairing" };
+      // Still approving in storage (a blocked domain's row too, which reads as blocked while listed): it is paired now.
+      this.sql.exec("update pairings set status = 'paired' where id = ? and status = 'approving'", p.id);
+      this.broadcast();
+      if (now.status === "blocked") return { ok: false, error: "app_blocked" };
+      if (now.status === "revoked") return { ok: false, error: REVOKED_ERROR };
       return { ok: true };
     }
     if (action === "deny" || action === "unpair") {
-      // Denying an unverified app's request takes back the domain's approval too: its next request shows the warning again.
-      if (action === "deny" && p.status === "pending" && !p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
+      // Denying an unverified app takes back the domain's approval too, in any state (pending, approving, or paired by
+      // the answer just given): its next request shows the warning again. Unpair, from the app's line, keeps it.
+      if (action === "deny" && !p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
       // Authoritative at the hub: the grant goes, nothing is relayed, the app's pins are dropped.
       this.sql.exec("delete from pairings where id = ?", p.id);
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);
@@ -707,15 +726,24 @@ export class Hub extends DurableObject<Env> {
   /** On approval: tell the app who reads it, and learn its tools. A failure is shown in the dock and retried on use. */
   private async introduce(p: Pairing): Promise<void> {
     const agent = this.agent(p.agent_id);
-    if (p.status === "blocked") return;
+    // Whether the row still stands as it did, after an await: a Deny or Unpair may have removed it, or a block
+    // come, while the app was answering (Review round 1 on #120). Then the hub calls the app no more.
+    const stands = () => {
+      const now = this.pairings().find((x) => x.id === p.id);
+      return !!now && (now.status === "approving" || now.status === "paired");
+    };
+    if (!stands()) return;
     try {
       // The agent's own MCP client goes to a verified app only (apc_link, APC 0.4): an unverified one learns nothing of it.
       await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null, transport(p), p.verified ? (agent?.client_name ?? null) : null);
+      if (!stands()) return;
       const listed = (await listAppTools(p.mcp_url, transport(p))).filter((t) => !HIDDEN_TOOLS.has(t.name));
+      if (!stands()) return;
       // An unverified app's tools are kept small and plain, with no annotations (TIN-580).
       const tools = p.verified ? listed : shapeUnverifiedTools(listed);
       this.sql.exec("update pairings set tools = ?, error = null where id = ?", JSON.stringify(tools), p.id);
     } catch (error) {
+      if (!stands()) return;
       this.failed(p, error);
     }
     this.broadcast();
@@ -730,7 +758,7 @@ export class Hub extends DurableObject<Env> {
    * A revoked line of the same app does not count: the new pairing replaces it.
    */
   private pairingRoom(agentId: string, origin: string, verified: boolean): "too_many_apps" | "app_host_too_long" | "app_id_taken" | null {
-    const live = this.pairings().filter((p) => p.status === "pending" || p.status === "paired");
+    const live = this.pairings().filter((p) => p.status === "pending" || p.status === "approving" || p.status === "paired");
     if (live.length >= LIMITS.pairings) return "too_many_apps";
     if (verified) return null;
     const id = domainAppId(origin, this.pairings(agentId).filter((p) => !(p.status === "revoked" && p.app_origin === origin)));
@@ -858,7 +886,7 @@ export class Hub extends DurableObject<Env> {
     if (p.status === "blocked") return { ok: false, error: "app_blocked" };
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
     const agent = this.agent(t.agent_id)!;
-    return { ok: true, status: p.status, agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
+    return { ok: true, status: p.status === "approving" ? "pending" : p.status, agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
   }
 
   // ---- page readings from the browser extension (TIN-421, DESIGN.md 13.5), no owner ----
