@@ -9,6 +9,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
 import { DOCK_TTL_MS, type Env, type Hub } from "./hub.ts";
+import { withByteRanges } from "./range.ts";
 
 /** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */
 function hubManifest(origin: string): ApcManifest {
@@ -243,6 +244,16 @@ app.get("/", async (c) => {
   const url = new URL(c.req.url);
   if (url.searchParams.has("start_over") && (await ownsDock(c.env, getCookie(c, COOKIE)))) return c.redirect(`/dock${url.search}`, 302);
   return c.env.ASSETS.fetch(c.req.raw);
+});
+/**
+ * The landing's clip and poster (TIN-623): the asset layer ignores Range, and Safari will not play a video
+ * without 206 answers, so the Worker serves /media/* and cuts the byte range itself (src/worker/range.ts).
+ */
+app.on(["GET", "HEAD"], "/media/*", async (c) => {
+  const req = c.req.raw;
+  // The asset layer's HEAD has no Content-Length, so a HEAD asks it with GET and sends none of the body.
+  const asset = await c.env.ASSETS.fetch(req.method === "HEAD" ? new Request(req, { method: "GET" }) : req);
+  return withByteRanges(req, asset);
 });
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
