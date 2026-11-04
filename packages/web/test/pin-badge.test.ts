@@ -16,6 +16,17 @@ class El {
   textContent = "";
   innerHTML = "";
   hidden = false;
+  hasAttribute(k: string) {
+    return this.attrs.has(k);
+  }
+  removeAttribute(k: string) {
+    this.attrs.delete(k);
+  }
+  focus() {}
+  matches(selector: string): boolean {
+    const m = /^\[([\w-]+)\]$/.exec(selector);
+    return !!m && this.attrs.has(m[1]!);
+  }
   type = "";
   style: Record<string, string> = {};
   listeners = new Map<string, Array<(e: unknown) => void>>();
@@ -105,6 +116,17 @@ const doc = {
     Object.defineProperty(e, "id", { set: (v: string) => e.setAttribute("id", v) });
     return e;
   },
+  querySelectorAll: (selector: string): El[] => {
+    const out: El[] = [];
+    const walk = (n: El) => {
+      for (const c of n.children) {
+        if (c.matches(selector)) out.push(c);
+        walk(c);
+      }
+    };
+    walk(doc.documentElement);
+    return out;
+  },
   elementFromPoint: (_x: number, _y: number): El | null => hovered,
 };
 doc.documentElement.append(doc.head, doc.body);
@@ -114,7 +136,9 @@ Object.assign(globalThis, {
   document: doc,
   HTMLElement: FakeHTMLElement,
   customElements: { get: (t: string) => defined.get(t), define: (t: string, c: new () => El) => void defined.set(t, c) },
+  location: { href: "https://app.test/" },
   window: {
+    dispatchEvent: () => true,
     addEventListener: (t: string, fn: (e: unknown) => void) => windowListeners.set(t, [...(windowListeners.get(t) ?? []), fn]),
     removeEventListener: (t: string, fn: (e: unknown) => void) => windowListeners.set(t, (windowListeners.get(t) ?? []).filter((f) => f !== fn)),
   },
@@ -204,6 +228,36 @@ test("events a page's script makes cannot drag, pin or unpin: only the person's 
   pin.children.find((c) => c.className === "apc-pin__unpin")!.fire("click", { isTrusted: false });
   assert.deepEqual(seen, [], "a synthetic click does not unpin");
   stop();
+});
+
+test("armed from the keyboard: a script's Enter or Space pins nothing; the person's pins and its click is swallowed (APC 0.6)", () => {
+  const pin = badge({ id: "g_key", name: "Claude", seen: true });
+  const bar = new El("div");
+  doc.body.append(bar);
+  const mark = new El("button");
+  mark.setAttribute("data-apc-mark", "");
+  mark.setAttribute("data-grant", "g_key");
+  bar.append(mark);
+  const row = targetEl("customer:cus_5");
+  const pinned: string[] = [];
+  const stop = enablePinning({ root: doc.body as unknown as HTMLElement, onPin: (g, t) => void pinned.push(`${g} ${t.id}`) });
+  // The person activates the mark with the keyboard (a click with detail 0): armed, and the target can be focused.
+  mark.fire("click", { detail: 0, isTrusted: true });
+  assert.equal(doc.documentElement.getAttribute("data-apc-armed"), "g_key");
+  assert.equal(row.getAttribute("tabindex"), "0", "targets can be focused while armed");
+  // A script dispatches Enter and Space on the target: isTrusted is false, so nothing is pinned.
+  for (const key of ["Enter", " "]) press("keydown", { key, target: row, isTrusted: false, preventDefault() {} });
+  assert.deepEqual(pinned, []);
+  assert.equal(doc.documentElement.getAttribute("data-apc-armed"), "g_key", "and it is still armed");
+  // The person's Enter pins, and the click the browser makes from it must not run the row's own action.
+  press("keydown", { key: "Enter", target: row, isTrusted: true, preventDefault() {} });
+  assert.deepEqual(pinned, ["g_key cus_5"]);
+  assert.equal(row.getAttribute("tabindex"), null, "the tabindex it gave is put back");
+  let stopped = 0;
+  press("click", { target: row, isTrusted: true, preventDefault() {}, stopImmediatePropagation: () => stopped++ });
+  assert.equal(stopped, 1, "the following click is swallowed");
+  stop();
+  void pin;
 });
 
 test("an agent set before the element was upgraded is taken in on connect; the mark is named", () => {

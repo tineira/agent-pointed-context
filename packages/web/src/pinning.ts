@@ -597,6 +597,8 @@ export function enablePinning(options: PinningOptions): () => void {
       const hit = targetOf(event.target as Element | null);
       if (!hit) return;
       event.preventDefault();
+      // The click the browser makes from this key (Space: on keyup) must not run the target's own action either.
+      swallowClickUntil = Date.now() + 500;
       if (tapPin.tap(hit) === "refused") note?.say("This agent cannot point at that. Tab to another outlined item, or press Escape.");
     }
   };

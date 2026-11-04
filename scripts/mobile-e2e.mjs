@@ -323,10 +323,17 @@ for (const app of APPS) {
     const { on, say } = JSON.parse(where);
     if (!on) throw new Error("focus did not move to a target");
     if (!/Enter or Space/.test(say)) throw new Error(`the note does not say how to pin: ${say}`);
-    await press("Tab", "Tab", 9);
+    // The target whose own action would navigate: Pulse's customer row, Signals' offer link. Its click must be swallowed.
+    const navSelector = app.name === "Pulse" ? '[data-focus^="customer:"]:not([data-focus-part])' : '[data-focus-part="offer"]';
+    await evaluate(`document.querySelector(${JSON.stringify(navSelector)}).focus()`);
+    const hrefBefore = await evaluate(`location.href`);
     await press("Enter", "Enter", 13, "\r");
     const pin = (await stateOf()).grants.find((g) => g.id === first)?.pin;
     if (!pin) throw new Error("Enter on a focused target did not pin");
+    const navFocus = await evaluate(`document.querySelector(${JSON.stringify(navSelector)}).getAttribute("data-focus")`);
+    if (pin.id !== navFocus.split(":").slice(1).join(":")) throw new Error(`pinned ${pin.id}, expected the focused ${navFocus}`);
+    const hrefAfter = await evaluate(`location.href`);
+    if (hrefAfter !== hrefBefore) throw new Error(`the target's own action also ran: ${hrefBefore} -> ${hrefAfter}`);
     if ((await armedNow()) !== null) throw new Error("still armed after the pin");
     if ((await evaluate(`document.querySelectorAll('[data-focus][tabindex="0"]').length`)) > 0 && !(await evaluate(`[...document.querySelectorAll("[data-focus]")].every((e) => e.getAttribute("tabindex") !== "0" || e.matches("a, button, input"))`))) throw new Error("targets keep the tabindex the pin mode gave them");
   });
