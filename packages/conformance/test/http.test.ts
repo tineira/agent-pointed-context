@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { APC_STANDARD_VERSION, revokedAnswer } from "@tineira/apc-protocol";
 import { HttpConformanceUsageError, IN_PROCESS_ONLY, redactGrantUrl, redactSecrets, runHttpConformance, type HttpConformanceOptions } from "../src/index.ts";
+import { standardSupport } from "../src/shared.ts";
 
 const ORIGIN = "https://app.example";
 const GRANT = `${ORIGIN}/mcp/s1/live-secret`;
@@ -221,4 +222,24 @@ test("the CLI never prints a grant's secret: a 500 echoing it, or an invalid --g
   } finally {
     server.close();
   }
+});
+
+test("a newer patch of the checks' own standard passes with a note; a newer minor fails", async () => {
+  const [major, minor, patch] = APC_STANDARD_VERSION.split(".").map(Number) as [number, number, number];
+  const manifest = (standard: string) => ({ name: "Fake", standard, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/?connect` } });
+  const nextPatch = `${major}.${minor}.${patch + 1}`;
+  const patched = await run({ manifest: manifest(nextPatch) });
+  const result = patched.results.find((r) => r.id === "apc-json-standard")!;
+  assert.equal(result.status, "pass", result.detail);
+  assert.match(result.note ?? "", /newer patch .* never changes the contract/);
+  const nextMinor = await run({ manifest: manifest(`${major}.${minor + 1}.0`) });
+  assert.equal(status(nextMinor, "apc-json-standard"), "fail");
+  assert.equal(status(await run({ manifest: manifest(APC_STANDARD_VERSION) }), "apc-json-standard"), "pass");
+
+  assert.deepEqual(standardSupport("0.7.0", "0.7.1"), { ok: true });
+  assert.equal(standardSupport("0.7.2", "0.7.1").ok, true);
+  assert.ok("note" in standardSupport("0.7.2", "0.7.1"));
+  assert.equal(standardSupport("0.8.0", "0.7.1").ok, false);
+  assert.equal(standardSupport("1.7.1", "0.7.1").ok, false);
+  assert.equal(standardSupport("0.4.9", "0.7.1").ok, false, "apc.json exists since 0.5.0");
 });

@@ -41,7 +41,7 @@ import {
   type FocusTarget,
   type PresenceEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
 
 export { ConformanceError } from "./shared.ts";
 export {
@@ -206,7 +206,8 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       const parsed = parseApcManifest(body, origin);
       expect(parsed.ok, `${APC_JSON_PATH}: ${parsed.ok ? "" : `${parsed.error}, ${parsed.detail}`}`);
       const m = parsed.manifest;
-      expect(compareStandard(m.standard, "0.5.0") >= 0 && compareStandard(m.standard, APC_STANDARD_VERSION) <= 0, `standard is ${m.standard}: apc.json exists since 0.5.0, and this suite checks up to ${APC_STANDARD_VERSION}`);
+      const support = standardSupport(m.standard, APC_STANDARD_VERSION);
+      expect(support.ok, support.ok ? "" : `${support.reason} (this suite checks 0.5.0 up to ${APC_STANDARD_VERSION}, and newer patches of it)`);
       expect(!m.profiles.includes("hub"), "an app's profiles are direct, dock or both, never hub");
       expect(m.profiles.includes(app.profile), `profiles ${JSON.stringify(m.profiles)} leave out ${app.profile}, which the app serves`);
       if (app.link) expect(m.profiles.includes("direct") && m.profiles.includes("dock"), `profiles ${JSON.stringify(m.profiles)}: an app that links both paths offers both`);

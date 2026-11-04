@@ -135,9 +135,12 @@ test("the hooks are POSIX sh, executable, and never block git", () => {
   assert.match(readFileSync(repo(".githooks/post-checkout"), "utf8"), /\[ "\$3" = "1" \] \|\| exit 0/, "branch checkouts only");
   assert.match(readFileSync(repo(".githooks/post-rewrite"), "utf8"), /\[ "\$1" = "rebase" \] \|\| exit 0/, "rebases only");
   const lib = readFileSync(repo(".githooks/lib/rebuild-extension.sh"), "utf8");
-  assert.ok(lib.includes("scripts/extension-changed.mjs") && lib.includes("node build.mjs") && lib.includes("pnpm install --frozen-lockfile"));
+  assert.ok(lib.includes("scripts/extension-changed.mjs") && lib.includes("node apps/extension/build.mjs < /dev/null"));
+  assert.ok(lib.includes("CI=true pnpm install --frozen-lockfile < /dev/null"), "pnpm never waits for an answer nobody sees");
   assert.ok(lib.includes("APC extension rebuilt into apps/extension/dist: reload it on chrome://extensions"));
   assert.ok(!/\bexit 1\b|return 1\b/.test(lib), "a failed build warns and returns 0");
+  assert.match(lib, /--git-dir[\s\S]*--git-common-dir[\s\S]*\[ "\$git_dir" = "\$common_dir" \] \|\| return 0/, "a linked worktree (an agent's) never rebuilds");
+  assert.match(lib, /APC_HOOKS_IN_WORKTREES/);
 });
 
 test("prepare sets core.hooksPath inside a git work tree only, and leaves a person's choice alone", () => {
@@ -160,6 +163,12 @@ test("prepare sets core.hooksPath inside a git work tree only, and leaves a pers
     node("scripts/git-hooks.mjs", [r.dir], r.dir);
     assert.equal(hooksPath(), "my-hooks", "someone else's hooksPath is kept");
     r.git("config", "--unset", "core.hooksPath");
+    writeFileSync(join(r.dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n");
+    const said = node("scripts/git-hooks.mjs", [r.dir], r.dir);
+    assert.equal(hooksPath(), "", "hooks of the person's own in .git/hooks: core.hooksPath would turn them off, so nothing is set");
+    assert.match(said, /pre-commit/);
+    assert.match(said, /git config core\.hooksPath \.githooks/, "it says how to opt in");
+    rmSync(join(r.dir, ".git", "hooks", "pre-commit"));
     r.git("config", "apc.hooks", "off");
     node("scripts/git-hooks.mjs", [r.dir], r.dir);
     assert.equal(hooksPath(), "", "apc.hooks off keeps them off across installs");

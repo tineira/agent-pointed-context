@@ -119,7 +119,7 @@ export function ExtensionInstall() {
   const manualSteps = <ol className="extension-steps">
     <Step number={1} title="Download the extension" address={address}>
       <p>Get the ready-to-use zip. You don’t need to build anything.</p>
-      <a className="extension-primary" href={EXTENSION_DOWNLOAD}>Download extension (.zip)</a>
+      <a className="extension-primary" href={EXTENSION_DOWNLOAD} download>Download extension (.zip)</a>
     </Step>
     <Step number={2} title="Unzip it into a folder you keep" address={address}>
       <p>On Windows, right-click the zip and choose <b>Extract all</b>. On a Mac, double-click it. Move the extracted folder somewhere permanent, such as Documents.</p>
@@ -171,7 +171,7 @@ export function ExtensionInstall() {
     <details className="extension-update" id={EXTENSION_UPDATE_ANCHOR} open={updateOpen} onToggle={(e) => setUpdateOpen(e.currentTarget.open)}>
       <summary>Updating the extension later</summary>
       <ol>
-        <li><a href={EXTENSION_DOWNLOAD}>Download the zip again</a> and unzip it.</li>
+        <li><a href={EXTENSION_DOWNLOAD} download>Download the zip again</a> and unzip it.</li>
         <li>Replace the files in the folder you kept (the one with <code>manifest.json</code>) with the new ones.</li>
         <li>On <code>{address}</code>, click APC’s reload button. Then reload any page where you want to drop your agent.</li>
       </ol>
