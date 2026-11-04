@@ -62,14 +62,33 @@ function browser(env: unknown) {
   };
 }
 
+/** The page's next session request never settles and ignores its abort: lost before the Worker, or its answer lost after (the cookie set). */
+function stallNextOpen(reachesWorker: boolean) {
+  const through = globalThis.fetch;
+  let stalled = false;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (stalled || !String(input).endsWith("/api/session")) return through(input, init);
+    stalled = true;
+    if (reachesWorker) await through(input, init);
+    return new Promise<never>(() => {});
+  };
+}
+
+/** Limits short enough for a test: one request 50 ms, an open 150 ms, a wait for another tab 2 s. */
+const quick = () => {
+  for (const tab of [tabA, tabB]) Object.assign(tab.sessionLimits, { requestMs: 50, openMs: 150, waitMs: 2000 });
+};
+
 // The page reads ?seed= from its location.
 Object.defineProperty(globalThis, "location", { value: { search: "" }, configurable: true });
 
 const realFetch = globalThis.fetch;
 const realNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator")!;
+const limits = { ...tabA.sessionLimits };
 afterEach(() => {
   globalThis.fetch = realFetch;
   Object.defineProperty(globalThis, "navigator", realNavigator);
+  for (const tab of [tabA, tabB]) Object.assign(tab.sessionLimits, limits);
 });
 
 test("two opens on one page (StrictMode's second effect) share one request and one sandbox", async () => {
@@ -101,6 +120,47 @@ test("without the lock, two tabs would race: two sandboxes, and the page the coo
   const sids = await Promise.all([tabA.openSession(), tabB.openSession()]);
   assert.equal(owners.size, 2);
   assert.deepEqual((await Promise.all(sids.map(async (sid) => (await b.state(sid)).status))).sort(), [200, 403]);
+});
+
+test("a tab whose open never settles lets go of the lock after openMs, and the waiting tab opens its own sandbox", async () => {
+  quick();
+  const { owners, env } = sandboxes();
+  const b = browser(env);
+  stallNextOpen(false);
+  const stuck = tabA.openSession();
+  const waiting = tabB.openSession();
+  await assert.rejects(stuck, /timed out/);
+  const sid = await waiting;
+  assert.equal(owners.size, 1);
+  assert.equal(b.cookie(), `apc_session=${sid}.${owners.get(sid)}`);
+  assert.equal((await b.state(sid)).status, 200);
+});
+
+test("when the stuck open did reach the Worker, the waiting tab resumes the sandbox its cookie names", async () => {
+  quick();
+  const { owners, env } = sandboxes();
+  const b = browser(env);
+  stallNextOpen(true);
+  const stuck = tabA.openSession();
+  const waiting = tabB.openSession();
+  await assert.rejects(stuck, /timed out/);
+  const sid = await waiting;
+  assert.equal(b.opens(), 2);
+  assert.equal(owners.size, 1);
+  assert.equal(b.cookie(), `apc_session=${sid}.${owners.get(sid)}`);
+  assert.equal((await b.state(sid)).status, 200);
+});
+
+test("a tab that waits longer than waitMs for another's open gives up with an error instead of hanging", async () => {
+  let release = () => {};
+  const held = navigator.locks.request("apc-pulse-session", () => new Promise<void>((resolve) => (release = resolve)));
+  Object.assign(tabB.sessionLimits, { waitMs: 50 });
+  const { env } = sandboxes();
+  const b = browser(env);
+  await assert.rejects(tabB.openSession(), (error: Error) => error.name === "TimeoutError" || error.name === "AbortError");
+  assert.equal(b.opens(), 0);
+  release();
+  await held;
 });
 
 test("the Worker resumes the sandbox a create's cookie names (set by a parallel request), and opens none", async () => {
