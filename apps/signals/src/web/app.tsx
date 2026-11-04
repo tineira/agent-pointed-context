@@ -192,10 +192,15 @@ function Feed({ sid }: { sid: string }) {
   // Revoke from the app (APC 0.2): at once, here; the dock learns it on its next call.
   const revoke = (id: string) => {
     const name = state.grants.find((g) => g.id === id)?.name ?? "Your agent";
-    void call<{ ok: boolean; error?: string }>(`${base}/grants/${id}/revoke`, {}).then((r) => {
-      say(r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, drop it here again from your dock.` : `Not revoked: ${r.error}`);
-      refresh();
-    });
+    void call<{ ok: boolean; error?: string }>(`${base}/grants/${id}/revoke`, {})
+      .then(
+        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, drop it here again from your dock.` : `Not revoked: ${r.error}`),
+        (e: unknown) => `Not revoked: ${e instanceof Error ? e.message : String(e)}`,
+      )
+      .then((message) => {
+        say(message);
+        refresh();
+      });
   };
   const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpin} onRevoke={revoke} />;
   return (

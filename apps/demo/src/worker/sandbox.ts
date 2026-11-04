@@ -565,16 +565,17 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   private async mcp(request: Request, sid: string, secret: string, origin: string): Promise<Response> {
-    // Stateless: no server-to-client stream (GET) and no session to end (DELETE). 405 is what the spec allows.
-    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "sandbox_expired" }, { status: 404 });
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant) {
-      // Revoked in the app (APC 0.2): 403 with the answer, whatever the method, so the holder (an agent, or a dock's hub) can say so.
+      // Revoked in the app (APC 0.2): 403 with the answer, whatever the method (checked before the
+      // method), so the holder (an agent, or a dock's hub) can say so.
       const revokedAt = this.revokedAt({ hash: await secretHash(secret) });
       if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
       return Response.json({ error: "unknown_grant" }, { status: 404 });
     }
+    // Stateless: no server-to-client stream (GET) and no session to end (DELETE). 405 is what the spec allows.
+    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     await this.touch();
 
     if (request.method === "POST") {

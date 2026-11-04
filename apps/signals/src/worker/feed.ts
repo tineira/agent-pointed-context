@@ -302,15 +302,16 @@ export class Feed extends DurableObject<Env> {
   }
 
   private async mcp(request: Request, secret: string, origin: string): Promise<Response> {
-    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "expired" }, { status: 404 });
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant) {
-      // Revoked in the app (APC 0.2): 403 with the answer, so the dock's hub can say who revoked it.
+      // Revoked in the app (APC 0.2): 403 with the answer, whatever the method (checked before the
+      // method), so the dock's hub can say who revoked it.
       const revokedAt = this.revokedAt({ hash: await secretHash(secret) });
       if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
       return Response.json({ error: "unknown_grant" }, { status: 404 });
     }
+    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     await this.touch();
     try {
       const body = (await request.clone().json()) as { method?: string; params?: { clientInfo?: { title?: unknown; icons?: unknown } } } | null;

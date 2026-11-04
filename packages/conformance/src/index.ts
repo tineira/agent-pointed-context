@@ -323,6 +323,20 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
         expect(status === REVOKED_HTTP_STATUS, `${method} on a revoked grant: HTTP ${status}, expected ${REVOKED_HTTP_STATUS}`);
         expect(isRevokedAnswer(body) && body.revoked_by.length > 0 && ISO.test(body.revoked_at), `${method} on a revoked grant answers { error: "revoked", revoked_by, revoked_at }: ${JSON.stringify(body).slice(0, 200)}`);
       }
+      // Whatever the HTTP method: a GET (the SSE stream) or a DELETE (ending a session) is answered "revoked" too, not 405.
+      for (const method of ["GET", "DELETE"]) {
+        const request = new Request(a.mcpUrl, { method, headers: { accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" } });
+        const response = await (app.fetch ? app.fetch(request) : fetch(request));
+        const text = await response.text();
+        let body: unknown = null;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // not JSON
+        }
+        expect(response.status === REVOKED_HTTP_STATUS, `${method} on a revoked grant: HTTP ${response.status}, expected ${REVOKED_HTTP_STATUS}`);
+        expect(isRevokedAnswer(body), `${method} on a revoked grant answers { error: "revoked", revoked_by, revoked_at }: ${text.slice(0, 200)}`);
+      }
       expect(!(await app.page.pin(a.grantId, second)), "a revoked agent cannot be pinned");
       const other = await call(app, b.mcpUrl, "get_current_view");
       expect(!other.isError && "view" in data(other), "another agent is not touched");
