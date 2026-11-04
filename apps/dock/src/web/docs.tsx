@@ -4,9 +4,9 @@
  * bundled as text and rendered here as React elements; code samples come from the type-checked, tested examples
  * in src/docs/examples. Static, like the landing: the Worker never runs for /docs.
  */
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { APC_STANDARD_VERSION } from "@apc/protocol";
-import { exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "../docs/markdown.ts";
+import { exampleRegion, fragmentTarget, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "../docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, type DocPage } from "../docs/pages.ts";
 import overview from "../docs/pages/overview.md?raw";
 import spec from "../docs/pages/spec.md?raw";
@@ -34,7 +34,9 @@ function Inlines({ nodes, file }: { nodes: Inline[]; file: string }): ReactNode 
     if (n.t === "code") return <code key={i}>{n.v}</code>;
     if (n.t === "strong") return <strong key={i}><Inlines nodes={n.c} file={file} /></strong>;
     if (n.t === "em") return <em key={i}><Inlines nodes={n.c} file={file} /></em>;
-    return <a key={i} href={resolveHref(n.href, file)}><Inlines nodes={n.c} file={file} /></a>;
+    const href = resolveHref(n.href, file);
+    // A link with a scheme that is not http(s) or mailto is shown as its text, never as a link.
+    return href ? <a key={i} href={href}><Inlines nodes={n.c} file={file} /></a> : <span key={i}><Inlines nodes={n.c} file={file} /></span>;
   });
 }
 
@@ -95,13 +97,17 @@ function Nav({ current }: { current: DocPage | null }) {
 
 export function Docs({ path }: { path: string }) {
   const page = docPageAt(path);
-  const blocks = page ? parseMarkdown(SOURCES[page.path] ?? "") : [];
-  const title = blocks.find((b) => b.t === "heading" && b.level === 1);
+  const blocks = useMemo(() => (page ? parseMarkdown(SOURCES[page.path] ?? "") : []), [page]);
+  const titleBlock = blocks.find((b) => b.t === "heading" && b.level === 1);
+  const title = titleBlock?.t === "heading" ? plainText(titleBlock.c) : "Not found";
   useEffect(() => {
-    document.title = `${title?.t === "heading" ? plainText(title.c) : "Not found"} · APC docs`;
-    // The page renders after load, so the browser could not scroll to #anchor itself.
-    if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+    document.title = `${title} · APC docs`;
   }, [title]);
+  useEffect(() => {
+    // The page renders after load, so the browser could not scroll to #anchor itself.
+    const id = fragmentTarget(location.hash);
+    if (id) document.getElementById(id)?.scrollIntoView();
+  }, [page]);
   return (
     <main className="docs">
       <header className="docs-head">

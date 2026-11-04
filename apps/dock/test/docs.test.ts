@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { exampleRegion, headingIds, linksOf, parseInline, parseMarkdown, REPO, repoPath, resolveHref, slugify, type Block } from "../src/docs/markdown.ts";
+import { exampleRegion, fragmentTarget, headingIds, linksOf, parseInline, parseMarkdown, REPO, repoPath, resolveHref, slugify, type Block } from "../src/docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, isDocsPath, SITE_PATHS } from "../src/docs/pages.ts";
 
 const root = new URL("../../../", import.meta.url);
@@ -43,6 +43,42 @@ test("headings get GitHub's ids, and links resolve to the site or the repo", () 
   assert.equal(resolveHref("https://example.com", "x/y.md"), "https://example.com");
   assert.equal(resolveHref("../../CHANGELOG.md", "packages/protocol/CHANGELOG.md"), `${REPO}/blob/main/CHANGELOG.md`);
   assert.equal(repoPath("src/core.ts#L3", "packages/protocol/README.md"), "packages/protocol/src/core.ts#L3");
+  assert.equal(resolveHref("mailto:a@example.com", "x/y.md"), "mailto:a@example.com");
+  assert.equal(resolveHref("HTTPS://example.com", "x/y.md"), "HTTPS://example.com");
+});
+
+test("a link is only ever http(s), mailto, a site path, an anchor or a file in the repo: never a script", () => {
+  const unsafe = [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "JAVASCRIPT:alert(1)",
+    " javascript:alert(1)",
+    "java\tscript:alert(1)",
+    "java\nscript:alert(1)",
+    "\u0001javascript:alert(1)",
+    "javascript\u0000:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "DATA:text/html;base64,PHNjcmlwdD4=",
+    "vbscript:msgbox(1)",
+    "VbScript:msgbox(1)",
+    "file:///etc/passwd",
+    "blob:https://example.com/x",
+    "1javascript:alert(1)",
+    "",
+    " \t",
+  ];
+  for (const href of unsafe) assert.equal(resolveHref(href, "x/y.md"), null, JSON.stringify(href));
+  // In a page, such a link is text: the link check reports it.
+  assert.deepEqual(brokenIn({ path: "/docs/x", file: "apps/dock/README.md" }, parseMarkdown("# T\n\n[x](javascript:alert%281%29) [y](data:,x)")), ["javascript:alert%281%29: unsafe link", "data:,x: unsafe link"]);
+});
+
+test("a malformed #fragment names nothing, and never throws", () => {
+  assert.equal(fragmentTarget("#versioning-and-deprecation"), "versioning-and-deprecation");
+  assert.equal(fragmentTarget("#caf%C3%A9"), "café");
+  assert.equal(fragmentTarget("#%E0%A4%A"), null);
+  assert.equal(fragmentTarget("#%"), null);
+  assert.equal(fragmentTarget("#"), null);
+  assert.equal(fragmentTarget(""), null);
 });
 
 test("an example region is shown without its markers, dedented", () => {
@@ -68,7 +104,10 @@ function brokenIn(page: { path: string; file: string }, blocks: Block[]): string
   const own = new Set(headingIds(blocks));
   for (const href of linksOf(blocks)) {
     const resolved = resolveHref(href, page.file);
-    if (resolved.startsWith("#")) {
+    const inRepo = resolved?.match(new RegExp(`^${REPO.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:blob|tree)/main/([^?#]+)`));
+    const issue = resolved?.startsWith(`${REPO}/issues/new?`) ? new URL(resolved) : null;
+    if (resolved === null) broken.push(`${href}: unsafe link`);
+    else if (resolved.startsWith("#")) {
       if (!own.has(resolved.slice(1))) broken.push(`${href}: no such heading here`);
     } else if (resolved.startsWith("/")) {
       const [path = "", anchor] = resolved.split("#", 2);
@@ -76,12 +115,12 @@ function brokenIn(page: { path: string; file: string }, blocks: Block[]): string
       if (target) {
         if (anchor && !idsOf.get(target.path)!.has(anchor)) broken.push(`${href}: no heading #${anchor} on ${target.path}`);
       } else if (isDocsPath(path) || !SITE_PATHS.includes(path)) broken.push(`${href}: no such page on the site`);
-    } else if (resolved.startsWith(`${REPO}/blob/main/`) || resolved.startsWith(`${REPO}/tree/main/`)) {
-      const file = resolved.slice(`${REPO}/blob/main/`.length).split("#")[0]!;
+    } else if (inRepo) {
+      const file = decodeURIComponent(inRepo[1]!);
       if (!exists(file)) broken.push(`${href}: no ${file} in the repo`);
-    } else if (resolved.startsWith(`${REPO}/issues/new?template=`)) {
-      const template = resolved.slice(`${REPO}/issues/new?template=`.length);
-      if (!exists(`.github/ISSUE_TEMPLATE/${template}`)) broken.push(`${href}: no issue template ${template}`);
+    } else if (issue) {
+      const template = issue.searchParams.get("template") ?? "";
+      if (!/^[\w.-]+\.md$/.test(template) || !exists(`.github/ISSUE_TEMPLATE/${template}`)) broken.push(`${href}: no issue template ${template}`);
     } else if (!/^https:\/\//.test(resolved)) broken.push(`${href}: not https`);
   }
   for (const b of blocks) {

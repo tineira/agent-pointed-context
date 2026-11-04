@@ -181,8 +181,15 @@ export class OrdersApp {
   private byId(id: string): Grant | undefined {
     return this.live().find((g) => g.id === id);
   }
+  /** To every open page. A page whose stream closed without telling us is dropped: it never fails the tool call that published. */
   private publish(message: PageMessage): void {
-    for (const send of this.pages) send(message);
+    for (const send of this.pages) {
+      try {
+        send(message);
+      } catch {
+        this.pages.delete(send);
+      }
+    }
   }
 
   // #region direct
@@ -473,6 +480,7 @@ export class OrdersApp {
     let send: ((message: PageMessage) => void) | null = null;
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
+        // Throws once the stream is closed; publish() then drops this page.
         send = (message) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(message)}\n\n`));
         this.pages.add(send);
       },

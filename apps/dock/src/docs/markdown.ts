@@ -207,14 +207,35 @@ export function slugify(text: string): string {
 
 export const REPO = "https://github.com/tineira/agent-pointed-context";
 
+/** The only schemes a link may have: anything else (`javascript:`, `data:`, `vbscript:`…) is never a link. */
+const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+
 /**
- * Where a link in a page goes. Site links (`/docs/spec`), anchors and absolute URLs stay; a relative link
- * (`../../CHANGELOG.md`, as the standard's changelog has) is a file in the repo, next to the page's source
- * (`file`, its path in the repo), so it opens on GitHub.
+ * Where a link in a page goes, or null when it must not be a link. Site links (`/docs/spec`), anchors and
+ * http(s) or mailto URLs stay; a relative link (`../../CHANGELOG.md`, as the standard's changelog has) is a
+ * file in the repo, next to the page's source (`file`, its path in the repo), so it opens on GitHub. Any
+ * other scheme is refused, however it is written: browsers drop whitespace and control characters from a
+ * URL and ignore case, so `Java\tScript:` is still `javascript:`, and the check reads it the same way.
  */
-export function resolveHref(href: string, file: string): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("/") || href.startsWith("#")) return href;
-  return `${REPO}/blob/main/${repoPath(href, file)}`;
+export function resolveHref(href: string, file: string): string | null {
+  const clean = href.replace(/[\u0000- \u007f-\u009f]/g, "");
+  if (!clean) return null;
+  const scheme = clean.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (scheme) return SAFE_SCHEMES.has(`${scheme[1]!.toLowerCase()}:`) ? clean : null;
+  if (clean.startsWith("/") || clean.startsWith("#")) return clean;
+  // A colon before any / ? or # would make a browser read a scheme anyway: not a relative path.
+  if (/^[^/?#]*:/.test(clean)) return null;
+  return `${REPO}/blob/main/${repoPath(clean, file)}`;
+}
+
+/** The element id a URL's #fragment names, or null. A malformed fragment (`#%E0%A4%A`) names nothing; it never throws. */
+export function fragmentTarget(hash: string): string | null {
+  if (!hash.startsWith("#") || hash.length < 2) return null;
+  try {
+    return decodeURIComponent(hash.slice(1));
+  } catch {
+    return null;
+  }
 }
 
 /** A relative link's path in the repo, with its #anchor, from the page's own path. */
