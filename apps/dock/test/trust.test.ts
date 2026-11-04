@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appVerdict, declaredName, domainAppId, domainBase, envList, isBlocked, LIMITS, shapeUnverifiedTools, unverifiedFocus, untrustedResult } from "../src/worker/trust.ts";
+import { allowedOrigin, appVerdict, blockedHost, declaredName, domainAppId, domainBase, envList, isBlocked, LIMITS, shapeUnverifiedTools, unverifiedFocus, untrustedResult } from "../src/worker/trust.ts";
 
 const allowed = ["https://pulse.apc.tineira.com", "https://signals.apc.tineira.com"];
 const closed = { allowed, blocked: [], open: false, dev: false };
@@ -39,10 +39,26 @@ test("an unverified app's id is its domain, with a '_' and never '__', and a loo
   assert.equal(domainBase("https://a--b.example:8443"), "a_b_example_8443");
   assert.equal(domainBase("https://xn--pulse-9qa.example"), "xn_pulse_9qa_example");
   assert.equal(domainBase(`https://${"a".repeat(40)}.example`), null, "too long to read as a prefix");
-  assert.equal(domainAppId("https://evil.example", []), "evil_example");
-  assert.equal(domainAppId("https://evil.example", [{ app_id: "evil_example", app_origin: "https://evil.example" }]), "evil_example_2");
-  assert.equal(domainAppId("https://evil-example", [{ app_id: "evil_example", app_origin: "https://evil.example" }]), null);
-  assert.equal(domainAppId("https://pulse.example", [{ app_id: "pulse", app_origin: "https://pulse.apc.tineira.com" }]), "pulse_example");
+  assert.deepEqual(domainAppId("https://evil.example", []), { id: "evil_example" });
+  assert.deepEqual(domainAppId("https://evil.example", [{ app_id: "evil_example", app_origin: "https://evil.example" }]), { id: "evil_example_2" });
+  assert.deepEqual(domainAppId("https://evil-example", [{ app_id: "evil_example", app_origin: "https://evil.example" }]), { error: "app_id_taken" });
+  assert.deepEqual(domainAppId("https://pulse.example", [{ app_id: "pulse", app_origin: "https://pulse.apc.tineira.com" }]), { id: "pulse_example" });
+  assert.deepEqual(domainAppId(`https://${"a".repeat(40)}.example`, []), { error: "app_host_too_long" }, "a clear error, not app_id_taken");
+});
+
+test("blocklist and APP_ORIGINS entries are read through the URL parser: Unicode names match their punycode hosts", () => {
+  assert.equal(blockedHost("bücher.example"), "xn--bcher-kva.example");
+  assert.equal(blockedHost("https://BÜCHER.example:8443/path"), "xn--bcher-kva.example");
+  assert.equal(blockedHost("*.evil.example."), "evil.example");
+  assert.equal(blockedHost("not a host"), "");
+  assert.ok(isBlocked("https://xn--bcher-kva.example", ["bücher.example"]));
+  assert.ok(isBlocked(new URL("https://shop.bücher.example").origin, ["bücher.example"]));
+  assert.equal(isBlocked("https://evil.example", ["not a host"]), false);
+  assert.equal(allowedOrigin("https://Pulse.APC.tineira.com/"), "https://pulse.apc.tineira.com");
+  assert.equal(allowedOrigin("https://bücher.example"), "https://xn--bcher-kva.example");
+  assert.equal(allowedOrigin("pulse.apc.tineira.com"), "", "an origin needs its scheme");
+  const verdict = appVerdict("https://xn--bcher-kva.example", "https://xn--bcher-kva.example/mcp", { allowed: ["https://bücher.example/"], blocked: [], open: false, dev: false });
+  assert.deepEqual(verdict, { ok: true, verified: true });
 });
 
 test("a declared name keeps letters, digits and plain punctuation only", () => {

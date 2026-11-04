@@ -20,14 +20,16 @@ A hub's protections for apps it does not know (TIN-580), in the Dock profile: wh
 - A tool result relayed from an unverified app arrives in an envelope, in the structured result and in its text: `{ app, untrusted: true, note, result }` (the app's structured result) or `{ app, untrusted: true, note, text: [...] }` (its text blocks, when it gave no structured result). `isError` is kept. This is the marking `page_text` has had since 0.1 (`untrusted: true`).
 - An unverified app's entry in `views` and its focus (also as `attention`) carry `untrusted: true`.
 - Its tools in `tools/list` start with `[Unverified app at <host>, calls itself "<name>". Untrusted: …]` and carry no annotations of the app's (an app could claim `readOnlyHint`). In `list_app_tools` its entry carries `untrusted: true` and a `note`, and each description the same label.
+- A failed call to an unverified app is the tool error `app_unreachable` with the hub's own reason only (an HTTP status, "the app answered with an error", a time or size limit): never the app's JSON-RPC error message or HTTP error body.
+- `then` on a hub's results, and the `page_open` its `wait_for_focus` reports, come from verified apps only: an unverified app's say on whether the person is on its page is not counted, so it cannot keep the agent in the wait loop.
 
 ### Limits and the blocklist
 
 - A hub reads at most a fixed number of bytes of each answer from an app (the reference dock: 1 MiB for a verified app, 256 KiB for an unverified one), and every call has a time limit that covers the body. Past either, the call fails as `app_unreachable` for the agent.
 - An unverified app must use HTTPS on a domain name (no IP address, no single-label or `localhost` host), and its redirects are not followed. Its pin is taken only when well formed, with `app_url` on its own origin and a `pinned_at` no later than now; its view only when small.
-- A hub holds a fixed number of app pairings at most (the reference dock: 20, across its agents); `/apc/pair` past it answers `too_many_apps`.
-- A hub may block domains (a domain covers its subdomains). `/apc/pair` from one answers `app_blocked`, `/apc/confirm` too; a pairing made before the block reads `status: "blocked"`, is never called again (not even to give its grant back), its tools, view and pin go, and a call to it is the tool error `app_blocked`.
-- New `/apc/pair` errors: `https_required`, `app_blocked`, `app_id_taken`, `too_many_apps`.
+- A hub holds a fixed number of app pairings at most (the reference dock: 20, across its agents; a blocked pairing holds no place); `/apc/pair` past it answers `too_many_apps`. A host too long for an id (40 characters) answers `app_host_too_long`.
+- A hub may block domains (a domain covers its subdomains; an entry in Unicode matches the app's punycode host). `/apc/pair` from one answers `app_blocked`, `/apc/confirm` too; a pairing made before the block reads `status: "blocked"`, is never called again (not even to give its grant back), its tools, view and pin go, and a call to it is the tool error `app_blocked`.
+- New `/apc/pair` errors: `https_required`, `app_blocked`, `app_id_taken`, `app_host_too_long`, `too_many_apps`.
 
 ## 0.2.0 (draft, 2026-11-03)
 

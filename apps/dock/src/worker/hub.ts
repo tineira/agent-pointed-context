@@ -16,7 +16,7 @@ import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
-import { AppCallError, callAppTool, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
+import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
 import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, untrustedResult, unverifiedView } from "./trust.ts";
@@ -334,7 +334,15 @@ export class Hub extends DurableObject<Env> {
   }
   /** then rides on a hub result while the dock is open and the person is on a paired app's page. */
   private attendance(agentId: string): boolean {
-    return this.dockOpen() && combineAttendance(this.pairings(agentId, "paired").map((p) => p.page_open)) === true;
+    return this.dockOpen() && this.presence(agentId) === true;
+  }
+  /**
+   * Whether the person is on a paired app's page, as the verified apps say (TIN-580). An unverified app's
+   * then or page_open never counts: one that claimed the person was always there would keep the agent in
+   * the wait loop, each round a wait the app can hold. Its pins still reach the agent; only its say on presence is ignored.
+   */
+  private presence(agentId: string): boolean | null {
+    return combineAttendance(this.pairings(agentId, "paired").filter((p) => p.verified).map((p) => p.page_open));
   }
   private async touch(): Promise<void> {
     this.setMeta("expires_at", String(Date.now() + DOCK_TTL_MS));
@@ -667,14 +675,16 @@ export class Hub extends DurableObject<Env> {
     // The person pairs again after revoking in the app (APC 0.2): the new pairing replaces the revoked one's line, and its app id.
     this.sql.exec("delete from pairings where agent_id = ? and app_origin = ? and status = 'revoked'", t.agent_id, origin);
     // A cap on the apps one dock pairs, every agent and app counted, pending or paired (TIN-580).
-    const held = this.sql.exec<{ n: number }>("select count(*) as n from pairings where status in ('pending', 'paired')").toArray()[0]?.n ?? 0;
+    // A blocked domain's pairing holds no place: it reads as blocked, never as pending or paired.
+    const held = this.pairings().filter((p) => p.status === "pending" || p.status === "paired").length;
     if (held >= LIMITS.pairings) return { ok: false, error: "too_many_apps" };
     const others = this.pairings(t.agent_id);
     // A verified app's id comes from its name; an unverified app's from its domain, never from the name it declares,
     // which it keeps only as secondary text (TIN-580). Verified ids are [a-z0-9] and "page" (TIN-421); a domain id
     // always has a "_", so the two never meet.
-    const appId = verdict.verified ? appIdFor(name, new Set([...others.map((p) => p.app_id), PAGE_APP.id])) : domainAppId(origin, others);
-    if (!appId) return { ok: false, error: "app_id_taken" };
+    const domainId = verdict.verified ? null : domainAppId(origin, others);
+    if (domainId && "error" in domainId) return { ok: false, error: domainId.error };
+    const appId = verdict.verified ? appIdFor(name, new Set([...others.map((p) => p.app_id), PAGE_APP.id])) : domainId!.id;
     const declared = verdict.verified ? null : declaredName(name) || null;
     const id = `pr_${randomHex(6)}`;
     this.sql.exec(
@@ -894,7 +904,8 @@ export class Hub extends DurableObject<Env> {
       this.broadcast();
       return;
     }
-    this.sql.exec("update pairings set error = ? where id = ?", String(error).slice(0, 200), p.id);
+    // What the dock shows; for an unverified app, never the app's own words (TIN-580).
+    this.sql.exec("update pairings set error = ? where id = ?", (p.verified ? String(error) : failureReason(error)).slice(0, 200), p.id);
   }
 
   /** Ask every paired app what the person sees and where they pointed: the hub's quick look. */
@@ -924,7 +935,7 @@ export class Hub extends DurableObject<Env> {
       const finish = (got: boolean) => {
         if (done) return;
         done = true;
-        resolve({ got, open: combineAttendance(this.pairings(agentId, "paired").map((p) => p.page_open)) });
+        resolve({ got, open: this.presence(agentId) });
       };
       for (const p of paired) {
         callAppTool(p.mcp_url, "wait_for_focus", { timeout_s: timeoutS }, timeoutS * 1000 + LIMITS.waitGraceMs, transport(p))
@@ -1240,7 +1251,9 @@ export class Hub extends DurableObject<Env> {
       result = await callAppTool(p.mcp_url, tool, args, LIMITS.callMs, transport(p));
     } catch (error) {
       this.failed(p, error);
-      return toolError("app_unreachable", `${p.app_name} did not answer: ${String(error).slice(0, 120)}`);
+      // An unverified app's failure is told in the hub's own words only: its JSON-RPC error text and its HTTP error
+      // body are the app's, and would reach the agent unmarked in a tool error (TIN-580).
+      return toolError("app_unreachable", `${p.app_name} did not answer: ${(p.verified ? String(error) : failureReason(error)).slice(0, 120)}`);
     }
     if (result.isError && isRevokedAnswer(structured(result))) {
       this.markRevoked(p);

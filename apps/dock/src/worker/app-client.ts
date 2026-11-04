@@ -38,11 +38,22 @@ export class AppCallError extends Error {
   readonly status: number | undefined;
   /** The `error` of the app's JSON body, when it gave one: "revoked" when the person revoked the grant in the app (APC 0.2). */
   readonly code: string | undefined;
-  constructor(message: string, status?: number, code?: string) {
+  /**
+   * What went wrong in the hub's own words only, never the app's (TIN-580): the message may carry the
+   * app's JSON-RPC error text or error code; this never does. What an unverified app's failure tells the agent.
+   */
+  readonly reason: string;
+  constructor(message: string, status?: number, code?: string, reason?: string) {
     super(message);
     this.status = status;
     this.code = code;
+    this.reason = reason ?? message;
   }
+}
+
+/** The hub's own words for a failed call: an AppCallError's reason, or "unreachable" for anything else (a network error's text is not the app's, but says nothing useful either). */
+export function failureReason(error: unknown): string {
+  return error instanceof AppCallError ? error.reason : "unreachable";
 }
 
 /** Rejects when the signal aborts: a call ends at its time limit even if the app never answers or never ends its body. */
@@ -115,7 +126,8 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
   ]);
   if (!response.ok) {
     const code = await errorCode(response, ends);
-    throw new AppCallError(`${method}: HTTP ${response.status}${code ? ` ${code}` : ""}`, response.status, code);
+    // The reason leaves out the app's code: it is the app's text.
+    throw new AppCallError(`${method}: HTTP ${response.status}${code ? ` ${code}` : ""}`, response.status, code, `${method}: HTTP ${response.status}`);
   }
   const type = response.headers.get("content-type") ?? "";
   const text = await readCapped(response, maxBytes(transport), ends, method);
@@ -140,7 +152,7 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
     }
   }
   if (!message || typeof message !== "object") throw new AppCallError(`${method}: no response`);
-  if (message.error) throw new AppCallError(`${method}: ${String(message.error.message ?? "error").slice(0, 200)}`);
+  if (message.error) throw new AppCallError(`${method}: ${String(message.error.message ?? "error").slice(0, 200)}`, undefined, undefined, `${method}: the app answered with an error`);
   return message.result;
 }
 

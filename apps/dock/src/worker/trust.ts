@@ -40,11 +40,28 @@ export function envList(value: string | undefined): string[] {
   return (value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-/** A blocklist entry as a bare lower-case host: "Evil.Example", "https://evil.example/", "*.evil.example" all give "evil.example". */
-function blockedHost(entry: string): string {
-  let e = entry.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/^\*\./, "");
-  e = e.split("/")[0]!.replace(/:\d+$/, "").replace(/^\.+|\.+$/g, "");
-  return e;
+/**
+ * A blocklist entry as the host the URL parser gives: "Evil.Example", "https://evil.example/", "*.evil.example"
+ * all give "evil.example", and a Unicode name its punycode ("bücher.example" gives "xn--bcher-kva.example"),
+ * the form an app's origin arrives in. An entry the parser refuses gives "" and blocks nothing.
+ */
+export function blockedHost(entry: string): string {
+  const e = entry.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/^\*\./, "").replace(/^\.+/, "");
+  try {
+    return new URL(`https://${e}`).hostname.replace(/\.+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+/** An APP_ORIGINS entry as the origin the URL parser gives (lower case, punycode, no path or trailing slash); "" if it is not one. */
+export function allowedOrigin(entry: string): string {
+  try {
+    const origin = new URL(entry.trim()).origin;
+    return origin === "null" ? "" : origin;
+  } catch {
+    return "";
+  }
 }
 
 /** Whether the app's origin is on the blocklist we operate: its host, or any domain above it. */
@@ -77,7 +94,7 @@ export function appVerdict(origin: string, mcpUrl: string, o: { allowed: readonl
   }
   if (url.origin !== origin || url.username || url.password) return { ok: false, error: "app_not_allowed" };
   if (isBlocked(origin, o.blocked)) return { ok: false, error: "app_blocked" };
-  if (o.allowed.includes(origin) || (o.dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))) return { ok: true, verified: true };
+  if (o.allowed.some((a) => allowedOrigin(a) === origin) || (o.dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))) return { ok: true, verified: true };
   if (!o.open) return { ok: false, error: "app_not_allowed" };
   if (url.protocol === "http:") return { ok: false, error: "https_required" };
   if (url.protocol !== "https:") return { ok: false, error: "app_not_allowed" };
@@ -100,18 +117,19 @@ export function domainBase(origin: string): string | null {
 }
 
 /**
- * An unverified app's id within one agent's apps: its domain, never the name it declares. Another
- * origin that maps to the same id (a-b.example and a.b.example) is refused (null), so no app answers
- * under a prefix the agent already knows; the same origin again gets "_2", "_3".
+ * An unverified app's id within one agent's apps: its domain, never the name it declares. A host too
+ * long for an id is refused (app_host_too_long). Another origin that maps to the same id (a-b.example
+ * and a.b.example) is refused (app_id_taken), so no app answers under a prefix the agent already
+ * knows; the same origin again gets "_2", "_3".
  */
-export function domainAppId(origin: string, others: ReadonlyArray<{ app_id: string; app_origin: string }>): string | null {
+export function domainAppId(origin: string, others: ReadonlyArray<{ app_id: string; app_origin: string }>): { id: string } | { error: "app_host_too_long" | "app_id_taken" } {
   const base = domainBase(origin);
-  if (!base) return null;
+  if (!base) return { error: "app_host_too_long" };
   const taken = new Map(others.map((o) => [o.app_id, o.app_origin]));
   const owner = taken.get(base);
-  if (owner === undefined) return base;
-  if (owner !== origin) return null;
-  for (let n = 2; ; n++) if (!taken.has(`${base}_${n}`)) return `${base}_${n}`;
+  if (owner === undefined) return { id: base };
+  if (owner !== origin) return { error: "app_id_taken" };
+  for (let n = 2; ; n++) if (!taken.has(`${base}_${n}`)) return { id: `${base}_${n}` };
 }
 
 /** The name an unverified app declares, kept only as secondary text: letters, digits and plain punctuation, 40 characters at most. */
