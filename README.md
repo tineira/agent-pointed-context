@@ -192,7 +192,7 @@ On Windows the local Workers runtime needs the Microsoft Visual C++ Redistributa
 | `packages/server` | the attention envelope, `get_current_view`, `wait_for_focus`, presence events |
 | `packages/web` | drag-to-pin, presence marks, view reporting, the agent bar and pin badge |
 | `packages/conformance` | the conformance suite for the core of the standard, the `apc-conformance` command (the checks HTTP reaches, against a live app), and a Durable Object stand-in for Node |
-| `scripts/build-packages.mjs`, `scripts/check-packages.mjs`, `scripts/publish-local.mjs` | build the four packages' `dist/` for npm, check their versions and manifests before a release (`.github/workflows/publish.yml`), and the one-time first publish by hand |
+| `scripts/build-packages.mjs`, `scripts/check-packages.mjs`, `scripts/publish-local.mjs`, `scripts/check-no-npm-token.mjs` | build the four packages' `dist/` for npm, check their versions and manifests before a release (`.github/workflows/publish.yml`), the one-time first publish by hand, and the tag job's check that no npm token is configured (OIDC only) |
 | `apps/v1` | V1, frozen (TIN-604): Pulse as the paper describes it, at apc.tineira.com/v1 (Worker `apc-demo`), with its own copy of the three packages in `src/apc`; changed only to keep it running ([README](apps/v1/README.md)) |
 | `apps/demo` | Pulse for the APC standard: a Cloudflare Worker with one Durable Object per visitor, a Vite + React front end, paired from the dock (`apc-pulse`, pulse.apc.tineira.com) |
 | `apps/signals` | The APC standard: Signals, a market feed (competitor offers and our ads, from the same seed as Pulse) as the second APC app (`apc-signals`, signals.apc.tineira.com) |

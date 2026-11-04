@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { PACKAGES, REPOSITORY_URL, checkManifest, checkVersions, distTargets, npmPublishArgs, rewriteDeclaration, standardVersionOf, tarballName } from "../lib/packages.mjs";
 
 const at = (version) => PACKAGES.map((n) => ({ name: `@tineira/apc-${n}`, version }));
@@ -57,10 +61,12 @@ test("each tarball is published with npm on next, public, protocol first, with n
   const workflow = readFileSync(repo(".github/workflows/publish.yml"), "utf8");
   assert.ok(!/NPM_TOKEN|--provenance|secrets\./.test(workflow), "trusted publishing: no token, provenance is automatic");
   assert.ok(!/^\s*registry-url\s*:/m.test(workflow), "no registry-url: setup-node would write an _authToken line and a placeholder NODE_AUTH_TOKEN");
-  // A YAML env key (`NODE_AUTH_TOKEN: …`) or a shell assignment (`NODE_AUTH_TOKEN=…`); the guard's `${NODE_AUTH_TOKEN:-}` only reads it.
-  assert.ok(!/NODE_AUTH_TOKEN\s*(:\s|:$|=)/m.test(workflow) && !/_authToken\s*=/.test(workflow), "nothing sets NODE_AUTH_TOKEN or writes an _authToken");
-  assert.match(workflow, /if \[ -n "\$\{NODE_AUTH_TOKEN:-\}" \]/, "the tag job fails when NODE_AUTH_TOKEN is set");
-  assert.match(workflow, /npm config get \/\/registry\.npmjs\.org\/:_authToken/, "the tag job fails when npm has a token configured");
+  assert.ok(!/NODE_AUTH_TOKEN/.test(workflow) && !/_authToken\s*=/.test(workflow), "nothing sets NODE_AUTH_TOKEN or writes an _authToken");
+  const code = workflow.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  assert.ok(!/npm config get/.test(code), "npm 11+ exits 1 on `npm config get` of a protected key, which would abort the job");
+  const publishJob = workflow.slice(workflow.indexOf("\n  publish:"), workflow.indexOf("\n  dry-run:"));
+  const guard = publishJob.indexOf("run: node scripts/check-no-npm-token.mjs");
+  assert.ok(guard > 0 && guard < publishJob.indexOf("npm publish "), "the tag job checks for a token before it publishes");
   assert.match(workflow, /id-token: write/);
   assert.match(workflow, /tags: \["apc-v\*"\]/);
   assert.ok(!/pull_request/.test(workflow), "never on a pull request");
@@ -72,6 +78,43 @@ test("each tarball is published with npm on next, public, protocol first, with n
   assert.equal(workflow.match(/^\s+id-token: write\s*$/gm)?.length, 1, "only the tag job gets an OIDC token");
   assert.match(workflow, /environment: npm-publish/);
   assert.match(workflow, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/, "a tag publishes only a commit of main");
+});
+
+/** The tag job's guard (scripts/check-no-npm-token.mjs), run for real with npm, in a clean environment. */
+test("the token guard passes with no token, fails on any token, and never prints its value", async () => {
+  const VALUE = "DUMMYtokenVALUE123";
+  const dir = mkdtempSync(join(tmpdir(), "apc-npmrc-"));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^npm_config_/i.test(k) && k !== "NODE_AUTH_TOKEN"));
+  const guard = fileURLToPath(repo("scripts/check-no-npm-token.mjs"));
+  const run = (cwd, extra) =>
+    new Promise((done) => {
+      execFile(process.execPath, [guard], { cwd, env: { ...env, ...extra }, timeout: 60_000 }, (error, stdout, stderr) => done({ code: error ? (error.code ?? 1) : 0, out: stdout + stderr }));
+    });
+  try {
+    const empty = join(dir, "empty.npmrc");
+    writeFileSync(empty, "");
+    const withToken = join(dir, "token.npmrc");
+    writeFileSync(withToken, `//registry.npmjs.org/:_authToken=${VALUE}\n`);
+    const project = join(dir, "project");
+    mkdirSync(project);
+    writeFileSync(join(project, ".npmrc"), `//registry.npmjs.org/:_authToken=${VALUE}\n`);
+
+    const clean = await run(dir, { NPM_CONFIG_USERCONFIG: empty });
+    assert.equal(clean.code, 0, clean.out);
+    assert.match(clean.out, /no npm token configured/);
+    for (const [why, cwd, extra] of [
+      ["a token in the user config", dir, { NPM_CONFIG_USERCONFIG: withToken }],
+      ["a token in the project's .npmrc", project, { NPM_CONFIG_USERCONFIG: empty }],
+      ["NODE_AUTH_TOKEN", dir, { NPM_CONFIG_USERCONFIG: empty, NODE_AUTH_TOKEN: VALUE }],
+    ]) {
+      const r = await run(cwd, extra);
+      assert.equal(r.code, 1, `${why}: ${r.out}`);
+      assert.match(r.out, /an npm token is configured/, why);
+      assert.ok(!r.out.includes(VALUE), `${why}: the value is never printed`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("declarations import .js, not the .ts the sources import", () => {

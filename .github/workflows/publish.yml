@@ -59,18 +59,10 @@ jobs:
         run: |
           node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<22||(a===22&&b<14)) { console.error("Node 22.14+ needed, got "+process.versions.node); process.exit(1) }'
           node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); if (a<11||(a===11&&(b<5||(b===5&&c<1)))) { console.error("npm 11.5.1+ needed, got "+process.argv[1]); process.exit(1) }' "$(npm --version)"
-      # OIDC only: no token in the environment or in npm's config (the value is never printed).
+      # OIDC only: no token in the environment, in npm's config or in an .npmrc (the value is never printed).
+      # A script, not `npm config get`: npm 11+ refuses to read a protected key and exits 1 either way.
       - name: No npm token configured
-        run: |
-          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error title=Token set::NODE_AUTH_TOKEN is set; trusted publishing uses OIDC and no token."
-            exit 1
-          fi
-          token="$(npm config get //registry.npmjs.org/:_authToken)"
-          case "$token" in
-            ""|undefined|null) echo "no npm token configured" ;;
-            *) echo "::error title=Token configured::npm has an _authToken for registry.npmjs.org; trusted publishing uses OIDC and no token."; exit 1 ;;
-          esac
+        run: node scripts/check-no-npm-token.mjs
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: node scripts/check-packages.mjs --tag "$GITHUB_REF_NAME"
