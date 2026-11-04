@@ -34,10 +34,13 @@ function standInHub(t: TestContext | null): { calls: string[] } {
   return { calls };
 }
 
+/** Pulse's deploy (wrangler.jsonc): the standard's, with both profiles. */
+const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
+
 /** Pulse as the suite sees it: its MCP endpoint, and the page through the sandbox's own methods. */
-async function pulse(profile: "direct" | "dock", options: { revoke?: boolean } = {}) {
+async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean } = {}) {
   const room = durableObjectRoom();
-  const sandbox = new Sandbox(room.ctx, profile === "dock" ? { APC_V2: "1", HUB_ORIGINS: HUB } : {});
+  const sandbox = new Sandbox(room.ctx, options.env ?? DEPLOY);
   await sandbox.init(SEED);
   const data = generateDataset(SEED);
   const targets: [FocusTarget, FocusTarget] = [
@@ -46,24 +49,42 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean } =
   ];
   let agents = 0;
   const secretOf = async (grantId: string): Promise<string> => ((await sandbox.state()).grants as Array<{ id: string; secret: string }>).find((g) => g.id === grantId)!.secret;
+  const connectOn = async (path: "direct" | "dock") => {
+    let grantId: string;
+    if (path === "direct") {
+      grantId = (await sandbox.addAgentGrant()).id;
+    } else {
+      // A dock agent dropped on Pulse, the person said yes: Pulse makes the grant and hands it to the hub.
+      agents++;
+      const paired = await sandbox.pairHub(SID, ORIGIN, { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] });
+      assert.equal(paired.ok, true, `pairing: ${paired.error}`);
+      grantId = paired.grant_id!;
+      await sandbox.unpin(grantId);
+    }
+    return { grantId, mcpUrl: `${ORIGIN}/mcp/${SID}/${await secretOf(grantId)}` };
+  };
   const app: ApcAppAdapter = {
     name: "Pulse",
     profile,
     fetch: (request) => sandbox.fetch(request),
-    async connect() {
-      let grantId: string;
-      if (profile === "direct") {
-        grantId = (await sandbox.addAgentGrant()).id;
-      } else {
-        // A dock agent dropped on Pulse, the person said yes: Pulse makes the grant and hands it to the hub.
-        agents++;
-        const paired = await sandbox.pairHub(SID, ORIGIN, { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] });
-        assert.equal(paired.ok, true, `pairing: ${paired.error}`);
-        grantId = paired.grant_id!;
-        await sandbox.unpin(grantId);
-      }
-      return { grantId, mcpUrl: `${ORIGIN}/mcp/${SID}/${await secretOf(grantId)}` };
-    },
+    connect: () => connectOn(profile),
+    // apc_link (APC 0.4): Pulse's deploy offers both profiles.
+    ...(options.link
+      ? {
+          link: {
+            connect: (path) => connectOn(path),
+            async agents() {
+              const state = await sandbox.state();
+              const second = new Set((state.links as Array<[string, string]>).map(([, dock]) => dock));
+              return (state.grants as Array<{ id: string }>).filter((g) => !second.has(g.id)).map((g) => ({ grants: [g.id, ...(state.links as Array<[string, string]>).filter(([d]) => d === g.id).map(([, k]) => k)] }));
+            },
+            unlink: async (grantId) => (await sandbox.unlinkGrant(grantId)).ok,
+            async expireCodes() {
+              room.db.exec("update apc_kv set value = json_set(value, '$.expires_at', 0) where key like 'code:%'");
+            },
+          },
+        }
+      : {}),
     targets,
     probe: { tool: "list_customers", args: { limit: 1 } },
     page: {
@@ -84,9 +105,41 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean } =
 
 standInHub(null);
 for (const profile of ["direct", "dock"] as const) {
-  const { app } = await pulse(profile);
+  // The apc_link checks once, with the Direct run: they make agents on both paths themselves.
+  const { app } = await pulse(profile, { link: profile === "direct" });
   for (const check of apcConformance(app)) test(check.name, check.run);
 }
+// The direct-only setup (no dock, the agent of its own at start) still passes the core.
+{
+  const { app } = await pulse("direct", { env: { APC_PROFILES: "direct" } });
+  for (const check of apcConformance({ ...app, name: "Pulse direct-only" })) test(check.name, check.run);
+}
+
+test("a Pulse that offers one profile refuses the other", async () => {
+  const dockOnly = await pulse("dock", { env: { ...DEPLOY, APC_PROFILES: "dock" } });
+  assert.equal((await dockOnly.sandbox.resolveConflict("g_nobody", "split")).ok, false);
+  assert.deepEqual((await dockOnly.sandbox.state()).profiles, ["dock"]);
+  const directOnly = await pulse("direct", { env: { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct" } });
+  assert.deepEqual(await directOnly.sandbox.pairHub(SID, ORIGIN, { hub: HUB, agent: "ag_1", ticket: "d".repeat(32), target: null }), { ok: false, error: "not_available" });
+});
+
+test("a link code is never written to the sandbox's log or kept in clear", async () => {
+  const { app, sandbox, room } = await pulse("direct", { link: true });
+  const check = apcConformance(app).find((c) => c.name.includes("the code links them"))!;
+  const codes: string[] = [];
+  const original = sandbox.fetch.bind(sandbox);
+  app.fetch = async (request) => {
+    const response = await original(request);
+    const text = await response.clone().text();
+    for (const m of text.matchAll(/lk_[0-9a-f]{24}/g)) codes.push(m[0]);
+    return response;
+  };
+  await check.run();
+  assert.ok(codes.length > 0, "an offer was made");
+  const everything = (await sandbox.eventsJsonl()) + JSON.stringify(room.db.prepare("select * from apc_kv").all());
+  for (const code of codes) assert.equal(everything.includes(code), false, "only its hash is kept, and the log hides it");
+  assert.match(await sandbox.eventsJsonl(), /"type":"linked"/);
+});
 
 test("the suite catches an app whose Revoke does nothing", async () => {
   const { app } = await pulse("direct", { revoke: false });

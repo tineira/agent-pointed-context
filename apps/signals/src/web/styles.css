@@ -106,3 +106,13 @@ apc-agents.agent-bar { --apc-chip: var(--panel); --apc-line: var(--line); --apc-
 /* The standard pin badge (TIN-482, <apc-pin>) shares them; on :root so the copy that follows the pointer while dragging is themed too. */
 :root { --apc-chip: var(--panel); --apc-line: var(--line); --apc-ink: var(--fg); --apc-muted: var(--muted); --apc-accent: var(--accent); --apc-ok: var(--ok); }
 .bar-row { display: flex; justify-content: flex-end; min-height: 36px; }
+
+/* The Direct profile's Connect panel (TIN-578): the list from @apc/web, in the timeline. */
+.connect { margin: 12px 16px 0; display: flex; flex-direction: column; gap: 10px; }
+.connect h2 { margin: 0; }
+.connect p { margin: 0; }
+.connect-head { display: flex; justify-content: space-between; align-items: center; }
+.link { border: 0; background: none; padding: 0 4px; font-size: 20px; line-height: 1; color: var(--muted); cursor: pointer; }
+.connect-open { align-self: flex-end; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); padding: 6px 14px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.connect-open:hover { background: var(--hover); }
+.mobile-actions > .connect-open { font-size: 13px; padding: 5px 10px; }

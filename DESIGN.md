@@ -559,3 +559,50 @@ Every attack, what stops it, and the test that shows it (`apps/dock/test/hostile
 **A note on sizes.** The byte cap on an answer counts bytes as read. The smaller caps on what the hub keeps of an unverified app (a view under 8 KB, a schema under 8 KB, `next_args` under 1 KB) measure the JSON's length in UTF-16 code units, not bytes, so non-ASCII text can make a kept view up to about three times that in UTF-8. Each is still bounded, by that cap and by the answer's byte cap, and marked untrusted.
 
 Not covered: the warning the person approves before an unverified app pairs (the next phase); a rate limit on an app's pins; and what the agent does with marked text, which no hub can decide for it.
+
+## 16. The Direct profile packaged, and `apc_link` (TIN-578)
+
+Since this section, Pulse and Signals offer both profiles on their deploys; § 14's "Pulse runs Dock only, Signals offers Dock" describes the state before it.
+
+**Profiles in one place.** Each app declares how agents reach it in `APC_PROFILES` (`"direct,dock"` in `apps/demo/wrangler.jsonc` and `apps/signals/wrangler.jsonc`; `parseProfiles` in `@apc/server`, both when missing). Every check that used to hide Direct behind `APC_V2` (making an agent, a restricted agent, giving a shared URL its own, the cleanup of grants with no dock link) reads it instead; `APC_V2` keeps only what is not about profiles (a dock's seed, the dataset route, Start over, the signup codes). An app that offers one profile refuses the other's routes.
+
+**The Direct profile in the packages.** An app no longer builds Direct itself:
+
+| Part | Where | What it does |
+|---|---|---|
+| A grant per agent | `newDirectGrant()` in `@apc/server` (`direct.ts`) | an id and 128 random bits of secret; the app keeps them in its own grants table |
+| Its secret MCP URL | `directMcpUrl(origin, sid, secret)` | `{origin}/mcp/{sid}/{secret}`: whoever holds the URL holds the grant |
+| What a connection says | `initializeOf(body)`, `linkClient(client, path)` | the client's name, title, icons; on the Dock path the agent's client as the hub names it |
+| Names | `cleanAgentName` | plain text, one line, 40 characters |
+| The agent list | `<apc-direct-agents>` in `@apc/web` (`direct-agents.ts`) | the person makes an agent (`apc-add`), names it (`apc-rename`), and copies its URL and the prompt to paste to it (`connectPrompt`) |
+| Revoke | core (§ 14) | ⊘ in the agent bar |
+
+Pulse's grants, its sandbox's Direct routes and its Agents screen use them (on the standard's deploy the screen is **Agents** again, with "Agents connected directly"). Signals takes Direct agents and `apc_link` with about 115 lines of server code of its own and 70 on its page, nothing of it a reimplementation of the packages: `addDirectGrant`, `renameGrant` and `unlinkGrant` in its feed, three routes, the client on `initialize`, the link offer around its tools, Revoke of both grants, a grants table whose `hub` and `agent` may be null (an older feed's table is made again on start), and a Connect panel on its page around `<apc-direct-agents>`. A visitor with no dock gets a feed on a world of its own. The dock's landing card "Connect app by app" opens Signals with that panel (`?connect`), beside "Open your dock", with equal weight.
+
+**The agent bar's rule** (`<apc-agents>`). Each agent shows the path it came by: *direct*, *via dock*, or *direct + dock* when linked, with **unlink**. With any agent that came directly the bar is always shown in full: the app is the only place the person sees and points that agent. When every agent came through a dock, the person may collapse the bar (‹) to a small indicator of who is reading (their icons and "2 reading"); it is never hidden, and a click opens it again. The pins on the page (`<apc-pin>`) stay visible and draggable either way. While an agent that came only directly is connected, the bar shows a quiet hint, **Use this agent across apps with the dock** (apc.tineira.com), until the person dismisses or follows it, once per browser; an app turns it off with `dockHint = null`.
+
+**`apc_link`** (APC 0.4, `packages/protocol/src/core.ts`). The same agent connected both ways would otherwise be two marks in the bar. When a connection arrives (`initialize`) with the same MCP client as one already connected on the opposite path to the same app, the app puts `apc_link: { code, expires_in: 120, note }` on a result of the new connection, like `attention`; the agent sends the code back with `apc_link({ code })` on its other connection (through the dock, `<app>__apc_link`), and the bar shows one agent with both paths. It is in the core's instructions and the `guide` prompt (`@apc/server`) and in the dock's instructions, so an agent knows the step is legitimate; an agent that ignores it stays two entries.
+
+- `ApcLinks` in `@apc/server` (`links.ts`) holds the state in a small synchronous key-value store (`sqlKv` on the Durable Object's SQLite, or `memoryKv`): the links, each grant's current MCP session (its client, and whether an offer is still due), and the codes by SHA-256. Every check and write happens after its one await, with nothing in between.
+- An offer is due when the connection arrives and someone with its client is connected on the other path, neither linked. It rides on the next successful result, at most once per session; on the Dock path only on one of the app's own tools, since the hub merges core results (`get_current_view`, `wait_for_focus`) into its own and would drop it. A new `initialize` is a new session.
+- The hub initializes an app as itself (`clientInfo.name` "apc-hub"), so it now names the agent's own client in `params._meta["apc.tineira.com/agent_client"]` of that `initialize` (`initializeApp` in `apps/dock/src/worker/app-client.ts`, one argument from `introduce` in `hub.ts`). It names it to verified apps only (§ 15): an unverified app learns nothing of the agent's client, so it is never offered a link through the hub, and its results come wrapped as untrusted anyway. The hub needed no other change: it relays a verified app's results with every key but `attention` and `then`, and lists `apc_link` among the app's tools.
+- Linking grants nothing: each grant keeps its own access, trimming and pin. A linked agent shows once in the bar, under its Direct grant (dragging its mark pins that grant; the dock still points the other). Revoke on it revokes both grants (both URLs answer 403 `revoked`); unlink removes only the link.
+
+Every way a code could be abused, and what closes it:
+
+| Abuse | Closed by |
+|---|---|
+| Guessing a code | 96 random bits, 120 s, the app's rate limits, and only the connections it was offered to can redeem it |
+| Using it twice | marked used on success; a second redeem is `used` |
+| Using it late | `expired` after `expires_in` |
+| Sending it back on the connection that got it, or on another of the same path (two Direct grants merging) | `same_connection`, `same_path` |
+| Another agent on the other path (another client, or one that connected after the offer) | the code is bound to the connections offered it: `not_offered` |
+| Linking an agent that is already linked, to steal its entry | `already_linked` |
+| A code from another app or another person's sandbox | codes live in one app's sandbox: `unknown_code` |
+| Getting access through a link | linking grants nothing: no grant, trim or pin changes |
+| Keeping a revoked agent through its link | Revoke cuts both; a revoked grant's link and codes go |
+| Being asked again and again | once per MCP session |
+| Reading a code from storage or the log | only its hash is kept; Pulse's event log writes `(hidden)` for it |
+| A page, an app result or a reading that writes "apc_link" to trick the agent | the note says to answer only the app's own `apc_link` key; the worst case is a wrong grouping the person can unlink, with nothing granted |
+
+**Tests.** The conformance suite has the `apc_link` checks (an adapter's `link`): one offer per session and the code links; refused on the same connection, the same path, another client, an unknown code and once used; refused when expired, with no new offer in that session; no offer between two clients; Revoke on a linked agent cuts both grants; unlink makes two agents again, each with its own grant. Pulse and Signals pass the suite on both profiles (`apps/demo/test/conformance.test.ts`, `apps/signals/test/conformance.test.ts`). `apps/dock/test/apc-link.test.ts` runs the real hub and the real Pulse sandbox: the same agent links both ways round (the code relayed by the hub and answered directly, and the other way), Revoke cuts both, and unlink keeps both working. `packages/server/test/links.test.ts` covers `ApcLinks` alone.

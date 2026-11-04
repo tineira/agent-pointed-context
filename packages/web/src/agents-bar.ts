@@ -10,7 +10,19 @@
  * A custom element in light DOM, not shadow DOM: enablePinning finds marks by event target, and the
  * app's own fonts and theme apply. Its styles are injected once and scoped by class prefix; the app
  * themes it through --apc-* custom properties. Framework-agnostic: set `agents`, listen for events.
+ *
+ * The bar's rule (APC 0.4, TIN-578):
+ * - Each agent shows which path it came by (`paths`): directly, via a dock, or both when the same agent
+ *   is linked (apc_link), with Unlink (event apc-unlink).
+ * - With any agent that came directly, the bar is always shown in full: the app is the only place the
+ *   person sees and points that agent. When every agent came through a dock, the person may collapse it
+ *   to a small indicator of who is reading (the dock has the marks); it is never hidden. The pins on the
+ *   page (`<apc-pin>`) stay visible and draggable either way.
+ * - Offering the dock to a Direct user: a quiet hint, "Use this agent across apps with the dock", shown
+ *   while an agent that came only directly is connected, until the person dismisses or follows it (once
+ *   per browser). On by default; an app turns it off with `dockHint = null` or `dock-hint="off"`.
  */
+import type { ApcProfile } from "@apc/protocol";
 
 export type AgentState = "off" | "idle" | "waiting" | "busy" | "seen";
 
@@ -27,18 +39,67 @@ export interface BarAgent {
   warning?: string | null;
   /** Limited to part of the app (a restricted grant): outlined. */
   restricted?: boolean;
+  /** How it came: ["direct"], ["dock"], or both when the same agent is linked (apc_link). Left out: not shown, and the bar never collapses. */
+  paths?: ApcProfile[];
 }
 
-/** Events, all with detail { id }: open (go to the pin), unpin, warning (open what the warning is about), revoke (cut the agent from the app). */
-export type AgentBarEvent = "apc-open" | "apc-unpin" | "apc-warning" | "apc-revoke";
+/** Events, all with detail { id }: open (go to the pin), unpin, warning (open what the warning is about), revoke (cut the agent from the app, both paths when linked), unlink (show a linked agent as two again). */
+export type AgentBarEvent = "apc-open" | "apc-unpin" | "apc-warning" | "apc-revoke" | "apc-unlink";
 
 /** How long the first click on ⊘ waits for the second before it lets go. */
 export const REVOKE_CONFIRM_MS = 4000;
 
+/** The hint that offers the dock to a Direct user, and where it leads. */
+export const DOCK_HINT = { text: "Use this agent across apps with the dock", url: "https://apc.tineira.com" } as const;
+const COLLAPSED_KEY = "apc-agents.collapsed";
+const HINT_KEY = "apc-agents.dock-hint";
+
+/** The words for the path an agent came by, for its tag. Null when the app does not say. */
+export function pathLabel(paths: readonly ApcProfile[] | undefined): { text: string; title: string } | null {
+  if (!paths?.length) return null;
+  if (paths.includes("direct") && paths.includes("dock")) return { text: "direct + dock", title: "The same agent, connected directly and through a dock. Each way keeps its own access; Revoke cuts both." };
+  return paths[0] === "direct" ? { text: "direct", title: "Connected directly, on this app's own MCP URL" } : { text: "via dock", title: "Came through an agent dock" };
+}
+
+/** The bar may collapse only when every agent came through a dock: an agent that came directly keeps it in full. */
+export function barCanCollapse(agents: readonly BarAgent[]): boolean {
+  return agents.length > 0 && agents.every((a) => !!a.paths?.length && !a.paths.includes("direct"));
+}
+
+/** Who is reading, for the collapsed indicator: the agents that connected. */
+export function readingSummary(agents: readonly BarAgent[]): string {
+  const names = agents.filter((a) => a.state !== "off").map((a) => a.name);
+  if (!names.length) return "No agent is reading";
+  if (names.length === 1) return `${names[0]} is reading`;
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)} are reading`;
+}
+
+/** The dock hint shows while an agent that came only directly is connected, unless the app turned it off or the person dismissed it. */
+export function showDockHint(agents: readonly BarAgent[], options: { enabled: boolean; dismissed: boolean }): boolean {
+  return options.enabled && !options.dismissed && agents.some((a) => a.paths?.length === 1 && a.paths[0] === "direct" && a.state !== "off");
+}
+
+function stored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function store(key: string, value: string | null): void {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // private mode or storage off: for this page only
+  }
+}
+
 const STYLE_ID = "apc-agents-style";
 const CSS = `
-apc-agents { display: inline-flex; align-items: center; gap: 10px; }
+apc-agents { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .apc-agents__agent { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.apc-agents__agent[hidden] { display: none; }
 .apc-agents__mark { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 8px; cursor: grab; touch-action: none;
   background: var(--apc-chip, #ffffff); border: 1px solid var(--apc-line, #d6dce5); color: var(--apc-ink, #141a24); }
 .apc-agents__mark:active { cursor: grabbing; }
@@ -59,6 +120,17 @@ apc-agents { display: inline-flex; align-items: center; gap: 10px; }
 .apc-agents__revoke { border: 0; background: none; padding: 0 2px; font: 13px/1 system-ui, sans-serif; color: inherit; cursor: pointer; opacity: 0.45; }
 .apc-agents__revoke:hover, .apc-agents__revoke:focus-visible { opacity: 1; color: var(--apc-warn, #c0392b); }
 .apc-agents__revoke.apc-agents__revoke--armed { opacity: 1; padding: 2px 6px; border-radius: 6px; font-weight: 600; font-size: 12px; color: #fff; background: var(--apc-warn, #c0392b); }
+.apc-agents__path { font: 600 10px/1 system-ui, sans-serif; letter-spacing: 0.02em; white-space: nowrap; color: var(--apc-muted, #5b6575); }
+.apc-agents__unlink, .apc-agents__collapse, .apc-agents__hint button { border: 0; background: none; padding: 0 2px; font: 11px/1 system-ui, sans-serif; color: var(--apc-muted, #5b6575); cursor: pointer; text-decoration: underline dotted; }
+.apc-agents__unlink:hover, .apc-agents__collapse:hover, .apc-agents__hint button:hover { color: var(--apc-ink, #141a24); }
+.apc-agents__collapse { text-decoration: none; font-size: 13px; opacity: 0.6; }
+.apc-agents__mini { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px 0 4px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--apc-line, #d6dce5); background: var(--apc-chip, #ffffff); color: var(--apc-ink, #141a24); font: 600 11px/1 system-ui, sans-serif; }
+.apc-agents__mini-icon { display: grid; place-items: center; width: 16px; height: 16px; }
+.apc-agents__mini-icon img, .apc-agents__mini-icon svg { width: 16px; height: 16px; display: block; }
+.apc-agents__hint { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; font: 11px/1.2 system-ui, sans-serif; color: var(--apc-muted, #5b6575); }
+.apc-agents__hint a { color: inherit; }
+.apc-agents__hint a:hover { color: var(--apc-ink, #141a24); }
 @keyframes apc-agents-float { 0%, 100% { transform: translateY(1.5px); } 50% { transform: translateY(-2.5px); } }
 @keyframes apc-agents-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
 @keyframes apc-agents-bounce { 0% { transform: translateY(0); } 25% { transform: translateY(-6px); } 50% { transform: translateY(0); } 70% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
@@ -71,7 +143,8 @@ const BOT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColo
 /** The words a mark, its dot and its revoke button say, for tooltips and screen readers. Pure, so it is tested. */
 export function agentLabels(a: BarAgent): { mark: string; dot: string | null; revoke: string; revokeArmed: string } {
   const mark = `${a.name}${a.state === "off" ? " (not connected yet)" : ""}. Drag onto anything to point this agent.`;
-  const revoke = `Revoke ${a.name}: it can no longer read this app, at once. To let it back, connect or drop it here again.`;
+  const both = !!a.paths?.includes("direct") && !!a.paths.includes("dock");
+  const revoke = `Revoke ${a.name}: it can no longer read this app${both ? ", directly or through the dock" : ""}, at once. To let it back, connect or drop it here again.`;
   const revokeArmed = `Click again to revoke ${a.name}.`;
   if (!a.pin) return { mark, dot: null, revoke, revokeArmed };
   const read = a.pin.seen ? "your agent read it" : "waiting for your agent's next call";
@@ -89,6 +162,9 @@ export function defineAgentBar(tag = "apc-agents"): void {
     private armed = new Map<string, ReturnType<typeof setTimeout>>();
     /** The app draws an agent's icon into this element itself (for example with its own logos). Called on every update. */
     renderIcon: ((agent: BarAgent, into: HTMLElement) => void) | null = null;
+    private hint: { text: string; url: string } | null = { ...DOCK_HINT };
+    /** The collapsed indicator's icons, kept per agent like the marks' (an app's renderIcon may keep state in them). */
+    private miniIcons = new Map<string, HTMLElement>();
 
     get agents(): BarAgent[] {
       return this.list;
@@ -96,6 +172,18 @@ export function defineAgentBar(tag = "apc-agents"): void {
     set agents(next: BarAgent[]) {
       this.list = next;
       this.render();
+    }
+    /** The hint that offers the dock to a Direct user; null turns it off. */
+    get dockHint(): { text: string; url: string } | null {
+      return this.getAttribute("dock-hint") === "off" ? null : this.hint;
+    }
+    set dockHint(next: { text: string; url: string } | null) {
+      this.hint = next;
+      this.render();
+    }
+
+    private collapsed(): boolean {
+      return barCanCollapse(this.list) && stored(COLLAPSED_KEY) === "1";
     }
 
     connectedCallback(): void {
@@ -137,6 +225,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
     /** Keyed by agent: an agent's element (and the icon the app drew in it) lives as long as the agent. */
     private render(): void {
       if (!this.isConnected) return;
+      const collapsed = this.collapsed();
       const seen = new Set<string>();
       for (const a of this.list) {
         seen.add(a.id);
@@ -149,6 +238,8 @@ export function defineAgentBar(tag = "apc-agents"): void {
           node = { root, icon, key: "" };
           this.nodes.set(a.id, node);
         }
+        // Collapsed, an agent's element is hidden, not removed: what the app drew in it stays.
+        node.root.hidden = collapsed;
         this.append(node.root);
         this.fill(node, a);
       }
@@ -156,14 +247,87 @@ export function defineAgentBar(tag = "apc-agents"): void {
         if (seen.has(id)) continue;
         node.root.remove();
         this.nodes.delete(id);
+        this.miniIcons.delete(id);
         this.disarm(id, false);
       }
+      for (const old of this.querySelectorAll(":scope > .apc-agents__extra")) old.remove();
+      if (collapsed) this.append(this.mini());
+      else if (barCanCollapse(this.list)) {
+        const fold = document.createElement("button");
+        fold.type = "button";
+        fold.className = "apc-agents__collapse apc-agents__extra";
+        fold.textContent = "‹";
+        fold.title = "Collapse to who is reading. Your agents came through your dock: drag them from there.";
+        fold.setAttribute("aria-label", "Collapse the agent bar");
+        fold.addEventListener("click", () => {
+          store(COLLAPSED_KEY, "1");
+          this.render();
+        });
+        this.append(fold);
+      }
+      const hint = this.dockHint;
+      if (hint && showDockHint(this.list, { enabled: true, dismissed: stored(HINT_KEY) === "dismissed" })) this.append(this.hintNode(hint));
+    }
+
+    /** Collapsed: who is reading, as small icons and a count; a click shows the bar again. Never hidden. */
+    private mini(): HTMLElement {
+      const reading = this.list.filter((a) => a.state !== "off");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "apc-agents__mini apc-agents__extra";
+      const summary = readingSummary(this.list);
+      button.title = `${summary}. Show the agents.`;
+      button.setAttribute("aria-label", `${summary}. Show the agents.`);
+      for (const a of reading.slice(0, 4)) {
+        let icon = this.miniIcons.get(a.id);
+        if (!icon) {
+          icon = document.createElement("span");
+          icon.className = "apc-agents__mini-icon";
+          this.miniIcons.set(a.id, icon);
+        }
+        if (this.renderIcon) this.renderIcon(a, icon);
+        else if (a.icon) {
+          const img = document.createElement("img");
+          img.src = a.icon;
+          img.alt = "";
+          icon.replaceChildren(img);
+        } else icon.innerHTML = BOT;
+        button.append(icon);
+      }
+      button.append(document.createTextNode(reading.length ? `${reading.length} reading` : "no agent reading"));
+      button.addEventListener("click", () => {
+        store(COLLAPSED_KEY, null);
+        this.render();
+      });
+      return button;
+    }
+
+    private hintNode(hint: { text: string; url: string }): HTMLElement {
+      const box = document.createElement("span");
+      box.className = "apc-agents__hint apc-agents__extra";
+      const dismiss = () => {
+        store(HINT_KEY, "dismissed");
+        this.render();
+      };
+      const link = document.createElement("a");
+      link.href = hint.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = hint.text;
+      link.addEventListener("click", () => setTimeout(dismiss, 0));
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "×";
+      close.setAttribute("aria-label", "Dismiss this hint");
+      close.addEventListener("click", dismiss);
+      box.append(link, close);
+      return box;
     }
 
     private fill(node: { root: HTMLElement; icon: HTMLElement; key: string }, a: BarAgent): void {
       const labels = agentLabels(a);
       const armed = this.armed.has(a.id);
-      const key = JSON.stringify([a.name, a.state, a.pin, a.warning, a.restricted, typeof a.icon === "string" ? a.icon.length : null, armed]);
+      const key = JSON.stringify([a.name, a.state, a.pin, a.warning, a.restricted, typeof a.icon === "string" ? a.icon.length : null, armed, a.paths ?? null]);
       if (this.renderIcon) this.renderIcon(a, node.icon);
       else if (node.key === "" || JSON.stringify(a.icon ?? null) !== node.icon.dataset.src) {
         node.icon.dataset.src = JSON.stringify(a.icon ?? null);
@@ -216,6 +380,25 @@ export function defineAgentBar(tag = "apc-agents"): void {
         pin.append(dot, unpin);
         parts.push(pin);
       }
+      // Which path it came by; a linked agent can be shown as two again.
+      const path = pathLabel(a.paths);
+      if (path) {
+        const tag = document.createElement("span");
+        tag.className = "apc-agents__path";
+        tag.textContent = path.text;
+        tag.title = path.title;
+        parts.push(tag);
+        if (a.paths?.length === 2) {
+          const unlink = document.createElement("button");
+          unlink.type = "button";
+          unlink.className = "apc-agents__unlink";
+          unlink.textContent = "unlink";
+          unlink.title = `Show ${a.name}'s two connections as two agents again. Nothing else changes.`;
+          unlink.setAttribute("aria-label", `Unlink ${a.name}`);
+          unlink.addEventListener("click", () => this.emit("apc-unlink", a.id));
+          parts.push(unlink);
+        }
+      }
       // Revoke from the app: every agent has it, whichever way it came.
       const revoke = document.createElement("button");
       revoke.type = "button";
@@ -237,4 +420,5 @@ export function defineAgentBar(tag = "apc-agents"): void {
 export interface ApcAgentsElement extends HTMLElement {
   agents: BarAgent[];
   renderIcon: ((agent: BarAgent, into: HTMLElement) => void) | null;
+  dockHint: { text: string; url: string } | null;
 }

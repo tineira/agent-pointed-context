@@ -511,3 +511,20 @@ test("a Unicode blocklist entry blocks the punycode host an app arrives as; a ho
   assert.deepEqual(await w.pairApp(fakeApp(`https://${"a".repeat(40)}.example`, "Long")), { ok: false, error: "app_host_too_long" });
   assert.equal([...w.hits.keys()].some((o) => o.includes("bcher") || o.includes("aaaa")), false);
 });
+
+test("apc_link (APC 0.4): the hub names the agent's own MCP client to a verified app only, never to an unverified one", async (t) => {
+  const w = await world(t);
+  await w.rpcHub("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2" } });
+  const seen: Json[] = [];
+  const app = fakeApp("https://evil.example", "Pulse", { respond: (method, params) => (method === "initialize" ? void seen.push(params) : undefined) });
+  assert.equal((await w.pairApp(app)).ok, true);
+  assert.equal(seen.length, 1, "the hub introduced itself to the unverified app");
+  assert.equal("_meta" in seen[0]!, false, "with no word of the agent's client");
+  // Pulse, verified, is told: with the agent also connected directly, its own result carries an offer.
+  const direct = await w.pulse.addAgentGrant();
+  const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2" } } };
+  await w.pulse.fetch(new Request(`${PULSE}/mcp/${SID}/${direct.secret}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(init) }));
+  await w.pairPulse();
+  const relayed = await w.callHub("pulse__list_customers", { limit: 1 });
+  assert.equal(typeof relayed.structuredContent?.apc_link?.code, "string", "the verified app learned the client and offered a link");
+});

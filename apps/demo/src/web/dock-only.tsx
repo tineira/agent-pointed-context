@@ -1,15 +1,16 @@
 /**
- * Pulse's v2 deploy takes agents only from a dock (TIN-402): no agent of its own, no MCP URL to
- * connect. What stays is how to point an agent here; the dock manages the agents (TIN-410).
- * apc.tineira.com keeps connect.tsx and the how-to.
+ * How to reach Pulse on the standard's deploy: through a dock (TIN-402, the dock manages those agents,
+ * TIN-410) and, where Pulse offers the Direct profile (APC_PROFILES, TIN-578), app by app, with the
+ * agents made on the Agents screen.
  */
 import type { SandboxState } from "./api.ts";
+import { AppLink } from "./ui.tsx";
 
 const dockName = (state: SandboxState) => state.hubs?.[0] ?? "your agent dock";
 
 const STEPS = (dock: string) => [
   <>
-    Open your agent dock (<strong>{dock}</strong>) and connect your agent there. Pulse has no agent of its own: your agent lives in the dock, and the same agent can read every app you point it at.
+    Open your agent dock (<strong>{dock}</strong>) and connect your agent there. Your agent lives in the dock, and the same agent can read every app you point it at.
   </>,
   <>Drag your agent's logo from the dock onto anything here: a bar, a step of the bridge, a whole chart, a customer.</>,
   <>Allow it here (all of Pulse, or one region), then in the dock. Next time, a drop just points it.</>,
@@ -18,7 +19,7 @@ const STEPS = (dock: string) => [
   </>,
 ];
 
-/** On Overview while no dock agent is here: the one way in. */
+/** On the data pages while no agent is here: the ways in (the dock, and Direct where Pulse offers it). */
 export function DockHint(props: { state: SandboxState }) {
   if (props.state.grants.length > 0) return null;
   return (
@@ -26,6 +27,12 @@ export function DockHint(props: { state: SandboxState }) {
       <h2>Point your agent here</h2>
       <p className="hint">
         No agent can read Pulse yet. Drag your agent from your agent dock (<strong>{dockName(props.state)}</strong>) onto any chart or customer, and allow it here and in the dock.
+        {props.state.profiles?.includes("direct") && (
+          <>
+            {" "}
+            Or connect an agent to Pulse alone, with its own URL: <AppLink href="/agents">Agents →</AppLink>
+          </>
+        )}
       </p>
     </section>
   );
@@ -47,6 +54,14 @@ export function DockHowTo(props: { state: SandboxState }) {
           </li>
         ))}
       </ol>
+      {props.state.profiles?.includes("direct") && (
+        <section className="flex flex-col gap-2 border-t border-line pt-6 text-sm">
+          <h2 className="text-base font-semibold">Or connect app by app</h2>
+          <p className="text-muted">
+            Connect an agent to Pulse alone: on <AppLink href="/agents">Agents</AppLink>, make an agent and paste its URL into your agent as a remote MCP server. Its mark shows at the top right; drag it onto anything here. The same agent connected both ways shows as one, if it agrees.
+          </p>
+        </section>
+      )}
     </div>
   );
 }

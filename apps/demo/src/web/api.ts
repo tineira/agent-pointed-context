@@ -1,4 +1,4 @@
-import type { FocusRow, FocusTarget, PresenceEvent } from "@apc/protocol";
+import type { ApcProfile, FocusRow, FocusTarget, PresenceEvent } from "@apc/protocol";
 import type { Region } from "../model/seed.ts";
 import type { CompatRow } from "../worker/compat.ts";
 import { HEARTBEAT_MS } from "../worker/page.ts";
@@ -34,6 +34,9 @@ export interface SandboxState {
   hub_links?: Array<{ hub: string; agent: string; grant_id: string }>;
   /** On Pulse's v2 deploy, the docks it pairs with, by host (TIN-402). */
   hubs?: string[];
+  /** The profiles Pulse offers (APC 0.4), and the agents linked across both: [direct grant, dock grant]. */
+  profiles?: ApcProfile[];
+  links?: Array<[string, string]>;
   expires_at: string;
 }
 
@@ -61,6 +64,8 @@ export function createApi(sid: string) {
     unpin: (grantId: string) => post("/unpin", { grant_id: grantId }),
     /** Revoke from the app (APC 0.2): the agent's grant goes at once, whichever way it came. */
     revoke: (grantId: string) => post<{ ok: boolean; error?: string }>(`/grants/${grantId}/revoke`, {}),
+    /** apc_link (APC 0.4): show a linked agent as two again; both grants stay. */
+    unlink: (grantId: string) => post<{ ok: boolean }>(`/grants/${grantId}/unlink`, {}),
     addRestricted: (region: Region) => post<GrantState>("/grants/restricted", { region }),
     addAgent: () => post<GrantState>("/grants/agent", {}),
     reset: () => post<{ ok: boolean }>("/reset", {}),

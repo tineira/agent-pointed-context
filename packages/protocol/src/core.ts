@@ -24,6 +24,8 @@
  *    hint `then` while a page of the person's is open.
  * 6. **Revoke from the app**: the person can cut any agent from the app itself, at once, without the
  *    hub (`RevokedAnswer`).
+ * 7. **`apc_link`** (an app that offers both profiles): the same agent on both paths shown as one,
+ *    with a one-time code; it grants nothing (`ApcLinkOffer`).
  *
  * `@apc/conformance` checks an app against this core, given its MCP endpoint and a small adapter for
  * what happens in the page.
@@ -109,4 +111,71 @@ export function revokedAnswer(host: string, revokedAt: string): RevokedAnswer {
 export function isRevokedAnswer(body: unknown): body is RevokedAnswer {
   const b = body as Partial<RevokedAnswer> | null;
   return !!b && typeof b === "object" && b.error === REVOKED_ERROR && typeof b.revoked_by === "string";
+}
+
+/** The other path: Direct for Dock and Dock for Direct. */
+export function oppositePath(path: ApcProfile): ApcProfile {
+  return path === "direct" ? "dock" : "direct";
+}
+
+/**
+ * `apc_link` (APC 0.4): the same agent, connected to one app both ways (its own MCP URL, Direct, and
+ * through a dock's hub, Dock), shown as one agent in the app's agent bar.
+ *
+ * - **The offer.** When a connection arrives (`initialize`) with the same MCP client as one already
+ *   connected on the opposite path to the same app, the app puts `apc_link: { code, expires_in, note }`
+ *   (`ApcLinkOffer`) on a result of that new connection: a top-level key of the structured result and
+ *   of the text, like `attention`. On the Dock path it rides on a result of one of the app's own tools,
+ *   not a core tool (the hub merges those into its own results). The app asks at most once per MCP
+ *   session (from one `initialize` to the next): an agent that does not answer, or answers late, is not
+ *   asked again in that session, and stays two entries.
+ * - **The answer.** The agent calls the tool `apc_link({ code })` (`APC_LINK_TOOL`) on its *other*
+ *   connection to the same app: directly, or through the dock as `<app>__apc_link`. The app links the
+ *   two grants and answers `ApcLinkDone`, or refuses with a tool error, `ApcLinkRefused`.
+ * - **The code** is random (at least 96 bits), works once, expires after `expires_in` seconds
+ *   (`APC_LINK_TTL_S`), and is redeemed only by a different connection to the same app, on the opposite
+ *   path, among those the app offered it to (the same MCP client, not already linked). Anything else is
+ *   refused with a reason (`ApcLinkRefusal`). The app keeps only a hash of it.
+ * - **Linking grants nothing.** Each path keeps its own grant, trimming and pin; the link changes only
+ *   what the agent bar shows: one agent with both paths. Revoke on a linked agent cuts both grants. The
+ *   person can unlink from the bar, which removes the link and nothing else.
+ * - **Which client it is.** On the Direct path, `clientInfo.name` of the agent's own `initialize`. On
+ *   the Dock path the hub initializes the app as itself, so it names the agent's own MCP client in
+ *   `params._meta[APC_AGENT_CLIENT_META]` of that `initialize`.
+ */
+export const APC_LINK_TOOL = "apc_link";
+/** The key an offer puts on a result. */
+export const APC_LINK_KEY = "apc_link";
+/** How long a link code lives, in seconds. */
+export const APC_LINK_TTL_S = 120;
+/** On the Dock path: the `_meta` key of the hub's `initialize` that names the agent's own MCP client. */
+export const APC_AGENT_CLIENT_META = "apc.tineira.com/agent_client";
+
+export interface ApcLinkOffer {
+  /** One-time; sent back with `apc_link({ code })` on the other connection. */
+  code: string;
+  /** Seconds left: `APC_LINK_TTL_S` when offered. */
+  expires_in: number;
+  /** What to do with it, for the agent. */
+  note: string;
+}
+
+export interface ApcLinkDone {
+  linked: true;
+  note: string;
+}
+
+export const LINK_REFUSED_ERROR = "link_refused";
+/**
+ * Why a code was refused: `unknown_code` (no such code in this app), `expired`, `used` (it already
+ * linked), `same_connection` (sent back on the connection that got it), `same_path` (on another
+ * connection of the same path), `not_offered` (on a connection it was not offered to: another client,
+ * or one not connected when it was offered), `already_linked` (one of the two is linked already).
+ */
+export type ApcLinkRefusal = "unknown_code" | "expired" | "used" | "same_connection" | "same_path" | "not_offered" | "already_linked";
+
+export interface ApcLinkRefused {
+  error: typeof LINK_REFUSED_ERROR;
+  reason: ApcLinkRefusal;
+  message: string;
 }

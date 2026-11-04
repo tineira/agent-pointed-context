@@ -6,6 +6,15 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The Direct profile packaged, and `apc_link` (2026-11-03, TIN-578)
+
+- **Pulse and Signals take agents both ways.** Each declares its profiles in one place, `APC_PROFILES` ("direct,dock"), instead of `APC_V2` hiding Direct; on the standard's deploy Pulse's Agents screen lists "Agents connected directly", and Signals has a Connect panel and opens a world of its own for a visitor with no dock. (`apps/demo/wrangler.jsonc`, `apps/signals/wrangler.jsonc`, `apps/demo/src/worker/sandbox.ts`, `apps/signals/src/worker/feed.ts`, `apps/signals/src/web/app.tsx`)
+- **The Direct profile is packaged.** `@apc/server` makes a grant per agent and its MCP URL and reads what a connection says (`direct.ts`); `@apc/web` has the agent list where the person makes and names agents, with the URL and the prompt to copy (`<apc-direct-agents>`). (`packages/server/src/direct.ts`, `packages/web/src/direct-agents.ts`)
+- **The same agent both ways shows as one (`apc_link`, APC 0.4).** The app offers a one-time code on the new connection, the agent sends it back on the other, and the bar shows one agent with both paths; it grants nothing, Revoke cuts both grants, and the person can unlink. The dock names the agent's client to a verified app when it introduces it, never to an unverified one. (`packages/server/src/links.ts`, `apps/dock/src/worker/app-client.ts`)
+- **The agent bar shows each agent's path and follows the bar rule.** Always in full with a Direct agent; with only dock agents it can collapse to who is reading, never hidden; a quiet, dismissible hint offers the dock to a Direct user. (`packages/web/src/agents-bar.ts`)
+- **"Connect app by app" on the landing opens Signals' Connect panel**, beside "Open your dock". (`apps/dock/src/web/landing.tsx`)
+- **The conformance suite checks `apc_link`**, and a test links one agent through the real hub and Pulse both ways round. (`packages/conformance/src/index.ts`, `apps/dock/test/apc-link.test.ts`)
+
 ### The APC standard at apc.tineira.com (2026-11-03, TIN-605)
 
 - **The APC standard moves to its own home and loses its "v2".** The dock is Worker `apc-dock` on apc.tineira.com, Pulse is `apc-pulse` on pulse.apc.tineira.com and Signals is `apc-signals` on signals.apc.tineira.com, all with fresh Durable Objects and rate-limit namespaces (1007 to 1010). Every allow-list, the extension's host permissions, the desktop apps, the e2e script and the tests use the new hosts. The old Workers and the `v2.` hosts are removed by hand after a production check. (`apps/*/wrangler.jsonc`, `apps/extension`, `apps/dock-desktop`, `apps/desktop`, `scripts/extension-e2e.mjs`)

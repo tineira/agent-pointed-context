@@ -3,6 +3,7 @@
  * HTTP, no session (APC apps are stateless). The app's grant is the secret in its MCP URL, kept by
  * the hub only.
  */
+import { APC_AGENT_CLIENT_META } from "@apc/protocol";
 import { LIMITS } from "./trust.ts";
 
 export interface AppToolResult {
@@ -158,11 +159,24 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
 
 /**
  * Introduce the hub to the app with the agent's mark (TIN-388): the app shows the agent as
- * "<name> via dock" with its icon, a small PNG, in clientInfo.icons as MCP defines it.
+ * "<name> via dock" with its icon, a small PNG, in clientInfo.icons as MCP defines it. With the
+ * agent's own MCP client in `_meta` (APC 0.4, `APC_AGENT_CLIENT_META`), so an app the agent also
+ * reaches directly can offer to show it as one agent (apc_link). The hub names it to verified apps only.
  */
-export async function initializeApp(mcpUrl: string, title: string, icon: string | null, transport: AppTransport = STRICT): Promise<void> {
+export async function initializeApp(mcpUrl: string, title: string, icon: string | null, transport: AppTransport = STRICT, agentClient: string | null = null): Promise<void> {
   const icons = icon ? [{ src: icon, mimeType: "image/png", sizes: ["64x64"] }] : undefined;
-  await rpc(mcpUrl, "initialize", { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: "apc-hub", title, version: "0.1.0", ...(icons ? { icons } : {}) } }, LIMITS.initializeMs, transport);
+  await rpc(
+    mcpUrl,
+    "initialize",
+    {
+      protocolVersion: PROTOCOL,
+      capabilities: {},
+      clientInfo: { name: "apc-hub", title, version: "0.1.0", ...(icons ? { icons } : {}) },
+      ...(agentClient ? { _meta: { [APC_AGENT_CLIENT_META]: agentClient } } : {}),
+    },
+    LIMITS.initializeMs,
+    transport,
+  );
 }
 
 /**

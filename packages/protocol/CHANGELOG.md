@@ -4,6 +4,18 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
 
+## 0.4.0 (draft, 2026-11-03)
+
+`apc_link`: one agent on both paths, shown as one (TIN-578). In `packages/protocol/src/core.ts`, `packages/server/src/links.ts`, `packages/conformance` and DESIGN.md section 16.
+
+- **The offer.** When a connection arrives (`initialize`) with the same MCP client as one already connected on the opposite path to the same app, the app puts `apc_link: { code, expires_in, note }` (`ApcLinkOffer`, key `APC_LINK_KEY`) on a result of the new connection, a top-level key of the structured result and of the text, like `attention`. On the Dock path it rides on a result of one of the app's own tools, never a core tool (the hub merges those). The app asks at most once per MCP session, from one `initialize` to the next.
+- **The answer.** The agent calls the tool `apc_link({ code })` (`APC_LINK_TOOL`) on its other connection to the same app: directly, or through the dock as `<app>__apc_link`. The app answers `ApcLinkDone` (`{ linked: true, note }`), or a tool error `ApcLinkRefused` (`{ error: "link_refused", reason, message }`).
+- **The code** has at least 96 random bits, works once and expires after `APC_LINK_TTL_S` (120) seconds. It is redeemed only on a different connection to the same app, on the opposite path, among those it was offered to (the same client, neither linked). Otherwise the reason is `unknown_code`, `expired`, `used`, `same_connection`, `same_path`, `not_offered` or `already_linked`. The app keeps only its hash.
+- **Linking grants nothing.** Each path keeps its own grant, trimming and pin; the agent bar shows one agent with both paths. Revoke on a linked agent cuts both grants, and the person can unlink, which removes the link only.
+- **The client on the Dock path.** The hub initializes an app as itself (`clientInfo.name` "apc-hub"), so it names the agent's own MCP client in `params._meta["apc.tineira.com/agent_client"]` (`APC_AGENT_CLIENT_META`) of that `initialize`. On the Direct path the client is the agent's own `clientInfo.name`.
+- `oppositePath` gives the other profile. `APC_INSTRUCTIONS` and the `guide` prompt tell the agent what an `apc_link` key means.
+- The hub names the agent's client to verified apps only: an unverified app (0.3.0) learns nothing of it, so it is never offered a link through the hub.
+
 ## 0.3.0 (draft, 2026-11-03)
 
 A hub's protections for apps it does not know (TIN-580), in the Dock profile: what an agent receives through a hub from an unverified app, and the hub's answers to pairing. In `apps/dock/src/worker/trust.ts`, `hub.ts`, `app-client.ts` and DESIGN.md section 15. Apps and agents that only meet verified apps see nothing new.

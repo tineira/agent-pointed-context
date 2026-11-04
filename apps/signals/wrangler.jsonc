@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   // Signals (TIN-384): the second APC app, a market feed, on its own origin. One Durable Object per
-  // visitor, seeded from their Pulse sandbox. Agents reach it only through a dock's hub.
+  // visitor, on the world their dock opened it on (or one of its own). Agents reach it both ways
+  // (TIN-578): directly, each on its own MCP URL, and through a dock's hub.
   "name": "apc-signals",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
@@ -18,8 +19,9 @@
     { "name": "NEW_FEED", "namespace_id": "1009", "simple": { "limit": 10, "period": 60 } },
     { "name": "FEED_CALLS", "namespace_id": "1010", "simple": { "limit": 300, "period": 60 } }
   ],
-  // The agent docks (hubs) Signals may pair with; under vite dev, localhost too.
-  "vars": { "HUB_ORIGINS": "https://apc.tineira.com" },
+  // The agent docks (hubs) Signals may pair with; under vite dev, localhost too. APC_PROFILES is the one
+  // place Signals declares how agents reach it (APC 0.3): Direct, Dock, or both.
+  "vars": { "HUB_ORIGINS": "https://apc.tineira.com", "APC_PROFILES": "direct,dock" },
   "routes": [{ "pattern": "signals.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
   "observability": { "enabled": true }

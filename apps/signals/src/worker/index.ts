@@ -29,7 +29,10 @@ async function allowed(limiter: RateLimit | undefined, key: string): Promise<boo
   }
 }
 
-/** Resume the visitor's feed (following the seed of the Pulse they came from), or open one for that seed. */
+/**
+ * Resume the visitor's feed (following the seed of the world their dock opened it on), or open one: for
+ * that seed, or, for someone who came to connect an agent directly (no dock), a world of its own.
+ */
 app.post("/api/session", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { seed?: unknown };
   const seed = typeof body.seed === "number" && Number.isInteger(body.seed) && body.seed >= 0 && body.seed < 2 ** 32 ? body.seed : null;
@@ -38,10 +41,9 @@ app.post("/api/session", async (c) => {
     if (seed !== null) await stubFor(c.env, current.sid).useSeed(seed);
     return c.json({ sid: current.sid, created: false });
   }
-  if (seed === null) return c.json({ error: "no_seed" }, 400);
   if (!(await allowed(c.env.NEW_FEED, `ip:${c.req.header("cf-connecting-ip") ?? "unknown"}`))) return c.json({ error: "rate_limited" }, 429);
   const sid = randomHex(16);
-  const { owner } = await stubFor(c.env, sid).init(seed);
+  const { owner } = await stubFor(c.env, sid).init(seed ?? crypto.getRandomValues(new Uint32Array(1))[0]!);
   setCookie(c, COOKIE, `${sid}.${owner}`, { path: "/", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: Math.floor(FEED_TTL_MS / 1000) });
   return c.json({ sid, created: true });
 });
@@ -80,6 +82,19 @@ app.post("/api/s/:sid/unpin", async (c) => {
 /** Revoke from the app (APC 0.2, TIN-577): the person cuts an agent at once; the dock's hub is not called. */
 app.post("/api/s/:sid/grants/:id/revoke", async (c) => {
   const result = await stub(c).revokeGrant(c.req.param("id"));
+  return c.json(result, result.ok ? 200 : 400);
+});
+/** The Direct profile (TIN-578): the person makes an agent with its own MCP URL, names it, unlinks it. */
+app.post("/api/s/:sid/grants/agent", async (c) => {
+  const result = await stub(c).addDirectGrant();
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/s/:sid/grants/:id/name", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
+  return c.json(await stub(c).renameGrant(c.req.param("id"), body.name ?? null));
+});
+app.post("/api/s/:sid/grants/:id/unlink", async (c) => {
+  const result = await stub(c).unlinkGrant(c.req.param("id"));
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/s/:sid/hub/pair", async (c) => {

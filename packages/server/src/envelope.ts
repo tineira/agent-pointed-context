@@ -1,4 +1,4 @@
-import type { Attention, FocusPayload, FocusRow } from "@apc/protocol";
+import { APC_LINK_KEY, type ApcLinkOffer, type Attention, type FocusPayload, type FocusRow } from "@apc/protocol";
 
 export const ATTENTION_NOTE = "The person pinned you to something on their screen. Call get_current_view to read it and mark it seen.";
 
@@ -46,6 +46,11 @@ export function attachAttention(result: ToolResult, attention: Attention): ToolR
  */
 export function attachThen(result: ToolResult, pageOpen: boolean): ToolResult {
   return pageOpen ? attachKey(result, "then", THEN_NOTE) : result;
+}
+
+/** An `apc_link` offer (APC 0.4), placed like the envelope: a top-level key of the structured result and of the text. */
+export function attachApcLink(result: ToolResult, offer: ApcLinkOffer): ToolResult {
+  return attachKey(result, APC_LINK_KEY, offer);
 }
 
 function attachKey(result: ToolResult, key: string, value: unknown): ToolResult {
