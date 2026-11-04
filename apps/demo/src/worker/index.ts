@@ -73,6 +73,9 @@ app.get("/api/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-s
  * a `seed` in the body, which docks and old links sent, is ignored.
  */
 app.post("/api/session", async (c) => {
+  // The body is read and dropped: the page still sends one, and an unread body leaves the connection in a state
+  // the local runtime answers the next request on with "fetch failed" (TIN-621, mobile-e2e).
+  await c.req.text().catch(() => "");
   const current = session(getCookie(c, COOKIE));
   if (current && (await rpc(c.env, current.sid, (s) => s.isOwner(current.owner)))) {
     return c.json({ sid: current.sid, created: false });

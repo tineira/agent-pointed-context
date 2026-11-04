@@ -41,6 +41,9 @@ async function allowed(limiter: RateLimit | undefined, key: string): Promise<boo
  * the body, which docks and old links sent, is ignored.
  */
 app.post("/api/session", async (c) => {
+  // The body is read and dropped: the page still sends one, and an unread body leaves the connection in a state
+  // the local runtime answers the next request on with "fetch failed" (TIN-621, mobile-e2e).
+  await c.req.text().catch(() => "");
   const current = session(getCookie(c, COOKIE));
   if (current && (await stubFor(c.env, current.sid).isOwner(current.owner))) {
     return c.json({ sid: current.sid, created: false });
