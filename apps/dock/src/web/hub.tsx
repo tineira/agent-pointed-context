@@ -19,6 +19,8 @@ import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-
 import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
+import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
+import { buttonsOff, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -92,6 +94,16 @@ export function HubDock() {
   // A new object on each failure, so a failed retry sets up the next one.
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  /** Answers on their way per request (Review round 1 and Fix check 2 on #120): which buttons are off until they land, on every surface. */
+  const [deciding, setDeciding] = useState<Sent>(new Map());
+  /** What the hub said when it refused the last answer (Fix check 4 on #120), shown on every surface of this page. */
+  const [notice, setNotice] = useState<string | null>(null);
+  // It stays a while, then goes by itself; the person can close it sooner.
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 15_000);
+    return () => clearTimeout(id);
+  }, [notice]);
   const [shown, setShown] = useState<Set<string>>(new Set());
   const [world, setWorld] = useState(false);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
@@ -234,7 +246,28 @@ export function HubDock() {
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
-  const decide = (pid: string, action: "approve" | "deny" | "unpair") => void call(`${base}/pairings/${pid}`, { action }).then(refresh);
+  const decide = (pid: string, action: Decision) => {
+    // Never the same kind twice, and no yes once anything is on its way; a Deny still goes while an Approve is
+    // on its way, from this surface too, so a misclick can be undone (Fix check 2 on #120). The hub lets it win.
+    const kind = kindOf(action);
+    const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
+    if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
+    setDeciding((m) => sentOut(m, pid, kind));
+    setNotice(null);
+    void call<{ ok?: boolean; error?: unknown }>(`${base}/pairings/${pid}`, { action })
+      // A refusal (400 with { ok: false, error }) is said, never dropped (Fix check 4 on #120); so is a call that failed.
+      .then((r) => {
+        if (r?.ok === false) setNotice(decisionNotice(r.error));
+      })
+      .catch(() => setNotice(decisionNotice("unreachable")))
+      .finally(() => {
+        // Answered or failed: that kind clears, and only it (a failed Deny can be sent again).
+        setDeciding((m) => landed(m, pid, kind));
+        refresh();
+      });
+  };
+  /** What is on its way for a request: Approve off while a yes is, both off while a Deny is (request-state.ts). */
+  const inFlight = (p: { id: string }) => inFlightOf(deciding.get(p.id));
   const dragProps = (a: DockAgent) => ({
     draggable: true,
     title: a.client_name ? `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)` : `Drag ${a.name} into your agent's chat: it pastes the prompt that connects it`,
@@ -271,7 +304,13 @@ export function HubDock() {
     void fetchTicket(agentId);
   }
 
-  const requests = pending.map(({ agent, pairing }) => (
+  const requests = pending.map(({ agent, pairing }) =>
+    pairing.app.unverified ? (
+      // An app outside APP_ORIGINS (TIN-581): the warning, in the dock, the first time its domain asks here.
+      <section key={pairing.id} className="request unverified">
+        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} inFlight={inFlight(pairing)} approving={!!pairing.approving} decide={(action) => decide(pairing.id, action)} />
+      </section>
+    ) : (
     <section key={pairing.id} className="request">
       <p>
         {pairing.kind === "reader" ? (
@@ -285,18 +324,31 @@ export function HubDock() {
         )}
       </p>
       <div className="row">
-        <button type="button" className="primary" onClick={() => decide(pairing.id, "approve")}>
+        <button type="button" className="primary" disabled={buttonsOff({ inFlight: inFlight(pairing), approving: pairing.approving }).approve} onClick={() => decide(pairing.id, "approve")}>
           Allow
         </button>
-        <button type="button" onClick={() => decide(pairing.id, "deny")}>
+        <button type="button" disabled={buttonsOff({ inFlight: inFlight(pairing) }).deny} onClick={() => decide(pairing.id, "deny")}>
           Deny
         </button>
       </div>
     </section>
-    ));
+    ),
+  );
 
-  const floatRequests = pending.map(({ agent, pairing }) => ({ id: pairing.id, kind: pairing.kind, app: pairing.app.name, host: host(pairing.app.origin), agent: agent.name, agentId: agent.id }));
+  const floatRequests: FloatRequest[] = pending.map(({ agent, pairing }) => ({
+    id: pairing.id,
+    kind: pairing.kind,
+    app: pairing.app.name,
+    host: host(pairing.app.origin),
+    agent: agent.name,
+    agentId: agent.id,
+    inFlight: inFlight(pairing),
+    approving: !!pairing.approving,
+    ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
+  }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
+  // The hub's refusal of the last answer, on whichever surface this page is (Fix check 4 on #120).
+  const noticeEl = notice ? <DecisionNotice notice={notice} dismiss={() => setNotice(null)} /> : null;
 
   // The APC dock for Windows' pets (TIN-479): one agent, and its pairing requests; with no agent, the hint.
   if (PET) {
@@ -311,12 +363,13 @@ export function HubDock() {
         decide={(id, action) => decide(id, action)}
         startDrag={(e) => startDrag(e, agent.id)}
         endDrag={() => endDrag(agent.id)}
+        refusal={noticeEl}
       />
     );
   }
 
   // The APC dock for Windows' always-on-top strip (#84), in its builds before the pets: only what Float shows.
-  if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} />;
+  if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} refusal={noticeEl} />;
 
   const pageOf = agentRoute(path);
   if (pageOf) {
@@ -340,12 +393,13 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
-          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app }))}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, inFlight: inFlight(p), approving: !!p.approving }))}
           decide={decide}
           refresh={refresh}
           back={back}
           dragProps={dragProps(agent)}
           dragging={dragging === agent.id}
+          refusal={noticeEl}
         />
       </>
     );
@@ -355,6 +409,7 @@ export function HubDock() {
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
+      {noticeEl}
       {requests}
       {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>Add an agent</b> below, then connect it.</p>}
       <ul className="tiles">
@@ -371,7 +426,14 @@ export function HubDock() {
                 <span className="tile-where">
                   {a.focus ? (
                     <>
-                      → {a.focus.app.name}: {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
+                      → {a.focus.app.name}
+                      {a.focus.app.unverified && (
+                        <>
+                          {" "}
+                          <NotVerified />
+                        </>
+                      )}
+                      : {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
                     </>
                   ) : !connected ? (
                     "not connected yet: drag me into your agent's chat"
@@ -436,7 +498,7 @@ export function HubDock() {
     </main>
   );
   return (
-    <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand}>
+    <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand} refusal={noticeEl}>
       {renderDock}
     </KeepAtHand>
   );
@@ -456,16 +518,27 @@ interface FloatRequest {
   host: string;
   agent: string;
   agentId: string;
+  /** An app outside APP_ORIGINS (TIN-581): what it calls itself, and whether this request shows the warning. */
+  unverified?: { declared: string | null; warning: boolean };
+  /** What is on its way: an Approve turns Approve off, a Deny turns both off (request-state.ts). */
+  inFlight?: InFlight;
+  /** The hub is still introducing itself to the app: Approve is off, Deny stays on (Fix check 1 on #120). */
+  approving?: boolean;
 }
+
+/** What the person answers a request with; "approve_unverified" is only the warning's Approve (TIN-581). */
+type Decision = "approve" | "approve_unverified" | "deny" | "unpair";
 
 interface FloatProps {
   agents: DockAgent[];
   onUsed: () => void;
   /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
   requests: FloatRequest[];
-  decide: (id: string, action: "approve" | "deny") => void;
+  decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   children: (button: ReactNode) => ReactNode;
+  /** The hub's refusal of the last answer (Fix check 4 on #120). */
+  refusal?: ReactNode;
 }
 
 /** One Float window and install event, with controls in both the checklist and permanent footer. */
@@ -542,6 +615,7 @@ function Float(props: FloatProps) {
       <FloatAgents
         agents={props.agents}
         requests={props.requests}
+        refusal={props.refusal}
         decide={(id, action) => {
           // The click is a user activation: the last decision gives the logos' size back at once.
           const last = latest.current.requests.length <= 1;
@@ -560,7 +634,7 @@ function Float(props: FloatProps) {
         }}
       />,
     );
-  }, [win, props.agents, props.requests, showCard, size.opened]);
+  }, [win, props.agents, props.requests, props.refusal, showCard, size.opened]);
   // Where a browser allows a resize without a click, the card shows at once (the window then fits);
   // otherwise the notice stays until the click. With no request left, back to the logos' size.
   useEffect(() => {
@@ -645,10 +719,12 @@ function Float(props: FloatProps) {
 function FloatAgents(props: {
   agents: DockAgent[];
   requests: FloatRequest[];
-  decide: (id: string, action: "approve" | "deny") => void;
+  decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
   notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
+  /** The hub's refusal of the last answer (Fix check 4 on #120): shown above the requests or the logos. */
+  refusal?: ReactNode;
 }) {
   // Which agent the person is dragging here: its pet stretches while held (TIN-483).
   const [dragging, setDragging] = useState<string | null>(null);
@@ -675,7 +751,14 @@ function FloatAgents(props: {
   if (props.requests.length > 0)
     return (
       <div className="float float-requests">
-        {props.requests.map((r) => (
+        {props.refusal}
+        {props.requests.map((r) =>
+          r.unverified ? (
+            // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
+            <div key={r.id} className="float-request unverified" tabIndex={-1}>
+              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
+            </div>
+          ) : (
           <div key={r.id} className="float-request" tabIndex={-1} autoFocus={props.notice?.focus && r === props.requests[0]}>
             <p>
               {r.kind === "reader" ? (
@@ -689,18 +772,21 @@ function FloatAgents(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
-              <button type="button" onClick={() => props.decide(r.id, "deny")}>
+              <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
                 Deny
               </button>
             </div>
           </div>
-        ))}
+          ),
+        )}
       </div>
     );
   if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;
+  // A refusal with no request left: said in place of the logos until it is closed.
+  if (props.refusal) return <div className="float float-requests">{props.refusal}</div>;
   return (
     <div className="float">
       {props.agents.map((a) => {

@@ -23,6 +23,21 @@ type Vars = { did: string; owner: string };
 
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
+/**
+ * The dock is never framed (Review round 1 on #120): a page on a same-site host (pulse.apc.tineira.com) would
+ * get the owner's cookie in an iframe of the dock, and could lay its own content over the warning's Approve.
+ * Every response from the Worker says so, the assets it hands out included; public/_headers says it for the
+ * assets served without it (/dock). A WebSocket upgrade keeps its own headers.
+ */
+const NO_FRAMING ={ "content-security-policy": "frame-ancestors 'none'", "x-frame-options": "DENY" } as const;
+app.use("*", async (c, next) => {
+  await next();
+  if (c.res.status === 101) return;
+  const res = new Response(c.res.body, c.res);
+  for (const [k, v] of Object.entries(NO_FRAMING)) res.headers.set(k, v);
+  c.res = res;
+});
+
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const stubFor = (env: Env, did: string): Stub => env.HUB.get(env.HUB.idFromName(did));
 

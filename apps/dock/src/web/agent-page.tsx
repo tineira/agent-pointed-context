@@ -3,17 +3,22 @@
  * the dock, the apps it reads, how to connect it (folded), and Remove. Also the dock's shared types
  * and calls, and the Remove confirm (TIN-418).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Onboarding } from "../onboarding.ts";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { ConnectAgent, CopyRow } from "./setup.tsx";
 import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } from "../worker/reading.ts";
+import { NotVerified, UnverifiedRequest } from "./unverified.tsx";
+import { buttonsOff, type InFlight } from "./request-state.ts";
 
 export interface AppRef {
   id: string;
   name: string;
   origin: string;
+  /** An app outside APP_ORIGINS (TIN-580): name is its host; declared_name is what it calls itself. */
+  unverified?: true;
+  declared_name?: string | null;
 }
 export interface DockAgent {
   id: string;
@@ -37,7 +42,9 @@ export interface DockAgent {
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
   /** Apps, and browsers sending page readings (kind "reader", TIN-421). */
   /** revoked: the app revoked the grant itself (APC 0.2); revoked_by is the app's host. */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null }>;
+  /** warning: a pending unverified app whose domain the person has not approved in this dock asks with the warning (TIN-581). */
+  /** blocked_by: our blocklist, or the kill switch that closes the dock to unverified apps. */
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed" }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 export interface DockState {
@@ -172,13 +179,16 @@ function Readings(props: { agent: DockAgent; clear: () => void }) {
 export function AgentPage(props: {
   agent: DockAgent;
   base: string;
-  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef }>;
-  decide: (pairingId: string, action: "approve" | "deny" | "unpair") => void;
+  /** inFlight: what is on its way (an Approve turns Approve off, a Deny both); approving: the hub is introducing itself to the app (Approve off, Deny on). */
+  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; inFlight?: InFlight; approving?: boolean }>;
+  decide: (pairingId: string, action: "approve" | "approve_unverified" | "deny" | "unpair") => void;
   refresh: () => void;
   back: () => void;
   dragProps: Record<string, unknown>;
   /** The person is dragging this agent (its pet stretches). */
   dragging?: boolean;
+  /** The hub's refusal of the last answer (Fix check 4 on #120), above the requests. */
+  refusal?: ReactNode;
 }) {
   const { agent: a, base } = props;
   const [calls, setCalls] = useState<CallEntry[] | null>(null);
@@ -229,7 +239,14 @@ export function AgentPage(props: {
         <dd>
           {a.focus ? (
             <>
-              {a.focus.app.name}: {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}{" "}
+              {a.focus.app.name}
+              {a.focus.app.unverified && (
+                <>
+                  {" "}
+                  <NotVerified />
+                </>
+              )}
+              : {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}{" "}
               <button type="button" className="link" onClick={() => void call(`${base}/agents/${a.id}/clear`, {}).then(props.refresh)}>
                 Clear pointer
               </button>
@@ -277,7 +294,13 @@ export function AgentPage(props: {
 
       <section className="agent-section">
         <h2>Its apps</h2>
-        {props.requests.map((r) => (
+        {props.refusal}
+        {props.requests.map((r) =>
+          r.app.unverified ? (
+            <div key={r.id} className="request unverified">
+              <UnverifiedRequest domain={host(r.app.origin)} declared={r.app.declared_name ?? null} agent={a.name} warning={!!r.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} />
+            </div>
+          ) : (
           <div key={r.id} className="request">
             <p>
               {r.kind === "reader" ? (
@@ -291,15 +314,16 @@ export function AgentPage(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
-              <button type="button" onClick={() => props.decide(r.id, "deny")}>
+              <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
                 Deny
               </button>
             </div>
           </div>
-        ))}
+          ),
+        )}
         {paired.length === 0 && revoked.length === 0 && blocked.length === 0 && props.requests.length === 0 ? (
           <p className="muted">None yet. Drag {a.name} onto an app to pair it.</p>
         ) : (
@@ -307,7 +331,19 @@ export function AgentPage(props: {
             {paired.map((p) => (
               <li key={p.id}>
                 <span>
-                  {p.app.name} <span className="muted">· {p.kind === "reader" ? "page readings" : host(p.app.origin)} · since {when(p.created_at)}</span>
+                  {p.app.unverified ? (
+                    // An unverified app (TIN-581): named by its domain, badged, and what it calls itself only as its own word.
+                    <>
+                      {p.app.name} <NotVerified />
+                      <span className="muted">
+                        {p.app.declared_name ? ` · calls itself “${p.app.declared_name}”` : ""} · since {when(p.created_at)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      {p.app.name} <span className="muted">· {p.kind === "reader" ? "page readings" : host(p.app.origin)} · since {when(p.created_at)}</span>
+                    </>
+                  )}
                   {p.error ? <span className="warn"> · not answering</span> : p.page_open ? <span className="read"> · open now</span> : null}
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")}>
@@ -331,7 +367,10 @@ export function AgentPage(props: {
             {blocked.map((p) => (
               <li key={p.id} className="revoked">
                 <span>
-                  {p.app.name} <span className="warn">· Blocked: the dock no longer reads {host(p.app.origin)}</span>
+                  {p.app.name} {p.app.unverified && <NotVerified />}{" "}
+                  <span className="warn">
+                    {p.blocked_by === "closed" ? `· Paused: the dock is not reading unverified apps right now` : `· Blocked: the dock no longer reads ${host(p.app.origin)}`}
+                  </span>
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
                   Remove

@@ -66,7 +66,7 @@ async function world(t: TestContext, env: Json = {}) {
     const { ticket } = await hub.ticket(agent.id);
     return (await pulse.pairHub(SID, PULSE, { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } })) as { ok: boolean; error?: string };
   };
-  /** An app outside APP_ORIGINS asks to pair (it pairs only with OPEN_PAIRING, as unverified). */
+  /** An app outside APP_ORIGINS asks to pair (as unverified: the person approves the warning in the dock before it pairs, TIN-581). */
   const shopPairs = async (mcpUrl = `${SHOP}/mcp/${"c".repeat(32)}`) => {
     const { ticket } = await hub.ticket(agent.id);
     return (await hub.pair({ ticket, agent: agent.id, app: { name: "Shop", origin: SHOP }, mcp_url: mcpUrl })) as { ok: boolean; error?: string };
@@ -233,7 +233,8 @@ test("a verified app paired on the operator's word (its file out of reach, no co
 });
 
 test("an unverified app pairs only with a valid apc.json it serves itself: unreachable, a redirect or another origin refuse it", async (t) => {
-  const w = await world(t, { OPEN_PAIRING: "1" });
+  // Open to unverified apps by default (TIN-581): the checks on its apc.json hold before the warning is ever shown.
+  const w = await world(t);
   // Every answer below is read anew: no copy is kept between them.
   const saved = LIMITS.apcJsonFreshMs;
   t.after(() => (LIMITS.apcJsonFreshMs = saved));

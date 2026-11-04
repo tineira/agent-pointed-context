@@ -1,0 +1,5 @@
+# The dock is never framed (TIN-581, review round 1 on #120): the same headers the Worker puts on its own responses,
+# for the assets served without it (the dock page at /dock, its scripts and icons).
+/*
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
