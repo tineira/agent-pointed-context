@@ -1,5 +1,5 @@
 import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@apc/protocol";
-import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, markState } from "@apc/web";
+import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, markState, type DockUnsupported } from "@apc/web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateDataset, LAST_MONTH, MONTHS, PLANS, REGIONS, type Dataset, type Plan, type Region } from "../model/seed.ts";
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
@@ -205,6 +205,19 @@ function Sandbox({ sid }: { sid: string }) {
               void refresh();
             }
           : undefined,
+        // APC 0.5: a Pulse that offers only Direct (APC_PROFILES, as its apc.json says) answers a dock agent's
+        // drop with how to connect directly, and opens the Agents screen, where the person does.
+        ...(hubMode
+          ? {
+              profiles: () => stateRef.current?.profiles,
+              direct: { name: "Pulse", connect: `${location.origin}/agents` },
+              onDockUnsupported: (answer: DockUnsupported) => {
+                navigate({ screen: "agents" }, readRoute().filters);
+                setNotice(answer.message);
+                setTimeout(() => setNotice(null), 10_000);
+              },
+            }
+          : {}),
         canTarget: (grantId, target: FocusTarget) => {
           const grant = stateRef.current?.grants.find((g) => g.id === grantId);
           if (!grant?.regions) return true;
@@ -221,7 +234,7 @@ function Sandbox({ sid }: { sid: string }) {
           setTimeout(() => setNotice(null), 4000);
         },
       }),
-    [api, regionOf, v2, hubMode],
+    [api, regionOf, v2, hubMode, navigate],
   );
 
   // Show each pin on its target when the target is on this page.

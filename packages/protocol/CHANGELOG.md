@@ -4,6 +4,29 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
 
+## 0.5.0 (draft, 2026-11-03)
+
+Discovery with `apc.json`, and a clear answer to a drop an app cannot take (TIN-579). In `packages/protocol/src/manifest.ts`, `packages/server/src/apc-json.ts`, `packages/web/src/pinning.ts`, `packages/conformance`, `apps/dock/src/worker/hub.ts` and DESIGN.md section 17.
+
+### `apc.json`
+
+- **Every APC origin says what it is** at `GET {origin}/.well-known/apc.json` (`APC_JSON_PATH`), from that origin, as JSON (`ApcManifest`): `name`, `standard` (the version it implements), `origin` (exactly the origin it is served from), `profiles`, `mcp: { path }` (every grant's MCP URL on the origin starts with `origin + path`), and, with `"direct"`, `direct: { connect }` (the page on its own origin where the person connects an agent directly). At most `APC_JSON_MAX_BYTES` (16 KiB).
+- **`profiles`** is `"direct"`, `"dock"` or both for an app, and `"hub"` alone for a dock's hub (`ApcRole`), so apps and tools can tell a dock from an app. A hub's file also has `dock: { pair, confirm }`, its pairing endpoints. A reader ignores profile words and keys it does not know.
+- `parseApcManifest(raw, origin)` checks a file read from `origin`: the manifest, or `apc_json_wrong_origin` (it names another origin) or `apc_json_invalid` (anything else, with a reason). `declaresMcpUrl(manifest, url)` says whether an MCP URL is on the origin and under `mcp.path`. `compareStandard` orders versions.
+
+### Pairing (the Dock profile)
+
+- **A hub reads the app's `apc.json` before it pairs** (`POST {hub}/apc/pair`), once the ticket and the app's origin have passed, under the hub's transport rules (0.3.0): a time limit, the byte cap, and no redirect followed for an unverified app. It refuses the pairing (`ApcJsonRefusal`) when the file is missing (`apc_json_missing`: a 4xx or a redirect), cannot be read as one (`apc_json_invalid`), names another origin (`apc_json_wrong_origin`), does not list `"dock"` (`dock_not_offered`), or does not cover the MCP URL the app sent (`mcp_url_not_declared`). An unverified app whose file cannot be reached (no answer, a time limit, a 5xx) is refused too (`apc_json_unreachable`).
+- A hub may keep the copy it read: the reference dock uses it for 10 minutes, then reads the file again. A verified app whose file cannot be reached keeps pairing, checked against the last copy the hub read, or on the operator's word when it has none. A definite answer (missing, invalid, another origin) refuses a verified app too. The hub reads the file only when an app asks to pair: a pairing made stays until it is revoked or unpaired.
+
+### A drop an app cannot take
+
+- **A dock agent dropped on an app that offers only Direct is answered, never lost.** The app (with `@apc/web`: `enablePinning({ profiles, direct: { name, connect }, onDockUnsupported })`) takes the drop anywhere on the page and tells the person that it connects agents directly, with its connect page, in the words of `directOnlyNote(name)`. It never pairs or pins such a drop. While it takes native drops, `enablePinning` sets `data-apc-native-drops` on the root element; the browser extension answers a Direct-only app (by its `apc.json`) that does not, the same way.
+
+### Conformance
+
+- The suite reads the app's `apc.json` through the adapter's `fetch`: served as JSON from the app's origin, valid, a standard from 0.5.0 to the suite's own, the profile under test listed (both with `link`), never `"hub"`, the grant's MCP URL under `mcp.path`, and `direct.connect` on its origin.
+
 ## 0.4.0 (draft, 2026-11-03)
 
 `apc_link`: one agent on both paths, shown as one (TIN-578). In `packages/protocol/src/core.ts`, `packages/server/src/links.ts`, `packages/conformance` and DESIGN.md section 16.

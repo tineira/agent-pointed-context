@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, decide, grantedAlone, hubAllowed, isDockPage, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, directOnlyAnswer, grantedAlone, hubAllowed, isDockPage, lookUpDirectOnly, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -79,4 +79,39 @@ test("a pin is unread, read once the agent read it, and stale once a newer drop 
   assert.equal(pinState("t1", "t1", true), "read");
   assert.equal(pinState("t1", "t2", true), "stale");
   assert.equal(pinState("t1", null, false), "stale", "cleared or expired at the dock");
+});
+
+test("a dock agent dropped on a Direct-only APC app gets the answer from its apc.json; an app with Dock gets none (APC 0.5)", async () => {
+  const origin = "https://signals.example";
+  const signals = (profiles: string[], over: Record<string, unknown> = {}) => ({ name: "Signals", standard: "0.5.0", origin, profiles, mcp: { path: "/mcp/" }, direct: { connect: `${origin}/?connect` }, ...over });
+  assert.deepEqual(directOnlyAnswer(signals(["direct"]), origin), {
+    name: "Signals",
+    connect: `${origin}/?connect`,
+    message: "Signals connects agents directly, not through a dock. Connect your agent to Signals on its own URL, then drag its mark from the agent bar there.",
+  });
+  assert.equal(connectLabel("Signals"), "Connect an agent to Signals");
+  assert.equal(directOnlyAnswer(signals(["direct", "dock"]), origin), null, "an app that offers Dock answers its own drops");
+  assert.equal(directOnlyAnswer(signals(["dock"]), origin), null);
+  assert.equal(directOnlyAnswer(signals(["direct"]), "https://other.example"), null, "a file that names another origin is not this app's");
+  assert.equal(directOnlyAnswer(signals(["direct"], { direct: { connect: "https://phish.example/connect" } }), origin), null, "a connect page off its origin is never linked");
+  assert.equal(directOnlyAnswer({ name: "x" }, origin), null);
+
+  const asked: Array<[string, RequestInit | undefined]> = [];
+  const serve = (body: string, status = 200) =>
+    (async (url: string | URL | Request, init?: RequestInit) => {
+      asked.push([String(url), init]);
+      return new Response(body, { status, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+  assert.equal((await lookUpDirectOnly(origin, serve(JSON.stringify(signals(["direct"])))))?.connect, `${origin}/?connect`);
+  assert.equal(asked[0]![0], `${origin}/.well-known/apc.json`, "read from the page's own origin");
+  assert.equal(asked[0]![1]?.credentials, "omit", "no cookies");
+  assert.equal(asked[0]![1]?.redirect, "error", "no redirect");
+  assert.equal(await lookUpDirectOnly(origin, serve(JSON.stringify(signals(["direct", "dock"])))), null);
+  assert.equal(await lookUpDirectOnly(origin, serve("not found", 404)), null);
+  assert.equal(await lookUpDirectOnly(origin, serve("<html>")), null);
+  assert.equal(await lookUpDirectOnly(origin, serve(JSON.stringify({ ...signals(["direct"]), pad: "x".repeat(20_000) }))), null, "too large");
+  const offline = (async () => {
+    throw new TypeError("offline");
+  }) as typeof fetch;
+  assert.equal(await lookUpDirectOnly(origin, offline), null);
 });

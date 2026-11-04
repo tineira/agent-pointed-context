@@ -2,6 +2,62 @@
  * The extension's pure parts (TIN-421, DESIGN.md 13): which docks it talks to, what it calls this
  * browser, and how it keeps one reader token per dock and agent. No chrome.* APIs here, so the tests run it.
  */
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, directOnlyNote, parseApcManifest } from "@apc/protocol";
+
+/** An APC app that connects agents only directly (APC 0.5): what the extension tells a person who drops a dock agent on it. */
+export interface DirectOnly {
+  name: string;
+  /** The app's page where the person connects an agent directly, on its own origin. */
+  connect: string | null;
+  message: string;
+}
+
+/**
+ * What the extension makes of an APC app's apc.json: an app that lists no "dock" gets the answer;
+ * an app that offers Dock, a hub, or a file that is not a valid apc.json of that origin gets null, and
+ * the extension stands back, as before.
+ */
+export function directOnlyAnswer(raw: unknown, origin: string): DirectOnly | null {
+  const parsed = parseApcManifest(raw, origin);
+  if (!parsed.ok) return null;
+  const m = parsed.manifest;
+  if (m.profiles.includes("dock") || m.profiles.includes("hub")) return null;
+  return { name: m.name, connect: m.direct?.connect ?? null, message: directOnlyNote(m.name) };
+}
+
+/**
+ * Read a page's apc.json from its own origin (APC 0.5), for the answer to a drop on a Direct-only app:
+ * no cookies, no redirect, 3 s and APC_JSON_MAX_BYTES at most. Anything that goes wrong is null.
+ */
+export async function lookUpDirectOnly(origin: string, fetcher: typeof fetch = fetch): Promise<DirectOnly | null> {
+  try {
+    const r = await fetcher(`${origin}${APC_JSON_PATH}`, { credentials: "omit", redirect: "error", signal: AbortSignal.timeout(3000), headers: { accept: "application/json" } });
+    if (!r.ok || !r.body) return null;
+    // Read up to the cap, never the whole of whatever a page serves there.
+    const reader = r.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > APC_JSON_MAX_BYTES) {
+        void reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+    const all = new Uint8Array(size);
+    let at = 0;
+    for (const c of chunks) {
+      all.set(c, at);
+      at += c.byteLength;
+    }
+    return directOnlyAnswer(JSON.parse(new TextDecoder().decode(all)), origin);
+  } catch {
+    return null;
+  }
+}
 
 /** The docks this extension sends readings to. A drag naming any other hub is refused: a page could forge one. */
 export const HUB_ORIGINS = ["https://apc.tineira.com"];
@@ -135,6 +191,9 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 
 /** What the content script tells the person after a drop. */
 export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "blocked" | "not_here";
+
+/** The link on the card for a Direct-only app. */
+export const connectLabel = (name: string) => `Connect an agent to ${name}`;
 
 /** Where the text goes (13.5), said before anything is sent. */
 const PASSES_THROUGH = "It passes through your dock, on Cloudflare, and is kept 10 minutes at most.";

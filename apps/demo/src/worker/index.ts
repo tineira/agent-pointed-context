@@ -7,7 +7,7 @@
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { ApcProfile } from "@apc/protocol";
-import { parseProfiles } from "@apc/server";
+import { apcJsonResponse, apcManifest, parseProfiles } from "@apc/server";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { SANDBOX_TTL_MS, type Env } from "./sandbox.ts";
 
@@ -25,6 +25,8 @@ function randomHex(bytes: number): string {
 const stubFor = (env: Env, sid: string): Stub => env.SANDBOX.get(env.SANDBOX.idFromName(sid));
 /** The profiles Pulse offers, from APC_PROFILES (the one place they are declared). */
 const offers = (env: Env, profile: ApcProfile): boolean => parseProfiles(env.APC_PROFILES).includes(profile);
+/** The profiles Pulse serves: Dock only on the standard's deploy (APC_V2), where it pairs with a dock's hub. */
+const served = (env: Env): ApcProfile[] => parseProfiles(env.APC_PROFILES).filter((p) => p !== "dock" || env.APC_V2 === "1");
 
 /**
  * Call a sandbox, retrying a retryable failure with a fresh stub (a stub is
@@ -213,6 +215,12 @@ app.all("/mcp/:sid/:secret", async (c) => {
   if (!(await allowed(c.env.SANDBOX_CALLS, `s:${sid}`))) return tooMany(c);
   return stubFor(c.env, sid).fetch(c.req.raw);
 });
+
+/**
+ * What Pulse is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles it
+ * serves, where its MCP URLs live, and its Agents screen, where the person connects an agent directly.
+ */
+app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Pulse", origin: new URL(c.req.url).origin, profiles: served(c.env), connect: "/agents" })));
 
 /** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));

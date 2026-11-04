@@ -6,6 +6,14 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Discovery with `apc.json`, and an answer to a drop an app cannot take (2026-11-03, TIN-579)
+
+- **Pulse, Signals and the dock say what they are at `/.well-known/apc.json` (APC 0.5).** Each app's file names it, the standard, its origin, the profiles it serves (from `APC_PROFILES`), where its MCP URLs live and its connect page (Pulse's Agents screen, Signals' Connect panel); the dock's says it is a hub, with its pairing endpoints. `@apc/server` builds an app's in one call. (`packages/protocol/src/manifest.ts`, `packages/server/src/apc-json.ts`, `apps/demo/src/worker/index.ts`, `apps/signals/src/worker/index.ts`, `apps/dock/src/worker/index.ts`)
+- **The dock pairs an app only after reading its `apc.json`.** It refuses a file that is missing, invalid, names another origin, lists no Dock profile or does not cover the MCP URL the app sent, each with its own error code; it keeps the copy for 10 minutes, never follows an unverified app's redirect, and lets a verified app pair while its file is briefly unreachable. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/app-client.ts`, `apps/dock/test/apc-json.test.ts`)
+- **A dock agent dropped on a Direct-only app is answered, not lost.** The page says the app connects agents directly and links its connect page (Signals opens its Connect panel, Pulse its Agents screen), through `@apc/web`'s `enablePinning`; the browser extension gives the same answer on a Direct-only app that does not take the drop itself. (`packages/web/src/pinning.ts`, `apps/signals/src/web/app.tsx`, `apps/demo/src/web/App.tsx`, `apps/extension/src/content.ts`, `apps/extension/src/drop.ts`, `apps/signals/test/direct-only.test.ts`)
+- **The conformance suite checks `apc.json`**: its shape, origin and standard, and that its profiles and MCP path match what the app serves; Pulse and Signals pass. (`packages/conformance/src/index.ts`, `apps/demo/test/conformance.test.ts`, `apps/signals/test/conformance.test.ts`)
+- **CI deploys Pulse and Signals before the dock**, so the dock never asks for an `apc.json` the apps do not serve yet. (`.github/workflows/ci.yml`)
+
 ### The Direct profile packaged, and `apc_link` (2026-11-03, TIN-578)
 
 - **Pulse and Signals take agents both ways.** Each declares its profiles in one place, `APC_PROFILES` ("direct,dock"), instead of `APC_V2` hiding Direct; on the standard's deploy Pulse's Agents screen lists "Agents connected directly", and Signals has a Connect panel and opens a world of its own for a visitor with no dock. (`apps/demo/wrangler.jsonc`, `apps/signals/wrangler.jsonc`, `apps/demo/src/worker/sandbox.ts`, `apps/signals/src/worker/feed.ts`, `apps/signals/src/web/app.tsx`)

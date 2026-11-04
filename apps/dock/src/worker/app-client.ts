@@ -3,7 +3,7 @@
  * HTTP, no session (APC apps are stateless). The app's grant is the secret in its MCP URL, kept by
  * the hub only.
  */
-import { APC_AGENT_CLIENT_META } from "@apc/protocol";
+import { APC_AGENT_CLIENT_META, APC_JSON_MAX_BYTES, APC_JSON_PATH } from "@apc/protocol";
 import { LIMITS } from "./trust.ts";
 
 export interface AppToolResult {
@@ -197,6 +197,50 @@ export async function revokeGrant(mcpUrl: string, transport: AppTransport = STRI
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+/** An app's apc.json as the hub read it: the parsed JSON, or why there is none, in the hub's own words. */
+export type ApcJsonRead = { ok: true; body: unknown } | { ok: false; error: "apc_json_missing" | "apc_json_unreachable" | "apc_json_invalid"; reason: string };
+
+/**
+ * Read `GET {origin}/.well-known/apc.json` (APC 0.5) under the transport rules of every other call
+ * (TIN-580): a time limit that covers the body, a byte cap (APC_JSON_MAX_BYTES), and no redirect
+ * followed for an unverified app (a redirect counts as no file). An answer that says there is none (a
+ * 4xx, a redirect) is `missing`; no answer, a time limit or a 5xx is `unreachable`; too large or not
+ * JSON is `invalid`.
+ */
+export async function readApcJson(origin: string, transport: AppTransport = STRICT): Promise<ApcJsonRead> {
+  const signal = AbortSignal.timeout(LIMITS.apcJsonMs);
+  const ends = deadline(signal, "apc.json", LIMITS.apcJsonMs);
+  let response: Response;
+  try {
+    response = await Promise.race([
+      fetch(`${origin}${APC_JSON_PATH}`, {
+        headers: { accept: "application/json", "user-agent": "apc-hub/0.1" },
+        signal,
+        ...(transport.verified ? {} : { redirect: "manual" as const }),
+      }),
+      ends,
+    ]);
+  } catch (error) {
+    return { ok: false, error: "apc_json_unreachable", reason: failureReason(error) };
+  }
+  if (!response.ok) {
+    response.body?.cancel().catch(() => {});
+    return { ok: false, error: response.status >= 500 ? "apc_json_unreachable" : "apc_json_missing", reason: `apc.json: HTTP ${response.status}` };
+  }
+  let text: string;
+  try {
+    text = await readCapped(response, APC_JSON_MAX_BYTES, ends, "apc.json");
+  } catch (error) {
+    const tooLarge = error instanceof AppCallError && error.code === "too_large";
+    return { ok: false, error: tooLarge ? "apc_json_invalid" : "apc_json_unreachable", reason: failureReason(error) };
+  }
+  try {
+    return { ok: true, body: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false, error: "apc_json_invalid", reason: "apc.json: not JSON" };
   }
 }
 

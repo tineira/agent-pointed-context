@@ -7,8 +7,8 @@
  * agent was dropped asks, and the answer goes back with the same drop. Once the reading is sent, the
  * agent's mark stays pinned on the paragraph (TIN-469, 13.6), showing whether the agent read it.
  */
-import { APC_AGENT_TYPE, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
-import { hubAllowed, pinState, STATUS_TEXT, type Consent, type DropStatus, type PinMark, type PinState } from "./drop.ts";
+import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
+import { connectLabel, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DropStatus, type PinMark, type PinState } from "./drop.ts";
 import { altText, tableContext } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -30,6 +30,23 @@ const BOX_MAX = 4000;
  * are not APC apps: there the extension takes the agent (TIN-472).
  */
 const apcApp = () => !!document.querySelector("[data-focus], apc-agents, [data-apc-mark]");
+
+/**
+ * One exception (APC 0.5): an APC app that connects agents only directly (its apc.json lists no
+ * "dock") and does not answer a dock agent's drop itself (no APC_DROPS_ATTR, which @apc/web sets).
+ * There a drop would be lost, so the extension takes it and tells the person how to connect directly.
+ * The service worker reads the app's apc.json once per page, on the first drag of an agent over it.
+ */
+let directOnly: DirectOnly | null | undefined;
+function lookUpApp(): void {
+  if (directOnly !== undefined) return;
+  directOnly = null;
+  chrome.runtime
+    .sendMessage<{ directOnly?: DirectOnly | null } | null>({ type: "apc_json" })
+    .then((r) => (directOnly = r?.directOnly ?? null))
+    .catch(() => {});
+}
+const answersHere = () => !!directOnly && !document.documentElement.hasAttribute(APC_DROPS_ATTR);
 
 const w = window as Window & { __apcDrop?: boolean };
 // Injected again when the person grants the site from the popup: one listener set per page.
@@ -66,7 +83,16 @@ function listen(): void {
   };
 
   const onDragover = (e: DragEvent) => {
-    if (!e.isTrusted || !carriesAgent(e) || apcApp()) return;
+    if (!e.isTrusted || !carriesAgent(e)) return;
+    if (apcApp()) {
+      lookUpApp();
+      if (!answersHere()) return;
+      // A Direct-only app that would lose the drop: take it anywhere, to answer it. Nothing is outlined: there is nothing to read.
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "link";
+      keepLast();
+      return;
+    }
     e.preventDefault();
     // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
@@ -83,7 +109,9 @@ function listen(): void {
   window.addEventListener(
     "dragenter",
     (e) => {
-      if (e.isTrusted && carriesAgent(e)) keepLast();
+      if (!e.isTrusted || !carriesAgent(e)) return;
+      if (apcApp()) lookUpApp();
+      keepLast();
     },
     true,
   );
@@ -93,7 +121,12 @@ function listen(): void {
   window.addEventListener("dragend", () => light(null));
   window.addEventListener("drop", (e) => {
     light(null);
-    if (!e.isTrusted || !carriesAgent(e) || apcApp()) return;
+    if (!e.isTrusted || !carriesAgent(e)) return;
+    if (apcApp()) {
+      if (!answersHere() || !directOnly) return;
+      e.preventDefault();
+      return answerDirectOnly(directOnly, e.clientX, e.clientY);
+    }
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
@@ -258,6 +291,46 @@ function ask(status: "consent" | "consent_sensitive", x: number, y: number, send
   root.append(card);
   document.documentElement.append(host);
   setTimeout(close, 45_000);
+}
+
+/**
+ * The answer to a dock agent dropped on a Direct-only APC app (APC 0.5), where it was dropped, in a
+ * closed shadow root: the app connects agents directly, with a link to its connect page (from its
+ * apc.json, on its own origin) and ×. Nothing is sent anywhere.
+ */
+function answerDirectOnly(app: DirectOnly, x: number, y: number): void {
+  const host = document.createElement("div");
+  const root = host.attachShadow({ mode: "closed" });
+  const card = document.createElement("div");
+  card.setAttribute("role", "status");
+  card.setAttribute("aria-label", "APC");
+  const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
+  const top = Math.max(8, Math.min(y + 12, innerHeight - 150));
+  card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 30px 12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
+  const text = document.createElement("p");
+  text.style.cssText = "margin:0 0 8px";
+  text.textContent = app.message;
+  card.append(text);
+  if (app.connect) {
+    const link = document.createElement("a");
+    link.href = app.connect;
+    link.textContent = connectLabel(app.name);
+    link.style.cssText = "color:#f2a46b;font-weight:600";
+    card.append(link);
+  }
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.setAttribute("aria-label", "Close");
+  close.style.cssText = "position:absolute;top:6px;right:8px;background:none;border:0;color:#ccc;font:16px system-ui,sans-serif;cursor:pointer";
+  const remove = () => host.remove();
+  close.addEventListener("click", (ev) => {
+    if (ev.isTrusted) remove();
+  });
+  card.append(close);
+  root.append(card);
+  document.documentElement.append(host);
+  setTimeout(remove, 20_000);
 }
 
 /** The pins on this page, one per dock and agent: a new drop moves it. */

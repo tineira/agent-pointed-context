@@ -10,13 +10,13 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { isRevokedAnswer, REVOKED_ERROR, REVOKED_HTTP_STATUS, type FocusPayload, type ViewPayload } from "@apc/protocol";
+import { declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@apc/protocol";
 import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@apc/server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
-import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
+import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, readApcJson, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
 import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, untrustedResult, unverifiedView } from "./trust.ts";
@@ -205,6 +205,7 @@ export class Hub extends DurableObject<Env> {
       create table if not exists reading_log (
         id integer primary key autoincrement, agent_id text not null references agents(id) on delete cascade,
         origin text not null, at text not null, site text not null, bytes integer not null);
+      create table if not exists apc_json (origin text primary key, body text not null, read_at integer not null);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
     for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"]]) {
@@ -656,6 +657,58 @@ export class Hub extends DurableObject<Env> {
   // ---- pairing from an app (server to server, no owner) ----
 
   /**
+   * Whether this dock has room for a new pairing with this app: under the cap on the apps one dock
+   * pairs, every agent and app counted, pending or paired (TIN-580; a blocked domain's pairing reads as
+   * blocked and holds no place), and, for an unverified app, a domain id of its own. Null when it has.
+   * A revoked line of the same app does not count: the new pairing replaces it.
+   */
+  private pairingRoom(agentId: string, origin: string, verified: boolean): "too_many_apps" | "app_host_too_long" | "app_id_taken" | null {
+    const live = this.pairings().filter((p) => p.status === "pending" || p.status === "paired");
+    if (live.length >= LIMITS.pairings) return "too_many_apps";
+    if (verified) return null;
+    const id = domainAppId(origin, this.pairings(agentId).filter((p) => !(p.status === "revoked" && p.app_origin === origin)));
+    return "error" in id ? id.error : null;
+  }
+
+  /**
+   * An app's apc.json (APC 0.5, DESIGN.md section 17), read from its own origin when it asks to pair,
+   * after the ticket and the origin passed (so nobody can make the hub fetch an address it would not
+   * pair). The copy read is kept per origin: for 10 minutes it is used as is; after that the hub reads
+   * the file again. A definite answer (no file, a file that is not one, another origin) refuses the
+   * pairing and forgets the copy, verified app or not. When the file cannot be reached (no answer, a time
+   * limit, a 5xx), an unverified app is refused, but a verified one keeps pairing: checked against the
+   * last copy the hub read, or, with none, on the operator's word (it is in APP_ORIGINS); then `manifest` is null.
+   */
+  private async manifestFor(origin: string, verified: boolean): Promise<{ ok: true; manifest: ApcManifest | null } | { ok: false; error: ApcJsonRefusal }> {
+    const now = Date.now();
+    this.sql.exec("delete from apc_json where read_at < ?", now - DOCK_TTL_MS);
+    const row = this.sql.exec<{ body: string; read_at: number }>("select body, read_at from apc_json where origin = ?", origin).toArray()[0];
+    let kept: ApcManifest | null = null;
+    if (row) {
+      try {
+        const parsed = parseApcManifest(JSON.parse(row.body), origin);
+        kept = parsed.ok ? parsed.manifest : null;
+      } catch {
+        kept = null;
+      }
+    }
+    if (kept && row && now - row.read_at < LIMITS.apcJsonFreshMs) return { ok: true, manifest: kept };
+    const read = await readApcJson(origin, { verified });
+    if (read.ok) {
+      const parsed = parseApcManifest(read.body, origin);
+      if (!parsed.ok) {
+        this.sql.exec("delete from apc_json where origin = ?", origin);
+        return { ok: false, error: parsed.error };
+      }
+      this.sql.exec("insert into apc_json (origin, body, read_at) values (?, ?, ?) on conflict(origin) do update set body = excluded.body, read_at = excluded.read_at", origin, JSON.stringify(parsed.manifest), Date.now());
+      return { ok: true, manifest: parsed.manifest };
+    }
+    if (read.error === "apc_json_unreachable") return verified ? { ok: true, manifest: kept } : { ok: false, error: read.error };
+    this.sql.exec("delete from apc_json where origin = ?", origin);
+    return { ok: false, error: read.error };
+  }
+
+  /**
    * An app asks to be read by an agent: it got the ticket from the agent's drag, the person said yes
    * on its page, and it sends the grant it made (its MCP URL). The pairing waits for the person's
    * yes in the dock.
@@ -673,12 +726,22 @@ export class Hub extends DurableObject<Env> {
     // Verified (APP_ORIGINS), unverified (only while pairing is open: HTTPS, a domain), blocked or refused (TIN-580).
     const verdict = appVerdict(origin, b.mcp_url, { allowed: envList(this.env.APP_ORIGINS), blocked: this.blocked(), open: this.env.OPEN_PAIRING === "1", dev: dev() });
     if (!verdict.ok) return { ok: false, error: verdict.error };
+    // What can be refused without a request is refused first (and checked again after it, below).
+    const early = this.pairingRoom(t.agent_id, origin, verdict.verified);
+    if (early) return { ok: false, error: early };
+    // The app says what it is in its own apc.json, from its own origin (APC 0.5): it must offer the Dock
+    // profile and declare where its MCP URLs live, so a URL the domain did not declare never pairs.
+    const read = await this.manifestFor(origin, verdict.verified);
+    if (!read.ok) return { ok: false, error: read.error };
+    const manifest = read.manifest;
+    if (manifest && !manifest.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
+    if (manifest && !declaresMcpUrl(manifest, b.mcp_url)) return { ok: false, error: "mcp_url_not_declared" };
+    // Everything below is synchronous: the agent may have gone while the file was read.
+    if (!this.agent(t.agent_id)) return { ok: false, error: "ticket_expired" };
     // The person pairs again after revoking in the app (APC 0.2): the new pairing replaces the revoked one's line, and its app id.
     this.sql.exec("delete from pairings where agent_id = ? and app_origin = ? and status = 'revoked'", t.agent_id, origin);
-    // A cap on the apps one dock pairs, every agent and app counted, pending or paired (TIN-580).
-    // A blocked domain's pairing holds no place: it reads as blocked, never as pending or paired.
-    const held = this.pairings().filter((p) => p.status === "pending" || p.status === "paired").length;
-    if (held >= LIMITS.pairings) return { ok: false, error: "too_many_apps" };
+    const refused = this.pairingRoom(t.agent_id, origin, verdict.verified);
+    if (refused) return { ok: false, error: refused };
     const others = this.pairings(t.agent_id);
     // A verified app's id comes from its name; an unverified app's from its domain, never from the name it declares,
     // which it keeps only as secondary text (TIN-580). Verified ids are [a-z0-9] and "page" (TIN-421); a domain id

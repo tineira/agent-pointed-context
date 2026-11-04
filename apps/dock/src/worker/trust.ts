@@ -21,6 +21,9 @@ export const LIMITS = {
   callMs: 20_000,
   lookMs: 6_000,
   revokeMs: 10_000,
+  /** Reading an app's apc.json at pairing (APC 0.5), and how long the hub trusts the copy it read before it reads the file again. */
+  apcJsonMs: 5_000,
+  apcJsonFreshMs: 10 * 60_000,
   /** A wait_for_focus on an app may run this much past its own timeout. */
   waitGraceMs: 15_000,
   /** The app pairings one dock holds at most, pending and paired, across its agents. */

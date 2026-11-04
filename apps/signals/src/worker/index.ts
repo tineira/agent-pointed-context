@@ -4,6 +4,7 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { apcJsonResponse, apcManifest, parseProfiles } from "@apc/server";
 import { FEED_TTL_MS, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";
@@ -128,6 +129,12 @@ app.all("/mcp/:sid/:secret", async (c) => {
   if (!(await allowed(c.env.FEED_CALLS, `s:${sid}`))) return c.json({ error: "rate_limited" }, 429);
   return stubFor(c.env, sid).fetch(c.req.raw);
 });
+
+/**
+ * What Signals is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles
+ * it offers (APC_PROFILES), where its MCP URLs live, and its Connect panel (?connect).
+ */
+app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: parseProfiles(c.env.APC_PROFILES), connect: "/?connect" })));
 
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));

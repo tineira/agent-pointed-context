@@ -1,4 +1,4 @@
-import { parseFocusAttrs, type FocusTarget } from "@apc/protocol";
+import { directOnlyNote, parseFocusAttrs, type ApcRole, type FocusTarget } from "@apc/protocol";
 
 export interface PinningOptions {
   /** Where marks and targets live; defaults to document. */
@@ -23,6 +23,60 @@ export interface PinningOptions {
    * and carries a pairing ticket. The app asks the person, then pairs with the hub. Without it the drop is ignored.
    */
   onUnknownAgent?: (drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget, element: Element) => void;
+  /**
+   * APC 0.5: the profiles this app offers, as its apc.json says: a list, or a function read on each
+   * drag, for a page that learns them later. An app without "dock" still takes the drop of an agent
+   * dragged from a dock, anywhere on the page and with or without acceptNativeDrops, and answers it
+   * with `onDockUnsupported` instead of `onUnknownAgent`: never a drop that silently does nothing.
+   */
+  profiles?: readonly ApcRole[] | (() => readonly ApcRole[] | null | undefined);
+  /** For that answer: the app's name and the page where the person connects an agent directly (apc.json's `direct.connect`). */
+  direct?: { name: string; connect: string | null };
+  /** A dock agent dropped on an app that does not offer Dock. Without it, `showDockUnsupported` tells the person in the page. */
+  onDockUnsupported?: (answer: DockUnsupported) => void;
+}
+
+/** The answer to a dock agent dropped on a Direct-only app: who it was, what to tell the person, and where they connect instead. */
+export interface DockUnsupported {
+  drag: AgentDrag;
+  /** The target under the drop, if any. */
+  target: FocusTarget | null;
+  name: string;
+  connect: string | null;
+  /** `directOnlyNote(name)`: the same words as the browser extension's. */
+  message: string;
+}
+
+/**
+ * The default answer to a dock agent dropped on a Direct-only app: a note at the bottom of the page
+ * with the words, a link to the app's connect page, and ×. It stays 20 s, or until closed.
+ */
+export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
+  const box = document.createElement("div");
+  box.setAttribute("role", "status");
+  box.setAttribute("data-apc-dock-unsupported", "");
+  Object.assign(box.style, { position: "fixed", zIndex: "2147483647", right: "16px", bottom: "16px", maxWidth: "340px", padding: "12px 14px", borderRadius: "10px", background: "#1f1f1f", color: "#fff", font: "13px/1.45 system-ui, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.25)" });
+  const text = document.createElement("p");
+  text.textContent = answer.message;
+  Object.assign(text.style, { margin: "0 0 8px" });
+  box.appendChild(text);
+  if (answer.connect) {
+    const link = document.createElement("a");
+    link.setAttribute("href", answer.connect);
+    link.textContent = `Connect an agent to ${answer.name}`;
+    Object.assign(link.style, { color: "#f2a46b", fontWeight: "600" });
+    box.appendChild(link);
+  }
+  const close = document.createElement("button");
+  close.setAttribute("type", "button");
+  close.setAttribute("aria-label", "Close");
+  close.textContent = "×";
+  Object.assign(close.style, { position: "absolute", top: "4px", right: "6px", background: "none", border: "0", color: "#ccc", font: "16px system-ui, sans-serif", cursor: "pointer" });
+  close.addEventListener("click", () => box.remove());
+  box.appendChild(close);
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 20_000);
+  return box;
 }
 
 /** What an agent's drag carries. hub and ticket come with pairing (TIN-382): the hub's origin and a single-use, short-lived ticket. */
@@ -35,6 +89,13 @@ export interface AgentDrag {
 
 /** The drag type a dock puts on an agent: its payload is agentDragPayload(handle), never a secret. */
 export const APC_AGENT_TYPE = "application/x-apc-agent";
+
+/**
+ * Set on the page's root element while enablePinning takes native agent drops (APC 0.5): the page
+ * answers every drop of a dock agent itself, so the browser extension stands back even on a
+ * Direct-only app. A Direct-only app without it gets the extension's answer instead.
+ */
+export const APC_DROPS_ATTR = "data-apc-native-drops";
 
 /**
  * What an agent's drag carries: a public handle and nothing else. Any page the agent is dropped on
@@ -136,7 +197,12 @@ export function enablePinning(options: PinningOptions): () => void {
   // Native drops from another window (opt-in). During dragover only the types are readable, so the
   // target lights up for any APC agent; who it is and whether it may point there is checked on drop.
   let native: { current: { element: Element; target: FocusTarget } | null; depth: number } | null = null;
-  const isAgentDrag = (event: DragEvent) => !!event.dataTransfer && [...event.dataTransfer.types].includes(APC_AGENT_TYPE);
+  // An app that does not offer Dock (APC 0.5) takes a dock agent's drop only to answer it.
+  const dockless = () => {
+    const p = typeof options.profiles === "function" ? options.profiles() : options.profiles;
+    return !!p && !p.includes("dock");
+  };
+  const isAgentDrag = (event: DragEvent) => !!event.dataTransfer && [...event.dataTransfer.types].includes(APC_AGENT_TYPE) && (!!options.acceptNativeDrops || dockless());
   const nativeEnd = () => {
     native?.current?.element.classList.remove("apc-target");
     native = null;
@@ -152,13 +218,15 @@ export function enablePinning(options: PinningOptions): () => void {
   };
   const onDragOver = (event: DragEvent) => {
     if (!isAgentDrag(event) || !native) return;
-    const hit = targetAt(event.clientX, event.clientY);
+    // A Direct-only app lights no target for a dragged agent: it cannot point a dock agent at anything.
+    const hit = dockless() ? null : targetAt(event.clientX, event.clientY);
     if (hit?.element !== native.current?.element) {
       native.current?.element.classList.remove("apc-target");
       hit?.element.classList.add("apc-target");
       native.current = hit;
     }
-    if (hit) {
+    // On a Direct-only app the drop is taken anywhere, so the person always gets the answer.
+    if (hit || dockless()) {
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = "link";
     }
@@ -173,6 +241,12 @@ export function enablePinning(options: PinningOptions): () => void {
     const drag = parseAgentDrag(event.dataTransfer!.getData(APC_AGENT_TYPE));
     const hit = targetAt(event.clientX, event.clientY);
     nativeEnd();
+    if (drag?.hub && drag.ticket && dockless()) {
+      const name = options.direct?.name ?? "This app";
+      const answer: DockUnsupported = { drag, target: hit?.target ?? null, name, connect: options.direct?.connect ?? null, message: directOnlyNote(name) };
+      (options.onDockUnsupported ?? showDockUnsupported)(answer);
+      return;
+    }
     if (!drag || !hit) return;
     const grantId = options.resolveAgent ? options.resolveAgent(drag.agent) : drag.agent;
     if (!grantId) {
@@ -190,7 +264,9 @@ export function enablePinning(options: PinningOptions): () => void {
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
   window.addEventListener("keydown", onKey);
-  if (options.acceptNativeDrops) {
+  const takesNative = !!(options.acceptNativeDrops || options.profiles);
+  if (takesNative) {
+    document.documentElement?.setAttribute(APC_DROPS_ATTR, "");
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("dragleave", onDragLeave);
@@ -198,6 +274,7 @@ export function enablePinning(options: PinningOptions): () => void {
   }
   return () => {
     nativeEnd();
+    if (takesNative) document.documentElement?.removeAttribute(APC_DROPS_ATTR);
     window.removeEventListener("dragenter", onDragEnter);
     window.removeEventListener("dragover", onDragOver);
     window.removeEventListener("dragleave", onDragLeave);

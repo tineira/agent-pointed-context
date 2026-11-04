@@ -13,6 +13,8 @@ import { LIMITS } from "../src/worker/trust.ts";
 installWorkersStandIn();
 const { Hub } = await import(new URL("../src/worker/hub.ts", import.meta.url).href);
 const { Sandbox } = await import(new URL("../../demo/src/worker/sandbox.ts", import.meta.url).href);
+/** Pulse's Worker, for the apc.json it serves at /.well-known/apc.json (APC 0.5): the hub reads it when Pulse pairs. */
+const { default: pulseWorker } = await import(new URL("../../demo/src/worker/index.ts", import.meta.url).href);
 
 const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
@@ -36,7 +38,12 @@ interface FakeApp {
   respond?: (method: string, params: Json) => Answer;
   /** Every JSON-RPC method or tool it was sent, and every /apc/revoke. */
   calls: string[];
+  /** Its /.well-known/apc.json (APC 0.5); by default a valid one that offers the Dock profile. */
+  apcJson?: () => Answer;
 }
+
+/** A valid apc.json for an app on `origin` that offers the Dock profile. */
+const manifestOf = (origin: string, name: string, over: Json = {}): Json => ({ name, standard: "0.5.0", origin, profiles: ["dock"], mcp: { path: "/mcp/" }, ...over });
 
 const rpcAnswer = (result: unknown) => Response.json({ jsonrpc: "2.0", id: 1, result });
 const asResult = (data: Json) => ({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
@@ -56,6 +63,7 @@ function fakeApp(origin: string, name: string, over: Partial<FakeApp> = {}): Fak
 
 async function serve(app: FakeApp, request: Request): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname === "/.well-known/apc.json") return (await app.apcJson?.()) ?? Response.json(manifestOf(app.origin, app.name));
   if (url.pathname === "/apc/revoke") {
     app.calls.push("/apc/revoke");
     return Response.json({ ok: true });
@@ -90,6 +98,7 @@ async function world(t: TestContext, env: Json = { OPEN_PAIRING: "1" }) {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     hits.set(url.origin, (hits.get(url.origin) ?? 0) + 1);
+    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
     if (url.origin === DOCK && url.pathname === "/apc/pair") return Response.json(await hub.pair(await request.json()));
     const app = apps.get(url.origin);

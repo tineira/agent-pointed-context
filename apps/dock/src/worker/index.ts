@@ -6,7 +6,14 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { APC_STANDARD_VERSION, type ApcManifest } from "@apc/protocol";
+import { apcJsonResponse } from "@apc/server";
 import { DOCK_TTL_MS, type Env, type Hub } from "./hub.ts";
+
+/** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */
+function hubManifest(origin: string): ApcManifest {
+  return { name: "APC dock", standard: APC_STANDARD_VERSION, origin, profiles: ["hub"], mcp: { path: "/mcp/" }, dock: { pair: `${origin}/apc/pair`, confirm: `${origin}/apc/confirm` } };
+}
 
 export { Hub } from "./hub.ts";
 
@@ -191,6 +198,12 @@ app.all("/mcp/:did/:secret", async (c) => {
   if (!/^[0-9a-f]{32}$/.test(c.req.param("did"))) return c.json({ error: "not_found" }, 404);
   return stubFor(c.env, c.req.param("did")).fetch(c.req.raw);
 });
+
+/**
+ * What this origin is (APC 0.5): a dock's hub, not an app (`profiles: ["hub"]`), with where agents'
+ * MCP URLs live and where apps pair, so apps and tools can tell a dock from an app.
+ */
+app.get("/.well-known/apc.json", (c) => apcJsonResponse(hubManifest(new URL(c.req.url).origin)));
 
 /** No OAuth yet: the secret in the MCP URL is the agent's. A 404 here tells a client to connect directly. */
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));

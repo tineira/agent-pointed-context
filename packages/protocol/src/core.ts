@@ -26,6 +26,8 @@
  *    hub (`RevokedAnswer`).
  * 7. **`apc_link`** (an app that offers both profiles): the same agent on both paths shown as one,
  *    with a one-time code; it grants nothing (`ApcLinkOffer`).
+ * 8. **`apc.json`** (APC 0.5): what the app is, at `GET {origin}/.well-known/apc.json`: its name, the
+ *    standard, its origin, its profiles, where its MCP URLs live, its connect page (`manifest.ts`).
  *
  * `@apc/conformance` checks an app against this core, given its MCP endpoint and a small adapter for
  * what happens in the page.

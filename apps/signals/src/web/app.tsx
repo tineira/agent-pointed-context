@@ -149,6 +149,14 @@ function Feed({ sid }: { sid: string }) {
         acceptNativeDrops: true,
         // Every drop goes through the server, which checks with the dock that a pairing still stands (TIN-389).
         resolveAgent: () => null,
+        // APC 0.5: a Signals that offers only Direct (APC_PROFILES, as its apc.json says) answers a dock agent's
+        // drop with how to connect directly, and opens its Connect panel.
+        profiles: () => stateRef.current?.profiles,
+        direct: { name: "Signals", connect: `${location.origin}/?connect` },
+        onDockUnsupported: (answer) => {
+          setConnectOpen(true);
+          say(answer.message);
+        },
         onUnknownAgent: async (drag, target) => {
           const paired = stateRef.current?.grants.some((g) => g.hub === drag.hub && g.agent === drag.agent);
           if (!paired) return setPending({ drag, target });

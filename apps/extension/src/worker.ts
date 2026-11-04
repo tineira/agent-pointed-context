@@ -8,7 +8,7 @@
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, readerKey, type Consent, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, lookUpDirectOnly, readerKey, sitePattern, type Consent, type DirectOnly, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -64,7 +64,26 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     void pinCall(m.type === "pin_state" ? "state" : "clear", m.hub, m.agent).then(reply);
     return true;
   }
+  // An APC app the agent is dragged over (APC 0.5): whether it connects agents only directly, from its apc.json.
+  if (m?.type === "apc_json") {
+    void directOnlyOf(sender.tab.url).then((directOnly) => reply({ directOnly }));
+    return true;
+  }
 });
+
+/** What each APC app's apc.json said, per origin, for five minutes (memory only: the service worker comes and goes). */
+const apcApps = new Map<string, { at: number; answer: Promise<DirectOnly | null> }>();
+
+/** The answer for a Direct-only app on the tab's origin, or null (it offers Dock, or has no apc.json): read from that origin only. */
+async function directOnlyOf(url: string | undefined): Promise<DirectOnly | null> {
+  const site = sitePattern(url);
+  if (!site) return null;
+  const kept = apcApps.get(site.origin);
+  if (kept && Date.now() - kept.at < 5 * 60_000) return kept.answer;
+  const answer = lookUpDirectOnly(site.origin);
+  apcApps.set(site.origin, { at: Date.now(), answer });
+  return answer;
+}
 
 /** The pin's state or ×, at the dock, with this browser's token for that agent. */
 async function pinCall(what: "state" | "clear", hub: string, agent: string): Promise<Record<string, unknown> | null> {
