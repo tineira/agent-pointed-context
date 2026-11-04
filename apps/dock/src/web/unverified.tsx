@@ -49,6 +49,8 @@ export function UnverifiedRequest(props: {
   agent: string;
   warning: boolean;
   busy?: boolean;
+  /** The hub is still introducing itself to the app after a yes: Approve is off, Deny stays on, so the person can always say no. */
+  approving?: boolean;
   decide: (action: UnverifiedAction) => void;
   /** Float and the pets: smaller type, same words. */
   compact?: boolean;
@@ -61,7 +63,7 @@ export function UnverifiedRequest(props: {
   }, [props.busy]);
   const off = !!props.busy || clicked;
   const answer = (action: UnverifiedAction) => {
-    if (off) return;
+    if (off || (action !== "deny" && props.approving)) return;
     setClicked(true);
     props.decide(action);
   };
@@ -79,7 +81,7 @@ export function UnverifiedRequest(props: {
           <button type="button" disabled={off} onClick={() => answer("deny")}>
             Deny
           </button>
-          <button type="button" disabled={off} onClick={() => answer("approve")}>
+          <button type="button" disabled={off || !!props.approving} onClick={() => answer("approve")}>
             Allow
           </button>
         </div>
@@ -98,7 +100,7 @@ export function UnverifiedRequest(props: {
       <p className="unverified-risk">{w.risk}</p>
       <div className="row">
         {w.actions.map((a) => (
-          <button key={a.action} type="button" className={a.default ? "primary" : undefined} autoFocus={a.default} disabled={off} onClick={() => answer(a.action)}>
+          <button key={a.action} type="button" className={a.default ? "primary" : undefined} autoFocus={a.default} disabled={off || (a.action !== "deny" && !!props.approving)} onClick={() => answer(a.action)}>
             {a.label}
           </button>
         ))}

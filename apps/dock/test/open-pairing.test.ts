@@ -230,8 +230,11 @@ test("a Deny while the hub is introducing itself wins: no call after it, nothing
   const pending = await w.pairApp(shop, { approve: false });
   const approving = w.hub.decide(pending.pairing_id!, "approve_unverified");
   await initializeAsked;
+  // Had the object been evicted here, the alarm would settle the approval on time.
+  const approvedAt = Date.parse(w.hub.ctx.storage.sql.exec("select approved_at from pairings where id = ?", pending.pairing_id).toArray()[0].approved_at);
+  assert.equal(w.hubRoom.alarm, approvedAt + LIMITS.approvingMs);
 
-  // While approving: still the request (buttons off), nothing relayed, and a second answer is not taken as an approval.
+  // While approving: still the request (Approve off, Deny on), nothing relayed, and a second answer is not taken as an approval.
   const line = await w.pairingOf(SHOP);
   assert.equal(line.status, "pending");
   assert.equal(line.approving, true);
@@ -267,14 +270,132 @@ test("a Deny on a pairing the warning's Approve just made clears the domain's ap
   assert.equal((await w.pairingOf(SHOP)).warning, false, "Unpair, from the app's line, keeps the approval");
 });
 
-test("an approval whose introduction never finished counts as paired after a minute", async (t) => {
+/**
+ * As if the object had been evicted while introducing itself after the warning's Approve: the row is left
+ * approving since `agoMs`, with the domain's approval recorded (unless `approved` is false).
+ */
+function leftHalfway(w: Awaited<ReturnType<typeof world>>, id: string, origin: string, o: { agoMs: number; approved?: boolean }) {
+  const at = new Date(Date.now() - o.agoMs).toISOString();
+  w.hub.ctx.storage.sql.exec("update pairings set status = 'approving', approved_at = ? where id = ?", at, id);
+  if (o.approved !== false) w.hub.ctx.storage.sql.exec("insert into unverified_ok (origin, approved_at) values (?, ?) on conflict(origin) do nothing", origin, at);
+}
+const storedStatus = (w: Awaited<ReturnType<typeof world>>, id: string) => w.hub.ctx.storage.sql.exec("select status from pairings where id = ?", id).toArray()[0]?.status ?? null;
+const approvalOf = (w: Awaited<ReturnType<typeof world>>, origin: string) => w.hub.ctx.storage.sql.exec("select 1 from unverified_ok where origin = ?", origin).toArray().length > 0;
+
+test("an approval whose introduction never finished counts as paired after a minute, when nothing holds it", async (t) => {
   const w = await world(t);
   const shop = fakeApp(SHOP, "Shop");
   const pending = await w.pairApp(shop, { approve: false });
-  // As if the object had been evicted while introducing itself: the row is left approving.
-  w.hub.ctx.storage.sql.exec("update pairings set status = 'approving', approved_at = ? where id = ?", new Date(Date.now() - LIMITS.approvingMs - 1_000).toISOString(), pending.pairing_id);
+  leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: LIMITS.approvingMs + 1_000 });
   assert.equal((await w.pairingOf(SHOP)).status, "paired");
   assert.equal((await w.callHub("shop_example__get_figure")).structuredContent.untrusted, true, "its tools are read on first use");
+});
+
+// ---- Fix check 1 (Grok on #120) ----
+
+for (const hold of [
+  { name: "the kill switch closed", on: (w: Awaited<ReturnType<typeof world>>) => (w.hubEnv.UNVERIFIED_PAIRING = "closed"), off: (w: Awaited<ReturnType<typeof world>>) => (w.hubEnv.UNVERIFIED_PAIRING = "open") },
+  { name: "the host on our blocklist", on: (w: Awaited<ReturnType<typeof world>>) => (w.hubEnv.BLOCKED_APPS = "shop.example"), off: (w: Awaited<ReturnType<typeof world>>) => (w.hubEnv.BLOCKED_APPS = "") },
+]) {
+  test(`an approval left half-way is never stored paired while held (${hold.name}): it goes, its approval with it, and nothing is called once the hold lifts`, async (t) => {
+    const w = await world(t);
+    const shop = fakeApp(SHOP, "Shop");
+    const pending = await w.pairApp(shop, { approve: false });
+    leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: LIMITS.approvingMs + 1_000 });
+    hold.on(w);
+    const before = w.hits.get(SHOP) ?? 0;
+    await w.hub.alarm();
+    assert.equal(storedStatus(w, pending.pairing_id!), null, "dropped, not promoted");
+    assert.equal(approvalOf(w, SHOP), false, "the domain's approval went with it");
+    hold.off(w);
+    assert.equal(await w.pairingOf(SHOP), undefined);
+    assert.equal((await w.listHub()).some((x) => x.name.startsWith("shop_example__")), false);
+    assert.match((await w.callHub("shop_example__get_figure")).content[0].text, /"error":"unknown_app"/);
+    assert.equal(w.hits.get(SHOP) ?? 0, before, "the app was never called: not while held, not after");
+    assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
+    assert.equal((await w.pairingOf(SHOP)).warning, true, "the person approves again");
+  });
+}
+
+test("an approval left half-way whose domain lost its approval meanwhile goes: the grant is given back, nothing else called", async (t) => {
+  const w = await world(t);
+  const shop = fakeApp(SHOP, "Shop");
+  const pending = await w.pairApp(shop, { approve: false });
+  leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: LIMITS.approvingMs + 1_000, approved: false });
+  assert.equal(await w.pairingOf(SHOP), undefined);
+  assert.equal(storedStatus(w, pending.pairing_id!), null);
+  assert.deepEqual(shop.calls, ["/apc/revoke"], "the app may be called, so it gets its grant back; no initialize, no tools");
+});
+
+test("decide() never stores paired when it answers app_blocked: the kill switch closed during the introduction", async (t) => {
+  const w = await world(t);
+  let answerInitialize!: () => void;
+  const initializing = new Promise<void>((resolve) => (answerInitialize = resolve));
+  let asked!: () => void;
+  const initializeAsked = new Promise<void>((resolve) => (asked = resolve));
+  const shop = fakeApp(SHOP, "Shop", {
+    respond: (method) => {
+      if (method !== "initialize") return null;
+      asked();
+      return initializing.then(() => Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "Shop", version: "1" } } }));
+    },
+  });
+  const pending = await w.pairApp(shop, { approve: false });
+  const approving = w.hub.decide(pending.pairing_id!, "approve_unverified");
+  await initializeAsked;
+  w.hubEnv.UNVERIFIED_PAIRING = "closed";
+  answerInitialize();
+  assert.deepEqual(await approving, { ok: false, error: "app_blocked" });
+  assert.equal(storedStatus(w, pending.pairing_id!), null, "not stored paired, nor left approving");
+  assert.equal(approvalOf(w, SHOP), false);
+  w.hubEnv.UNVERIFIED_PAIRING = "open";
+  const calls = shop.calls.length;
+  await w.listHub();
+  await w.callHub("list_app_tools");
+  assert.deepEqual(shop.calls.slice(calls), [], "nothing called once it opens again");
+  assert.equal(shop.calls.includes("tools/list"), false);
+});
+
+test("the alarm settles an approval left half-way on time: it is set for approved_at + approvingMs, and then pairs it when nothing holds it", async (t) => {
+  const w = await world(t);
+  const saved = LIMITS.approvingMs;
+  LIMITS.approvingMs = 400;
+  t.after(() => (LIMITS.approvingMs = saved));
+  const shop = fakeApp(SHOP, "Shop");
+  const pending = await w.pairApp(shop, { approve: false });
+  leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: 0 });
+  const approvedAt = Date.parse(w.hub.ctx.storage.sql.exec("select approved_at from pairings where id = ?", pending.pairing_id).toArray()[0].approved_at);
+  // Whenever the hub sets its alarm (decide() does as it starts approving), it covers the approval.
+  await w.hub.arm();
+  assert.equal(w.hubRoom.alarm, approvedAt + 400, "the alarm rings when the approval is due, not at the pending request's end");
+  await sleep(450);
+  await w.hub.alarm();
+  assert.equal(storedStatus(w, pending.pairing_id!), "paired");
+});
+
+test("a Deny on an approval left half-way works, and Remove on a held line takes the domain's approval back", async (t) => {
+  const w = await world(t);
+  const shop = fakeApp(SHOP, "Shop");
+  const pending = await w.pairApp(shop, { approve: false });
+  leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: 1_000 });
+  const line = await w.pairingOf(SHOP);
+  assert.equal(line.approving, true, "still within the minute: shown as the request, Approve off, Deny on");
+  assert.deepEqual(await w.hub.decide(pending.pairing_id!, "deny"), { ok: true });
+  assert.equal(storedStatus(w, pending.pairing_id!), null);
+  assert.equal(approvalOf(w, SHOP), false);
+  assert.deepEqual(shop.calls, ["/apc/revoke"]);
+
+  // Paired, then held by the kill switch: Remove (unpair) takes the approval back; the app, which may not be called, gets nothing.
+  await w.pairApp(shop);
+  w.hubEnv.UNVERIFIED_PAIRING = "closed";
+  const calls = shop.calls.length;
+  assert.equal((await w.pairingOf(SHOP)).status, "blocked");
+  assert.deepEqual(await w.hub.decide((await w.pairingOf(SHOP)).id, "unpair"), { ok: true });
+  assert.equal(approvalOf(w, SHOP), false);
+  assert.deepEqual(shop.calls.slice(calls), []);
+  w.hubEnv.UNVERIFIED_PAIRING = "open";
+  assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
+  assert.equal((await w.pairingOf(SHOP)).warning, true);
 });
 
 test("a long host never leaves a trusted-looking prefix alone: the registered domain is shown whole, the rest shortened from the left", () => {

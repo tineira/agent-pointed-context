@@ -178,8 +178,8 @@ function Readings(props: { agent: DockAgent; clear: () => void }) {
 export function AgentPage(props: {
   agent: DockAgent;
   base: string;
-  /** busy: an answer is on its way, or the hub is introducing itself to the app: the buttons are off. */
-  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; busy?: boolean }>;
+  /** busy: an answer is on its way (both buttons off); approving: the hub is introducing itself to the app (Approve off, Deny on). */
+  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; busy?: boolean; approving?: boolean }>;
   decide: (pairingId: string, action: "approve" | "approve_unverified" | "deny" | "unpair") => void;
   refresh: () => void;
   back: () => void;
@@ -294,7 +294,7 @@ export function AgentPage(props: {
         {props.requests.map((r) =>
           r.app.unverified ? (
             <div key={r.id} className="request unverified">
-              <UnverifiedRequest domain={host(r.app.origin)} declared={r.app.declared_name ?? null} agent={a.name} warning={!!r.warning} busy={!!r.busy} decide={(action) => props.decide(r.id, action)} />
+              <UnverifiedRequest domain={host(r.app.origin)} declared={r.app.declared_name ?? null} agent={a.name} warning={!!r.warning} busy={!!r.busy} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} />
             </div>
           ) : (
           <div key={r.id} className="request">
@@ -310,7 +310,7 @@ export function AgentPage(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" disabled={!!r.busy} onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" disabled={!!r.busy || !!r.approving} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
               <button type="button" disabled={!!r.busy} onClick={() => props.decide(r.id, "deny")}>

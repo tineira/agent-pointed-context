@@ -364,13 +364,48 @@ export class Hub extends DurableObject<Env> {
     this.setMeta("expires_at", String(Date.now() + DOCK_TTL_MS));
     await this.arm();
   }
-  /** A Durable Object has one alarm: it rings for whatever is due first, the oldest reading, the oldest pending pairing's end, or the dock's end. */
+  /**
+   * A Durable Object has one alarm: it rings for whatever is due first, the oldest reading, the oldest
+   * pending pairing's end, the oldest approval left half-way (approved_at + approvingMs), or the dock's end.
+   * Under vite dev alarms are not set: there the same work runs on the next state, pair or decide, which
+   * the dock page asks for on every change it hears of.
+   */
   private async arm(): Promise<void> {
     if (dev()) return;
     const expiresAt = Number(this.meta("expires_at") ?? 0);
     const oldest = this.sql.exec<{ at: string | null }>("select min(reading_at) as at from readers").toArray()[0]?.at;
     const pending = this.sql.exec<{ at: string | null }>("select min(created_at) as at from pairings where status = 'pending'").toArray()[0]?.at;
-    await this.ctx.storage.setAlarm(Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity));
+    const approving = this.sql.exec<{ at: string | null }>("select min(approved_at) as at from pairings where status = 'approving'").toArray()[0]?.at;
+    await this.ctx.storage.setAlarm(
+      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity),
+    );
+  }
+  /** What storage says of a pairing, under the blocked overlay pairings() reads: "approving" while held is still approving here. */
+  private stored(id: string): string | null {
+    return this.sql.exec<{ status: string }>("select status from pairings where id = ?", id).toArray()[0]?.status ?? null;
+  }
+  /**
+   * The end of an approval (Fix check 1 on #120): the row is still approving in storage, the hub's
+   * introduction finished or never will. It turns paired only if, now, nothing holds it (not blocked by our
+   * list, not an unverified app while the kill switch is closed) and, for an unverified app, its domain's
+   * approval still stands. Otherwise the pairing goes and the domain's approval with it, so the person
+   * approves again later; the app gets its grant back only if it may be called.
+   */
+  private async settleApproval(p: Pairing): Promise<"paired" | "dropped"> {
+    if (this.stored(p.id) !== "approving") return "dropped";
+    const held = p.status === "blocked";
+    const approved = p.verified || (this.unverifiedOpen() && this.warned(p.app_origin));
+    if (!held && approved) {
+      this.sql.exec("update pairings set status = 'paired' where id = ? and status = 'approving'", p.id);
+      this.broadcast();
+      return "paired";
+    }
+    this.sql.exec("delete from pairings where id = ?", p.id);
+    this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+    if (!p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
+    this.broadcast();
+    if (givesBack(p)) await revokeGrant(p.mcp_url, transport(p));
+    return "dropped";
   }
   /**
    * A pending pairing nobody decided within LIMITS.pendingMs (10 minutes) goes, as a deny would, and
@@ -378,9 +413,10 @@ export class Hub extends DurableObject<Env> {
    * again. Run by the alarm, and before anything that counts or decides pending pairings.
    */
   private async expirePending(): Promise<void> {
-    // An approval whose introduction never finished (the object was evicted mid-way) is the person's yes all the same:
-    // it is paired, and its tools are read on first use, as after a failed introduction.
-    this.sql.exec("update pairings set status = 'paired' where status = 'approving' and approved_at <= ?", new Date(Date.now() - LIMITS.approvingMs).toISOString());
+    // An approval whose introduction never finished within LIMITS.approvingMs (the object was evicted mid-way) is
+    // settled: paired if nothing holds it and its approval stands, its tools read on first use; dropped otherwise.
+    const halfway = new Set(this.sql.exec<{ id: string }>("select id from pairings where status = 'approving' and approved_at <= ?", new Date(Date.now() - LIMITS.approvingMs).toISOString()).toArray().map((r) => r.id));
+    for (const p of this.pairings().filter((x) => halfway.has(x.id))) await this.settleApproval(p);
     const cutoff = new Date(Date.now() - LIMITS.pendingMs).toISOString();
     // Every row still pending in storage, a blocked domain's too (it reads as blocked, and is never called), so the alarm never rings for one that stays.
     const ids = new Set(this.sql.exec<{ id: string }>("select id from pairings where status = 'pending' and created_at <= ?", cutoff).toArray().map((r) => r.id));
@@ -630,21 +666,24 @@ export class Hub extends DurableObject<Env> {
       // deletes the row, introduce() stops before its next call, and the pairing never turns paired.
       this.sql.exec("update pairings set status = 'approving', approved_at = ? where id = ? and status = 'pending'", new Date().toISOString(), p.id);
       this.broadcast();
+      // Should the object be evicted before the introduction ends, the alarm settles the approval on time (settleApproval).
+      await this.arm();
       await this.introduce({ ...p, status: "approving" });
       const now = this.pairings().find((x) => x.id === p.id);
       // Denied meanwhile (or the app answered 404 and the row went): nothing to pair.
       if (!now) return { ok: false, error: "unknown_pairing" };
-      // Still approving in storage (a blocked domain's row too, which reads as blocked while listed): it is paired now.
-      this.sql.exec("update pairings set status = 'paired' where id = ? and status = 'approving'", p.id);
-      this.broadcast();
-      if (now.status === "blocked") return { ok: false, error: "app_blocked" };
       if (now.status === "revoked") return { ok: false, error: REVOKED_ERROR };
-      return { ok: true };
+      // Paired only if nothing holds it now and its approval still stands (Fix check 1 on #120); a blocked or
+      // kill-switched row, or one whose domain lost its approval meanwhile, goes instead and is never stored paired.
+      if ((await this.settleApproval(now)) === "paired") return { ok: true };
+      return { ok: false, error: now.status === "blocked" ? "app_blocked" : "warning_required" };
     }
     if (action === "deny" || action === "unpair") {
       // Denying an unverified app takes back the domain's approval too, in any state (pending, approving, or paired by
-      // the answer just given): its next request shows the warning again. Unpair, from the app's line, keeps it.
-      if (action === "deny" && !p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
+      // the answer just given): its next request shows the warning again. Unpair, from a paired app's line, keeps it;
+      // Remove on a held line (blocked, or paused by the kill switch) or on an approval left half-way takes it back,
+      // so the person approves again before that app is ever read (Fix check 1 on #120).
+      if (!p.verified && (action === "deny" || p.status === "blocked" || this.stored(p.id) === "approving")) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
       // Authoritative at the hub: the grant goes, nothing is relayed, the app's pins are dropped.
       this.sql.exec("delete from pairings where id = ?", p.id);
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);

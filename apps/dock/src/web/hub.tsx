@@ -253,7 +253,7 @@ export function HubDock() {
       });
   };
   /** A request's buttons are off while an answer to it is on its way, or the hub is still introducing itself to the app. */
-  const busy = (p: { id: string; approving?: boolean }) => deciding.has(p.id) || !!p.approving;
+  const busy = (p: { id: string }) => deciding.has(p.id);
   const dragProps = (a: DockAgent) => ({
     draggable: true,
     title: a.client_name ? `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)` : `Drag ${a.name} into your agent's chat: it pastes the prompt that connects it`,
@@ -294,7 +294,7 @@ export function HubDock() {
     pairing.app.unverified ? (
       // An app outside APP_ORIGINS (TIN-581): the warning, in the dock, the first time its domain asks here.
       <section key={pairing.id} className="request unverified">
-        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} busy={busy(pairing)} decide={(action) => decide(pairing.id, action)} />
+        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} busy={busy(pairing)} approving={!!pairing.approving} decide={(action) => decide(pairing.id, action)} />
       </section>
     ) : (
     <section key={pairing.id} className="request">
@@ -310,7 +310,7 @@ export function HubDock() {
         )}
       </p>
       <div className="row">
-        <button type="button" className="primary" disabled={busy(pairing)} onClick={() => decide(pairing.id, "approve")}>
+        <button type="button" className="primary" disabled={busy(pairing) || !!pairing.approving} onClick={() => decide(pairing.id, "approve")}>
           Allow
         </button>
         <button type="button" disabled={busy(pairing)} onClick={() => decide(pairing.id, "deny")}>
@@ -329,6 +329,7 @@ export function HubDock() {
     agent: agent.name,
     agentId: agent.id,
     busy: busy(pairing),
+    approving: !!pairing.approving,
     ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
   }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
@@ -375,7 +376,7 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
-          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, busy: busy(p) }))}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, busy: busy(p), approving: !!p.approving }))}
           decide={decide}
           refresh={refresh}
           back={back}
@@ -502,6 +503,8 @@ interface FloatRequest {
   unverified?: { declared: string | null; warning: boolean };
   /** An answer is on its way, or the hub is introducing itself to the app: the buttons are off. */
   busy?: boolean;
+  /** The hub is still introducing itself to the app: Approve is off, Deny stays on (Fix check 1 on #120). */
+  approving?: boolean;
 }
 
 /** What the person answers a request with; "approve_unverified" is only the warning's Approve (TIN-581). */
@@ -728,7 +731,7 @@ function FloatAgents(props: {
           r.unverified ? (
             // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
             <div key={r.id} className="float-request unverified" tabIndex={-1}>
-              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} busy={!!r.busy} decide={(action) => props.decide(r.id, action)} compact />
+              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} busy={!!r.busy} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
             </div>
           ) : (
           <div key={r.id} className="float-request" tabIndex={-1} autoFocus={props.notice?.focus && r === props.requests[0]}>
@@ -744,7 +747,7 @@ function FloatAgents(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" disabled={!!r.busy} onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" disabled={!!r.busy || !!r.approving} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
               <button type="button" disabled={!!r.busy} onClick={() => props.decide(r.id, "deny")}>
