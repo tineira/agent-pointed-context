@@ -69,6 +69,8 @@ const body = new El("body");
 const root = new El("html");
 let under: El | null = null;
 Object.assign(globalThis, {
+  // The page is Signals', on its own origin.
+  location: { origin: ORIGIN },
   document: { documentElement: root, body, createElement: (tag: string) => new El(tag), elementFromPoint: () => under, addEventListener() {}, removeEventListener() {} },
   window: {
     addEventListener: (t: string, fn: (e: unknown) => void) => windowListeners.set(t, [...(windowListeners.get(t) ?? []), fn]),
@@ -76,7 +78,7 @@ Object.assign(globalThis, {
   },
 });
 // By URL, like the Durable Objects: the page module needs the DOM types, which this test project does not load.
-const { agentDragPayload, APC_AGENT_TYPE, APC_DROPS_ATTR, enablePinning } = await import(new URL("../../../packages/web/src/pinning.ts", import.meta.url).href);
+const { agentDragPayload, APC_AGENT_TYPE, APC_DROPS_ATTR, enablePinning, loadApcProfiles } = await import(new URL("../../../packages/web/src/pinning.ts", import.meta.url).href);
 
 /** The person drags an agent from their dock over the page and drops it at whatever is under the pointer; whether the page took the drop. */
 function dropFromDock(): boolean {
@@ -152,32 +154,73 @@ test("a dock agent dropped on a Direct-only app is answered with how to connect 
   assert.equal(root.hasAttribute(APC_DROPS_ATTR), false);
 });
 
-test("an app's own answer replaces the note; an app that offers Dock pairs as before", async () => {
-  const manifest = await directOnlyManifest();
-  let profiles: ApcManifest["profiles"] | undefined;
-  const answers: unknown[] = [];
-  const unknown: unknown[] = [];
+/** A promise the test settles when it likes: the page's apc.json, still on its way. */
+function later<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+const flush = () => new Promise((r) => setImmediate(r));
+
+test("a drop before the page knows its profiles is held, then answered as its own apc.json says", async () => {
+  under = new El("article");
+  under.setAttribute("data-focus", "post:p_2");
+  // Signals' page reads its own apc.json (loadApcProfiles), served by its Worker.
+  const read: string[] = [];
+  const viaWorker = (async (url: string | URL | Request) => {
+    read.push(String(url));
+    return worker.fetch(new Request(String(url)), DIRECT_ONLY);
+  }) as typeof fetch;
+  assert.deepEqual(await loadApcProfiles(ORIGIN, viaWorker), ["direct"]);
+  assert.deepEqual(read, [`${ORIGIN}${APC_JSON_PATH}`]);
+
+  // Direct-only, the file still on its way: the drop is taken, and answered once the file says so.
+  const file = later<readonly ("direct" | "dock")[] | null>();
+  const answers: Array<{ target: unknown; message: string }> = [];
+  const unknown: string[] = [];
   const stop = enablePinning({
     acceptNativeDrops: true,
-    // Read on each drag: the page learns them once its state loads.
-    profiles: () => profiles,
+    profiles: file.promise,
     direct: { name: "Signals", connect: `${ORIGIN}/?connect` },
-    onDockUnsupported: (answer: unknown) => void answers.push(answer),
+    onDockUnsupported: (answer: { target: unknown; message: string }) => void answers.push(answer),
     onUnknownAgent: (drag: { agent: string }) => void unknown.push(drag.agent),
     resolveAgent: () => null,
     onPin: () => {},
   });
-  under = new El("article");
-  under.setAttribute("data-focus", "post:p_2");
+  assert.equal(root.hasAttribute(APC_DROPS_ATTR), true);
+  assert.equal(dropFromDock(), true, "taken while the profiles load");
+  await flush();
+  assert.deepEqual([answers.length, unknown], [0, []], "held: neither answered nor paired yet");
+  file.resolve(["direct"]);
+  await flush();
+  assert.deepEqual(unknown, [], "never sent to pairing");
+  assert.deepEqual(answers, [{ drag: { v: 1, agent: "ag_1a2b3c4d", hub: "https://dock.test", ticket: `${"d".repeat(32)}.${"0".repeat(32)}` }, target: { kind: "post", id: "p_2", part: null, params: null }, name: "Signals", connect: `${ORIGIN}/?connect`, message: directOnlyNote("Signals") }]);
   dropFromDock();
-  assert.deepEqual([answers.length, unknown], [0, ["ag_1a2b3c4d"]], "before the profiles are known, as before");
-  profiles = manifest.profiles;
-  dropFromDock();
-  assert.equal(answers.length, 1);
-  assert.deepEqual(answers[0], { drag: { v: 1, agent: "ag_1a2b3c4d", hub: "https://dock.test", ticket: `${"d".repeat(32)}.${"0".repeat(32)}` }, target: { kind: "post", id: "p_2", part: null, params: null }, name: "Signals", connect: `${ORIGIN}/?connect`, message: directOnlyNote("Signals") });
-  profiles = ["direct", "dock"];
-  dropFromDock();
-  assert.deepEqual([answers.length, unknown.length], [1, 2], "an app that offers Dock asks to pair");
+  assert.equal(answers.length, 2, "once known, answered at once");
   assert.equal(body.find("data-apc-dock-unsupported"), undefined, "the app's own answer, no default note");
   stop();
+
+  // An app that offers Dock, the file still on its way: the held drop goes to pairing once it is read.
+  const both = later<readonly ("direct" | "dock")[] | null>();
+  const unknown2: string[] = [];
+  const stop2 = enablePinning({ acceptNativeDrops: true, profiles: both.promise, onUnknownAgent: (drag: { agent: string }) => void unknown2.push(drag.agent), resolveAgent: () => null, onPin: () => {} });
+  dropFromDock();
+  await flush();
+  assert.deepEqual(unknown2, []);
+  both.resolve(["direct", "dock"]);
+  await flush();
+  assert.deepEqual(unknown2, ["ag_1a2b3c4d"], "an app that offers Dock asks to pair, as before");
+  stop2();
+});
+
+test("the note links only to an http(s) page of the app itself", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const [connect, shown] of [[`${ORIGIN}/?connect`, true], [`blob:${ORIGIN}/x`, false], ["javascript:alert(1)", false], ["https://elsewhere.example/connect", false]] as const) {
+    const stop = enablePinning({ profiles: ["direct"], direct: { name: "Signals", connect }, onPin: () => {} });
+    dropFromDock();
+    const note = body.find("data-apc-dock-unsupported")!;
+    assert.equal(note.children.some((c) => c.tagName === "A"), shown, connect);
+    note.remove();
+    stop();
+  }
 });

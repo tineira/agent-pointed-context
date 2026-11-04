@@ -205,10 +205,10 @@ export type ApcJsonRead = { ok: true; body: unknown } | { ok: false; error: "apc
 
 /**
  * Read `GET {origin}/.well-known/apc.json` (APC 0.5) under the transport rules of every other call
- * (TIN-580): a time limit that covers the body, a byte cap (APC_JSON_MAX_BYTES), and no redirect
- * followed for an unverified app (a redirect counts as no file). An answer that says there is none (a
- * 4xx, a redirect) is `missing`; no answer, a time limit or a 5xx is `unreachable`; too large or not
- * JSON is `invalid`.
+ * (TIN-580): a time limit that covers the body and a byte cap (APC_JSON_MAX_BYTES). Stricter than the
+ * other calls, no redirect is followed for any app, verified too: the file is the origin's own or none.
+ * A 4xx is `missing`; no answer, a time limit or a 5xx is `unreachable`; a redirect is `unreachable` for
+ * a verified app (its fallback rules apply) and `missing` for an unverified one; too large or not JSON is `invalid`.
  */
 export async function readApcJson(origin: string, transport: AppTransport = STRICT): Promise<ApcJsonRead> {
   const signal = AbortSignal.timeout(LIMITS.apcJsonMs);
@@ -219,12 +219,19 @@ export async function readApcJson(origin: string, transport: AppTransport = STRI
       fetch(`${origin}${APC_JSON_PATH}`, {
         headers: { accept: "application/json", "user-agent": "apc-hub/0.1" },
         signal,
-        ...(transport.verified ? {} : { redirect: "manual" as const }),
+        // Never followed, for any app: the file must be the origin's own, and a redirect's target is not.
+        redirect: "manual",
       }),
       ends,
     ]);
   } catch (error) {
     return { ok: false, error: "apc_json_unreachable", reason: failureReason(error) };
+  }
+  // A redirect (3xx, or the opaque answer some runtimes give for one) is no file of the origin's: for a
+  // verified app it counts as unreachable (its last copy, or the operator's word), for an unverified one as missing.
+  if ((response.status >= 300 && response.status < 400) || (response as { type?: string }).type === "opaqueredirect" || response.status === 0) {
+    response.body?.cancel().catch(() => {});
+    return { ok: false, error: transport.verified ? "apc_json_unreachable" : "apc_json_missing", reason: `apc.json: a redirect (HTTP ${response.status})` };
   }
   if (!response.ok) {
     response.body?.cancel().catch(() => {});

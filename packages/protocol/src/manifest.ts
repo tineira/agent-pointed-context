@@ -59,16 +59,20 @@ const VERSION_RE = /^(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,5})$/;
 const PATH_RE = /^\/([A-Za-z0-9._~!$&'()*+,;=:@-]+\/)*$/;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
-/** An absolute http(s) URL on `origin`, or null. */
-function onOrigin(value: unknown, origin: string): string | null {
+/**
+ * An absolute http(s) URL on `origin`, with no credentials, as its href; null otherwise. The scheme is
+ * checked as well as the origin: `blob:https://app.example/…` has that origin too, and is no page of it.
+ */
+export function urlOnOrigin(value: unknown, origin: string): string | null {
   if (typeof value !== "string" || value.length > 2048) return null;
   try {
     const url = new URL(value);
-    return url.origin === origin && !url.username && !url.password ? url.href : null;
+    return (url.protocol === "https:" || url.protocol === "http:") && url.origin === origin && !url.username && !url.password ? url.href : null;
   } catch {
     return null;
   }
 }
+const onOrigin = urlOnOrigin;
 
 /** Compares two versions of the standard: negative, zero or positive. */
 export function compareStandard(a: string, b: string): number {
@@ -121,14 +125,27 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
   return { ok: true, manifest };
 }
 
-/** Whether an MCP URL lies under what the manifest declares: its origin and `mcp.path`. */
+/**
+ * Whether an MCP URL lies under what the manifest declares: an http(s) URL on its origin, with no
+ * credentials, under `mcp.path`. The URL parser removes literal `.` and `..` segments, but not encoded
+ * ones, which a server may decode afterwards: so the rest of the path after `mcp.path` may hold no
+ * encoded slash, backslash or dot (`%2f`, `%5c`, `%2e`), no encoded percent (`%25`, a second round of
+ * encoding), and no backslash.
+ */
 export function declaresMcpUrl(manifest: ApcManifest, mcpUrl: string): boolean {
+  let url: URL;
   try {
-    const url = new URL(mcpUrl);
-    return url.origin === manifest.origin && !url.username && !url.password && url.pathname.startsWith(manifest.mcp.path) && url.pathname.length > manifest.mcp.path.length;
+    url = new URL(mcpUrl);
   } catch {
     return false;
   }
+  if (!urlOnOrigin(url.href, manifest.origin)) return false;
+  if (!url.pathname.startsWith(manifest.mcp.path) || url.pathname.length <= manifest.mcp.path.length) return false;
+  const rest = url.pathname.slice(manifest.mcp.path.length);
+  // Checked on the URL as sent too: the parser turns some encoded dots into segments it then removes.
+  const sent = mcpUrl.split(/[?#]/, 1)[0]!;
+  const encoded = /%(2f|5c|2e|25)/i;
+  return !encoded.test(rest) && !encoded.test(sent) && !rest.includes("\\") && !rest.split("/").some((s) => s === "." || s === "..");
 }
 
 /**

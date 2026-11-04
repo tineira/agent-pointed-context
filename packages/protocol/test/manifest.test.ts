@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { APC_JSON_PATH, compareStandard, declaresMcpUrl, directOnlyNote, parseApcManifest } from "../src/index.ts";
+import { APC_JSON_PATH, compareStandard, declaresMcpUrl, directOnlyNote, parseApcManifest, urlOnOrigin } from "../src/index.ts";
 
 const O = "https://signals.example";
 const app = (over: Record<string, unknown> = {}) => ({ name: "Signals", standard: "0.5.0", origin: O, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${O}/?connect` }, ...over });
@@ -52,6 +52,21 @@ test("an MCP URL is declared when it is on the origin and under mcp.path", () =>
   assert.equal(declaresMcpUrl(m, `https://evil.example/mcp/abc`), false);
   assert.equal(declaresMcpUrl(m, `https://u:p@signals.example/mcp/abc`), false);
   assert.equal(declaresMcpUrl(m, "not a url"), false);
+  // Encoded traversal, which a server may decode after the hub checked the path: never declared.
+  for (const sneaky of ["/mcp/%2e%2e%2fadmin", "/mcp/..%2f..%2fadmin", "/mcp/%2E%2E/admin", "/mcp/%252e%252e%252fadmin", "/mcp/abc%2f..%2fdef", "/mcp/abc%5c..%5cdef", "/mcp/a/%2e/b", "/mcp/abc%25"]) {
+    assert.equal(declaresMcpUrl(m, `${O}${sneaky}`), false, sneaky);
+  }
+  assert.equal(declaresMcpUrl(m, `${O}/mcp/../admin`), false, "a literal .. is resolved by the parser, out of the path");
+  assert.equal(declaresMcpUrl(m, `${O}/mcp/abc%20def/x`), true, "other encodings are a server's own business");
+  assert.equal(declaresMcpUrl(m, `blob:${O}/mcp/abc`), false, "a blob: URL has the origin, not the scheme");
+});
+
+test("a connect page or a hub's endpoint must be http(s) on the origin: blob:, data: and javascript: are refused", () => {
+  for (const connect of [`blob:${O}/connect`, "data:text/html,hi", "javascript:alert(1)", `${O.replace("https", "ftp")}/x`]) {
+    assert.equal(parseApcManifest(app({ direct: { connect } }), O).ok, false, connect);
+    assert.equal(urlOnOrigin(connect, O), null, connect);
+  }
+  assert.equal(urlOnOrigin(`${O}/?connect`, O), `${O}/?connect`);
 });
 
 test("versions of the standard compare as numbers, and the Direct-only answer names the app", () => {

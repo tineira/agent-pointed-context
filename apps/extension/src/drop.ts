@@ -88,39 +88,55 @@ export const LOOKUP_KEEP_MS = 5 * 60_000;
 export const LOOKUP_KEEP_UNKNOWN_MS = 30_000;
 
 /**
- * What the extension does with a dock agent's drag over an APC app, on one page (APC 0.5). The app's
- * apc.json is read once, on the first drag. A page that answers drops itself (APC_DROPS_ATTR, set by
- * @apc/web) is left alone. Otherwise the drop is taken while the app may be Direct-only: once its file
- * says so, and while the lookup is still on its way, so a quick first drop is never lost; a drop taken
- * during the lookup is answered when the lookup comes back, or let go if the app turns out to take dock
- * agents.
+ * What the extension does with a dock agent's drag over an APC app, on one page (APC 0.5). A page that
+ * answers drops itself (APC_DROPS_ATTR, set by @apc/web) is left alone. Otherwise the app's apc.json is
+ * looked up on the first drag, and the drop is taken while the app may be Direct-only: once its file says
+ * so, and while the lookup is still on its way, so a quick first drop is never lost. A drop taken during
+ * the lookup is answered when the lookup comes back, or handed back to the page if the app takes dock
+ * agents. A real answer (the file read, Direct-only or not) holds for the page. A lookup that told
+ * nothing is asked again on a later drag, once the service worker's short negative cache
+ * (LOOKUP_KEEP_UNKNOWN_MS) has run out; until then the extension stands back, as it did before 0.5.
  */
-export function directOnlyGate(lookUp: () => Promise<DirectOnly | null>, pageAnswers: () => boolean) {
+export function directOnlyGate(lookUp: () => Promise<DirectOnlyLookup>, pageAnswers: () => boolean, now: () => number = Date.now) {
   let pending: Promise<DirectOnly | null> | null = null;
+  let inFlight = false;
+  /** The real answer, once the file was read; undefined until then. */
   let known: DirectOnly | null | undefined;
-  const start = () =>
-    (pending ??= lookUp()
-      .catch(() => null)
-      .then((answer) => (known = answer)));
+  let toldNothingAt = -Infinity;
+  const start = (): Promise<DirectOnly | null> | null => {
+    if (inFlight) return pending;
+    if (known !== undefined || now() - toldNothingAt < LOOKUP_KEEP_UNKNOWN_MS) return null;
+    inFlight = true;
+    pending = lookUp()
+      .catch((): DirectOnlyLookup => ({ directOnly: null, read: false }))
+      .then((r) => {
+        inFlight = false;
+        if (r.read) known = r.directOnly;
+        else toldNothingAt = now();
+        return r.read ? r.directOnly : null;
+      });
+    return pending;
+  };
   return {
-    /** The agent is dragged over the page: start reading its file. */
+    /** The agent is dragged over the page: look its file up, unless known or asked too recently. */
     start(): void {
       void start();
     },
     /** dragover: whether the extension takes the drop (the browser refuses it otherwise). */
     accepts(): boolean {
+      if (pageAnswers()) return false;
       void start();
-      return !pageAnswers() && known !== null;
+      return !!known || inFlight;
     },
     /**
-     * drop: `now` when the answer is known (the extension answers, and keeps the page's own handlers from
-     * answering too), `later` while the lookup is on its way, or null to stand back.
+     * drop: `now` when the app is known to be Direct-only (the extension answers, and keeps the page's own
+     * handlers from answering too), `later` while the lookup is on its way, or null to stand back.
      */
     drop(): { now: DirectOnly } | { later: Promise<DirectOnly | null> } | null {
       if (pageAnswers()) return null;
       if (known) return { now: known };
-      if (known === null) return null;
-      return { later: start() };
+      const p = start();
+      return inFlight && p ? { later: p } : null;
     },
   };
 }

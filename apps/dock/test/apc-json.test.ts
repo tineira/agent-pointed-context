@@ -27,7 +27,7 @@ const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock" };
 
 type Json = Record<string, unknown>;
 /** What an origin answers to GET /.well-known/apc.json: a Response, or a thrown network error. */
-type Serve = () => Response | Promise<Response>;
+type Serve = (init?: RequestInit) => Response | Promise<Response>;
 
 async function world(t: TestContext, env: Json = {}) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, ...env });
@@ -47,7 +47,7 @@ async function world(t: TestContext, env: Json = {}) {
       reads.set(url.origin, (reads.get(url.origin) ?? 0) + 1);
       redirects.push(init?.redirect);
       const own = apcJson.get(url.origin);
-      if (own) return own();
+      if (own) return own(init);
       if (url.origin === PULSE) return pulseWorker.fetch(request, PULSE_ENV);
     }
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
@@ -191,6 +191,30 @@ test("the hub keeps a copy for ten minutes, then reads the file again", async (t
   assert.equal(w.reads.get(PULSE), 2, "an old copy is read again");
 });
 
+test("the hub follows no redirect for a verified app's apc.json either: the target's body is never kept as the origin's file", async (t) => {
+  const w = await world(t);
+  const saved = LIMITS.apcJsonFreshMs;
+  t.after(() => (LIMITS.apcJsonFreshMs = saved));
+  LIMITS.apcJsonFreshMs = 0;
+  const deny = async () => assert.equal((await w.hub.decide((await w.pairings())[0]!.id, "deny")).ok, true);
+  // A fetch that follows the redirect unless told not to; the target says Pulse is Direct-only.
+  w.apcJson.set(PULSE, (init) => (init?.redirect === "manual" ? new Response(null, { status: 301, headers: { location: "https://elsewhere.example/apc.json" } }) : Response.json(manifest(PULSE, { profiles: ["direct"] }))));
+  assert.equal((await w.dropOnPulse()).ok, true, "a verified app's redirect counts as unreachable: it pairs on the operator's word");
+  assert.equal(w.redirects.at(-1), "manual");
+  // Had the target's body been kept, the next pairing would read "Direct only" from the copy.
+  await deny();
+  w.apcJson.set(PULSE, () => {
+    throw new TypeError("fetch failed");
+  });
+  assert.equal((await w.dropOnPulse()).ok, true, "no copy of the redirect's target was kept");
+  // A redirect after a good copy: the copy counts, as for any unreachable file.
+  await deny();
+  w.apcJson.set(PULSE, () => Response.json(manifest(PULSE, { profiles: ["direct"] })));
+  assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "dock_not_offered" });
+  w.apcJson.set(PULSE, () => new Response(null, { status: 302, headers: { location: `${PULSE}/elsewhere` } }));
+  assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "dock_not_offered" }, "checked against the last copy read");
+});
+
 test("an unverified app pairs only with a valid apc.json it serves itself: unreachable, a redirect or another origin refuse it", async (t) => {
   const w = await world(t, { OPEN_PAIRING: "1" });
   // Every answer below is read anew: no copy is kept between them.
@@ -202,9 +226,14 @@ test("an unverified app pairs only with a valid apc.json it serves itself: unrea
     throw new TypeError("fetch failed");
   });
   assert.deepEqual(await w.shopPairs(), { ok: false, error: "apc_json_unreachable" }, "no operator's word for an unverified app");
-  w.apcJson.set(SHOP, () => new Response(null, { status: 302, headers: { location: "https://elsewhere.example/apc.json" } }));
+  // A fetch that follows the redirect unless told not to: the target serves a valid file for this origin.
+  w.apcJson.set(SHOP, (init) => (init?.redirect === "manual" ? new Response(null, { status: 302, headers: { location: "https://elsewhere.example/apc.json" } }) : Response.json(shop())));
   assert.deepEqual(await w.shopPairs(), { ok: false, error: "apc_json_missing" }, "a redirect is not followed, so it is no file");
   assert.equal(w.redirects.at(-1), "manual");
+  w.apcJson.set(SHOP, () => Response.json(shop()));
+  for (const sneaky of ["%2e%2e%2fadmin", "..%2f..%2fadmin", "%252e%252e%252fadmin", "abc%2f..%2fdef"]) {
+    assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${sneaky}`), { ok: false, error: "mcp_url_not_declared" }, `encoded traversal: ${sneaky}`);
+  }
   w.apcJson.set(SHOP, () => Response.json(shop({ origin: "https://pulse.test" })));
   assert.deepEqual(await w.shopPairs(), { ok: false, error: "apc_json_wrong_origin" }, "it cannot borrow another app's file");
   w.apcJson.set(SHOP, () => Response.json(shop({ profiles: ["hub"], dock: { pair: `${SHOP}/apc/pair`, confirm: `${SHOP}/apc/confirm` } })));

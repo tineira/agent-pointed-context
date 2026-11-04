@@ -8,7 +8,7 @@
  * agent's mark stays pinned on the paragraph (TIN-469, 13.6), showing whether the agent read it.
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
-import { connectLabel, directOnlyGate, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DropStatus, type PinMark, type PinState } from "./drop.ts";
+import { connectLabel, directOnlyGate, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState } from "./drop.ts";
 import { altText, tableContext } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -35,11 +35,15 @@ const apcApp = () => !!document.querySelector("[data-focus], apc-agents, [data-a
  * One exception (APC 0.5): an APC app that connects agents only directly (its apc.json lists no
  * "dock") and does not answer a dock agent's drop itself (no APC_DROPS_ATTR, which @apc/web sets).
  * There a drop would be lost, so the extension takes it and tells the person how to connect directly.
- * The service worker reads the app's apc.json once per page, on the first drag of an agent over it;
- * while it is on its way the drop is taken too, and answered when it comes back (directOnlyGate).
+ * The service worker reads the app's apc.json on the first drag of an agent over it; while it is on its
+ * way the drop is taken too, and answered when it comes back (directOnlyGate). A lookup that told
+ * nothing is asked again on a later drag.
  */
 const directOnly = directOnlyGate(
-  () => chrome.runtime.sendMessage<{ directOnly?: DirectOnly | null } | null>({ type: "apc_json" }).then((r) => r?.directOnly ?? null),
+  () =>
+    chrome.runtime
+      .sendMessage<Partial<DirectOnlyLookup> | null>({ type: "apc_json" })
+      .then((r): DirectOnlyLookup => ({ directOnly: r?.directOnly ?? null, read: r?.read === true })),
   () => document.documentElement.hasAttribute(APC_DROPS_ATTR),
 );
 
@@ -124,9 +128,19 @@ function listen(): void {
         e.stopImmediatePropagation();
         return answerDirectOnly(answer.now, e.clientX, e.clientY);
       }
-      // Still reading the app's file: the page's own handlers run as before; the answer comes when the file does.
-      const { clientX: x, clientY: y } = e;
-      void answer.later.then((app) => app && answerDirectOnly(app, x, y));
+      // Still reading the app's file: the drop is held, so the page does not act on it and then get a card
+      // too. When the file says Direct-only, the card; otherwise the same drop goes back to the page, on the
+      // element it landed on, with the same data (untrusted, so this listener lets it through).
+      e.stopImmediatePropagation();
+      const { clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey } = e;
+      const at = e.target;
+      const items = [...e.dataTransfer!.types].filter((t) => t !== "Files").map((t) => [t, e.dataTransfer!.getData(t)] as const);
+      void answer.later.then((app) => {
+        if (app) return answerDirectOnly(app, clientX, clientY);
+        const transfer = new DataTransfer();
+        for (const [type, value] of items) transfer.setData(type, value);
+        at?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, dataTransfer: transfer }));
+      });
     },
     true,
   );

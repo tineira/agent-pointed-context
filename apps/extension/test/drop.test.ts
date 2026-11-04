@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -128,9 +128,9 @@ test("a drop on an APC app while its apc.json is still being read is taken, and 
   const app: DirectOnly = { name: "Signals", host: "signals.example", connect: "https://signals.example/?connect", message: "…" };
   /** A lookup the test answers when it likes: the service worker's reply, still on its way. */
   const deferred = () => {
-    let resolve!: (v: DirectOnly | null) => void;
+    let resolve!: (v: DirectOnlyLookup) => void;
     let calls = 0;
-    const promise = new Promise<DirectOnly | null>((r) => (resolve = r));
+    const promise = new Promise<DirectOnlyLookup>((r) => (resolve = r));
     return { lookUp: () => (calls++, promise), resolve, calls: () => calls };
   };
 
@@ -141,7 +141,7 @@ test("a drop on an APC app while its apc.json is still being read is taken, and 
   assert.equal(gate.accepts(), true, "dragover takes the drop while the file is on its way: the browser does not refuse it");
   const dropped = gate.drop();
   assert.ok(dropped && "later" in dropped, "a drop during the lookup is held, not lost");
-  slow.resolve(app);
+  slow.resolve({ directOnly: app, read: true });
   assert.equal(await (dropped as { later: Promise<DirectOnly | null> }).later, app, "and answered when the file comes back");
   assert.deepEqual(gate.drop(), { now: app }, "the next drop is answered at once");
   assert.equal(gate.accepts(), true);
@@ -150,15 +150,16 @@ test("a drop on an APC app while its apc.json is still being read is taken, and 
   assert.equal(gate.accepts(), false, "a page that answers drops itself (data-apc-native-drops) is never taken from");
   assert.equal(gate.drop(), null);
 
-  // In flight, then an app that takes dock agents (or no answer): the held drop is let go, and later drags are not taken.
+  // In flight, then an app that takes dock agents: the held drop goes back to the page, and later drags are not taken.
   const dock = deferred();
   const gate2 = directOnlyGate(dock.lookUp, () => false);
   const held = gate2.drop();
   assert.ok(held && "later" in held);
-  dock.resolve(null);
-  assert.equal(await (held as { later: Promise<DirectOnly | null> }).later, null, "nothing to answer: the extension stands back");
+  dock.resolve({ directOnly: null, read: true });
+  assert.equal(await (held as { later: Promise<DirectOnly | null> }).later, null, "nothing to answer: the drop is the page's");
   assert.equal(gate2.accepts(), false);
   assert.equal(gate2.drop(), null);
+  assert.equal(dock.calls(), 1, "a real answer holds for the page");
 
   // A page with the marker is never taken from, even before its file is read.
   const gate3 = directOnlyGate(deferred().lookUp, () => true);
@@ -170,4 +171,30 @@ test("a drop on an APC app while its apc.json is still being read is taken, and 
   const failed = gate4.drop();
   assert.equal(await (failed as { later: Promise<DirectOnly | null> }).later, null);
   assert.equal(gate4.accepts(), false);
+});
+
+test("a lookup that told nothing is asked again on a later drag, once the service worker's short negative cache has run out (APC 0.5)", async () => {
+  const app: DirectOnly = { name: "Signals", host: "signals.example", connect: "https://signals.example/?connect", message: "…" };
+  let clock = 1_000_000;
+  const replies: DirectOnlyLookup[] = [{ directOnly: null, read: false }, { directOnly: app, read: true }];
+  let calls = 0;
+  const gate = directOnlyGate(async () => replies[calls++]!, () => false, () => clock);
+  gate.start();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls, 1);
+  // Told nothing (the file was briefly unreachable): stand back, and do not ask again on every dragover.
+  assert.equal(gate.accepts(), false);
+  assert.equal(gate.drop(), null);
+  clock += LOOKUP_KEEP_UNKNOWN_MS - 1;
+  gate.start();
+  assert.equal(gate.accepts(), false);
+  assert.equal(calls, 1, "not before the service worker's negative cache runs out");
+  // A later drag, past it: asked again, and this time the file says Direct-only.
+  clock += 1;
+  gate.start();
+  assert.equal(calls, 2);
+  assert.equal(gate.accepts(), true, "taken while the new lookup is on its way");
+  const dropped = gate.drop();
+  assert.equal(await (dropped as { later: Promise<DirectOnly | null> }).later, app);
+  assert.deepEqual(gate.drop(), { now: app });
 });

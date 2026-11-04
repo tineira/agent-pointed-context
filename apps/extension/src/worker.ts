@@ -66,7 +66,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
   // An APC app the agent is dragged over (APC 0.5): whether it connects agents only directly, from its apc.json.
   if (m?.type === "apc_json") {
-    void directOnlyOf(sender.tab.url).then((directOnly) => reply({ directOnly }));
+    void directOnlyOf(sender.tab.url).then(reply);
     return true;
   }
 });
@@ -78,17 +78,20 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
  */
 const apcApps = new Map<string, { at: number; keep: number; lookup: Promise<DirectOnlyLookup> }>();
 
-/** The answer for a Direct-only app on the tab's origin, or null (it offers Dock, or no answer): read from that origin only. */
-async function directOnlyOf(url: string | undefined): Promise<DirectOnly | null> {
+/**
+ * What the tab's origin says about itself: the answer for a Direct-only app (or null), and whether its
+ * file was read at all, so the page asks again later when it was not. Read from that origin only.
+ */
+async function directOnlyOf(url: string | undefined): Promise<DirectOnlyLookup> {
   const site = sitePattern(url);
-  if (!site) return null;
+  if (!site) return { directOnly: null, read: false };
   const kept = apcApps.get(site.origin);
-  if (kept && Date.now() - kept.at < kept.keep) return (await kept.lookup).directOnly;
+  if (kept && Date.now() - kept.at < kept.keep) return kept.lookup;
   const entry = { at: Date.now(), keep: LOOKUP_KEEP_MS, lookup: lookUpDirectOnly(site.origin) };
   apcApps.set(site.origin, entry);
   const result = await entry.lookup;
   if (!result.read) entry.keep = LOOKUP_KEEP_UNKNOWN_MS;
-  return result.directOnly;
+  return result;
 }
 
 /** The pin's state or ×, at the dock, with this browser's token for that agent. */
