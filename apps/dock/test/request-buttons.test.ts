@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { buttonsOff, inFlightOf, kindOf, mayAnswer, mergeInFlight } from "../src/web/request-state.ts";
+import { buttonsOff, cardInFlight, inFlightOf, kindOf, landed, mayAnswer, mergeInFlight, sentOut, type Sent } from "../src/web/request-state.ts";
 
 test("the rules: a Deny goes while an Approve is on its way or the hub is approving; a second yes never does", () => {
   assert.deepEqual(buttonsOff({}), { deny: false, approve: false });
@@ -33,6 +33,26 @@ test("the rules: a Deny goes while an Approve is on its way or the hub is approv
   assert.equal(inFlightOf(undefined), undefined);
   assert.equal(mergeInFlight("approve", "deny"), "deny");
   assert.equal(mergeInFlight(undefined, "approve"), "approve");
+});
+
+test("a failed Deny can be sent again while an Approve is still on its way (Fix check 3 on #120)", () => {
+  const id = "pr_1";
+  // The page sends Approve, then Deny; the Deny's request is rejected (decide fails), the Approve still on its way.
+  let page: Sent = sentOut(new Map(), id, "approve");
+  page = sentOut(page, id, kindOf("deny"));
+  assert.deepEqual(buttonsOff({ inFlight: inFlightOf(page.get(id)) }), { deny: true, approve: true }, "while the Deny is on its way");
+  page = landed(page, id, "deny");
+  assert.equal(inFlightOf(page.get(id)), "approve", "only the Deny cleared");
+  assert.equal(mayAnswer("deny", { inFlight: inFlightOf(page.get(id)), approving: true }), true, "the page lets it go again");
+  // The card that sent the Approve: its own click never holds a Deny, so it follows the page.
+  const card = cardInFlight(inFlightOf(page.get(id)), true);
+  assert.deepEqual(buttonsOff({ inFlight: card, approving: true }), { deny: false, approve: true });
+  assert.equal(mayAnswer("deny", { inFlight: card, approving: true }), true);
+  assert.equal(cardInFlight(undefined, false), undefined);
+  assert.equal(cardInFlight("deny", true), "deny", "a Deny the page has on its way still turns both off");
+  // Both landed: the request is clean again.
+  page = landed(page, id, "approve");
+  assert.equal(page.has(id), false);
 });
 
 // ---- The warning as rendered ----

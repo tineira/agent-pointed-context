@@ -498,9 +498,10 @@ export class Hub extends DurableObject<Env> {
   async removeAgent(agentId: string): Promise<{ ok: boolean }> {
     if (!this.agent(agentId)) return { ok: false };
     const lines = this.pairings(agentId);
-    await Promise.allSettled(lines.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
     // Its unverified apps lose the domain's approval, as on Unpair (TIN-581): the next request from one warns again.
+    // Before any await (Fix check 3 on #120), so an approval the person gives while the grants go back is kept.
     for (const p of lines.filter((x) => !x.verified)) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
+    await Promise.allSettled(lines.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
     this.sql.exec("delete from readers where agent_id = ?", agentId);

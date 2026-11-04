@@ -314,6 +314,37 @@ test("an approval whose introduction never finished counts as paired after a min
   assert.equal((await w.callHub("shop_example__get_figure")).structuredContent.untrusted, true, "its tools are read on first use");
 });
 
+test("removing an agent clears its domains' approvals before giving its grants back: an approval given during a slow give-back is kept (Fix check 3 on #120)", async (t) => {
+  const w = await world(t);
+  await w.hub.addAgent();
+  let answerRevoke!: () => void;
+  const revoking = new Promise<void>((resolve) => (answerRevoke = resolve));
+  let revokeAsked!: () => void;
+  const revokeStarted = new Promise<void>((resolve) => (revokeAsked = resolve));
+  const shop = fakeApp(SHOP, "Shop");
+  await w.pairApp(shop);
+  const removed = (await w.agent()).id;
+  const keep = await w.agent(1);
+  // The app is slow to take its grant back.
+  shop.revoke = () => {
+    revokeAsked();
+    return revoking.then(() => Response.json({ ok: true }));
+  };
+  const removing = w.hub.removeAgent(removed);
+  await revokeStarted;
+  assert.equal(approvalOf(w, SHOP), false, "cleared at once, before the give-back");
+  // Meanwhile the person approves the same domain for the other agent, with the warning.
+  shop.revoke = undefined;
+  const asked = await w.pairApp(shop, { approve: false, agentIndex: 1 });
+  assert.equal((await w.agent(1)).pairings.find((p: Json) => p.id === asked.pairing_id).warning, true);
+  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: true });
+  answerRevoke();
+  assert.deepEqual(await removing, { ok: true });
+  assert.equal(approvalOf(w, SHOP), true, "the approval given during the wait survives");
+  assert.equal((await w.agent()).id, keep.id);
+  assert.equal((await w.agent()).pairings[0].status, "paired");
+});
+
 // ---- Fix check 1 (Grok on #120) ----
 
 for (const hold of [

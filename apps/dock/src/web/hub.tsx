@@ -20,7 +20,7 @@ import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx"
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
 import { NotVerified, UnverifiedRequest } from "./unverified.tsx";
-import { buttonsOff, inFlightOf, kindOf, mayAnswer, type InFlight } from "./request-state.ts";
+import { buttonsOff, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -95,7 +95,7 @@ export function HubDock() {
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   /** Answers on their way per request (Review round 1 and Fix check 2 on #120): which buttons are off until they land, on every surface. */
-  const [deciding, setDeciding] = useState<ReadonlyMap<string, { approve?: boolean; deny?: boolean }>>(new Map());
+  const [deciding, setDeciding] = useState<Sent>(new Map());
   const [shown, setShown] = useState<Set<string>>(new Set());
   const [world, setWorld] = useState(false);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
@@ -244,17 +244,12 @@ export function HubDock() {
     const kind = kindOf(action);
     const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
     if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
-    setDeciding((m) => new Map(m).set(pid, { ...m.get(pid), [kind]: true }));
+    setDeciding((m) => sentOut(m, pid, kind));
     void call(`${base}/pairings/${pid}`, { action })
       .catch(() => undefined)
       .finally(() => {
-        setDeciding((m) => {
-          const next = new Map(m);
-          const left = { ...next.get(pid), [kind]: false };
-          if (left.approve || left.deny) next.set(pid, left);
-          else next.delete(pid);
-          return next;
-        });
+        // Answered or failed: that kind clears, and only it (a failed Deny can be sent again).
+        setDeciding((m) => landed(m, pid, kind));
         refresh();
       });
   };

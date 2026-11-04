@@ -41,6 +41,8 @@ export interface FakeApp {
   calls: string[];
   /** Its /.well-known/apc.json (APC 0.5); by default a valid one that offers the Dock profile. */
   apcJson?: () => Answer;
+  /** How it answers /apc/revoke; by default at once, { ok: true }. */
+  revoke?: () => Answer;
 }
 
 /** A valid apc.json for an app on `origin` that offers the Dock profile. */
@@ -67,7 +69,7 @@ async function serve(app: FakeApp, request: Request): Promise<Response> {
   if (url.pathname === "/.well-known/apc.json") return (await app.apcJson?.()) ?? Response.json(manifestOf(app.origin, app.name));
   if (url.pathname === "/apc/revoke") {
     app.calls.push("/apc/revoke");
-    return Response.json({ ok: true });
+    return (await app.revoke?.()) ?? Response.json({ ok: true });
   }
   const body = (await request.json()) as { method: string; params: Json };
   const params = body.params ?? {};

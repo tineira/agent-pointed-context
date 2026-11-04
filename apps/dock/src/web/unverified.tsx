@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from "react";
 import { NOT_VERIFIED, splitHost, unverifiedWarning } from "../worker/trust.ts";
-import { buttonsOff, kindOf, mayAnswer, mergeInFlight, type InFlight } from "./request-state.ts";
+import { buttonsOff, cardInFlight, kindOf, mayAnswer, type InFlight } from "./request-state.ts";
 
 export type UnverifiedAction = "approve" | "approve_unverified" | "deny";
 
@@ -59,17 +59,18 @@ export function UnverifiedRequest(props: {
   /** Float and the pets: smaller type, same words. */
   compact?: boolean;
 }) {
-  // What this card sent, at once on a click, before the page re-renders: never the same kind twice.
-  const [clicked, setClicked] = useState<InFlight | undefined>(undefined);
-  // Cleared once the page has heard back and the hub is not approving, so a refused answer can be given again.
+  // An Approve this card sent, at once on a click, before the page re-renders: never two yeses. A Deny is the
+  // page's alone (its in-flight map), so a Deny that fails is on again as soon as the page clears it (Fix check 3 on #120).
+  const [approveClicked, setApproveClicked] = useState(false);
+  // Cleared once the page has heard back and the hub is not approving, so a refused Approve can be given again.
   useEffect(() => {
-    if (!props.inFlight && !props.approving) setClicked(undefined);
+    if (!props.inFlight && !props.approving) setApproveClicked(false);
   }, [props.inFlight, props.approving]);
-  const state = { inFlight: mergeInFlight(props.inFlight, clicked), approving: props.approving };
+  const state = { inFlight: cardInFlight(props.inFlight, approveClicked), approving: props.approving };
   const off = buttonsOff(state);
   const answer = (action: UnverifiedAction) => {
     if (!mayAnswer(action, state)) return;
-    setClicked(mergeInFlight(clicked, kindOf(action)));
+    if (kindOf(action) === "approve") setApproveClicked(true);
     props.decide(action);
   };
   const w = unverifiedWarning(props.domain, props.declared, props.agent);
