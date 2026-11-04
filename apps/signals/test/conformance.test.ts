@@ -207,6 +207,42 @@ test("Signals makes a grant for a dock agent only with the nonce its consent was
   assert.deepEqual(hub.calls.slice(calls), [`${HUB}/apc/pair`]);
 });
 
+test("a double-clicked Allow in Signals pairs once: the second request changes nothing, and the grant the first made stays (Grok on #123)", async (t) => {
+  const { feed } = await signals();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const calls: string[] = [];
+  let pairAsked!: () => void;
+  const asked = new Promise<void>((resolve) => (pairAsked = resolve));
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url === `${HUB}/apc/pair`) {
+      pairAsked();
+      // The hub takes its time (it reads the app's apc.json first).
+      await held;
+      return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null } });
+    }
+    // Were the second request to ask the hub, it would hear the pairing does not exist yet.
+    if (url === `${HUB}/apc/confirm`) return Response.json({ ok: false, error: "not_paired" });
+    throw new Error(`no network in this test: ${url}`);
+  });
+  const drop = { hub: HUB, agent: "ag_7", ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: buildMarket(generateDataset(SEED)).posts[0]!.id } };
+  const { consent } = await feed.pairHub(SID, ORIGIN, drop);
+  const first = feed.pairHub(SID, ORIGIN, { ...drop, consent });
+  await asked;
+  // The grant exists while the hub answers, but it is not yet this agent's link.
+  const during = (await feed.state()).grants as Array<{ id: string; agent: string | null }>;
+  assert.deepEqual(during.map((g) => g.agent), [null]);
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  release();
+  const done = await first;
+  assert.equal(done.ok, true, done.error);
+  assert.deepEqual(calls, [`${HUB}/apc/pair`], "no confirm, no second pairing");
+  const grants = (await feed.state()).grants as Array<{ id: string; agent: string | null }>;
+  assert.deepEqual(grants.map((g) => [g.id, g.agent]), [[done.grant_id, "ag_7"]], "the grant the hub got is still there, linked");
+});
+
 test("a running call in Signals is cut by its own grant, never by a grant id a later grant reuses (TIN-606)", async () => {
   const { app, feed, room } = await signals("direct");
   room.openPage();

@@ -290,6 +290,37 @@ test("a running call is cut by its own grant, never by a grant id a later grant 
   assert.equal(gone.body.error, "unknown_grant");
 });
 
+test("a double-clicked Allow in Pulse pairs once: the second request changes nothing (Grok on #123)", async (t) => {
+  const { sandbox } = await pulse("dock");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let pairAsked!: () => void;
+  const asked = new Promise<void>((resolve) => (pairAsked = resolve));
+  const calls: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url === `${HUB}/apc/pair`) {
+      pairAsked();
+      await held;
+      return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null } });
+    }
+    throw new Error(`no network in this test: ${url}`);
+  });
+  const drop = { hub: HUB, agent: "ag_8", ticket: `${"d".repeat(32)}.${"8".repeat(16)}`, target: { kind: "customer", id: generateDataset(SEED).customers[0]!.id } };
+  const { consent } = await sandbox.pairHub(SID, ORIGIN, drop);
+  const first = sandbox.pairHub(SID, ORIGIN, { ...drop, consent });
+  await asked;
+  assert.deepEqual(await sandbox.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  release();
+  const done = await first;
+  assert.equal(done.ok, true, done.error);
+  assert.deepEqual(calls, [`${HUB}/apc/pair`]);
+  const state = await sandbox.state();
+  assert.deepEqual(state.grants.map((g: { id: string }) => g.id), [done.grant_id]);
+  assert.deepEqual(state.hub_links.map((l: { grant_id: string }) => l.grant_id), [done.grant_id]);
+});
+
 test("Pulse makes a grant for a dock agent only with the nonce its consent was shown with (TIN-606)", async (t) => {
   const { sandbox } = await pulse("dock");
   const hub = standInHub(t);

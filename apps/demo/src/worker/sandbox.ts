@@ -85,6 +85,8 @@ export class Sandbox extends DurableObject<Env> {
   private links!: ApcLinks;
   /** Consent in the app, checked here (APC 0.6): the nonce the page shows its consent with. In the same table as the links. */
   private consent!: DockConsent;
+  /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
+  private pairing = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -478,13 +480,26 @@ export class Sandbox extends DurableObject<Env> {
     if (!allowed.includes(hub) && !(dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
     if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
     const agent = b.agent;
+    // One drop of an agent at a time (Grok on #123): a second request while the first waits on the hub (a double-clicked
+    // Allow) changes nothing, so it can neither ask for consent again nor drop the grant the first is making.
+    const key = `${hub} ${agent}`;
+    if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
+    this.pairing.add(key);
+    try {
+      return await this.pairHubOnce(sid, origin, hub, agent, b.ticket, b.region, b.target, b.consent);
+    } finally {
+      this.pairing.delete(key);
+    }
+  }
+
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }> {
     /** The person has not said yes here for this agent: the page asks, with this nonce. */
     const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
     const linked = this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, agent).toArray()[0];
     if (linked) {
       // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
       const grant = this.grants().find((g) => g.id === linked.grant_id);
-      const answer = grant ? await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : { ok: false, error: "not_paired" };
+      const answer = grant ? await hubCall(hub, "/apc/confirm", { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : { ok: false, error: "not_paired" };
       if (!answer.ok) {
         if (answer.error !== "not_paired") return { ok: false, error: answer.error ?? "hub_refused" };
         // The dock no longer pairs them: the grant goes, and the ticket is still good, so the person can say yes here and pair at once.
@@ -492,17 +507,17 @@ export class Sandbox extends DurableObject<Env> {
         return askFirst();
       }
       this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: answer.agent?.icon }]), linked.grant_id);
-      return { ...(await this.pin(linked.grant_id, b.target)), grant_id: linked.grant_id, status: answer.status ?? "paired" };
+      return { ...(await this.pin(linked.grant_id, target)), grant_id: linked.grant_id, status: answer.status ?? "paired" };
     }
     // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
-    if (!this.consent.take(b.consent, hub, agent)) return askFirst();
-    const region = (REGIONS as readonly string[]).includes(b.region as string) ? (b.region as Region) : null;
+    if (!this.consent.take(consent, hub, agent)) return askFirst();
+    const region = (REGIONS as readonly string[]).includes(rawRegion as string) ? (rawRegion as Region) : null;
     const { id, secret, created_at } = newDirectGrant();
     this.sql.exec(
       "insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, ?, ?)",
       id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, created_at,
     );
-    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
+    const answer = await hubCall(hub, "/apc/pair", { ticket, agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };
@@ -512,7 +527,7 @@ export class Sandbox extends DurableObject<Env> {
     this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", cleanName(answer.agent?.name), pickClientIcon([{ src: answer.agent?.icon }]), id);
     this.log("hub_paired", id, { hub, agent });
     this.broadcast({ type: "grants" });
-    const pinned = await this.pin(id, b.target);
+    const pinned = await this.pin(id, target);
     return { ok: pinned.ok, ...(pinned.error ? { error: pinned.error } : {}), grant_id: id, status: "pending" };
   }
 

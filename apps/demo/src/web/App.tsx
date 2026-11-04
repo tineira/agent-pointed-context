@@ -409,6 +409,7 @@ function Sandbox({ sid }: { sid: string }) {
       <Tour api={api} state={state} names={names} screen={route.screen} onOverview={() => navigate({ screen: "overview" }, filters)} onChanged={() => void refresh()} />
       {pendingDrop && (
         <HubConsent
+          key={pendingDrop.consent}
           api={api}
           drop={pendingDrop}
           onDone={(message) => {

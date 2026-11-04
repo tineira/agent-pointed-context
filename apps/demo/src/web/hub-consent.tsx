@@ -5,7 +5,7 @@
  */
 import type { AgentDrag } from "@apc/web";
 import type { FocusTarget } from "@apc/protocol";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { REGIONS, type Region } from "../model/seed.ts";
 import type { Api } from "./api.ts";
 
@@ -28,8 +28,12 @@ const ERRORS: Record<string, string> = {
 export function HubConsent(props: { api: Api; drop: PendingDrop; onDone: (notice: string | null) => void }) {
   const [region, setRegion] = useState<Region | "">("");
   const [busy, setBusy] = useState(false);
+  // One Allow, one request: the ref holds before the re-render that turns the buttons off (a double click, Grok on #123).
+  const sent = useRef(false);
   const host = new URL(props.drop.drag.hub).host;
   const allow = async () => {
+    if (sent.current) return;
+    sent.current = true;
     setBusy(true);
     try {
       const r = await props.api.hubPair({ hub: props.drop.drag.hub, agent: props.drop.drag.agent, ticket: props.drop.drag.ticket, region: region || null, target: props.drop.target, consent: props.drop.consent });

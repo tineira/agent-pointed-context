@@ -71,6 +71,8 @@ export class Feed extends DurableObject<Env> {
   private links!: ApcLinks;
   /** Consent in the app, checked here (APC 0.6): the nonce the page shows its consent with. */
   private consent!: DockConsent;
+  /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
+  private pairing = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -298,12 +300,25 @@ export class Feed extends DurableObject<Env> {
     if (!allowed.includes(hub) && !(dev() && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
     if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
     const agent = b.agent;
+    // One drop of an agent at a time (Grok on #123): a second request while the first waits on the hub (a double-clicked
+    // Allow) changes nothing, so it can neither take the grant the first is making for a link nor revoke it.
+    const key = `${hub} ${agent}`;
+    if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
+    this.pairing.add(key);
+    try {
+      return await this.pairHubOnce(sid, origin, hub, agent, b.ticket, b.target, b.consent);
+    } finally {
+      this.pairing.delete(key);
+    }
+  }
+
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string }> {
     /** The person has not said yes here for this agent: the page asks, with this nonce. */
     const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
     const linked = this.grants().find((g) => g.hub === hub && g.agent === agent);
     if (linked) {
       // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
-      const check = await hubCall(hub, "/apc/confirm", { ticket: b.ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
+      const check = await hubCall(hub, "/apc/confirm", { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
       if (!check.ok) {
         if (check.error !== "not_paired") return { ok: false, error: check.error ?? "hub_refused" };
         // The ticket is still good: the person can say yes here and pair at once.
@@ -311,22 +326,24 @@ export class Feed extends DurableObject<Env> {
         return askFirst();
       }
       this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent?.icon }]), linked.id);
-      return { ...(await this.pin(linked.id, b.target)), grant_id: linked.id };
+      return { ...(await this.pin(linked.id, target)), grant_id: linked.id };
     }
     // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
-    if (!this.consent.take(b.consent, hub, agent)) return askFirst();
+    if (!this.consent.take(consent, hub, agent)) return askFirst();
     const { id, secret, created_at } = newDirectGrant();
-    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, ?, ?)", id, secret, hub, agent, created_at);
-    const answer = await hubCall(hub, "/apc/pair", { ticket: b.ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
+    // The grant exists (its MCP URL answers), but it is linked to the agent only once the hub took it, as Pulse writes
+    // its hub link after /apc/pair: until then no drop finds it as this agent's.
+    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, null, ?)", id, secret, hub, created_at);
+    const answer = await hubCall(hub, "/apc/pair", { ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
       return { ok: false, error: answer.error ?? "hub_refused" };
     }
     // The agent's mark from the hub, so its first pin already shows its logo.
     const name = typeof answer.agent?.name === "string" ? answer.agent.name.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null : null;
-    this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", name, pickClientIcon([{ src: answer.agent?.icon }]), id);
+    this.sql.exec("update grants set agent = ?, client_title = ?, client_icon = ? where id = ?", agent, name, pickClientIcon([{ src: answer.agent?.icon }]), id);
     this.broadcast();
-    return { ...(await this.pin(id, b.target)), grant_id: id };
+    return { ...(await this.pin(id, target)), grant_id: id };
   }
 
   /** A dock's hub gives back its grant (TIN-388): the grant and its pin go, and the next drop asks again. */
