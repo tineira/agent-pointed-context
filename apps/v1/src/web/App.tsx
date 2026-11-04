@@ -74,7 +74,15 @@ function SandboxGate() {
   const [sid, setSid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    openSession().then(setSid, (e: unknown) => setError(String(e)));
+    // The open is shared (TIN-490); a gate that unmounted before it settled ignores the result.
+    let live = true;
+    openSession().then(
+      (id) => live && setSid(id),
+      (e: unknown) => live && setError(String(e)),
+    );
+    return () => {
+      live = false;
+    };
   }, []);
   if (error) return <p className="py-12 text-center text-sm text-muted">Could not open a sandbox: {error}</p>;
   if (!sid) return <p className="py-12 text-center text-sm text-muted">Opening your sandbox…</p>;
