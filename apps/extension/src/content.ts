@@ -1,15 +1,19 @@
 /**
  * The content script (TIN-421, DESIGN.md 13.1 and 13.2), on the sites the person granted: it lets a
- * page take the agent the person drags from their dock or Float. An APC app handles its own drops
- * first, so this listens on window in the bubble phase and steps back when the page took the drop.
- * On any other page it reads the block of text at the drop point and hands it to the service worker.
- * When the service worker needs the person's consent for the site (TIN-465, 13.3), a card where the
- * agent was dropped asks, and the answer goes back with the same drop. Once the reading is sent, the
- * agent's mark stays pinned on the paragraph (TIN-469, 13.6), showing whether the agent read it.
+ * page take the agent the person drags from their dock or Float. On an APC app it does nothing at all
+ * (the app takes the drop itself), except on a Direct-only app that would lose the drop (APC 0.5). On
+ * any other page it takes the agent's drop whatever the page's own handlers do: its dragover answer
+ * stays last on window, and its drop listener runs first, on window in the capture phase (TIN-572,
+ * TIN-573). There it reads the block of text at the drop point, the selection and the form state
+ * around it (TIN-571), and hands them to the service worker. When the service worker needs the
+ * person's consent for the site (TIN-465, 13.3), a card where the agent was dropped asks, and the
+ * answer goes back with the same drop. Once the reading is sent, the agent's mark stays pinned on the
+ * paragraph (TIN-469, 13.6), showing whether the agent read it.
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
+import { CONTEXT_MAX, type FormReading } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState } from "./drop.ts";
-import { altText, tableContext } from "./read.ts";
+import { altText, controlVisible, countable, formState, pickScope, tableContext, type Control, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
@@ -105,53 +109,35 @@ function listen(): void {
     window.addEventListener("dragover", onDragover);
   };
   window.addEventListener("dragover", onDragover);
-  window.addEventListener(
-    "dragenter",
-    (e) => {
-      if (!e.isTrusted || !carriesAgent(e)) return;
-      if (apcApp()) directOnly.start();
-      keepLast();
-    },
-    true,
-  );
-  // An APC app's drop, in the capture phase, before the page's own handlers (APC 0.5).
-  window.addEventListener(
-    "drop",
-    (e) => {
-      if (!e.isTrusted || !carriesAgent(e) || !apcApp()) return;
-      const answer = directOnly.drop();
-      if (!answer) return;
-      // The extension took the drop on dragover, so the browser's own action (opening what was dropped) never runs.
-      e.preventDefault();
-      if ("now" in answer) {
-        // Known Direct-only: the extension answers, and a page with an older @tineira/apc-web does not answer it a second time.
-        e.stopImmediatePropagation();
-        return answerDirectOnly(answer.now, e.clientX, e.clientY);
-      }
-      // Still reading the app's file: the drop is held, so the page does not act on it and then get a card
-      // too. When the file says Direct-only, the card; otherwise the same drop goes back to the page, on the
-      // element it landed on, with the same data (untrusted, so this listener lets it through).
+
+  /** An APC app's drop (APC 0.5): the app's own, unless it is Direct-only and would lose it. */
+  const onAppDrop = (e: DragEvent) => {
+    const answer = directOnly.drop();
+    if (!answer) return;
+    // The extension took the drop on dragover, so the browser's own action (opening what was dropped) never runs.
+    e.preventDefault();
+    if ("now" in answer) {
+      // Known Direct-only: the extension answers, and a page with an older @tineira/apc-web does not answer it a second time.
       e.stopImmediatePropagation();
-      const { clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey } = e;
-      const at = e.target;
-      const items = [...e.dataTransfer!.types].filter((t) => t !== "Files").map((t) => [t, e.dataTransfer!.getData(t)] as const);
-      void answer.later.then((app) => {
-        if (app) return answerDirectOnly(app, clientX, clientY);
-        const transfer = new DataTransfer();
-        for (const [type, value] of items) transfer.setData(type, value);
-        at?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, dataTransfer: transfer }));
-      });
-    },
-    true,
-  );
-  window.addEventListener("dragleave", (e) => {
-    if (!e.relatedTarget) light(null);
-  });
-  window.addEventListener("dragend", () => light(null));
-  window.addEventListener("drop", (e) => {
-    light(null);
-    // An APC app's drop is the capture listener's (above), or the app's own.
-    if (!e.isTrusted || !carriesAgent(e) || apcApp()) return;
+      return answerDirectOnly(answer.now, e.clientX, e.clientY);
+    }
+    // Still reading the app's file: the drop is held, so the page does not act on it and then get a card
+    // too. When the file says Direct-only, the card; otherwise the same drop goes back to the page, on the
+    // element it landed on, with the same data (untrusted, so this listener lets it through).
+    e.stopImmediatePropagation();
+    const { clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey } = e;
+    const at = e.target;
+    const items = [...e.dataTransfer!.types].filter((t) => t !== "Files").map((t) => [t, e.dataTransfer!.getData(t)] as const);
+    void answer.later.then((app) => {
+      if (app) return answerDirectOnly(app, clientX, clientY);
+      const transfer = new DataTransfer();
+      for (const [type, value] of items) transfer.setData(type, value);
+      at?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, dataTransfer: transfer }));
+    });
+  };
+
+  /** Any other page's drop: read what the person pointed at, then send it. The page's own handlers still see the drop. */
+  const onPageDrop = (e: DragEvent) => {
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
@@ -164,13 +150,43 @@ function listen(): void {
         .sendMessage<{ status: DropStatus; pin?: PinMark }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
         .then((r) => {
           const status = r?.status ?? "error";
-          if (status === "consent" || status === "consent_sensitive") return ask(status, e.clientX, e.clientY, send);
+          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send);
           say(status);
           if (status === "sent" && r?.pin) pin(target, r.pin);
         })
         .catch(() => say("error"));
     void send();
+  };
+
+  // dragenter and drop listen in the capture phase on window, which the content script fills before the
+  // page's own scripts run (it runs at document_start), so no listener of the page comes before them.
+  // In a tab the script was injected into later, a page's earlier capture listener could stop them:
+  // for dragenter that costs little, since each dragover moves the dragover listener too.
+  window.addEventListener(
+    "dragenter",
+    (e) => {
+      if (!e.isTrusted || !carriesAgent(e)) return;
+      if (apcApp()) directOnly.start();
+      keepLast();
+    },
+    true,
+  );
+  // The drop before any handler of the page (TIN-573): a page that stops drop on document or body, as it
+  // may for its own drags, no longer keeps it from the extension. It used to listen in the bubble phase.
+  window.addEventListener(
+    "drop",
+    (e) => {
+      light(null);
+      if (!e.isTrusted || !carriesAgent(e)) return;
+      if (apcApp()) onAppDrop(e);
+      else onPageDrop(e);
+    },
+    true,
+  );
+  window.addEventListener("dragleave", (e) => {
+    if (!e.relatedTarget) light(null);
   });
+  window.addEventListener("dragend", () => light(null));
   // The service worker's later word, once the person answered in the dock.
   chrome.runtime.onMessage.addListener((m) => {
     const msg = m as { type?: string; status?: DropStatus; pin?: PinMark };
@@ -180,10 +196,18 @@ function listen(): void {
   });
 }
 
+/** The page's element at a point, under the extension's own pins, which can sit right where the person drops. */
+function elementAt(x: number, y: number): Element | null {
+  return document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
+}
+
 /** The nearest block of text at a point, or null (a margin, a form field). */
 function blockAt(x: number, y: number): Element | null {
-  // Under the extension's own pins, which can sit right where the person drops.
-  const under = document.elementsFromPoint(x, y).find((el) => !(el instanceof HTMLElement && "apcPin" in el.dataset)) ?? null;
+  return blockOf(elementAt(x, y));
+}
+
+/** The nearest block of text around an element, or null (a form field, or a box that is most of the page). */
+function blockOf(under: Element | null): Element | null {
   // A formula or a drawing as a whole, not the glyph or shape inside it.
   const at = under?.closest("math,svg") ?? under;
   if (!at || at.closest(FIELDS)) return null;
@@ -245,9 +269,14 @@ function readable(el: Element, max: number): string {
   return parts.join("");
 }
 
-/** What the person pointed at: the block's text, the heading above it and its place in a table, or only the page. */
+/**
+ * What the person pointed at: the block's text, the heading above it and its place in a table, or only
+ * the page; their selection, with where it is when that is elsewhere; and the form state there (TIN-571).
+ * Taken only here, on a drop or a moved pin: nothing is read while the person fills a form.
+ */
 function readAt(x: number, y: number) {
-  const block = blockAt(x, y);
+  const under = elementAt(x, y);
+  const block = blockOf(under);
   const selection = String(getSelection() ?? "").slice(0, TEXT_MAX);
   const cell = block?.closest<HTMLTableCellElement>("td,th");
   const table = cell?.closest("table");
@@ -265,7 +294,197 @@ function readAt(x: number, y: number) {
         }
       : null,
     selection: selection || null,
+    selection_context: selection ? selectionContext(block, selection) : null,
+    form: formAt(x, y),
   };
+}
+
+/**
+ * Where the selection is (TIN-571): the heading above it and the text of its block, when that is not
+ * the pointed block, which the reading already gives with its heading. Null otherwise.
+ */
+function selectionContext(pointed: Element | null, selection: string): { heading: string | null; text: string | null } | null {
+  const sel = getSelection();
+  if (!sel?.rangeCount) return null;
+  const node = sel.getRangeAt(0).commonAncestorContainer;
+  const at = node instanceof Element ? node : node.parentElement;
+  if (!at) return null;
+  const block = blockOf(at);
+  if (pointed && block && (block === pointed || pointed.contains(block))) return null;
+  const heading = headingBefore(block ?? at);
+  const fold = (s: string) => s.replace(/\s+/g, " ").trim();
+  const words = block ? fold(readable(block, CONTEXT_MAX)).slice(0, CONTEXT_MAX) : "";
+  // The whole block selected: its text is the selection already.
+  const text = words && words !== fold(selection) ? words : null;
+  return heading || text ? { heading, text } : null;
+}
+
+/** Form controls, native and ARIA. A hidden input matches too, and is dropped when described. */
+const CONTROLS = "input,select,textarea,[role=radio],[role=checkbox],[role=switch]";
+/** A control's own group, whose choices go along whatever its size. */
+const OWN_GROUP = "fieldset,[role=radiogroup]";
+/** A wider group, whose choices go along only when it is small (pickScope). */
+const WIDER_GROUP = "form,[role=group]";
+/** The most controls looked at around one drop. */
+const CONTROLS_SCANNED = 300;
+
+/**
+ * The element at a point for the form state, inside open shadow roots too: a field in a web component
+ * is under its host at the document's level.
+ */
+function deepElementAt(x: number, y: number): Element | null {
+  let el = elementAt(x, y);
+  for (let depth = 0; el?.shadowRoot && depth < 8; depth++) {
+    const inner = el.shadowRoot.elementsFromPoint(x, y)[0];
+    if (!inner || inner === el) break;
+    el = inner;
+  }
+  return el;
+}
+
+/**
+ * The form state at a drop (TIN-571): the control dropped on (or the one its label names), and the
+ * choices of its own group: its fieldset or radiogroup, or else its form or role=group when that holds
+ * at most SCOPE_MAX controls (pickScope), or else only its own radios. Typed values go only for the
+ * control dropped on (formState). Without a control, the group the drop landed in.
+ */
+function formAt(x: number, y: number): FormReading | null {
+  const under = deepElementAt(x, y);
+  if (!under) return null;
+  const label = under.closest("label");
+  const pointed = under.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
+  const from = pointed ?? under;
+  const ancestors: Array<{ el: Element; kind: "own" | "wider"; controls: number }> = [];
+  for (let el = from.parentElement; el; el = el.parentElement) {
+    if (el.matches(OWN_GROUP)) ancestors.push({ el, kind: "own", controls: 0 });
+    // Only controls the reading could say something of count: not hidden inputs, buttons or ones the person cannot see.
+    else if (el.matches(WIDER_GROUP)) ancestors.push({ el, kind: "wider", controls: countControls(el) });
+  }
+  const scope = ancestors[pickScope(ancestors)]?.el ?? null;
+  const found = scope ? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED) : [];
+  // No group around it: the control's own radios still give which one is chosen.
+  if (!scope && pointed instanceof HTMLInputElement && pointed.type === "radio" && pointed.name) {
+    const root = pointed.form ?? pointed.getRootNode();
+    if (root instanceof HTMLFormElement || root instanceof Document || root instanceof ShadowRoot) {
+      for (const r of root.querySelectorAll<HTMLInputElement>("input[type=radio]")) if (r.name === pointed.name && r.form === pointed.form && found.length < CONTROLS_SCANNED) found.push(r);
+    }
+  }
+  if (pointed && !found.includes(pointed)) found.unshift(pointed);
+  const controls = found.map((el) => describe(el, el === pointed)).filter((c): c is Control => c !== null);
+  return formState(controls);
+}
+
+/** How many controls in a group the reading could say something of (countable); past CONTROLS_SCANNED in all, too many. */
+function countControls(group: Element): number {
+  const all = group.querySelectorAll(CONTROLS);
+  if (all.length > CONTROLS_SCANNED) return Infinity;
+  return [...all].filter((el) => {
+    const c = describe(el, false);
+    return !!c && countable(c);
+  }).length;
+}
+
+/** An element's opacity times its ancestors', across shadow roots. */
+function effectiveOpacity(el: Element): number {
+  let opacity = 1;
+  for (let at: Element | null = el; at && opacity > 0; at = at.parentElement ?? ((at.getRootNode() as ShadowRoot).host ?? null)) opacity *= Number(getComputedStyle(at).opacity);
+  return opacity;
+}
+
+/** A computed colour's alpha: rgb() is 1, rgba() and color() say it, transparent is 0. */
+function alpha(color: string): number {
+  if (color === "transparent") return 0;
+  // rgb(0 0 0 / 0.5), rgba(0, 0, 0, 0.5), color(srgb 0 0 0 / 50%); four numbers in rgba() means the last is alpha.
+  const m = /\/\s*([\d.]+%?)\s*\)$/.exec(color) ?? /^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+%?)\s*\)$/.exec(color);
+  if (!m) return 1;
+  return m[1]!.endsWith("%") ? Number(m[1]!.slice(0, -1)) / 100 : Number(m[1]);
+}
+
+/** What visuallyHidden needs of an element. */
+function seenOf(el: Element): Seen {
+  const style = getComputedStyle(el);
+  const box = el.getBoundingClientRect();
+  const page = document.documentElement;
+  return {
+    checkVisible: el.checkVisibility({ visibilityProperty: true, opacityProperty: true }),
+    opacity: effectiveOpacity(el),
+    textAlpha: Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)),
+    width: box.width,
+    height: box.height,
+    left: box.left + scrollX,
+    top: box.top + scrollY,
+    right: box.right + scrollX,
+    bottom: box.bottom + scrollY,
+    pageWidth: Math.max(page.scrollWidth, innerWidth),
+    pageHeight: Math.max(page.scrollHeight, innerHeight),
+    position: style.position,
+    clip: style.clip,
+    clipPath: style.clipPath,
+    ariaHidden: !!el.closest('[aria-hidden="true"]'),
+  };
+}
+
+/** A control as formState takes it, or null: a hidden input, or not a control. */
+function describe(el: Element, pointed: boolean): Control | null {
+  if (el instanceof HTMLInputElement && el.type === "hidden") return null;
+  const labels = "labels" in el ? [...((el as HTMLInputElement).labels ?? [])] : [];
+  const nativeChoice = el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox");
+  const typed = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !nativeChoice);
+  // A choice is seen through a label the person sees; a typed field only by itself.
+  // Only a native radio or checkbox may be seen through its label (custom widgets); anything else must be seen itself.
+  const visible = controlVisible(nativeChoice, typed, seenOf(el), nativeChoice ? labels.map(seenOf) : []);
+  const attr = (name: string) => el.getAttribute(name);
+  const base = { label: labelOf(el, labels), group: null, groupKey: null, name: attr("name"), id: el.id || null, autocomplete: attr("autocomplete"), placeholder: attr("placeholder"), checked: false, value: "", pointed, visible };
+  if (el instanceof HTMLInputElement) {
+    const type = el.type.toLowerCase();
+    if (type === "radio") return { ...base, kind: "radio", type, group: groupLabel(el), groupKey: el.name ? `name:${el.name}` : null, checked: el.checked, value: el.value === "on" ? "" : el.value };
+    if (type === "checkbox") return { ...base, kind: "checkbox", type, checked: el.checked };
+    return { ...base, kind: "text", type, value: el.value };
+  }
+  if (el instanceof HTMLTextAreaElement) return { ...base, kind: "text", type: "textarea", value: el.value };
+  if (el instanceof HTMLSelectElement) return { ...base, kind: "select", type: "select", value: [...el.selectedOptions].map((o) => o.label || o.text).join(", ") };
+  const role = attr("role");
+  const checked = attr("aria-checked") === "true";
+  if (role === "radio") {
+    const group = el.closest("[role=radiogroup]");
+    return { ...base, kind: "radio", type: "aria", label: base.label ?? (textWithout(el) || null), group: groupLabel(el), groupKey: group ? `group:${[...document.querySelectorAll("[role=radiogroup]")].indexOf(group)}` : null, checked };
+  }
+  if (role === "checkbox" || role === "switch") return { ...base, kind: "checkbox", type: "aria", label: base.label ?? (textWithout(el) || null), checked };
+  return null;
+}
+
+/** A control's accessible label: aria-labelledby (in its own document or shadow root), aria-label, its label elements, or its title. */
+function labelOf(el: Element, labels: Element[]): string | null {
+  const by = el.getAttribute("aria-labelledby");
+  const root = el.getRootNode() as Document | ShadowRoot;
+  const named = by
+    ? by
+        .split(/\s+/)
+        .map((id) => root.getElementById?.(id) ?? document.getElementById(id))
+        .filter((n): n is HTMLElement => !!n)
+        .map(textWithout)
+        .join(" ")
+    : "";
+  return named.trim() || el.getAttribute("aria-label")?.trim() || labels.map(textWithout).join(" ").trim() || (el as HTMLElement).title?.trim() || null;
+}
+
+/** A radio group's label: its fieldset's legend, or its group's own label. */
+function groupLabel(el: Element): string | null {
+  const group = el.closest(`${OWN_GROUP},[role=group]`);
+  if (!group) return null;
+  const legend = group instanceof HTMLFieldSetElement ? group.querySelector(":scope > legend") : null;
+  return (legend ? textWithout(legend) : "") || labelOf(group, []);
+}
+
+/** An element's words, without what its form controls hold (a label around a select would give every option). */
+function textWithout(el: Element): string {
+  const parts: string[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const control = node.parentElement?.closest("select,textarea,option,script,style");
+    if (!control || !el.contains(control)) parts.push(node.textContent ?? "");
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 /** The nearest h1 to h3 before an element in the document, or its own text when it is one. */
@@ -282,14 +501,14 @@ function headingBefore(el: Element): string | null {
  * The consent card (13.3), where the agent was dropped, in a closed shadow root. Its buttons take
  * trusted clicks only. A sensitive site gets Send and Not now, never Always.
  */
-function ask(status: "consent" | "consent_sensitive", x: number, y: number, send: (c: Consent) => void): void {
+function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void): void {
   const host = document.createElement("div");
   const root = host.attachShadow({ mode: "closed" });
   const card = document.createElement("div");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-label", "APC");
   const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
-  const top = Math.max(8, Math.min(y + 12, innerHeight - 150));
+  const top = Math.max(8, Math.min(y + 12, innerHeight - 240));
   card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
   const text = document.createElement("p");
   text.style.cssText = "margin:0 0 10px";

@@ -112,7 +112,39 @@ addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEff
 addEventListener("drop", (e) => e.preventDefault());
 </script>`;
 // A page like Grok: step 5c adds a dragover handler to it that refuses every drag, once the extension's is in place.
-const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply">Nimbus renewed its Enterprise contracts early</p></main>`;
+// It also stops every drop before the bubble phase on window, in the capture phase on window and on document (TIN-573).
+const REFUSING = `<!doctype html><title>Refusing page</title><main><p id="reply">Nimbus renewed its Enterprise contracts early</p><p id="other">Nimbus also raised its Basic price</p></main>
+<script>
+addEventListener("drop", (e) => e.stopImmediatePropagation(), true);
+document.addEventListener("drop", (e) => e.stopPropagation());
+</script>`;
+// A checkout (TIN-571): a chosen shipping option, a ticked box, a select, a typed note, and fields that must never be read.
+const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>Your order</h2>
+<p id="intro">Orders placed before noon ship the same day.</p>
+<form><fieldset><legend>Shipping method</legend>
+<label><input type="radio" name="ship" value="dhl"> DHL Express</label>
+<label><input type="radio" name="ship" value="post" checked> Registered post</label>
+<label for="saved-sel">Saved</label><select id="saved-sel" style="position:absolute;left:-9999px"><option>４１１１１１１１１１１１１１１１</option></select></fieldset>
+<label><input type="checkbox" name="insurance" checked> Insurance</label>
+<label><input type="checkbox" name="saved" checked> Visa 4111 1111 1111 1111</label>
+<label>Country <select name="country"><option>Peru</option><option selected>Chile</option></select></label>
+<label>Notes <input id="notes" name="notes" value="Leave at the door"></label>
+<label>Card number <input name="cardnumber" value="4111111111111111"></label>
+<label>Password <input type="password" value="hunter2"></label>
+<label>Ingresa tu RUN <input id="run" name="run" value="12.345.678-5"></label>
+<label>Reference <input id="ref" name="ref" value="de89 3704 0044 0532 0130 00"></label>
+<input type="hidden" name="csrf" value="HIDDENTOKEN">${'<input type="hidden" name="tracking" value="t">'.repeat(20)}
+<label for="rt" id="rt-label">Promo note</label> <input id="rt" role="textbox" value="ROLEVALUE" style="opacity:0;position:absolute">
+<p id="promo" style="position:relative">Promo codes apply at the end.<input id="bait" name="data" value="BAITVALUE" style="opacity:0.02;position:absolute;left:0;top:0;width:100%;height:100%"></p>
+<p id="total">Total: $42.00</p></form>
+<cvv-box id="cvv" style="display:block;width:200px"></cvv-box>
+<script>
+customElements.define("cvv-box", class extends HTMLElement {
+  connectedCallback() {
+    this.attachShadow({ mode: "open" }).innerHTML = '<label id="cvv-label">CVV</label> <input name="code" aria-labelledby="cvv-label" value="123">';
+  }
+});
+</script>`;
 const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
 // A table, and a paragraph with what innerText reads badly: a formula next to a hidden copy of itself, as Wikipedia has, and images with and without alt text (TIN-422).
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
@@ -122,7 +154,7 @@ const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countr
 <table><tr style="display:none"><th>HIDDEN HEADER</th><th>HIDDEN HEADER</th></tr><tr><td>Row</td><td id="unseen">Plain</td></tr></table>
 <p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
 <p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -294,6 +326,22 @@ try {
     await fresh.drop("#b");
     await reads(/SPRING/, "fresh.localhost");
     console.log("C6. Never ask sends every drop at once, sensitive sites included");
+
+    // C7. Not here sticks under Never ask (TIN-571): on a site set to Not here, and when chosen on the card that
+    // asks once more after an update (an install has seen it: undone here, as an update from before would be).
+    await other.drop("#a");
+    assert.equal((await other.buttons()).size, 0, "no card on a Not here site under Never ask");
+    assert.match((await latest()).page_text, /SPRING/, "and nothing sent");
+    await cdp("Runtime.evaluate", { expression: "chrome.storage.local.set({ formNoticeAll: false, formNoticeSites: [] })", awaitPromise: true }, swSession);
+    const updated = await open("updated.localhost");
+    await updated.drop("#a");
+    const offered = await until("the card that asks once more", async () => ((await updated.buttons()).size ? [...(await updated.buttons()).keys()].sort() : null), 10_000);
+    assert.deepEqual(offered, ["always", "never", "once"]);
+    await updated.click("never");
+    await updated.drop("#a");
+    assert.equal((await updated.buttons()).size, 0, "Not here on that card sticks");
+    assert.match((await latest()).page_text, /SPRING/, "and nothing was sent");
+    console.log("C7. under Never ask, Not here sticks, also when chosen on the card that asks once more");
     console.log("all passed");
   } else {
     // 1. First drop: the extension asks the dock; the person allows it; the reading arrives.
@@ -510,11 +558,87 @@ try {
     // A second handler arrives during the drag: the first dragover answers before it, the next one after it.
     await cdp("Runtime.evaluate", { expression: REFUSE }, refusing);
     for (const type of ["dragOver", "dragOver", "drop"]) await refusingDrag(type);
+    // The page also stops every drop on window (capture) and on document: the extension's capture listener comes first (TIN-573).
     await until("the reading of the refusing page", async () => /Enterprise contracts/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    // dragenter by itself moves the dragover listener last (TIN-573): a refusing handler added before the drag, then
+    // one dragover only. Had dragenter not moved it, that dragover would answer before the handler and be refused.
+    const otherAt = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#other").getBoundingClientRect(); return { x: r.x + 20, y: r.y + r.height / 2 }; })()`, returnByValue: true }, refusing)).result.value;
+    const otherData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    await cdp("Runtime.evaluate", { expression: REFUSE }, refusing);
+    for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: otherAt.x, y: otherAt.y, data: otherData }, refusing);
+    await until("the reading after dragenter alone moved the listener", async () => /Basic price/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     await cdp("Target.closeTarget", { targetId: refusingId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
-    console.log("5c. a page that refuses every drag from a later handler still takes the agent");
+    console.log("5c. a page that refuses every drag from a later handler, and stops every drop, still takes the agent; dragenter alone moves the listener");
+
+    // 10. A checkout: the reading carries the choices of that part of the form and what was typed in the field
+    // dropped on, never a secret, and the selection with where it is (TIN-571).
+    const { targetId: checkoutId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/checkout") });
+    const { sessionId: checkout } = await cdp("Target.attachToTarget", { targetId: checkoutId, flatten: true });
+    await sleep(2500);
+    const inCheckout = async (expression) => (await cdp("Runtime.evaluate", { expression, returnByValue: true }, checkout)).result.value;
+    const latestReading = async () => (await tool("page__get_reading")).structuredContent;
+    /** Drop on an element (its left part; a selector, or an expression in parentheses), then wait for a reading newer than the one before. */
+    const dropOnCheckout = async (selector) => {
+      const before = (await latestReading())?.reading?.taken_at;
+      const find = selector.startsWith("(") ? selector : `document.querySelector(${JSON.stringify(selector)})`;
+      const point = await inCheckout(`(() => { const r = ${find}.getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`);
+      const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+      for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data: dragged }, checkout);
+      return until(`the reading of ${selector}`, async () => {
+        const r = await latestReading();
+        return r?.reading?.taken_at && r.reading.taken_at !== before ? r.page_text : null;
+      });
+    };
+    const SECRETS = ["4111", "４１１１", "hunter2", "HIDDENTOKEN", "12.345", "de89", "BAITVALUE", "ROLEVALUE", "123\n"];
+    const noSecret = (text) => {
+      for (const secret of SECRETS) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
+    };
+    await inCheckout(`(() => { const t = document.querySelector("#intro").firstChild; const at = t.textContent.indexOf("before noon"); const r = document.createRange(); r.setStart(t, at); r.setEnd(t, at + "before noon".length); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
+    // On the total: the choices of this small form, not one typed value, and the saved card's number held back.
+    const filled = await dropOnCheckout("#total");
+    assert.match(filled, /Pointed at \(p\): Total: \$42\.00\nForm fields, as filled in on the page:\n- Shipping method: Registered post\n- Insurance: checked\n- Country: Chile\n1 field left out as sensitive\./);
+    assert.match(filled, /Selected: before noon\nThe selection is under the heading: Your order\nThe selection is in: Orders placed before noon ship the same day\./);
+    assert.ok(!filled.includes("Leave at the door"), "no typed value of a field not dropped on");
+    assert.ok(!filled.includes("DHL"), "only the chosen radio");
+    noSecret(filled);
+    // A selection of a card number printed on the page: not sent, only that there was one.
+    await inCheckout(`(() => { const label = [...document.querySelectorAll("label")].find((l) => l.textContent.includes("Visa")); const r = document.createRange(); r.selectNodeContents(label.lastChild); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
+    const selectedCard = await dropOnCheckout("#total");
+    assert.match(selectedCard, /\nSelected: \(selection left out as sensitive\)/);
+    noSecret(selectedCard);
+    await inCheckout(`getSelection().removeAllRanges()`);
+    // On the notes field: its typed value, marked. Typing after the drop sends nothing until the next drop.
+    assert.match(await dropOnCheckout("#notes"), /Pointed at: a form field, marked \(pointed at\) below\.\nForm fields, as filled in on the page:\n- Notes: Leave at the door \(pointed at\)\n- Shipping method: Registered post\n/);
+    await inCheckout(`(() => { const n = document.querySelector("#notes"); n.value = "Ring twice"; n.dispatchEvent(new Event("input", { bubbles: true })); n.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await sleep(2000);
+    assert.match((await latestReading()).page_text, /- Notes: Leave at the door \(pointed at\)/);
+    assert.match(await dropOnCheckout("#notes"), /- Notes: Ring twice \(pointed at\)/);
+    assert.equal(await inCheckout(`document.querySelector("#notes").value`), "Ring twice", "the drop typed nothing into the field");
+    // A RUN, a lowercase IBAN and a CVV labelled inside a shadow root, each dropped on: held back.
+    const run = await dropOnCheckout("#run");
+    assert.match(run, /- Ingresa tu RUN: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(run);
+    const ref = await dropOnCheckout("#ref");
+    assert.match(ref, /- Reference: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(ref);
+    const cvv = await dropOnCheckout('(document.querySelector("#cvv").shadowRoot.querySelector("input"))');
+    assert.match(cvv, /- CVV: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(cvv);
+    // A field the person can hardly see (opacity 0.02) laid over a paragraph, and a transparent role=textbox reached
+    // through its visible label: left out. The off-screen select with a fullwidth card number was never a choice.
+    const bait = await dropOnCheckout("#promo");
+    assert.match(bait, /- data: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(bait);
+    const role = await dropOnCheckout("#rt-label");
+    assert.match(role, /- Promo note: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(role);
+    assert.doesNotMatch(filled, /Saved/, "an off-screen select is not a choice");
+    await cdp("Target.closeTarget", { targetId: checkoutId });
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("10. a checkout's choices go along with their labels, a typed value only from the field dropped on, never a secret (RUN, IBAN, shadow CVV, hidden bait), only on the drop; a selection comes with where it is");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });
