@@ -13,6 +13,7 @@ import type { DockAgent } from "./agent-page.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
 import { UnverifiedRequest, type UnverifiedAction } from "./unverified.tsx";
+import { buttonsOff, type InFlight } from "./request-state.ts";
 
 const params = new URLSearchParams(location.search);
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -52,8 +53,8 @@ export interface PetRequest {
   agent: string;
   /** An app outside APP_ORIGINS (TIN-581): what it calls itself, and whether this request shows the warning. */
   unverified?: { declared: string | null; warning: boolean };
-  /** An answer is on its way, or the hub is introducing itself to the app: the buttons are off. */
-  busy?: boolean;
+  /** What is on its way: an Approve turns Approve off, a Deny turns both off (request-state.ts). */
+  inFlight?: InFlight;
   /** The hub is still introducing itself to the app: Approve is off, Deny stays on. */
   approving?: boolean;
 }
@@ -88,7 +89,7 @@ export function PetView(props: {
         r.unverified ? (
           // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
           <div key={r.id} className="pet-request unverified">
-            <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} busy={!!r.busy} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
+            <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
           </div>
         ) : (
         <div key={r.id} className="pet-request">
@@ -104,10 +105,10 @@ export function PetView(props: {
             )}
           </p>
           <div className="row">
-            <button type="button" className="primary" disabled={!!r.busy || !!r.approving} onClick={() => props.decide(r.id, "approve")}>
+            <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
               Allow
             </button>
-            <button type="button" disabled={!!r.busy} onClick={() => props.decide(r.id, "deny")}>
+            <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
               Deny
             </button>
           </div>

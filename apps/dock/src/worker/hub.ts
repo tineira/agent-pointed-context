@@ -497,7 +497,10 @@ export class Hub extends DurableObject<Env> {
    */
   async removeAgent(agentId: string): Promise<{ ok: boolean }> {
     if (!this.agent(agentId)) return { ok: false };
-    await Promise.allSettled(this.pairings(agentId).filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
+    const lines = this.pairings(agentId);
+    await Promise.allSettled(lines.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
+    // Its unverified apps lose the domain's approval, as on Unpair (TIN-581): the next request from one warns again.
+    for (const p of lines.filter((x) => !x.verified)) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
     this.sql.exec("delete from readers where agent_id = ?", agentId);
@@ -679,11 +682,9 @@ export class Hub extends DurableObject<Env> {
       return { ok: false, error: now.status === "blocked" ? "app_blocked" : "warning_required" };
     }
     if (action === "deny" || action === "unpair") {
-      // Denying an unverified app takes back the domain's approval too, in any state (pending, approving, or paired by
-      // the answer just given): its next request shows the warning again. Unpair, from a paired app's line, keeps it;
-      // Remove on a held line (blocked, or paused by the kill switch) or on an approval left half-way takes it back,
-      // so the person approves again before that app is ever read (Fix check 1 on #120).
-      if (!p.verified && (action === "deny" || p.status === "blocked" || this.stored(p.id) === "approving")) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
+      // Deny, Unpair or Remove on an unverified app takes back the domain's approval too, in any state (pending,
+      // approving, paired, held): its next request shows the warning again (Fix check 2 on #120). Verified apps have none.
+      if (!p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
       // Authoritative at the hub: the grant goes, nothing is relayed, the app's pins are dropped.
       this.sql.exec("delete from pairings where id = ?", p.id);
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);

@@ -116,18 +116,25 @@ test("the warning shows once per domain per dock: a second request from an appro
   // Its tools still arrive marked: the approval is the person's, not a verification.
   assert.match((await w.listHub()).find((x) => x.name === "shop_example__get_figure")!.description, /^\[Unverified app at shop\.example/);
 
-  // Unpaired and dropped again: still no warning. Another domain: the warning.
-  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "unpair")).ok, true);
-  assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
-  assert.equal((await w.pairingOf(SHOP)).warning, false);
+  // Another domain: the warning.
   assert.equal((await w.pairApp(fakeApp("https://other.example", "Other"), { approve: false })).ok, true);
   assert.equal((await w.pairingOf("https://other.example")).warning, true);
 
-  // Denying a request from the approved domain takes its approval back: the next one warns again.
-  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "deny")).ok, true);
+  // Unpaired (Fix check 2 on #120): the domain's approval goes, and the next request warns again.
+  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "unpair")).ok, true);
   assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
   assert.equal((await w.pairingOf(SHOP)).warning, true);
-  assert.deepEqual(await w.hub.decide((await w.pairingOf(SHOP)).id, "approve"), { ok: false, error: "warning_required" });
+  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "approve_unverified")).ok, true);
+
+  // Denying a request from the approved domain takes its approval back: the next one warns again.
+  await w.hub.addAgent();
+  const third = await w.pairApp(shop, { approve: false, agentIndex: 2 });
+  assert.equal((await w.agent(2)).pairings.find((p: Json) => p.id === third.pairing_id).warning, false);
+  assert.equal((await w.hub.decide(third.pairing_id!, "deny")).ok, true);
+  assert.equal((await w.pairApp(shop, { approve: false, agentIndex: 2 })).ok, true);
+  const asked = (await w.agent(2)).pairings.find((p: Json) => p.status === "pending");
+  assert.equal(asked.warning, true);
+  assert.deepEqual(await w.hub.decide(asked.id, "approve"), { ok: false, error: "warning_required" });
 });
 
 test("a pending pairing nobody decides goes after its time, frees its place under the cap, and gives the grant back", async (t) => {
@@ -256,7 +263,7 @@ test("a Deny while the hub is introducing itself wins: no call after it, nothing
   assert.deepEqual(await w.hub.decide((await w.pairingOf(SHOP)).id, "approve"), { ok: false, error: "warning_required" });
 });
 
-test("a Deny on a pairing the warning's Approve just made clears the domain's approval; Unpair keeps it", async (t) => {
+test("a Deny or an Unpair on a pairing the warning's Approve just made clears the domain's approval; a verified app is unchanged", async (t) => {
   const w = await world(t);
   const shop = fakeApp(SHOP, "Shop");
   await w.pairApp(shop);
@@ -267,7 +274,23 @@ test("a Deny on a pairing the warning's Approve just made clears the domain's ap
   assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "approve_unverified")).ok, true);
   assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "unpair")).ok, true);
   assert.equal((await w.pairApp(shop, { approve: false })).ok, true);
-  assert.equal((await w.pairingOf(SHOP)).warning, false, "Unpair, from the app's line, keeps the approval");
+  assert.equal((await w.pairingOf(SHOP)).warning, true, "Unpair after the approval settled as paired: the warning again (Fix check 2 on #120)");
+  assert.deepEqual(await w.hub.decide((await w.pairingOf(SHOP)).id, "approve"), { ok: false, error: "warning_required" });
+
+  // A verified app: Unpair and a new request, the usual yes, as before.
+  await w.pairPulse();
+  const pulseLine = (await w.agent()).pairings.find((p: Json) => (p.app as Json).origin === PULSE);
+  assert.equal((await w.hub.decide(pulseLine.id, "unpair")).ok, true);
+  await w.pairPulse();
+
+  // Removing an agent does the same for its unverified apps.
+  assert.equal((await w.hub.decide((await w.pairingOf(SHOP)).id, "approve_unverified")).ok, true);
+  await w.hub.addAgent();
+  const kept = await w.agent(1);
+  assert.equal((await w.hub.removeAgent((await w.agent()).id)).ok, true);
+  const again = await w.hub.ticket(kept.id);
+  assert.equal((await w.hub.pair({ ticket: again.ticket, agent: kept.id, app: { name: "Shop", origin: SHOP }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}` })).ok, true);
+  assert.equal((await w.agent()).pairings[0].warning, true);
 });
 
 /**

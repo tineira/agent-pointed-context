@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from "react";
 import { NOT_VERIFIED, splitHost, unverifiedWarning } from "../worker/trust.ts";
+import { buttonsOff, kindOf, mayAnswer, mergeInFlight, type InFlight } from "./request-state.ts";
 
 export type UnverifiedAction = "approve" | "approve_unverified" | "deny";
 
@@ -41,30 +42,34 @@ export function HostName(props: { host: string; className?: string }) {
  * A pending pairing with an unverified app. The first time its domain asks in this dock (`warning`),
  * the full warning: the domain first and big, the name the app gives itself only as secondary text,
  * the risk, Deny and Approve. Once the person approved that domain here, the usual request, with the badge.
- * While an answer is on its way (`busy`, or a click here a moment ago), both buttons are off.
+ * While an Approve is on its way, or the hub is still introducing itself after one (`approving`), Approve is
+ * off and Deny stays on, here too: a misclick can be undone (Fix check 2 on #120). A Deny on its way turns
+ * both off (request-state.ts).
  */
 export function UnverifiedRequest(props: {
   domain: string;
   declared: string | null;
   agent: string;
   warning: boolean;
-  busy?: boolean;
+  /** What the page has on its way for this request. */
+  inFlight?: InFlight;
   /** The hub is still introducing itself to the app after a yes: Approve is off, Deny stays on, so the person can always say no. */
   approving?: boolean;
   decide: (action: UnverifiedAction) => void;
   /** Float and the pets: smaller type, same words. */
   compact?: boolean;
 }) {
-  // Off at once on a click, before the page hears back: a second click cannot send a second answer.
-  const [clicked, setClicked] = useState(false);
-  // On again once the page has heard back (busy went true, then false), so a refused answer can be given again.
+  // What this card sent, at once on a click, before the page re-renders: never the same kind twice.
+  const [clicked, setClicked] = useState<InFlight | undefined>(undefined);
+  // Cleared once the page has heard back and the hub is not approving, so a refused answer can be given again.
   useEffect(() => {
-    if (!props.busy) setClicked(false);
-  }, [props.busy]);
-  const off = !!props.busy || clicked;
+    if (!props.inFlight && !props.approving) setClicked(undefined);
+  }, [props.inFlight, props.approving]);
+  const state = { inFlight: mergeInFlight(props.inFlight, clicked), approving: props.approving };
+  const off = buttonsOff(state);
   const answer = (action: UnverifiedAction) => {
-    if (off || (action !== "deny" && props.approving)) return;
-    setClicked(true);
+    if (!mayAnswer(action, state)) return;
+    setClicked(mergeInFlight(clicked, kindOf(action)));
     props.decide(action);
   };
   const w = unverifiedWarning(props.domain, props.declared, props.agent);
@@ -78,17 +83,17 @@ export function UnverifiedRequest(props: {
           <NotVerified /> wants to be read by <b>{props.agent}</b>. You approved this domain before in this dock; its tools and data still come marked untrusted.
         </p>
         <div className="row">
-          <button type="button" disabled={off} onClick={() => answer("deny")}>
+          <button type="button" disabled={off.deny} onClick={() => answer("deny")}>
             Deny
           </button>
-          <button type="button" disabled={off || !!props.approving} onClick={() => answer("approve")}>
+          <button type="button" disabled={off.approve} onClick={() => answer("approve")}>
             Allow
           </button>
         </div>
       </>
     );
   return (
-    <div className={`unverified-warning${props.compact ? " compact" : ""}`} role="alertdialog" aria-label={`${w.badge}: ${w.domain}`} aria-busy={off}>
+    <div className={`unverified-warning${props.compact ? " compact" : ""}`} role="alertdialog" aria-label={`${w.badge}: ${w.domain}`} aria-busy={off.approve}>
       <p className="unverified-domain">
         <HostName host={w.domain} />
       </p>
@@ -100,7 +105,7 @@ export function UnverifiedRequest(props: {
       <p className="unverified-risk">{w.risk}</p>
       <div className="row">
         {w.actions.map((a) => (
-          <button key={a.action} type="button" className={a.default ? "primary" : undefined} autoFocus={a.default} disabled={off || (a.action !== "deny" && !!props.approving)} onClick={() => answer(a.action)}>
+          <button key={a.action} type="button" className={a.default ? "primary" : undefined} autoFocus={a.default} disabled={a.action === "deny" ? off.deny : off.approve} onClick={() => answer(a.action)}>
             {a.label}
           </button>
         ))}

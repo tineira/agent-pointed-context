@@ -20,6 +20,7 @@ import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx"
 import { APPS, ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, OpenApp, Setup, World } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
 import { NotVerified, UnverifiedRequest } from "./unverified.tsx";
+import { buttonsOff, inFlightOf, kindOf, mayAnswer, type InFlight } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "your world and where your agents point"];
@@ -93,8 +94,8 @@ export function HubDock() {
   // A new object on each failure, so a failed retry sets up the next one.
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
-  /** Requests with an answer on its way (Review round 1 on #120): their buttons are off until it lands, on every surface. */
-  const [deciding, setDeciding] = useState<ReadonlySet<string>>(new Set());
+  /** Answers on their way per request (Review round 1 and Fix check 2 on #120): which buttons are off until they land, on every surface. */
+  const [deciding, setDeciding] = useState<ReadonlyMap<string, { approve?: boolean; deny?: boolean }>>(new Map());
   const [shown, setShown] = useState<Set<string>>(new Set());
   const [world, setWorld] = useState(false);
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
@@ -238,22 +239,27 @@ export function HubDock() {
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
   const decide = (pid: string, action: Decision) => {
-    // One answer at a time per request: a second click, here or on another surface of this page, waits for the first.
-    if (deciding.has(pid)) return;
-    setDeciding((s) => new Set(s).add(pid));
+    // Never the same kind twice, and no yes once anything is on its way; a Deny still goes while an Approve is
+    // on its way, from this surface too, so a misclick can be undone (Fix check 2 on #120). The hub lets it win.
+    const kind = kindOf(action);
+    const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
+    if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
+    setDeciding((m) => new Map(m).set(pid, { ...m.get(pid), [kind]: true }));
     void call(`${base}/pairings/${pid}`, { action })
       .catch(() => undefined)
       .finally(() => {
-        setDeciding((s) => {
-          const next = new Set(s);
-          next.delete(pid);
+        setDeciding((m) => {
+          const next = new Map(m);
+          const left = { ...next.get(pid), [kind]: false };
+          if (left.approve || left.deny) next.set(pid, left);
+          else next.delete(pid);
           return next;
         });
         refresh();
       });
   };
-  /** A request's buttons are off while an answer to it is on its way, or the hub is still introducing itself to the app. */
-  const busy = (p: { id: string }) => deciding.has(p.id);
+  /** What is on its way for a request: Approve off while a yes is, both off while a Deny is (request-state.ts). */
+  const inFlight = (p: { id: string }) => inFlightOf(deciding.get(p.id));
   const dragProps = (a: DockAgent) => ({
     draggable: true,
     title: a.client_name ? `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)` : `Drag ${a.name} into your agent's chat: it pastes the prompt that connects it`,
@@ -294,7 +300,7 @@ export function HubDock() {
     pairing.app.unverified ? (
       // An app outside APP_ORIGINS (TIN-581): the warning, in the dock, the first time its domain asks here.
       <section key={pairing.id} className="request unverified">
-        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} busy={busy(pairing)} approving={!!pairing.approving} decide={(action) => decide(pairing.id, action)} />
+        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} inFlight={inFlight(pairing)} approving={!!pairing.approving} decide={(action) => decide(pairing.id, action)} />
       </section>
     ) : (
     <section key={pairing.id} className="request">
@@ -310,10 +316,10 @@ export function HubDock() {
         )}
       </p>
       <div className="row">
-        <button type="button" className="primary" disabled={busy(pairing) || !!pairing.approving} onClick={() => decide(pairing.id, "approve")}>
+        <button type="button" className="primary" disabled={buttonsOff({ inFlight: inFlight(pairing), approving: pairing.approving }).approve} onClick={() => decide(pairing.id, "approve")}>
           Allow
         </button>
-        <button type="button" disabled={busy(pairing)} onClick={() => decide(pairing.id, "deny")}>
+        <button type="button" disabled={buttonsOff({ inFlight: inFlight(pairing) }).deny} onClick={() => decide(pairing.id, "deny")}>
           Deny
         </button>
       </div>
@@ -328,7 +334,7 @@ export function HubDock() {
     host: host(pairing.app.origin),
     agent: agent.name,
     agentId: agent.id,
-    busy: busy(pairing),
+    inFlight: inFlight(pairing),
     approving: !!pairing.approving,
     ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
   }));
@@ -376,7 +382,7 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
-          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, busy: busy(p), approving: !!p.approving }))}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, inFlight: inFlight(p), approving: !!p.approving }))}
           decide={decide}
           refresh={refresh}
           back={back}
@@ -501,8 +507,8 @@ interface FloatRequest {
   agentId: string;
   /** An app outside APP_ORIGINS (TIN-581): what it calls itself, and whether this request shows the warning. */
   unverified?: { declared: string | null; warning: boolean };
-  /** An answer is on its way, or the hub is introducing itself to the app: the buttons are off. */
-  busy?: boolean;
+  /** What is on its way: an Approve turns Approve off, a Deny turns both off (request-state.ts). */
+  inFlight?: InFlight;
   /** The hub is still introducing itself to the app: Approve is off, Deny stays on (Fix check 1 on #120). */
   approving?: boolean;
 }
@@ -731,7 +737,7 @@ function FloatAgents(props: {
           r.unverified ? (
             // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
             <div key={r.id} className="float-request unverified" tabIndex={-1}>
-              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} busy={!!r.busy} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
+              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
             </div>
           ) : (
           <div key={r.id} className="float-request" tabIndex={-1} autoFocus={props.notice?.focus && r === props.requests[0]}>
@@ -747,10 +753,10 @@ function FloatAgents(props: {
               )}
             </p>
             <div className="row">
-              <button type="button" className="primary" disabled={!!r.busy || !!r.approving} onClick={() => props.decide(r.id, "approve")}>
+              <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
                 Allow
               </button>
-              <button type="button" disabled={!!r.busy} onClick={() => props.decide(r.id, "deny")}>
+              <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
                 Deny
               </button>
             </div>
