@@ -13,7 +13,7 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX, type FormReading } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, pinState, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState } from "./drop.ts";
-import { altText, formState, tableContext, type Control } from "./read.ts";
+import { altText, formState, pickScope, tableContext, visuallyHidden, type Control, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
@@ -150,7 +150,7 @@ function listen(): void {
         .sendMessage<{ status: DropStatus; pin?: PinMark }>({ type: "drop", drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
         .then((r) => {
           const status = r?.status ?? "error";
-          if (status === "consent" || status === "consent_sensitive") return ask(status, e.clientX, e.clientY, send);
+          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send);
           say(status);
           if (status === "sent" && r?.pin) pin(target, r.pin);
         })
@@ -295,7 +295,7 @@ function readAt(x: number, y: number) {
       : null,
     selection: selection || null,
     selection_context: selection ? selectionContext(block, selection) : null,
-    form: formAt(under),
+    form: formAt(x, y),
   };
 }
 
@@ -321,44 +321,91 @@ function selectionContext(pointed: Element | null, selection: string): { heading
 
 /** Form controls, native and ARIA. A hidden input matches too, and is dropped when described. */
 const CONTROLS = "input,select,textarea,[role=radio],[role=checkbox],[role=switch]";
-/** What groups controls when there is no form around them. */
-const GROUPS = "fieldset,[role=radiogroup],[role=group]";
+/** A control's own group, whose choices go along whatever its size. */
+const OWN_GROUP = "fieldset,[role=radiogroup]";
+/** A wider group, whose choices go along only when it is small (pickScope). */
+const WIDER_GROUP = "form,[role=group]";
 /** The most controls looked at around one drop. */
 const CONTROLS_SCANNED = 300;
 
 /**
- * The form state at a drop (TIN-571): the control dropped on (or the one its label names) and the
- * controls of the form around it, or of its fieldset or group, or of the nearest box around it that has
- * controls and is not most of the page. Secret fields are counted, never read (formState).
+ * The element at a point for the form state, inside open shadow roots too: a field in a web component
+ * is under its host at the document's level.
  */
-function formAt(under: Element | null): FormReading | null {
+function deepElementAt(x: number, y: number): Element | null {
+  let el = elementAt(x, y);
+  for (let depth = 0; el?.shadowRoot && depth < 8; depth++) {
+    const inner = el.shadowRoot.elementsFromPoint(x, y)[0];
+    if (!inner || inner === el) break;
+    el = inner;
+  }
+  return el;
+}
+
+/**
+ * The form state at a drop (TIN-571): the control dropped on (or the one its label names), and the
+ * choices of its own group: its fieldset or radiogroup, or else its form or role=group when that holds
+ * at most SCOPE_MAX controls (pickScope), or else only its own radios. Typed values go only for the
+ * control dropped on (formState). Without a control, the group the drop landed in.
+ */
+function formAt(x: number, y: number): FormReading | null {
+  const under = deepElementAt(x, y);
   if (!under) return null;
   const label = under.closest("label");
   const pointed = under.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
   const from = pointed ?? under;
-  const scope = from.closest("form") ?? from.closest(GROUPS) ?? boxWithControls(from);
+  const ancestors: Array<{ el: Element; kind: "own" | "wider"; controls: number }> = [];
+  for (let el = from.parentElement; el; el = el.parentElement) {
+    if (el.matches(OWN_GROUP)) ancestors.push({ el, kind: "own", controls: 0 });
+    else if (el.matches(WIDER_GROUP)) ancestors.push({ el, kind: "wider", controls: el.querySelectorAll(CONTROLS).length });
+  }
+  const scope = ancestors[pickScope(ancestors)]?.el ?? null;
   const found = scope ? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED) : [];
+  // No group around it: the control's own radios still give which one is chosen.
+  if (!scope && pointed instanceof HTMLInputElement && pointed.type === "radio" && pointed.name) {
+    const root = pointed.form ?? pointed.getRootNode();
+    if (root instanceof HTMLFormElement || root instanceof Document || root instanceof ShadowRoot) {
+      for (const r of root.querySelectorAll<HTMLInputElement>("input[type=radio]")) if (r.name === pointed.name && r.form === pointed.form && found.length < CONTROLS_SCANNED) found.push(r);
+    }
+  }
   if (pointed && !found.includes(pointed)) found.unshift(pointed);
   const controls = found.map((el) => describe(el, el === pointed)).filter((c): c is Control => c !== null);
   return formState(controls);
 }
 
-/** The nearest box around an element that holds controls, short of the body and of most of the page. */
-function boxWithControls(from: Element): Element | null {
-  for (let el = from.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
-    if (!el.querySelector(CONTROLS)) continue;
-    return readable(el, BOX_MAX + 1).length <= BOX_MAX ? el : null;
-  }
-  return null;
+/** What visuallyHidden needs of an element. */
+function seenOf(el: Element): Seen {
+  const style = getComputedStyle(el);
+  const box = el.getBoundingClientRect();
+  const page = document.documentElement;
+  return {
+    checkVisible: el.checkVisibility({ visibilityProperty: true, opacityProperty: true }),
+    opacity: Number(style.opacity),
+    width: box.width,
+    height: box.height,
+    left: box.left + scrollX,
+    top: box.top + scrollY,
+    right: box.right + scrollX,
+    bottom: box.bottom + scrollY,
+    pageWidth: Math.max(page.scrollWidth, innerWidth),
+    pageHeight: Math.max(page.scrollHeight, innerHeight),
+    position: style.position,
+    clip: style.clip,
+    clipPath: style.clipPath,
+    ariaHidden: !!el.closest('[aria-hidden="true"]'),
+  };
 }
 
-/** A control as formState takes it, or null: a hidden input, or one the person cannot see (nor its label). */
+/** A control as formState takes it, or null: a hidden input, or not a control. */
 function describe(el: Element, pointed: boolean): Control | null {
   if (el instanceof HTMLInputElement && el.type === "hidden") return null;
   const labels = "labels" in el ? [...((el as HTMLInputElement).labels ?? [])] : [];
-  if (!rendered(el) && !labels.some(rendered)) return null;
+  const shown = !visuallyHidden(seenOf(el));
+  // A choice is seen through a label the person sees; a typed field only by itself.
+  const choice = (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "checkbox")) || el instanceof HTMLSelectElement || el.hasAttribute("role");
+  const visible = shown || (choice && !el.closest('[aria-hidden="true"]') && labels.some((l) => !visuallyHidden(seenOf(l))));
   const attr = (name: string) => el.getAttribute(name);
-  const base = { label: labelOf(el, labels), group: null, groupKey: null, name: attr("name"), id: el.id || null, autocomplete: attr("autocomplete"), placeholder: attr("placeholder"), checked: false, value: "", pointed };
+  const base = { label: labelOf(el, labels), group: null, groupKey: null, name: attr("name"), id: el.id || null, autocomplete: attr("autocomplete"), placeholder: attr("placeholder"), checked: false, value: "", pointed, visible };
   if (el instanceof HTMLInputElement) {
     const type = el.type.toLowerCase();
     if (type === "radio") return { ...base, kind: "radio", type, group: groupLabel(el), groupKey: el.name ? `name:${el.name}` : null, checked: el.checked, value: el.value === "on" ? "" : el.value };
@@ -377,23 +424,24 @@ function describe(el: Element, pointed: boolean): Control | null {
   return null;
 }
 
-/** A control's accessible label: aria-labelledby, aria-label, its label elements, its title, or its placeholder. */
+/** A control's accessible label: aria-labelledby (in its own document or shadow root), aria-label, its label elements, or its title. */
 function labelOf(el: Element, labels: Element[]): string | null {
   const by = el.getAttribute("aria-labelledby");
+  const root = el.getRootNode() as Document | ShadowRoot;
   const named = by
     ? by
         .split(/\s+/)
-        .map((id) => document.getElementById(id))
+        .map((id) => root.getElementById?.(id) ?? document.getElementById(id))
         .filter((n): n is HTMLElement => !!n)
         .map(textWithout)
         .join(" ")
     : "";
-  return named.trim() || el.getAttribute("aria-label")?.trim() || labels.map(textWithout).join(" ").trim() || (el as HTMLElement).title?.trim() || el.getAttribute("placeholder")?.trim() || null;
+  return named.trim() || el.getAttribute("aria-label")?.trim() || labels.map(textWithout).join(" ").trim() || (el as HTMLElement).title?.trim() || null;
 }
 
 /** A radio group's label: its fieldset's legend, or its group's own label. */
 function groupLabel(el: Element): string | null {
-  const group = el.closest(GROUPS);
+  const group = el.closest(`${OWN_GROUP},[role=group]`);
   if (!group) return null;
   const legend = group instanceof HTMLFieldSetElement ? group.querySelector(":scope > legend") : null;
   return (legend ? textWithout(legend) : "") || labelOf(group, []);
@@ -424,14 +472,14 @@ function headingBefore(el: Element): string | null {
  * The consent card (13.3), where the agent was dropped, in a closed shadow root. Its buttons take
  * trusted clicks only. A sensitive site gets Send and Not now, never Always.
  */
-function ask(status: "consent" | "consent_sensitive", x: number, y: number, send: (c: Consent) => void): void {
+function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void): void {
   const host = document.createElement("div");
   const root = host.attachShadow({ mode: "closed" });
   const card = document.createElement("div");
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-label", "APC");
   const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
-  const top = Math.max(8, Math.min(y + 12, innerHeight - 150));
+  const top = Math.max(8, Math.min(y + 12, innerHeight - 240));
   card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
   const text = document.createElement("p");
   text.style.cssText = "margin:0 0 10px";

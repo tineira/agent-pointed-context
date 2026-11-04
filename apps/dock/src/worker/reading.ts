@@ -22,10 +22,11 @@ export interface PageReading {
 }
 
 /**
- * The form state of the pointed control and of the form, fieldset or group around it (TIN-571): each
- * field's label and what the person sees chosen or typed in it. Never a password, a hidden input, or a
- * field for a card, an account, a one-time code or a national id; those are counted in left_out. Past
- * the caps, the rest are counted in more.
+ * The form state where the person dropped (TIN-571): the choices made in that part of the form (the
+ * chosen radio, checkboxes, a select's option) and what was typed in the field dropped on, each with its
+ * label. Never a typed value of another field. A choice that looks secret is counted in left_out; the
+ * typed value of the field dropped on, when it looks secret, is LEFT_OUT. Past the caps, the rest are
+ * counted in more.
  */
 export interface FormReading {
   fields: FormField[];
@@ -36,6 +37,8 @@ export interface FormReading {
 export interface FormField {
   label: string | null;
   value: string;
+  /** A choice (radio, checkbox, select) or what was typed (only ever in the field dropped on). */
+  kind: "choice" | "typed";
   /** The control the person dropped on. */
   pointed: boolean;
 }
@@ -52,8 +55,9 @@ export interface ReadingRow extends ReadingEntry {
   kept: boolean;
 }
 
-/** Said wherever the dock asks to allow a browser (13.5). */
-export const READER_NOTICE = "That text passes through this dock, on Cloudflare, and is kept 10 minutes at most.";
+/** Said wherever the dock asks to allow a browser (13.5): what a reading carries (TIN-571) and where it goes. */
+export const READER_NOTICE =
+  "A reading is the text you drop your agent on, with the choices made in that part of a form and what you typed in the field you drop it on (never a password or a card, account or id number). It passes through this dock, on Cloudflare, and is kept 10 minutes at most.";
 
 /** How long the hub keeps a reading: until the next drop replaces it, or this old. */
 export const READING_TTL_MS = 10 * 60_000;
@@ -70,26 +74,52 @@ export const FIELD_LABEL_MAX = 100;
 export const FIELD_VALUE_MAX = 200;
 export const FORM_TEXT_MAX = 1500;
 
-/** autocomplete tokens of fields that never go into a reading (TIN-571). */
-const SECRET_AUTOCOMPLETE = /^(current-password|new-password|one-time-code|cc-[a-z-]+)$/;
-/** Words that, alone, name a secret or an identity field: a card's code, an account, a national id, a password. */
-const SECRET_WORDS = new Set(["cvv", "cvv2", "cvc", "cvc2", "cvn", "csc", "iban", "ssn", "pin", "otp", "tin", "rut", "dni", "cpf", "nif", "nie", "curp", "password", "passwd", "pwd", "passcode", "contrasena", "clave", "senha"]);
-/** The same, written as several words (card number, cardNumber, card_number, número de tarjeta). */
-const SECRET_PHRASES =
-  /cardnumber|cardno|ccnumber|ccnum|creditcard|debitcard|cardverification|securitycode|cardcode|cardexp|expirydate|expirationdate|accountnumber|accountno|acctnumber|acctno|bankaccount|routingnumber|sortcode|socialsecurity|nationalid|identitynumber|identificationnumber|taxid|passport|password|passcode|onetimecode|verificationcode|numerodetarjeta|tarjetadecredito|tarjetadedebito|numerodecuenta|cuentacorriente|numerodocartao/;
+/** Said in place of the typed value of the field the person dropped on, when it is held back (TIN-571). */
+export const LEFT_OUT = "(left out as sensitive)";
 
-/** Whether a field's name, id, label or placeholder says it holds a secret or an identity number (TIN-571). */
-export function namesSecret(...texts: Array<string | null | undefined>): boolean {
+/**
+ * The filters a form's labels and values pass before they go into a reading (TIN-571), the same in the
+ * extension and at the hub. Choices (radios, checkboxes, a select's option) and the one typed value of
+ * the field the person dropped on are all a reading carries of a form; each is held back when its
+ * label, its value or the names the page gave the field look like a secret.
+ */
+
+/** autocomplete tokens of fields that never go into a reading. */
+const SECRET_AUTOCOMPLETE = /^(current-password|new-password|one-time-code|one-time-password|cc-[a-z-]+)$/;
+/** Words that, alone, name a secret or an identity field: a card's code, an account, a national id, a password, a one-time code. */
+const SECRET_WORDS = new Set([
+  "cvv", "cvv2", "cvc", "cvc2", "cvn", "csc", "cid", "ccv", "iban", "clabe", "account", "acct", "ssn", "pin", "otp", "totp", "mfa", "2fa", "tin", "rut", "run", "dni", "cpf", "nif", "nie", "curp", "cedula",
+  "password", "passwd", "pass", "pwd", "passcode", "contrasena", "clave", "senha",
+]);
+/**
+ * Words that name a secret in a field's name or id but are ordinary words in a label: "Envío sin costo"
+ * (Spanish "without"), "Pan integral" (bread). In a label they count only written in capitals (SIN, PAN).
+ */
+const NAME_WORDS = new Set(["sin", "pan"]);
+/** The same, written as several words (card number, cardNumber, card_number, número de tarjeta, Nro. de cuenta). */
+const SECRET_PHRASES =
+  /cardnumber|cardno|cardnum|ccnumber|ccnum|creditcard|debitcard|cardverification|securitycode|cardcode|cardexp|expirydate|expirationdate|accountnumber|accountnum|accountno|acctnumber|acctnum|acctno|bankaccount|routingnumber|sortcode|socialsecurity|socialinsurance|nationalid|identitynumber|identificationnumber|taxid|passport|password|passcode|onetimecode|onetimepassword|verificationcode|authcode|authenticationcode|numerodetarjeta|tarjetadecredito|tarjetadedebito|numerodecuenta|nrodecuenta|ndecuenta|nodecuenta|numdecuenta|cuentacorriente|cuentavista|cuentarut|numerodocartao|cedulade/;
+
+const wordsOf = (text: string) =>
+  text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+
+/**
+ * Whether a field's names say it holds a secret or an identity number. `kind` is "name" for what the
+ * page named the field in its markup (name, id), "label" for what the person reads (label, placeholder,
+ * a group's legend), where SIN and PAN count only in capitals.
+ */
+export function namesSecret(kind: "name" | "label", ...texts: Array<string | null | undefined>): boolean {
   for (const text of texts) {
     if (!text) continue;
-    const words = text
-      .normalize("NFD")
-      .replace(/\p{M}/gu, "")
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter(Boolean);
-    if (words.some((w) => SECRET_WORDS.has(w)) || SECRET_PHRASES.test(words.join(""))) return true;
+    const raw = wordsOf(text);
+    const words = raw.map((w) => w.toLowerCase());
+    if (words.some((w, i) => SECRET_WORDS.has(w) || (NAME_WORDS.has(w) && (kind === "name" || raw[i] === w.toUpperCase())))) return true;
+    if (SECRET_PHRASES.test(words.join(""))) return true;
   }
   return false;
 }
@@ -99,19 +129,57 @@ export function autocompleteSecret(value: string | null | undefined): boolean {
   return !!value && value.toLowerCase().split(/\s+/).some((token) => SECRET_AUTOCOMPLETE.test(token));
 }
 
-/** Whether a value looks like a payment card number (13 to 19 digits that pass Luhn) or an IBAN, whatever its field says. */
-export function valueSecret(value: string): boolean {
-  const compact = value.replace(/[\s-]/g, "");
-  if (/^\d{13,19}$/.test(compact)) {
-    let sum = 0;
-    for (let i = 0; i < compact.length; i++) {
-      let d = Number(compact[compact.length - 1 - i]);
-      if (i % 2 === 1) d = d * 2 > 9 ? d * 2 - 9 : d * 2;
-      sum += d;
-    }
-    if (sum % 10 === 0) return true;
+/** Each country's IBAN length, so a run of letters and digits is checked as an IBAN only where one could be. */
+const IBAN_LENGTHS: Record<string, number> = {
+  AD: 24, AE: 23, AL: 28, AT: 20, AZ: 28, BA: 20, BE: 16, BG: 22, BH: 22, BI: 27, BR: 29, BY: 28, CH: 21, CR: 22, CY: 28, CZ: 24, DE: 22, DJ: 27, DK: 18, DO: 28, EE: 20, EG: 29, ES: 24, FI: 18, FK: 18,
+  FO: 18, FR: 27, GB: 22, GE: 22, GI: 23, GL: 18, GR: 27, GT: 28, HR: 21, HU: 28, IE: 22, IL: 23, IQ: 23, IS: 26, IT: 27, JO: 30, KW: 30, KZ: 20, LB: 28, LC: 32, LI: 21, LT: 20, LU: 20, LV: 21, LY: 25,
+  MC: 27, MD: 24, ME: 22, MK: 19, MN: 20, MR: 27, MT: 31, MU: 30, NI: 28, NL: 18, NO: 15, OM: 23, PK: 24, PL: 28, PS: 29, PT: 25, QA: 29, RO: 24, RS: 22, RU: 33, SA: 24, SC: 31, SD: 18, SE: 24, SI: 19,
+  SK: 24, SM: 27, SO: 23, ST: 25, SV: 28, TL: 23, TN: 24, TR: 26, UA: 29, VA: 22, VG: 24, XK: 20, YE: 30,
+};
+
+/** Whether an IBAN's check digits hold (ISO 13616, mod 97). */
+function ibanValid(iban: string): boolean {
+  let rest = 0;
+  for (const ch of iban.slice(4) + iban.slice(0, 4)) {
+    const n = ch >= "A" ? String(ch.charCodeAt(0) - 55) : ch;
+    for (const d of n) rest = (rest * 10 + Number(d)) % 97;
   }
-  return /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(compact);
+  return rest === 1;
+}
+
+/** Whether a run of digits passes Luhn, as every payment card number does. */
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) d = d * 2 > 9 ? d * 2 - 9 : d * 2;
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+/** A Chilean RUT or RUN, with or without its dots and dash: 12.345.678-5, 1.234.567-K, 12345678K. */
+const RUT = /(?<![\dA-Za-z])\d{1,2}\.?\d{3}\.?\d{3}-?[\dkK](?![\dA-Za-z])/;
+
+/**
+ * Whether a text holds what looks like a secret number, whatever field it is in: once everything but
+ * letters and digits is removed and it is uppercased, a run of 8 or more digits (a card, an account, an
+ * id, a phone number or a date written without words), a Luhn-valid run of 12 to 19 digits, or a valid
+ * IBAN of its country's length (in any case, with any separators); or a RUT or RUN as written.
+ */
+export function textSecret(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const flat = text.normalize("NFD").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  for (const run of flat.match(/\d+/g) ?? []) {
+    if (run.length >= 8) return true;
+    if (run.length >= 12 && run.length <= 19 && luhn(run)) return true;
+  }
+  for (const at of flat.matchAll(/[A-Z]{2}(?=\d{2})/g)) {
+    const length = IBAN_LENGTHS[at[0]];
+    const candidate = length ? flat.slice(at.index, at.index + length) : "";
+    if (candidate.length === length && /^[A-Z0-9]+$/.test(candidate) && ibanValid(candidate)) return true;
+  }
+  return RUT.test(text);
 }
 
 /** Whitespace folded and capped, or null when nothing is left. */
@@ -150,9 +218,11 @@ export function shapeReading(raw: unknown): PageReading | null {
   let selectionContext: PageReading["selection_context"] = null;
   if (selection && isObject(r.selection_context)) {
     const c = r.selection_context as { heading?: unknown; text?: unknown };
+    // A block the person did not drop on: held back when it holds what looks like a secret number.
     const heading = clean(c.heading, NAME_MAX);
     const text = clean(c.text, CONTEXT_MAX);
-    if (heading || text) selectionContext = { heading, text };
+    const safe = { heading: textSecret(heading) ? null : heading, text: textSecret(text) ? null : text };
+    if (safe.heading || safe.text) selectionContext = safe;
   }
   return { url, title: clean(r.title, NAME_MAX) ?? "", element, selection, selection_context: selectionContext, form: shapeForm(r.form) };
 }
@@ -160,36 +230,70 @@ export function shapeReading(raw: unknown): PageReading | null {
 const isObject = (value: unknown): value is object => !!value && typeof value === "object" && !Array.isArray(value);
 const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value > 0 ? Math.min(value, 999) : 0);
 
+/** A field before the shared filters: a choice, or the typed value of the field dropped on. */
+export interface FieldCandidate {
+  kind: "choice" | "typed";
+  label: string | null;
+  value: string;
+  pointed: boolean;
+  /** What the extension alone can tell from the control's markup (type, autocomplete, name, id): it holds a secret. */
+  secret?: boolean;
+}
+
 /**
- * The form state in its one accepted shape (TIN-571), with the caps, whatever the extension sent. A field
- * whose label names a secret, or whose value looks like a card number or an IBAN, is left out here too.
+ * The form a reading carries, from its candidate fields in order, through the filters that the
+ * extension and the hub share (TIN-571): a typed value only for the field dropped on; a choice whose
+ * label or value looks secret counted in left_out; the typed value of the field dropped on, when it or
+ * its label looks secret, said as LEFT_OUT (and a label that holds a secret number dropped). Then the
+ * caps, the rest counted in more. Null when there is nothing to say.
  */
-function shapeForm(raw: unknown): FormReading | null {
-  if (!isObject(raw)) return null;
-  const f = raw as { fields?: unknown; left_out?: unknown; more?: unknown };
+export function shapeFields(candidates: readonly FieldCandidate[], leftOut = 0, more = 0): FormReading | null {
   const fields: FormField[] = [];
-  let leftOut = count(f.left_out);
-  let more = count(f.more);
   let size = 0;
-  for (const item of Array.isArray(f.fields) ? f.fields.slice(0, 200) : []) {
-    if (!isObject(item)) continue;
-    const field = item as { label?: unknown; value?: unknown; pointed?: unknown };
-    const label = clean(field.label, FIELD_LABEL_MAX);
-    const value = clean(field.value, FIELD_VALUE_MAX);
+  let typed = false;
+  for (const c of candidates) {
+    // Never the typed value of a field the person did not drop on, and only one field is dropped on.
+    if (c.kind === "typed" && (!c.pointed || typed)) continue;
+    if (c.kind === "typed") typed = true;
+    const label = clean(c.label, FIELD_LABEL_MAX);
+    const value = clean(c.value, FIELD_VALUE_MAX);
     if (!value) continue;
-    if (namesSecret(label) || valueSecret(value)) {
-      leftOut++;
-      continue;
+    const labelHolds = textSecret(label);
+    const secret = c.secret === true || labelHolds || namesSecret("label", label) || textSecret(value);
+    let field: FormField;
+    if (c.kind === "choice") {
+      if (secret) {
+        leftOut++;
+        continue;
+      }
+      field = { label, value, kind: "choice", pointed: c.pointed };
+    } else {
+      field = { label: labelHolds ? null : label, value: secret ? LEFT_OUT : value, kind: "typed", pointed: true };
     }
-    const length = (label?.length ?? 0) + value.length;
+    const length = (field.label?.length ?? 0) + field.value.length;
     if (fields.length >= FIELDS_MAX || size + length > FORM_TEXT_MAX) {
       more++;
       continue;
     }
     size += length;
-    fields.push({ label, value, pointed: field.pointed === true });
+    fields.push(field);
   }
   return fields.length || leftOut || more ? { fields, left_out: Math.min(leftOut, 999), more: Math.min(more, 999) } : null;
+}
+
+/** The form state in its one accepted shape (TIN-571), through the same filters and caps, whatever the extension sent. */
+function shapeForm(raw: unknown): FormReading | null {
+  if (!isObject(raw)) return null;
+  const f = raw as { fields?: unknown; left_out?: unknown; more?: unknown };
+  const candidates: FieldCandidate[] = [];
+  for (const item of Array.isArray(f.fields) ? f.fields.slice(0, 200) : []) {
+    if (!isObject(item)) continue;
+    const field = item as { label?: unknown; value?: unknown; pointed?: unknown; kind?: unknown };
+    if (typeof field.value !== "string") continue;
+    // Anything not said to be a choice is taken as typed, so it goes only for the field dropped on.
+    candidates.push({ kind: field.kind === "choice" ? "choice" : "typed", label: typeof field.label === "string" ? field.label : null, value: field.value, pointed: field.pointed === true });
+  }
+  return shapeFields(candidates, count(f.left_out), count(f.more));
 }
 
 /** The form lines of page_text (TIN-571). */

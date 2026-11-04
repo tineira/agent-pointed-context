@@ -125,12 +125,24 @@ const CHECKOUT = `<!doctype html><title>Checkout</title><h1>Checkout</h1><h2>You
 <label><input type="radio" name="ship" value="dhl"> DHL Express</label>
 <label><input type="radio" name="ship" value="post" checked> Registered post</label></fieldset>
 <label><input type="checkbox" name="insurance" checked> Insurance</label>
+<label><input type="checkbox" name="saved" checked> Visa 4111 1111 1111 1111</label>
 <label>Country <select name="country"><option>Peru</option><option selected>Chile</option></select></label>
 <label>Notes <input id="notes" name="notes" value="Leave at the door"></label>
 <label>Card number <input name="cardnumber" value="4111111111111111"></label>
 <label>Password <input type="password" value="hunter2"></label>
+<label>Ingresa tu RUN <input id="run" name="run" value="12.345.678-5"></label>
+<label>Reference <input id="ref" name="ref" value="de89 3704 0044 0532 0130 00"></label>
 <input type="hidden" name="csrf" value="HIDDENTOKEN">
-<p id="total">Total: $42.00</p></form>`;
+<p id="promo" style="position:relative">Promo codes apply at the end.<input id="bait" name="data" value="BAITVALUE" style="opacity:0;position:absolute;left:0;top:0;width:100%;height:100%"></p>
+<p id="total">Total: $42.00</p></form>
+<cvv-box id="cvv" style="display:block;width:200px"></cvv-box>
+<script>
+customElements.define("cvv-box", class extends HTMLElement {
+  connectedCallback() {
+    this.attachShadow({ mode: "open" }).innerHTML = '<label id="cvv-label">CVV</label> <input name="code" aria-labelledby="cvv-label" value="123">';
+  }
+});
+</script>`;
 const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
 // A table, and a paragraph with what innerText reads badly: a formula next to a hidden copy of itself, as Wikipedia has, and images with and without alt text (TIN-422).
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
@@ -542,42 +554,63 @@ try {
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("5c. a page that refuses every drag from a later handler, and stops every drop, still takes the agent; dragenter alone moves the listener");
 
-    // 10. A checkout: the reading carries the form state, never a secret, and the selection with where it is (TIN-571).
+    // 10. A checkout: the reading carries the choices of that part of the form and what was typed in the field
+    // dropped on, never a secret, and the selection with where it is (TIN-571).
     const { targetId: checkoutId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/checkout") });
     const { sessionId: checkout } = await cdp("Target.attachToTarget", { targetId: checkoutId, flatten: true });
     await sleep(2500);
     const inCheckout = async (expression) => (await cdp("Runtime.evaluate", { expression, returnByValue: true }, checkout)).result.value;
+    const latestReading = async () => (await tool("page__get_reading")).structuredContent;
+    /** Drop on an element (its left part; a selector, or an expression in parentheses), then wait for a reading newer than the one before. */
     const dropOnCheckout = async (selector) => {
-      const point = await inCheckout(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`);
+      const before = (await latestReading())?.reading?.taken_at;
+      const find = selector.startsWith("(") ? selector : `document.querySelector(${JSON.stringify(selector)})`;
+      const point = await inCheckout(`(() => { const r = ${find}.getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()`);
       const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
       for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data: dragged }, checkout);
+      return until(`the reading of ${selector}`, async () => {
+        const r = await latestReading();
+        return r?.reading?.taken_at && r.reading.taken_at !== before ? r.page_text : null;
+      });
+    };
+    const SECRETS = ["4111", "hunter2", "HIDDENTOKEN", "12.345", "de89", "BAITVALUE", "123\n"];
+    const noSecret = (text) => {
+      for (const secret of SECRETS) assert.ok(!text.includes(secret), `the reading has no ${JSON.stringify(secret)}`);
     };
     await inCheckout(`(() => { const t = document.querySelector("#intro").firstChild; const at = t.textContent.indexOf("before noon"); const r = document.createRange(); r.setStart(t, at); r.setEnd(t, at + "before noon".length); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
-    await dropOnCheckout("#total");
-    const filled = await until("the reading of the checkout", async () => {
-      const text = (await tool("page__get_reading")).structuredContent?.page_text ?? "";
-      return /Total: \$42\.00/.test(text) ? text : null;
-    });
-    assert.match(filled, /Form fields, as filled in on the page:\n- Shipping method: Registered post\n- Insurance: checked\n- Country: Chile\n- Notes: Leave at the door\n2 fields left out as sensitive\./);
+    // On the total: the choices of this small form, not one typed value, and the saved card's number held back.
+    const filled = await dropOnCheckout("#total");
+    assert.match(filled, /Pointed at \(p\): Total: \$42\.00\nForm fields, as filled in on the page:\n- Shipping method: Registered post\n- Insurance: checked\n- Country: Chile\n1 field left out as sensitive\./);
     assert.match(filled, /Selected: before noon\nThe selection is under the heading: Your order\nThe selection is in: Orders placed before noon ship the same day\./);
-    for (const secret of ["4111", "hunter2", "HIDDENTOKEN", "DHL"]) assert.ok(!filled.includes(secret), `the reading has no ${secret}`);
-    // Typing after the drop sends nothing: the state is read on the drop only.
-    await inCheckout(`(() => { const n = document.querySelector("#notes"); n.value = "Ring twice"; n.dispatchEvent(new Event("input", { bubbles: true })); n.dispatchEvent(new Event("change", { bubbles: true })); getSelection().removeAllRanges(); })()`);
+    assert.ok(!filled.includes("Leave at the door"), "no typed value of a field not dropped on");
+    assert.ok(!filled.includes("DHL"), "only the chosen radio");
+    noSecret(filled);
+    await inCheckout(`getSelection().removeAllRanges()`);
+    // On the notes field: its typed value, marked. Typing after the drop sends nothing until the next drop.
+    assert.match(await dropOnCheckout("#notes"), /Pointed at: a form field, marked \(pointed at\) below\.\nForm fields, as filled in on the page:\n- Notes: Leave at the door \(pointed at\)\n- Shipping method: Registered post\n/);
+    await inCheckout(`(() => { const n = document.querySelector("#notes"); n.value = "Ring twice"; n.dispatchEvent(new Event("input", { bubbles: true })); n.dispatchEvent(new Event("change", { bubbles: true })); })()`);
     await sleep(2000);
-    assert.match((await tool("page__get_reading")).structuredContent.page_text, /- Notes: Leave at the door/);
-    // A drop on the field itself: the field comes first, marked.
-    await dropOnCheckout("#notes");
-    const onField = await until("the reading of the notes field", async () => {
-      const text = (await tool("page__get_reading")).structuredContent?.page_text ?? "";
-      return /Ring twice/.test(text) ? text : null;
-    });
-    assert.match(onField, /Pointed at: a form field, marked \(pointed at\) below\.\nForm fields, as filled in on the page:\n- Notes: Ring twice \(pointed at\)\n/);
-    assert.doesNotMatch(onField, /Selected:/);
+    assert.match((await latestReading()).page_text, /- Notes: Leave at the door \(pointed at\)/);
+    assert.match(await dropOnCheckout("#notes"), /- Notes: Ring twice \(pointed at\)/);
     assert.equal(await inCheckout(`document.querySelector("#notes").value`), "Ring twice", "the drop typed nothing into the field");
+    // A RUN, a lowercase IBAN and a CVV labelled inside a shadow root, each dropped on: held back.
+    const run = await dropOnCheckout("#run");
+    assert.match(run, /- Ingresa tu RUN: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(run);
+    const ref = await dropOnCheckout("#ref");
+    assert.match(ref, /- Reference: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(ref);
+    const cvv = await dropOnCheckout('(document.querySelector("#cvv").shadowRoot.querySelector("input"))');
+    assert.match(cvv, /- CVV: \(left out as sensitive\) \(pointed at\)/);
+    noSecret(cvv);
+    // A field the person cannot see (opacity 0) over a paragraph: nothing of it.
+    const bait = await dropOnCheckout("#promo");
+    assert.doesNotMatch(bait, /\(pointed at\)/);
+    noSecret(bait);
     await cdp("Target.closeTarget", { targetId: checkoutId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
-    console.log("10. a checkout's form state goes along with its labels, never a secret, and only on the drop; a selection comes with where it is");
+    console.log("10. a checkout's choices go along with their labels, a typed value only from the field dropped on, never a secret (RUN, IBAN, shadow CVV, hidden bait), only on the drop; a selection comes with where it is");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });

@@ -1,85 +1,131 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { formState, secretControl, type Control } from "../src/read.ts";
+import { FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, LEFT_OUT, shapeReading } from "../../dock/src/worker/reading.ts";
+import { formState, pickScope, SCOPE_MAX, visuallyHidden, type Control, type Seen } from "../src/read.ts";
 
-const control = (over: Partial<Control>): Control => ({ kind: "text", type: "text", label: null, group: null, groupKey: null, name: null, id: null, autocomplete: null, placeholder: null, checked: false, value: "", pointed: false, ...over });
-const radio = (label: string, checked: boolean, over: Partial<Control> = {}) => control({ kind: "radio", type: "radio", label, group: "Shipping", groupKey: "name:ship", name: "ship", checked, ...over });
+const control = (over: Partial<Control>): Control => ({ kind: "text", type: "text", label: null, group: null, groupKey: null, name: null, id: null, autocomplete: null, placeholder: null, checked: false, value: "", pointed: false, visible: true, ...over });
+const radio = (label: string, checked: boolean, over: Partial<Control> = {}) => control({ kind: "radio", type: "radio", label, group: "Shipping method", groupKey: "name:ship", name: "ship", checked, ...over });
+const checkbox = (label: string, checked: boolean, over: Partial<Control> = {}) => control({ kind: "checkbox", type: "checkbox", label, checked, ...over });
+const typed = (label: string | null, value: string, over: Partial<Control> = {}) => control({ label, value, pointed: true, ...over });
+/** What the reading says of the field dropped on, once the extension and then the hub have shaped it. */
+const pointedValue = (c: Control) => {
+  const form = formState([c]);
+  const atHub = shapeReading({ url: "https://shop.example/checkout", title: "Checkout", form })?.form;
+  assert.deepEqual(atHub, form, "the hub keeps what the extension kept");
+  return form?.fields[0]?.value;
+};
+const page = { url: "https://shop.example/checkout", title: "Checkout" };
 
-test("a checkout's state: the chosen radio with its group, checkboxes either way, the chosen option and typed values, with their labels (TIN-571)", () => {
+test("a checkout's choices come through with their labels: the chosen shipping option, boxes either way, the chosen option (TIN-571)", () => {
   const state = formState([
     radio("DHL Express", false),
     radio("Registered post", true),
-    control({ kind: "checkbox", type: "checkbox", label: "Insurance", checked: true }),
-    control({ kind: "checkbox", type: "checkbox", label: "Gift wrap", checked: false }),
+    checkbox("Insurance", true),
+    checkbox("Gift wrap", false),
     control({ kind: "select", type: "select", label: "Country", value: "Chile" }),
-    control({ label: "Notes", value: "Leave at the door" }),
-    control({ kind: "text", type: "textarea", label: "Message", value: "Thanks!" }),
-    control({ label: "Coupon", value: "" }),
+    radio("Standard", false, { pointed: true, group: "Speed", groupKey: "name:speed", name: "speed" }),
   ]);
   assert.deepEqual(state, {
     fields: [
-      { label: "Shipping", value: "Registered post", pointed: false },
-      { label: "Insurance", value: "checked", pointed: false },
-      { label: "Gift wrap", value: "not checked", pointed: false },
-      { label: "Country", value: "Chile", pointed: false },
-      { label: "Notes", value: "Leave at the door", pointed: false },
-      { label: "Message", value: "Thanks!", pointed: false },
+      { label: "Speed", value: "Standard (not selected)", kind: "choice", pointed: true },
+      { label: "Shipping method", value: "Registered post", kind: "choice", pointed: false },
+      { label: "Insurance", value: "checked", kind: "choice", pointed: false },
+      { label: "Gift wrap", value: "not checked", kind: "choice", pointed: false },
+      { label: "Country", value: "Chile", kind: "choice", pointed: false },
     ],
     left_out: 0,
     more: 0,
   });
+  // One chosen radio per group; a group with no label is named by the radios' name.
+  assert.deepEqual(formState([radio("A", true, { group: null }), radio("B", true, { group: null })])!.fields, [{ label: "ship", value: "A", kind: "choice", pointed: false }]);
 });
 
-test("the pointed control comes first, and a pointed radio says when it is not the chosen one", () => {
-  const state = formState([radio("Registered post", true), control({ label: "Notes", value: "x" }), radio("DHL Express", false, { pointed: true })])!;
-  assert.deepEqual(state.fields[0], { label: "Shipping", value: "DHL Express (not selected)", pointed: true });
-  assert.deepEqual(state.fields[1], { label: "Shipping", value: "Registered post", pointed: false });
-  // One chosen radio per group, and a radio with no group's label is named by its group's name.
-  const two = formState([radio("A", true, { group: null }), radio("B", true, { group: null })])!;
-  assert.deepEqual(two.fields, [{ label: "ship", value: "A", pointed: false }]);
+test("a typed value goes only for the field dropped on, never for any other field", () => {
+  const state = formState([typed("Notes", "Leave at the door"), control({ label: "Address", value: "Av. Siempre Viva 742" }), checkbox("Insurance", true)])!;
+  assert.deepEqual(state.fields, [
+    { label: "Notes", value: "Leave at the door", kind: "typed", pointed: true },
+    { label: "Insurance", value: "checked", kind: "choice", pointed: false },
+  ]);
+  assert.ok(!JSON.stringify(state).includes("Siempre"));
+  // The hub drops a typed value not marked as the field dropped on, and any second one.
+  const atHub = shapeReading({ ...page, form: { fields: [{ label: "Address", value: "Av. Siempre Viva 742", kind: "typed", pointed: false }, { label: "A", value: "one", kind: "typed", pointed: true }, { label: "B", value: "two", kind: "typed", pointed: true }, { label: "C", value: "no kind", pointed: true }] } })!;
+  assert.deepEqual(atHub.form!.fields, [{ label: "A", value: "one", kind: "typed", pointed: true }]);
 });
 
-test("password, hidden, card, one-time-code and id fields are never read, and are counted", () => {
-  const secret = "4111 1111 1111 1111";
-  const controls = [
-    control({ type: "password", label: "Password", value: "hunter2" }),
-    control({ type: "password", label: "Empty password", value: "" }),
-    control({ type: "hidden", name: "csrf", value: "HIDDENTOKEN" }),
-    control({ label: "Name on card", autocomplete: "cc-name", value: "Ada Lovelace" }),
-    control({ label: "Code", autocomplete: "one-time-code", value: "123456" }),
-    control({ label: "New", autocomplete: "section-a new-password", value: "pw" }),
-    control({ name: "cardNumber", label: "Number", value: secret }),
-    control({ id: "card_cvc", label: "Code", value: "123" }),
-    control({ label: "CVV", value: "123" }),
-    control({ label: "IBAN", value: "DE89 3704 0044 0532 0130 00" }),
-    control({ label: "Account number", value: "12345678" }),
-    control({ label: "SSN", value: "078-05-1120" }),
-    control({ label: "RUT", value: "12.345.678-5" }),
-    control({ placeholder: "Número de tarjeta", value: "5555" }),
-    control({ label: "Reference", value: "4242424242424242" }),
-    control({ label: "Notes", value: "fine" }),
-  ];
-  const state = formState(controls)!;
-  assert.deepEqual(state.fields, [{ label: "Notes", value: "fine", pointed: false }]);
-  assert.equal(state.left_out, 14, "the hidden input is not a field the person sees, so it is not counted");
-  for (const word of ["hunter2", "HIDDENTOKEN", "Ada", "123456", "4111", "DE89", "12345678", "078-05", "12.345", "5555", "4242"]) assert.ok(!JSON.stringify(state).includes(word), word);
-  // A field named for an ordinary thing that only contains such a word is not taken for one.
-  for (const label of ["Shipping", "Business name", "Spin speed", "Tinted glass", "Pinned", "Address line 1"]) assert.equal(secretControl(control({ label, value: "x" })), false, label);
+test("the review's examples are all held back (TIN-571)", () => {
+  // A lowercase IBAN in a field named for something else, and in a select's option.
+  assert.equal(pointedValue(typed("Reference", "de89 3704 0044 0532 0130 00")), LEFT_OUT);
+  assert.equal(pointedValue(typed("Beneficiary", "GB82-WEST-1234-5698-7654-32")), LEFT_OUT);
+  assert.equal(formState([control({ kind: "select", type: "select", label: "Pay to", value: "de89370400440532013000" })])!.left_out, 1);
+  // A card number with dots or slashes, and inside other words.
+  assert.equal(pointedValue(typed("Number", "4111.1111.1111.1111")), LEFT_OUT);
+  assert.equal(pointedValue(typed("Number", "4111/1111/1111/1111")), LEFT_OUT);
+  assert.equal(pointedValue(typed("Card", "Visa 4111111111111111")), LEFT_OUT);
+  assert.equal(formState([radio("Visa 4111 1111 1111 1111", true, { group: "Saved cards" })])!.left_out, 1);
+  // A Chilean RUN, by its label and by its value alone.
+  assert.equal(pointedValue(typed("Ingresa tu RUN", "12.345.678-5", { name: "run" })), LEFT_OUT);
+  assert.equal(pointedValue(typed("Documento", "12.345.678-5")), LEFT_OUT);
+  assert.equal(pointedValue(typed("Documento", "1.234.567-K")), LEFT_OUT);
+  assert.equal(pointedValue(typed("Cédula de identidad", "1234567")), LEFT_OUT);
+  // An account number of 8 to 12 digits, under the abbreviated labels bank forms use.
+  for (const label of ["Nro. de cuenta", "N° de cuenta", "No. de cuenta"]) {
+    assert.equal(pointedValue(typed(label, "1234567")), LEFT_OUT, label);
+    assert.equal(pointedValue(typed("Destino", "123456789012")), LEFT_OUT);
+  }
+  // A checkbox whose label is the card number.
+  assert.equal(formState([checkbox("4111111111111111", true)])!.left_out, 1);
+  assert.equal(shapeReading({ ...page, form: { fields: [{ label: "4111111111111111", value: "checked", kind: "choice", pointed: false }] } })!.form!.left_out, 1);
+  // One-time codes and passwords by their markup.
+  assert.equal(pointedValue(typed("Code", "123456", { autocomplete: "one-time-password" })), LEFT_OUT);
+  for (const name of ["totp", "mfa_code", "2fa", "otp"]) assert.equal(pointedValue(typed("Code", "123456", { name })), LEFT_OUT, name);
+  assert.equal(pointedValue(typed("Password", "hunter2", { name: "pass" })), LEFT_OUT, "after a show-password toggle made it type=text");
+  for (const name of ["cid", "ccv", "account", "acct", "account_num", "clabe", "iban", "panNumber", "sin", "nif", "curp", "dni", "rut"]) assert.equal(pointedValue(typed("Field", "abc", { name })), LEFT_OUT, name);
+  // A CVV labelled from inside a shadow root (the content script resolves aria-labelledby there), named only "code".
+  assert.equal(pointedValue(typed("CVV", "123", { name: "code" })), LEFT_OUT);
+  // A password field is said to be there, never read.
+  assert.equal(pointedValue(typed("Password", "hunter2", { type: "password" })), LEFT_OUT);
+  // A label that holds a secret number is dropped with the value.
+  assert.deepEqual(formState([typed("Card 4111111111111111", "x")])!.fields[0], { label: null, value: LEFT_OUT, kind: "typed", pointed: true });
 });
 
-test("the caps hold: per value, per field count and in total, and the rest are counted", () => {
-  const long = formState([control({ label: "Notes", value: "word ".repeat(500) })])!;
+test("a field the person cannot see is never read: transparent, of no size, off the page, clipped, hidden from assistive technology", () => {
+  const shown: Seen = { checkVisible: true, opacity: 1, width: 200, height: 24, left: 10, top: 10, right: 210, bottom: 34, pageWidth: 1200, pageHeight: 900, position: "static", clip: "auto", clipPath: "none", ariaHidden: false };
+  assert.equal(visuallyHidden(shown), false);
+  for (const [why, over] of [
+    ["opacity: 0 (checkVisibility)", { checkVisible: false }],
+    ["near-zero opacity", { opacity: 0.001 }],
+    ["zero size", { width: 0, height: 0 }],
+    ["1 px (screen reader only)", { width: 1, height: 1 }],
+    ["off the page to the left", { left: -10010, right: -9810 }],
+    ["off the page above", { top: -500, bottom: -476 }],
+    ["clip on an absolute box", { position: "absolute", clip: "rect(0px, 0px, 0px, 0px)" }],
+    ["clip-path inset", { clipPath: "inset(50%)" }],
+    ["aria-hidden", { ariaHidden: true }],
+  ] as const) assert.equal(visuallyHidden({ ...shown, ...over }), true, why);
+  // The bait field: a text field under the pointer that the person cannot see sends nothing.
+  assert.equal(formState([typed("Promo", "BAITVALUE", { visible: false })]), null);
+});
+
+test("choices come from the control's own group; a form or role=group only when it holds at most 25 controls", () => {
+  assert.equal(pickScope([{ kind: "own", controls: 0 }, { kind: "wider", controls: 300 }]), 0);
+  assert.equal(pickScope([{ kind: "wider", controls: 12 }, { kind: "own", controls: 0 }]), 1, "the own group, even when a wider one is nearer");
+  assert.equal(pickScope([{ kind: "wider", controls: SCOPE_MAX }]), 0);
+  assert.equal(pickScope([{ kind: "wider", controls: 400 }, { kind: "wider", controls: 3 }]), -1, "a page-sized role=group: only the control dropped on");
+  assert.equal(pickScope([]), -1);
+});
+
+test("the caps hold, and the rest are counted", () => {
+  const long = formState([typed("Notes", "word ".repeat(500))])!;
   assert.ok(long.fields[0]!.value.length <= FIELD_VALUE_MAX);
-  const many = formState(Array.from({ length: 50 }, (_, i) => control({ label: `Field ${i}`, value: "v" })))!;
+  const many = formState(Array.from({ length: 50 }, (_, i) => checkbox(`Option ${i}`, true)))!;
   assert.equal(many.fields.length, FIELDS_MAX);
   assert.equal(many.more, 50 - FIELDS_MAX);
-  const big = formState(Array.from({ length: 15 }, (_, i) => control({ label: `Field ${i}`, value: "y".repeat(FIELD_VALUE_MAX) })))!;
+  const big = formState(Array.from({ length: 15 }, (_, i) => control({ kind: "select", type: "select", label: `Field ${i}`, value: "y".repeat(FIELD_VALUE_MAX) })))!;
   const size = big.fields.reduce((n, f) => n + (f.label?.length ?? 0) + f.value.length, 0);
   assert.ok(size <= FORM_TEXT_MAX && big.more > 0);
   assert.equal(formState([]), null);
-  assert.equal(formState([control({ label: "Empty", value: "  " })]), null);
+  assert.equal(formState([typed("Empty", "  ")]), null);
 });
 
 test("nothing is read outside a drop: the content script reads the page only in readAt, from a drop or a moved pin", () => {

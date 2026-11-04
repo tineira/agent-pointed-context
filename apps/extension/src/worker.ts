@@ -8,7 +8,7 @@
  */
 import { shapeReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, readerKey, sitePattern, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, grantedAlone, devHubHosts, hubAllowed, hubPatterns, isSensitive, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, readerKey, reask, sitePattern, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -31,6 +31,8 @@ chrome.runtime.onInstalled.addListener((details) => {
   void syncScripts().then(() => injectOpenTabs());
   // The welcome page asks for the one grant (13.3), so it is never hidden in the collapsed popup.
   if (details.reason === "install") void chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
+  // A new install learns what readings carry from the welcome page and the card: only an update asks once more (TIN-571).
+  if (details.reason === "install") void chrome.storage.local.set({ formNoticeAll: true });
 });
 
 /** An install can happen while the instructions or dock are already open. */
@@ -187,10 +189,15 @@ async function handleMove(hub: string, agent: string, raw: unknown): Promise<Dro
  * never kept for a sensitive site, which asks every time.
  */
 async function consent(origin: string, answer: Consent | undefined): Promise<true | DropStatus> {
-  const stored = await chrome.storage.local.get(["mode", "sites"]);
+  const stored = await chrome.storage.local.get(["mode", "sites", "formNoticeSites", "formNoticeAll"]);
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
+  const mode = (stored.mode as Mode | undefined) ?? "ask";
   const sensitive = isSensitive(new URL(origin).host);
   if (answer) {
+    // Any answer on a card means the person read what readings carry now (TIN-571): on this site, and
+    // under Never ask, everywhere. A new install read it on the welcome page and the card (formNoticeAll).
+    const noticed = new Set((stored.formNoticeSites ?? []) as string[]).add(origin);
+    await chrome.storage.local.set({ formNoticeSites: [...noticed], ...(mode === "never_ask" ? { formNoticeAll: true } : {}) });
     // Always is never kept for a sensitive site, by its domain or set to Always ask by the person (TIN-478).
     if (answer === "never" || (answer === "always" && !sensitive && sites[origin] !== "sensitive")) {
       sites[origin] = answer;
@@ -199,7 +206,10 @@ async function consent(origin: string, answer: Consent | undefined): Promise<tru
     return answer === "never" ? "not_here" : true;
   }
   const { origins = [] } = await chrome.permissions.getAll();
-  const decision = decide((stored.mode as Mode | undefined) ?? "ask", sites[origin], sensitive, grantedAlone(origin, origins));
+  const decision = decide(mode, sites[origin], sensitive, grantedAlone(origin, origins));
+  // A site that sends without asking asks once more, with what readings now carry (TIN-571).
+  const seen = stored.formNoticeAll === true || (mode !== "never_ask" && ((stored.formNoticeSites ?? []) as string[]).includes(origin));
+  if (reask(decision, seen)) return "consent_update";
   return decision === "send" ? true : decision === "ask" ? "consent" : decision === "ask_sensitive" ? "consent_sensitive" : "blocked";
 }
 

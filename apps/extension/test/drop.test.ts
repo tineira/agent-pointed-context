@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -39,7 +39,7 @@ test("a site to grant is an http(s) page's origin as a match pattern", () => {
 
 test("one reader token per dock and agent, and a note for every outcome", () => {
   assert.equal(readerKey("https://apc.tineira.com", "ag_1234"), "https://apc.tineira.com ag_1234");
-  for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error", "consent", "consent_sensitive", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
+  for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error", "consent", "consent_sensitive", "consent_update", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
 });
 
 test("sensitive by domain only: government labels and the .bank and .insurance TLDs, never a guess from the name (TIN-478)", () => {
@@ -197,4 +197,17 @@ test("a lookup that told nothing is asked again on a later drag, once the servic
   const dropped = gate.drop();
   assert.equal(await (dropped as { later: Promise<DirectOnly | null> }).later, app);
   assert.deepEqual(gate.drop(), { now: app });
+});
+
+test("the card says what goes along from a form, and a site that sends without asking asks once more with it (TIN-571)", () => {
+  for (const s of ["consent", "consent_sensitive", "consent_update"] as const) assert.ok(STATUS_TEXT[s].includes(FORM_NOTE), s);
+  assert.match(FORM_NOTE, /choices made in that part of a form and what you typed in the field you dropped on/);
+  // Always, a site granted by itself and Never ask send without a card: once, they ask with the new words.
+  assert.equal(reask(decide("ask", "always", false, false), false), true);
+  assert.equal(reask(decide("ask", undefined, false, true), false), true);
+  assert.equal(reask(decide("never_ask", undefined, true, false), false), true);
+  // Seen once: the setting stays, and drops are sent again without a card.
+  assert.equal(reask(decide("ask", "always", false, false), true), false);
+  // A drop that asks anyway, or never sends, needs no second card.
+  for (const d of [decide("ask", undefined, false, false), decide("ask", "sensitive", false, false), decide("ask", "never", false, false)]) assert.equal(reask(d, false), false, d);
 });

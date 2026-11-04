@@ -272,13 +272,24 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 }
 
 /** What the content script tells the person after a drop. */
-export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "blocked" | "not_here";
+export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here";
 
 /** The link on the card for a Direct-only app. */
 export const connectLabel = (host: string) => `Connect an agent on ${host}`;
 
 /** Where the text goes (13.5), said before anything is sent. */
 const PASSES_THROUGH = "It passes through your dock, on Cloudflare, and is kept 10 minutes at most.";
+/** What goes along from a form (TIN-571), said before anything is sent. */
+export const FORM_NOTE = "With the text go the choices made in that part of a form and what you typed in the field you dropped on, never a password or a card, account or id number.";
+
+/**
+ * Whether a drop that would be sent without a question (Always, a site granted by itself, Never ask)
+ * asks once more, because the person has not seen what readings now carry (TIN-571). The answer is
+ * kept as on any card, and the site's setting stays.
+ */
+export function reask(decision: Decision, seen: boolean): boolean {
+  return decision === "send" && !seen;
+}
 
 export const STATUS_TEXT: Record<DropStatus, string> = {
   sent: "Sent to your agent",
@@ -288,8 +299,9 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   no_ticket: "Drag your agent again from your dock",
   unknown_dock: "This agent is from a dock this extension does not know: nothing was sent",
   error: "Could not reach your dock: nothing was sent",
-  consent: `Send this to your agent? ${PASSES_THROUGH}`,
-  consent_sensitive: `This site is set to ask every time. Send this to your agent? ${PASSES_THROUGH}`,
+  consent: `Send this to your agent? ${FORM_NOTE} ${PASSES_THROUGH}`,
+  consent_sensitive: `This site is set to ask every time. Send this to your agent? ${FORM_NOTE} ${PASSES_THROUGH}`,
+  consent_update: `New: page readings carry more. ${FORM_NOTE} Send this to your agent? ${PASSES_THROUGH} This asks once: your setting for this site stays unless you choose Not here.`,
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
 };
