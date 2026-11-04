@@ -43,6 +43,8 @@ Measurements (load test up to 150 visitors at once, CPU per request) are in [DES
 
 ## Use the pattern in your app
 
+The standard's docs are at [apc.tineira.com/docs](https://apc.tineira.com/docs): the spec, a step-by-step integration guide (Direct, then Dock) whose code is type-checked and passes the conformance suite, conformance, and what an agent sees. A proposal to change the contract is a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
+
 The packages go to npm as 0.x pre-releases on the `next` tag ([Using the packages](#using-the-packages)); in this workspace the apps use their TypeScript sources. They are small, so copying them is fine too.
 
 | Package | What it gives you |
@@ -235,4 +237,4 @@ This software: T. Neira. *Agent Pointed Context: reference implementation and de
 
 ## License
 
-MIT for the code (see [LICENSE](LICENSE)). The paper and its companion record are CC BY 4.0.
+MIT for the code (see [LICENSE](LICENSE)), the docs' examples included. The text of the APC specification and its docs ([apc.tineira.com/docs](https://apc.tineira.com/docs), sources in [`apps/dock/src/docs/pages`](apps/dock/src/docs/pages) and the standard's [changelog](packages/protocol/CHANGELOG.md)) is CC BY 4.0, like the paper and its companion record (see [LICENSE-spec](LICENSE-spec)).
