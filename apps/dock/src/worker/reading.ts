@@ -11,6 +11,7 @@ export interface PageReading {
   title: string;
   /** The nearest block element at the drop point, or null when the drop was not on one. */
   element: { tag: string; role: string | null; name: string | null; text: string; heading: string | null; column: string | null; row: string | null } | null;
+  /** The person's selection, or SELECTION_LEFT_OUT when it holds what looks like a secret number (TIN-571). */
   selection: string | null;
   /**
    * Where the selection is, when it is not in the pointed block (TIN-571): the nearest h1 to h3 above it
@@ -76,6 +77,8 @@ export const FORM_TEXT_MAX = 1500;
 
 /** Said in place of the typed value of the field the person dropped on, when it is held back (TIN-571). */
 export const LEFT_OUT = "(left out as sensitive)";
+/** Said in place of a selection that holds what looks like a secret number (TIN-571). */
+export const SELECTION_LEFT_OUT = "(selection left out as sensitive)";
 
 /**
  * The filters a form's labels and values pass before they go into a reading (TIN-571), the same in the
@@ -149,8 +152,16 @@ function ibanValid(iban: string): boolean {
   return rest === 1;
 }
 
-/** A Chilean RUT or RUN, with or without its dots and dash: 12.345.678-5, 1.234.567-K, 12345678K. On normalized text. */
-const RUT = /(?<![\dA-Za-z])\d{1,2}\.?\d{3}\.?\d{3}\s?-?\s?[\dkK](?![\dA-Za-z])/;
+/**
+ * A Chilean RUT or RUN, its digit groups split by dots, spaces or nothing, and its check character after
+ * an optional dash: 12.345.678-5, 1 234 567-K, 12345678K. On normalized text (secretForm).
+ */
+const RUT = /(?<![\dA-Za-z])\d{1,2}[\s.]*\d{3}[\s.]*\d{3}\s*-?\s*[\dkK](?![\dA-Za-z])/;
+/** A value that ends in a check character after a dash, with 7 to 9 digits before it, whatever separates them (12.345x678-5). */
+const RUT_LOOSE = /^(?<body>[^-]*)-\s*[\dkK]\s*$/;
+
+/** Letters that look like K in other scripts (Greek Κ κ, Cyrillic К к), so a RUN's check character cannot hide as one. */
+const LOOKS_LIKE_K = /[ΚκКк]/g;
 
 /** Each Unicode decimal digit's value: they come in runs of ten, from 0 (Unicode keeps them so). */
 const digitValues = new Map<string, string>();
@@ -168,12 +179,13 @@ function asciiDigit(d: string): string {
 /**
  * Text as the secret checks read it: compatibility forms folded (fullwidth, mathematical letters and
  * digits, NFKC), every decimal digit of any script as 0 to 9 (Arabic-Indic included), format and
- * zero-width characters removed, and every dash or minus as "-".
+ * zero-width characters removed, every dash or minus as "-", and letters that look like K as K.
  */
 export function secretForm(text: string): string {
   return text
     .normalize("NFKC")
     .replace(/\p{Cf}/gu, "")
+    .replace(LOOKS_LIKE_K, "K")
     .replace(/[\p{Pd}−‑]/gu, "-")
     .replace(/\p{Nd}/gu, (d) => (d >= "0" && d <= "9" ? d : asciiDigit(d)));
 }
@@ -206,7 +218,10 @@ export function textSecret(text: string | null | undefined, block = false): bool
     const candidate = length ? flat.slice(at.index, at.index + length) : "";
     if (candidate.length === length && /^[A-Z0-9]+$/.test(candidate) && ibanValid(candidate)) return true;
   }
-  return RUT.test(norm);
+  if (RUT.test(norm)) return true;
+  const body = RUT_LOOSE.exec(norm.trim())?.groups?.body;
+  const bodyDigits = body?.match(/\d/g)?.length ?? 0;
+  return bodyDigits >= 7 && bodyDigits <= 9;
 }
 
 /**
@@ -257,9 +272,12 @@ export function shapeReading(raw: unknown): PageReading | null {
     const text = clean(e.text, TEXT_MAX);
     if (tag && text) element = { tag, role: clean(e.role, 40), name: clean(e.name, NAME_MAX), text, heading: clean(e.heading, NAME_MAX), column: clean(e.column, NAME_MAX), row: clean(e.row, NAME_MAX) };
   }
-  const selection = clean(r.selection, TEXT_MAX);
+  const selected = clean(r.selection, TEXT_MAX);
+  // A selection that holds what looks like a secret number is not sent, nor where it is: only that there was one.
+  const selectionHeld = textSecret(selected, true);
+  const selection = selectionHeld ? SELECTION_LEFT_OUT : selected;
   let selectionContext: PageReading["selection_context"] = null;
-  if (selection && isObject(r.selection_context)) {
+  if (selection && !selectionHeld && isObject(r.selection_context)) {
     const c = r.selection_context as { heading?: unknown; text?: unknown };
     // A block the person did not drop on: held back when it holds what looks like a secret number.
     const heading = clean(c.heading, NAME_MAX);

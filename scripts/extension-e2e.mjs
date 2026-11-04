@@ -603,6 +603,11 @@ try {
     assert.ok(!filled.includes("Leave at the door"), "no typed value of a field not dropped on");
     assert.ok(!filled.includes("DHL"), "only the chosen radio");
     noSecret(filled);
+    // A selection of a card number printed on the page: not sent, only that there was one.
+    await inCheckout(`(() => { const label = [...document.querySelectorAll("label")].find((l) => l.textContent.includes("Visa")); const r = document.createRange(); r.selectNodeContents(label.lastChild); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
+    const selectedCard = await dropOnCheckout("#total");
+    assert.match(selectedCard, /\nSelected: \(selection left out as sensitive\)/);
+    noSecret(selectedCard);
     await inCheckout(`getSelection().removeAllRanges()`);
     // On the notes field: its typed value, marked. Typing after the drop sends nothing until the next drop.
     assert.match(await dropOnCheckout("#notes"), /Pointed at: a form field, marked \(pointed at\) below\.\nForm fields, as filled in on the page:\n- Notes: Leave at the door \(pointed at\)\n- Shipping method: Registered post\n/);

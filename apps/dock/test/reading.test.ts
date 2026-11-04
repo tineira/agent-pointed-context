@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agoLabel, autocompleteSecret, codeSecret, CONTEXT_MAX, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, namesSecret, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel, textSecret } from "../src/worker/reading.ts";
+import { agoLabel, autocompleteSecret, codeSecret, CONTEXT_MAX, SELECTION_LEFT_OUT, FIELD_LABEL_MAX, FIELD_VALUE_MAX, FIELDS_MAX, FORM_TEXT_MAX, namesSecret, PAGE_TEXT_MAX, pageAddress, readerAllowed, readingEntry, readingSite, readingText, shapeReading, sizeLabel, textSecret } from "../src/worker/reading.ts";
 
 const raw = {
   url: "https://en.wikipedia.org/wiki/Churn_rate?session=s3cr3t#History",
@@ -159,6 +159,25 @@ test("the second review's bypasses are held back: any dash, zero-width character
   assert.equal(textSecret("In 2025 sales rose 12% to 340 units; in 2026 they reached 512 units across 7 regions and 19 stores.", true), false);
   const held = shapeReading({ ...raw, selection: "Pay", selection_context: { heading: "Payment", text: "Pay to ｄｅ８９ ３７０４ ００４４ ０５３２ ０１３０ ００" } })!;
   assert.deepEqual(held.selection_context, { heading: "Payment", text: null });
+});
+
+test("the third review's RUN variants are held back: any separators, look-alike K, letters between the groups (TIN-571)", () => {
+  for (const text of ["1 234 567-K", "1.234.567-Κ", "1.234.567-κ", "1.234.567-К", "1.234.567-к", "12.345x678-5", "12 345 678 5", "1.234.567 – K"]) {
+    assert.equal(textSecret(text), true, text);
+    assert.equal(shapeReading({ ...raw, form: { fields: [{ label: "Documento", value: text, kind: "typed", pointed: true }] } })!.form!.fields[0]!.value, "(left out as sensitive)", text);
+  }
+  for (const text of ["Ships in 3-5 days", "Size 42 - M", "Kit 7-K"]) assert.equal(textSecret(text), false, text);
+});
+
+test("a selection that holds a secret number is not sent, nor where it is: the reading says one was left out (TIN-571)", () => {
+  const r = shapeReading({ ...raw, selection: "4111111111111111", selection_context: { heading: "Payment", text: "Card on file" } })!;
+  assert.equal(r.selection, SELECTION_LEFT_OUT);
+  assert.equal(r.selection_context, null);
+  assert.match(readingText(r), /\nSelected: \(selection left out as sensitive\)$/);
+  assert.doesNotMatch(JSON.stringify(r), /4111/);
+  for (const selection of ["1.234.567-К", "de89 3704 0044 0532 0130 00"]) assert.equal(shapeReading({ ...raw, selection })!.selection, SELECTION_LEFT_OUT, selection);
+  // An ordinary selection with a few figures goes.
+  assert.equal(shapeReading({ ...raw, selection: "Churn rose 4.2% in March 2026" })!.selection, "Churn rose 4.2% in March 2026");
 });
 
 test("a short number in a field named only Code or Código is held back; a postal, promo or country code is not", () => {
