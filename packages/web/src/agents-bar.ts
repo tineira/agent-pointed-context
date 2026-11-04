@@ -3,7 +3,9 @@
  * in this app show. Each agent is its mark (logo; name as tooltip) and its state; a dot says where it
  * points (click: go there), × removes the pin, ! warns of a shared URL. Dragging a mark onto a target
  * points the agent within the page: the marks carry data-apc-mark and data-grant, the hooks
- * enablePinning drags by.
+ * enablePinning drags by. ⊘ revokes the agent (APC 0.2, TIN-577): a first click asks "Revoke?", a
+ * second within a few seconds emits apc-revoke, and the app cuts the agent's grant at once, whichever
+ * way it came (its own URL or a dock).
  *
  * A custom element in light DOM, not shadow DOM: enablePinning finds marks by event target, and the
  * app's own fonts and theme apply. Its styles are injected once and scoped by class prefix; the app
@@ -27,8 +29,11 @@ export interface BarAgent {
   restricted?: boolean;
 }
 
-/** Events, all with detail { id }: open (go to the pin), unpin, warning (open what the warning is about). */
-export type AgentBarEvent = "apc-open" | "apc-unpin" | "apc-warning";
+/** Events, all with detail { id }: open (go to the pin), unpin, warning (open what the warning is about), revoke (cut the agent from the app). */
+export type AgentBarEvent = "apc-open" | "apc-unpin" | "apc-warning" | "apc-revoke";
+
+/** How long the first click on ⊘ waits for the second before it lets go. */
+export const REVOKE_CONFIRM_MS = 4000;
 
 const STYLE_ID = "apc-agents-style";
 const CSS = `
@@ -51,6 +56,9 @@ apc-agents { display: inline-flex; align-items: center; gap: 10px; }
 .apc-agents__dot--away { cursor: pointer; box-shadow: 0 0 0 3px var(--apc-accent-soft, rgb(184 82 9 / 0.2)); }
 .apc-agents__unpin { border: 0; background: none; padding: 0 3px; font: 14px/1 system-ui, sans-serif; color: inherit; cursor: pointer; opacity: 0.7; }
 .apc-agents__unpin:hover { opacity: 1; }
+.apc-agents__revoke { border: 0; background: none; padding: 0 2px; font: 13px/1 system-ui, sans-serif; color: inherit; cursor: pointer; opacity: 0.45; }
+.apc-agents__revoke:hover, .apc-agents__revoke:focus-visible { opacity: 1; color: var(--apc-warn, #c0392b); }
+.apc-agents__revoke.apc-agents__revoke--armed { opacity: 1; padding: 2px 6px; border-radius: 6px; font-weight: 600; font-size: 12px; color: #fff; background: var(--apc-warn, #c0392b); }
 @keyframes apc-agents-float { 0%, 100% { transform: translateY(1.5px); } 50% { transform: translateY(-2.5px); } }
 @keyframes apc-agents-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.18); } }
 @keyframes apc-agents-bounce { 0% { transform: translateY(0); } 25% { transform: translateY(-6px); } 50% { transform: translateY(0); } 70% { transform: translateY(-2px); } 100% { transform: translateY(0); } }
@@ -60,12 +68,14 @@ apc-agents { display: inline-flex; align-items: center; gap: 10px; }
 /** A small robot, for an agent with no icon. */
 const BOT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 12h2v5H2v-5Zm18 0h2v5h-2v-5Z"/></svg>';
 
-/** The words a mark and its dot say, for tooltips and screen readers. Pure, so it is tested. */
-export function agentLabels(a: BarAgent): { mark: string; dot: string | null } {
+/** The words a mark, its dot and its revoke button say, for tooltips and screen readers. Pure, so it is tested. */
+export function agentLabels(a: BarAgent): { mark: string; dot: string | null; revoke: string; revokeArmed: string } {
   const mark = `${a.name}${a.state === "off" ? " (not connected yet)" : ""}. Drag onto anything to point this agent.`;
-  if (!a.pin) return { mark, dot: null };
+  const revoke = `Revoke ${a.name}: it can no longer read this app, at once. To let it back, connect or drop it here again.`;
+  const revokeArmed = `Click again to revoke ${a.name}.`;
+  if (!a.pin) return { mark, dot: null, revoke, revokeArmed };
   const read = a.pin.seen ? "your agent read it" : "waiting for your agent's next call";
-  return { mark, dot: `Pinned to ${a.pin.label}: ${read}${a.pin.here ? "" : ". Click to open it."}` };
+  return { mark, dot: `Pinned to ${a.pin.label}: ${read}${a.pin.here ? "" : ". Click to open it."}`, revoke, revokeArmed };
 }
 
 /** The element's constructor, defined only where custom elements exist (a browser), so importing this module in Node is safe. */
@@ -75,6 +85,8 @@ export function defineAgentBar(tag = "apc-agents"): void {
   class ApcAgents extends HTMLElement {
     private list: BarAgent[] = [];
     private nodes = new Map<string, { root: HTMLElement; icon: HTMLElement; key: string }>();
+    /** Agents whose ⊘ was clicked once, with the timer that lets go. */
+    private armed = new Map<string, ReturnType<typeof setTimeout>>();
     /** The app draws an agent's icon into this element itself (for example with its own logos). Called on every update. */
     renderIcon: ((agent: BarAgent, into: HTMLElement) => void) | null = null;
 
@@ -102,6 +114,26 @@ export function defineAgentBar(tag = "apc-agents"): void {
       this.dispatchEvent(new CustomEvent(type, { detail: { id }, bubbles: true }));
     }
 
+    private disarm(id: string, rerender = true): void {
+      const timer = this.armed.get(id);
+      if (timer === undefined) return;
+      clearTimeout(timer);
+      this.armed.delete(id);
+      if (rerender) this.render();
+    }
+
+    /** First click arms, second (within REVOKE_CONFIRM_MS) emits apc-revoke. */
+    private revokeClicked(id: string): void {
+      if (this.armed.has(id)) {
+        this.disarm(id);
+        this.emit("apc-revoke", id);
+        return;
+      }
+      this.armed.set(id, setTimeout(() => this.disarm(id), REVOKE_CONFIRM_MS));
+      this.render();
+      (this.nodes.get(id)?.root.querySelector(".apc-agents__revoke") as HTMLElement | null)?.focus();
+    }
+
     /** Keyed by agent: an agent's element (and the icon the app drew in it) lives as long as the agent. */
     private render(): void {
       if (!this.isConnected) return;
@@ -124,12 +156,14 @@ export function defineAgentBar(tag = "apc-agents"): void {
         if (seen.has(id)) continue;
         node.root.remove();
         this.nodes.delete(id);
+        this.disarm(id, false);
       }
     }
 
     private fill(node: { root: HTMLElement; icon: HTMLElement; key: string }, a: BarAgent): void {
       const labels = agentLabels(a);
-      const key = JSON.stringify([a.name, a.state, a.pin, a.warning, a.restricted, typeof a.icon === "string" ? a.icon.length : null]);
+      const armed = this.armed.has(a.id);
+      const key = JSON.stringify([a.name, a.state, a.pin, a.warning, a.restricted, typeof a.icon === "string" ? a.icon.length : null, armed]);
       if (this.renderIcon) this.renderIcon(a, node.icon);
       else if (node.key === "" || JSON.stringify(a.icon ?? null) !== node.icon.dataset.src) {
         node.icon.dataset.src = JSON.stringify(a.icon ?? null);
@@ -182,6 +216,16 @@ export function defineAgentBar(tag = "apc-agents"): void {
         pin.append(dot, unpin);
         parts.push(pin);
       }
+      // Revoke from the app: every agent has it, whichever way it came.
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = `apc-agents__revoke${armed ? " apc-agents__revoke--armed" : ""}`;
+      revoke.textContent = armed ? "Revoke?" : "⊘";
+      revoke.title = armed ? labels.revokeArmed : labels.revoke;
+      revoke.setAttribute("aria-label", armed ? labels.revokeArmed : `Revoke ${a.name}`);
+      revoke.addEventListener("click", () => this.revokeClicked(a.id));
+      revoke.addEventListener("keydown", (e) => e.key === "Escape" && this.disarm(a.id));
+      parts.push(revoke);
       node.root.replaceChildren(...parts);
     }
   }

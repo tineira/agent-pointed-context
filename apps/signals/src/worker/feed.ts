@@ -7,10 +7,10 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusRow } from "@apc/protocol";
-import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, isUnread, toolError, toolResult, type ToolResult } from "@apc/server";
+import { APC_INSTRUCTIONS, attachAttention, attachThen, attentionFor, isUnread, presenceEvent, revokedResponse, revokedToolResult, secretHash, toolError, toolResult, type ToolResult } from "@apc/server";
 import { generateDataset } from "../../../demo/src/model/seed.ts";
 import { buildMarket, type Post } from "../../../demo/src/model/market.ts";
-import { anyPageOpen } from "../../../demo/src/worker/page.ts";
+import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { checkPin, focusPayload, samePin, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
 
@@ -74,6 +74,8 @@ export class Feed extends DurableObject<Env> {
       create table if not exists agent_focus (
         grant_id text primary key references grants(id) on delete cascade,
         kind text not null, target_id text, part text, pinned_at text not null, seen_at text);
+      create table if not exists revoked_grants (
+        secret_hash text primary key, grant_id text not null, hub text not null, agent text not null, revoked_at text not null);
     `);
     try {
       this.sql.exec("alter table grants add column client_icon text");
@@ -104,10 +106,11 @@ export class Feed extends DurableObject<Env> {
     const r = this.sql.exec<{ data: string }>("select data from view_state where id = 1").toArray()[0];
     return r ? (JSON.parse(r.data) as StoredView) : null;
   }
-  private broadcast(): void {
+  private broadcast(message: Record<string, unknown> = { type: "state" }): void {
+    const text = JSON.stringify(message);
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        ws.send(JSON.stringify({ type: "state" }));
+        ws.send(text);
       } catch {
         // closed
       }
@@ -249,6 +252,33 @@ export class Feed extends DurableObject<Env> {
     return { ok: true };
   }
 
+  /**
+   * Revoke from the app (APC 0.2, TIN-577): the person cuts an agent from Signals itself. It holds at
+   * once and calls nobody, so it holds with the dock's hub down: the grant and its pin go, and its MCP
+   * URL answers 403 "revoked" from then on, with a call already running ending the same way. The hub
+   * learns it on its next call and shows "Revoked by" this host; a new drop asks the person again.
+   */
+  async revokeGrant(grantId: string): Promise<{ ok: boolean; error?: string }> {
+    const found = this.grants().find((g) => g.id === grantId);
+    if (!found) return { ok: false, error: "unknown_grant" };
+    const hash = await secretHash(found.secret);
+    // Everything below is synchronous storage work: nothing runs between the check and the deletes.
+    const grant = this.grants().find((g) => g.id === grantId);
+    if (!grant) return { ok: false, error: "unknown_grant" };
+    this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub, grant.agent, new Date().toISOString());
+    this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
+    this.sql.exec("delete from grants where id = ?", grant.id);
+    this.broadcast();
+    return { ok: true };
+  }
+
+  private revokedAt(by: { grantId: string } | { hash: string }): string | null {
+    const row = "grantId" in by
+      ? this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where grant_id = ?", by.grantId).toArray()[0]
+      : this.sql.exec<{ revoked_at: string }>("select revoked_at from revoked_grants where secret_hash = ?", by.hash).toArray()[0];
+    return row?.revoked_at ?? null;
+  }
+
   // ---- fetch: the page's WebSocket and the hub's MCP endpoint ----
 
   async fetch(request: Request): Promise<Response> {
@@ -272,10 +302,16 @@ export class Feed extends DurableObject<Env> {
   }
 
   private async mcp(request: Request, secret: string, origin: string): Promise<Response> {
-    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (!(await this.alive())) return Response.json({ error: "expired" }, { status: 404 });
     const grant = this.grants().find((g) => g.secret === secret);
-    if (!grant) return Response.json({ error: "unknown_grant" }, { status: 404 });
+    if (!grant) {
+      // Revoked in the app (APC 0.2): 403 with the answer, whatever the method (checked before the
+      // method), so the dock's hub can say who revoked it.
+      const revokedAt = this.revokedAt({ hash: await secretHash(secret) });
+      if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
+      return Response.json({ error: "unknown_grant" }, { status: 404 });
+    }
+    if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     await this.touch();
     try {
       const body = (await request.clone().json()) as { method?: string; params?: { clientInfo?: { title?: unknown; icons?: unknown } } } | null;
@@ -314,7 +350,8 @@ export class Feed extends DurableObject<Env> {
         this.sql.exec("update agent_focus set seen_at = ? where grant_id = ?", new Date().toISOString(), grant.id);
         this.broadcast();
       },
-      pageOpen: async () => this.pageOpen(),
+      // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
+      pageOpen: async () => (this.grants().some((g) => g.id === grant.id) ? this.pageOpen() : false),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: WAIT_CEILING_S,
     });
@@ -349,11 +386,22 @@ export class Feed extends DurableObject<Env> {
     return transport.handleRequest(new Request(request, { headers }));
   }
 
-  /** The attention envelope while the grant's pin is unread, and then while the person's page is open. */
+  /**
+   * Around every tool: the revoked answer for a grant revoked since its request came in, the attention
+   * envelope while the grant's pin is unread, then while the person's page is open (not on a wait that
+   * came back empty, which ends the loop), and presence on the page after each successful call.
+   */
   private instrument(server: McpServer, grantId: string, posts: Post[], origin: string): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+    const cut = (): ToolResult | null => {
+      if (this.grants().some((g) => g.id === grantId)) return null;
+      const revokedAt = this.revokedAt({ grantId });
+      return revokedAt ? revokedToolResult(new URL(origin).host, revokedAt) : toolError("unknown_grant", "This grant no longer exists.");
+    };
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>
       register(name, config, async (args: Record<string, unknown>, extra: unknown) => {
+        const before = cut();
+        if (before) return before;
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grantId);
         const waits = name === "wait_for_focus";
         if (waits) {
@@ -369,10 +417,19 @@ export class Feed extends DurableObject<Env> {
             this.broadcast();
           }
         }
+        const after = cut();
+        if (after) return after;
         const row = this.focusRow(grantId);
         const focus = focusPayload(row, posts, origin);
         if (isUnread(row) && focus) result = attachAttention(result, attentionFor(focus));
-        return attachThen(result, this.pageOpen());
+        const tool = String(name);
+        if (!result.isError) {
+          // Presence (the core, APC 0.2): ids only, the post a read named.
+          const targets = tool === "get_post" && typeof args.id === "string" ? [{ kind: "post", id: args.id }] : [];
+          this.broadcast({ type: "presence", event: presenceEvent({ grantId, tool, kind: "read", targets }) });
+        }
+        // Signals shares the view always (it has no switch), so attendance is the page itself.
+        return attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen()));
       });
   }
 }

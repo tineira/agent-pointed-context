@@ -4,6 +4,27 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@apc/protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant.
 
+## 0.2.0 (draft, 2026-11-03)
+
+The core written down, a conformance suite for it, and revoke from the app (TIN-577). In `packages/protocol/src/core.ts`, `packages/server/src/revoke.ts`, `packages/web/src/agents-bar.ts`, `packages/conformance` and DESIGN.md section 14.
+
+### The core and the profiles
+
+- The core is what every APC app implements, per grant, whichever way agents reach it: the view, the pin, presence, the focus format, `get_current_view` and `wait_for_focus` (`CORE_TOOLS`), and revoke from the app. A dock's hub is one more holder of a grant.
+- Two profiles, each optional: **Direct** (the agent connects to the app's own MCP URL; the grant per agent, its URL and the agent list are the profile's) and **Dock** (the agent connects once, to a hub; receiving the drop, the ticket, consent in the app, `/apc/pair`, `/apc/confirm` and `/apc/revoke` from the hub are the profile's). `ApcProfile` names them.
+- `CurrentViewResult` and `WaitForFocusResult` type the two tools' results. A wait returns a pin dropped during it, marked seen; with none, `timed_out: true` at the timeout, or `timed_out: false, page_open: false` as soon as the app knows the person's page is closed.
+- `then` is never on a `wait_for_focus` result that came back with no focus: that result ends the loop. An app without a view-sharing switch always shares, so it always reports `page_open`.
+- Presence is core: after each successful tool call the app publishes a `PresenceEvent` to the person's page, and a read of a target names it in `targets`.
+- An unknown or expired grant answers 404, whatever the body.
+
+### Revoke from the app
+
+- Every agent in the app's agent bar (`<apc-agents>`), Direct or Dock, has Revoke: a first click asks, a second within `REVOKE_CONFIRM_MS` emits `apc-revoke`.
+- It holds in the app alone and at once: the grant, its pin and (Dock) the app's link to the hub go. The app calls nobody, so it holds with the hub down.
+- From then on every request to the grant's MCP URL is answered HTTP 403 (`REVOKED_HTTP_STATUS`) with a `RevokedAnswer`: `{ error: "revoked", revoked_by, revoked_at, message }`, `revoked_by` being the app's host. A call already running ends as a tool error with the same answer and no app data. `revokedAnswer` and `isRevokedAnswer` build and recognise it.
+- A revoked grant never works again. The person lets the agent back with a new grant: a new MCP URL (Direct), or a new drop with consent in the app and in the dock (Dock).
+- A hub that gets a `RevokedAnswer` marks the pairing revoked and shows "Revoked by <app host>", stops relaying to it, drops the view and the pin it took from it, never confirms it on a drop, and never pairs it again by itself. A new pairing with the same app replaces the revoked one.
+
 ## 0.1.0 (draft, 2026-11-03)
 
 The contract as it stands today, in `packages/protocol/src`, `packages/server/src`, `packages/web/src` and DESIGN.md sections 6, 12 and 13.

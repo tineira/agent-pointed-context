@@ -18,7 +18,7 @@ export interface PulseBarAgent extends BarAgent {
 
 const roots = new WeakMap<HTMLElement, Root>();
 
-export function AgentBar(props: { agents: PulseBarAgent[]; onOpen: (id: string) => void; onUnpin: (id: string) => void; onWarning: (id: string) => void }) {
+export function AgentBar(props: { agents: PulseBarAgent[]; onOpen: (id: string) => void; onUnpin: (id: string) => void; onWarning: (id: string) => void; onRevoke: (id: string) => void }) {
   const ref = useRef<ApcAgentsElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -40,7 +40,7 @@ export function AgentBar(props: { agents: PulseBarAgent[]; onOpen: (id: string) 
       el.addEventListener(type, handler);
       return () => el.removeEventListener(type, handler);
     };
-    const offs = [on("apc-open", (id) => latest.current.onOpen(id)), on("apc-unpin", (id) => latest.current.onUnpin(id)), on("apc-warning", (id) => latest.current.onWarning(id))];
+    const offs = [on("apc-open", (id) => latest.current.onOpen(id)), on("apc-unpin", (id) => latest.current.onUnpin(id)), on("apc-warning", (id) => latest.current.onWarning(id)), on("apc-revoke", (id) => latest.current.onRevoke(id))];
     return () => offs.forEach((off) => off());
   }, []);
 

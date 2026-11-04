@@ -10,7 +10,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import type { FocusPayload, ViewPayload } from "@apc/protocol";
+import { isRevokedAnswer, REVOKED_ERROR, REVOKED_HTTP_STATUS, type FocusPayload, type ViewPayload } from "@apc/protocol";
 import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@apc/server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
@@ -75,9 +75,12 @@ interface Pairing {
   app_name: string;
   app_origin: string;
   mcp_url: string;
-  status: "pending" | "paired";
+  /** revoked: the person revoked the grant in the app itself (APC 0.2); kept to say so, never used again. */
+  status: "pending" | "paired" | "revoked";
   created_at: string;
   approved_at: string | null;
+  /** When the hub learned that the app revoked the grant. */
+  revoked_at: string | null;
   tools: AppTool[] | null;
   page_open: boolean | null;
   view: ViewPayload | null;
@@ -185,7 +188,7 @@ export class Hub extends DurableObject<Env> {
         origin text not null, at text not null, site text not null, bytes integer not null);
     `);
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -222,6 +225,7 @@ export class Hub extends DurableObject<Env> {
         status: r.status as Pairing["status"],
         created_at: r.created_at as string,
         approved_at: (r.approved_at as string | null) ?? null,
+        revoked_at: (r.revoked_at as string | null) ?? null,
         tools: r.tools ? (JSON.parse(r.tools as string) as AppTool[]) : null,
         page_open: r.page_open === null ? null : r.page_open === 1,
         view: r.view ? (JSON.parse(r.view as string) as ViewPayload) : null,
@@ -317,7 +321,7 @@ export class Hub extends DurableObject<Env> {
    * everything, as when the dock expires.
    */
   async reset(): Promise<void> {
-    await Promise.allSettled(this.pairings().map((p) => revokeGrant(p.mcp_url)));
+    await Promise.allSettled(this.pairings().filter((p) => p.status !== "revoked").map((p) => revokeGrant(p.mcp_url)));
     await this.wipe();
   }
 
@@ -373,7 +377,7 @@ export class Hub extends DurableObject<Env> {
    */
   async removeAgent(agentId: string): Promise<{ ok: boolean }> {
     if (!this.agent(agentId)) return { ok: false };
-    await Promise.allSettled(this.pairings(agentId).map((p) => revokeGrant(p.mcp_url)));
+    await Promise.allSettled(this.pairings(agentId).filter((p) => p.status !== "revoked").map((p) => revokeGrant(p.mcp_url)));
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
     this.sql.exec("delete from readers where agent_id = ?", agentId);
@@ -444,7 +448,8 @@ export class Hub extends DurableObject<Env> {
             waits: a.waits ?? 0,
           },
           pairings: [
-            ...this.pairings(a.id).map((p) => ({ id: p.id, kind: "app" as const, app: appRef(p), status: p.status, created_at: p.created_at, page_open: p.page_open, error: p.error })),
+            // A revoked pairing says who revoked it: the app's host, as the hub paired it (APC 0.2).
+            ...this.pairings(a.id).map((p) => ({ id: p.id, kind: "app" as const, app: appRef(p), status: p.status, created_at: p.created_at, page_open: p.page_open, error: p.error, ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}) })),
             // A browser sending page readings (TIN-421) is listed with the apps, under its own label.
             ...this.readers(a.id).map((r) => ({ id: r.id, kind: "reader" as const, app: { id: PAGE_APP.id, name: r.label, origin: r.origin }, status: r.status, created_at: r.created_at, page_open: null, error: null })),
           ],
@@ -510,8 +515,9 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from pairings where id = ?", p.id);
       this.sql.exec("delete from pointer where pairing_id = ?", p.id);
       this.broadcast();
-      // And the app gets its grant back, so a later drop there asks the person again (TIN-388).
-      await revokeGrant(p.mcp_url);
+      // And the app gets its grant back, so a later drop there asks the person again (TIN-388). A grant
+      // the app revoked itself is gone there already: removing the line is all that is left.
+      if (p.status !== "revoked") await revokeGrant(p.mcp_url);
       return { ok: true };
     }
     return { ok: false, error: "invalid_action" };
@@ -614,6 +620,8 @@ export class Hub extends DurableObject<Env> {
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
     const allowed = (this.env.APP_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     if (!name || !appAllowed(origin, b.mcp_url, allowed, dev())) return { ok: false, error: "app_not_allowed" };
+    // The person pairs again after revoking in the app (APC 0.2): the new pairing replaces the revoked one's line, and its app id.
+    this.sql.exec("delete from pairings where agent_id = ? and app_origin = ? and status = 'revoked'", t.agent_id, origin);
     // "page" is the browser's readings (TIN-421), never an app's id.
     const taken = new Set([...this.pairings(t.agent_id).map((p) => p.app_id), PAGE_APP.id]);
     const id = `pr_${randomHex(6)}`;
@@ -638,7 +646,8 @@ export class Hub extends DurableObject<Env> {
     if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
     const t = this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray()[0];
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
-    const p = this.pairings(t.agent_id).find((x) => x.mcp_url === b.mcp_url);
+    // A grant the app revoked never counts again (APC 0.2).
+    const p = this.pairings(t.agent_id).find((x) => x.mcp_url === b.mcp_url && x.status !== "revoked");
     // Not paired: the ticket stays good, so the app can ask the person and pair with it right away.
     if (!p) return { ok: false, error: "not_paired" };
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
@@ -786,6 +795,11 @@ export class Hub extends DurableObject<Env> {
   /** Take the focus an app returned (get_current_view or wait_for_focus), if it is a pin the hub has not taken yet. */
   private take(p: Pairing, result: AppToolResult, from: "view" | "wait"): boolean {
     const s = structured(result);
+    // A call that was running when the person revoked the grant in the app ends with the revoked answer (APC 0.2).
+    if (result.isError && isRevokedAnswer(s)) {
+      this.markRevoked(p);
+      return false;
+    }
     const open = from === "wait" ? (typeof s.page_open === "boolean" ? s.page_open : s.focus ? true : p.page_open) : "then" in s;
     this.sql.exec("update pairings set page_open = ?, error = null where id = ?", open === null ? null : open ? 1 : 0, p.id);
     if (from === "view") this.sql.exec("update pairings set view = ? where id = ?", s.view ? JSON.stringify(s.view) : null, p.id);
@@ -803,7 +817,19 @@ export class Hub extends DurableObject<Env> {
     return true;
   }
 
+  /** The app revoked this grant itself (APC 0.2): say so in the dock, relay nothing more, keep nothing of the app's. */
+  private markRevoked(p: Pairing): void {
+    this.sql.exec("update pairings set status = 'revoked', revoked_at = coalesce(revoked_at, ?), view = null, tools = null, page_open = null, error = null where id = ?", new Date().toISOString(), p.id);
+    this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+    this.broadcast();
+  }
+
   private failed(p: Pairing, error: unknown): void {
+    // The person revoked the grant in the app itself (APC 0.2): the app answers 403 "revoked". The
+    // pairing stays, to say so in the dock ("Revoked by <app host>"), but nothing is relayed to it
+    // again: what the hub kept from the app (its view, its tools, the pin it took) goes now, and only a
+    // new pairing, with both yeses, reads the app again.
+    if (error instanceof AppCallError && error.status === REVOKED_HTTP_STATUS && error.code === REVOKED_ERROR) return this.markRevoked(p);
     // 404 on the grant's own MCP URL: the app took the access back (the person removed the agent
     // there, TIN-402, or its data expired). The pairing goes; a new drop there pairs again.
     if (error instanceof AppCallError && error.status === 404) {
@@ -1062,6 +1088,9 @@ export class Hub extends DurableObject<Env> {
         this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
         return toolResult({ focus: this.render(agentId, row), timed_out: false });
       };
+      // A pin the hub took but has not handed over yet: ask its apps first, since one may have revoked
+      // the grant since (APC 0.2); a revoked pairing's pin goes before it could be delivered.
+      if (this.unread(agentId)) await this.look(agentId);
       const ready = deliver();
       if (ready) return ready;
       const timeoutS = (t as number | undefined) ?? WAIT_DEFAULT_S;
@@ -1134,6 +1163,8 @@ export class Hub extends DurableObject<Env> {
     if (app === PAGE_APP.id && this.readers(agentId, "paired").length) return this.pageTool(agentId, tool);
     await this.look(agentId);
     const p = this.pairings(agentId, "paired").find((x) => x.app_id === app);
+    const revoked = p ? null : this.pairings(agentId, "revoked").find((x) => x.app_id === app);
+    if (revoked) return toolError(REVOKED_ERROR, `The person revoked your access in ${revoked.app_name} (${host(revoked.app_origin)}). You cannot read it until they pair you again, by dropping you on it.`);
     if (!p) return toolError("unknown_app", `No paired app "${app}". Paired: ${this.pairings(agentId, "paired").map((x) => x.app_id).join(", ") || "none"}.`);
     if (HIDDEN_TOOLS.has(tool)) return toolError("hub_tool", `Call the dock's own ${tool}: it covers every app.`);
     let result: AppToolResult;
@@ -1142,6 +1173,10 @@ export class Hub extends DurableObject<Env> {
     } catch (error) {
       this.failed(p, error);
       return toolError("app_unreachable", `${p.app_name} did not answer: ${String(error).slice(0, 120)}`);
+    }
+    if (result.isError && isRevokedAnswer(structured(result))) {
+      this.markRevoked(p);
+      return toolError(REVOKED_ERROR, `The person revoked your access in ${p.app_name} (${host(p.app_origin)}). You cannot read it until they pair you again, by dropping you on it.`);
     }
     const { result: clean, had } = detachKeys(result, ["attention", "then"]);
     if (had.has("attention")) await this.look(agentId);
