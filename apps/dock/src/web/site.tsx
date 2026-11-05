@@ -25,6 +25,9 @@ function useHasDock(): boolean {
 /** Which top-bar link a page sits under: Try it for /try, Build it for every /build page. */
 const section = (page: SitePage): "try" | "build" | null => (page === "try" ? "try" : page.startsWith("build") ? "build" : null);
 
+/** "page" on the link to this very page; "true" on Build it from a page under it (/build/direct…), which is the current section, not the page. */
+const current = (page: SitePage, link: "try" | "build", here: "try" | "build" | null) => (here !== link ? undefined : page === link ? "page" : "true");
+
 export function SiteHeader(props: { page: SitePage }) {
   const hasDock = useHasDock();
   const here = section(props.page);
@@ -33,8 +36,8 @@ export function SiteHeader(props: { page: SitePage }) {
       {props.page === "landing" ? <span className="kicker">Agent Pointed Context</span> : <a className="kicker" href="/">Agent Pointed Context</a>}
       <nav className="landing-nav" aria-label="Site">
         {hasDock && <a href={DOCK}>Your dock</a>}
-        <a href={SITE_PAGES.try.path} aria-current={here === "try" ? "page" : undefined}>Try it</a>
-        <a href={SITE_PAGES.build.path} aria-current={here === "build" ? "page" : undefined}>Build it</a>
+        <a href={SITE_PAGES.try.path} aria-current={current(props.page, "try", here)}>Try it</a>
+        <a href={SITE_PAGES.build.path} aria-current={current(props.page, "build", here)}>Build it</a>
         <a href={DOCS}>Docs</a>
         <a href={REPO}>GitHub</a>
       </nav>

@@ -121,6 +121,7 @@ test("each page has its path, a trailing slash allowed, and its own title", () =
   for (const [page, { path }] of Object.entries(SITE_PAGES)) {
     assert.equal(sitePageAt(path), page);
     if (path !== "/") assert.equal(sitePageAt(`${path}/`), page);
+    if (path !== "/") assert.equal(sitePageAt(`${path}//`), page);
   }
   for (const other of ["/dock", "/dock/agents/ag_1", "/docs", "/extension", "/builder", "/build/other", "/try/x"]) assert.equal(sitePageAt(other), null, other);
   assert.equal(new Set(Object.values(SITE_PAGES).map((p) => p.title)).size, Object.keys(SITE_PAGES).length, "no two pages share a title");

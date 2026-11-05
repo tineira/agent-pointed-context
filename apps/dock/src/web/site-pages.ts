@@ -29,7 +29,7 @@ export const SITE_PAGES: Record<SitePage, { path: string; title: string }> = {
 
 /** The page at a path, a trailing slash allowed; null for any other path (the dock, /docs, /extension). */
 export function sitePageAt(pathname: string): SitePage | null {
-  const path = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   for (const [page, { path: p }] of Object.entries(SITE_PAGES) as [SitePage, { path: string }][]) if (p === path) return page;
   return null;
 }

@@ -293,7 +293,7 @@ main.landing { max-width: 1000px; margin: 0 auto; padding: 20px 16px 48px; gap: 
 .landing-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 24px; padding-top: 8px; font-size: 13px; }
 /* The site's other pages (TIN-627): /try, /build and its profile pages, in the landing's look. */
 a.kicker { text-decoration: none; }
-.landing-nav a[aria-current="page"] { color: var(--accent); font-weight: 600; }
+.landing-nav a[aria-current] { color: var(--accent); font-weight: 600; }
 .landing-back { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
 .landing-starter { margin-top: 20px; padding: 16px 18px; border: 2px solid var(--accent); border-radius: 12px; background: var(--card); }
 .landing-starter p { margin: 6px 0 0; font-size: 16px; color: var(--fg); }
