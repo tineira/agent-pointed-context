@@ -38,4 +38,4 @@ export function isDocsPath(pathname: string): boolean {
 }
 
 /** The site's other pages a docs page may link to (served by the dock's Worker and its assets, or by V1). */
-export const SITE_PATHS: readonly string[] = ["/", "/dock", "/extension", "/v1/", "/.well-known/apc.json"];
+export const SITE_PATHS: readonly string[] = ["/", "/try", "/build", "/build/direct", "/build/dock", "/build/both", "/dock", "/extension", "/v1/", "/.well-known/apc.json"];

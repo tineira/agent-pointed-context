@@ -1,30 +1,14 @@
 /**
- * The landing of apc.tineira.com (TIN-420, TIN-605, TIN-620): what APC is, from the hero alone (a line and a
- * short silent clip of the drag), then two paths. Try it is for people using an AI agent: the dock, the two demo
- * apps and the direct way in a note. Build it is for people building an app: Direct from the app's side, a real
- * focus, and the docs. Everyone sees it (TIN-610); a visitor who already has a dock also gets "Your dock" in the
- * top bar.
+ * The landing of apc.tineira.com (TIN-420, TIN-605, TIN-620, TIN-627): what APC is, from the hero alone (a line
+ * and a short silent clip of the drag), the agents it works with, then one decision: Try it (/try, for people
+ * using an AI agent) or Build it (/build, for people building an app). "What your agent can and cannot see" closes
+ * it. Everyone sees it (TIN-610); a visitor who already has a dock also gets "Your dock" in the top bar.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { clipFallback, type ClipError } from "./clip-fallback.ts";
-import { FOCUS_EXAMPLE } from "./landing-example.ts";
-import { APPS, DESKTOP } from "./setup.tsx";
-
-const DOCK = "/dock";
-/** The standard's docs (TIN-611): spec, integration guide, conformance. */
-const DOCS = "/docs";
-const REPO = "https://github.com/tineira/agent-pointed-context";
-const PAPER = "https://doi.org/10.5281/zenodo.23382909";
-/** The companion record: the design records and the payload specification. */
-const RECORDS = "https://doi.org/10.5281/zenodo.23383101";
-const VIDEO = "https://youtu.be/pb46Sd0UOtM";
-const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
-/** A live Direct app (TIN-578): Signals, with its Connect panel open. */
-const DIRECT_TRY = `${SIGNALS.url}?connect`;
-/** The cross-app question in the demos' fixed shared world (TIN-621): an offer in Signals, a customer who left in Pulse. */
-const TRY_POST = `${SIGNALS.url}?post=post_013`;
-const TRY_CUSTOMER = PULSE.url.replace(/overview$/, "customers/cus_0048");
+import { SiteFooter, SiteHeader } from "./site.tsx";
+import { SITE_PAGES, VIDEO } from "./site-pages.ts";
 
 /**
  * The hero clip: rendered from the November 2026 promo's own Remotion scene (the media repo), silent, without
@@ -41,41 +25,6 @@ const AGENTS = [
   { brand: "cursor", name: "Cursor" },
   { brand: "grok", name: "Grok" },
 ];
-
-const TRY_STEPS = [
-  { title: "Your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie, nothing to install." },
-  { title: "Connect your agent", text: "Add one MCP server to Claude, ChatGPT, Cursor or Grok. That single connection is all it needs." },
-  { title: "Open Pulse or Signals", text: "From this page, below. Drop your agent on something there, and allow it in the app and in your dock." },
-  { title: "Point and ask", text: "Drag your agent from the dock onto a bar, a customer or a headline, and ask about \"this\". Point at something in the other app and ask how the two connect." },
-];
-
-const BUILD_STEPS = [
-  { title: "Serve your own MCP endpoint", text: <>Each agent gets its own grant and MCP URL from your app: <code>get_current_view</code> and <code>wait_for_focus</code> beside your own tools. Nothing sits between your app and the agent.</> },
-  { title: "Make things pointable", text: <>Charts, rows and paragraphs carry <code>data-focus</code>, ids and keys only. A drop becomes a focus that names the exact tool call that reads it.</> },
-  { title: "Pass the conformance suite", text: <><code>@tineira/apc-conformance</code> checks the view, the pin, the focus format and revoke through your MCP endpoint.</> },
-];
-
-const REFS = [
-  { title: "Docs", text: "The standard, in five pages", href: DOCS },
-  { title: "Integration guide", text: "Integrate your app in an afternoon", href: `${DOCS}/integrate` },
-  { title: "Spec", text: "The core, the Direct and Dock profiles, the focus format", href: `${DOCS}/spec` },
-  { title: "Payload specification", text: "With the design records, on Zenodo", href: RECORDS },
-  { title: "Design record", text: "What is built and why: DESIGN.md", href: `${REPO}/blob/main/DESIGN.md` },
-  { title: "Paper", text: "Letting a person point an AI agent at what they see", href: PAPER },
-  { title: "Code", text: "github.com/tineira/agent-pointed-context, MIT", href: REPO },
-];
-
-function Cta() {
-  return (
-    <a className="landing-cta big" href={DOCK} onClick={(e) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 || screen.availWidth < 820) return;
-      // A compact dock beside this page, so Pulse or Signals opens from here next to it.
-      if (window.open(DOCK, "apc-dock", "popup,width=420,height=780,left=0,top=0")) e.preventDefault();
-    }}>
-      Open your dock
-    </a>
-  );
-}
 
 /** Whether the visitor asks for less motion, kept current. */
 function useReducedMotion(): boolean {
@@ -148,52 +97,10 @@ function HeroClip() {
   );
 }
 
-/** Whether this visitor already has a dock (the Worker answers by cookie, TIN-610); false until it says so, and if it fails. */
-function useHasDock(): boolean {
-  const [has, setHas] = useState(false);
-  useEffect(() => {
-    let live = true;
-    fetch("/api/dock/mine", { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body: { has_dock?: unknown } | null) => live && setHas(body?.has_dock === true))
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
-  return has;
-}
-
-function Steps(props: { steps: { title: string; text: ReactNode }[] }) {
-  return (
-    <ol className="landing-steps">
-      {props.steps.map((s, i) => (
-        <li key={s.title}>
-          <span className="landing-n">{i + 1}</span>
-          <div>
-            <b>{s.title}</b>
-            <p>{s.text}</p>
-          </div>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 export function Landing() {
-  const hasDock = useHasDock();
   return (
     <main className="landing">
-      <header className="landing-head">
-        <span className="kicker">Agent Pointed Context</span>
-        <nav className="landing-nav" aria-label="Site">
-          {hasDock && <a href={DOCK}>Your dock</a>}
-          <a href="#try">Try it</a>
-          <a href="#build">Build it</a>
-          <a href={DOCS}>Docs</a>
-          <a href={REPO}>GitHub</a>
-        </nav>
-      </header>
+      <SiteHeader page="landing" />
 
       <section className="landing-hero">
         <h1>Point your AI agent at what you see</h1>
@@ -223,93 +130,18 @@ export function Landing() {
           <h3>Try it</h3>
           <p>Use your own agent on two demo apps. A few minutes, made-up data, no account.</p>
           <div className="row">
-            <a className="landing-cta" href="#try">Try the demo →</a>
+            <a className="landing-cta" href={SITE_PAGES.try.path}>Try the demo →</a>
           </div>
         </div>
         <div className="landing-path">
           <span className="landing-who">For people building an app</span>
           <h3>Build it</h3>
-          <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app to their agent, never through us.</p>
+          <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app to their agent.</p>
           <div className="row">
-            <a className="landing-cta ghost" href="#build">Add APC to your app →</a>
-            <a className="small" href={`${DOCS}/integrate`}>Integration guide</a>
+            <a className="landing-cta ghost" href={SITE_PAGES.build.path}>Add APC to your app →</a>
           </div>
         </div>
       </div>
-
-      <section id="try">
-        <h2 className="landing-eyebrow">Try it</h2>
-        <p className="landing-title">Your agent, two demo apps, one drag</p>
-        <p className="landing-sub">You need an agent that can add a remote MCP server. The demo is free and its data is made up.</p>
-        <Steps steps={TRY_STEPS} />
-        <div className="row landing-try-cta">
-          <Cta />
-        </div>
-        <div className="landing-cards">
-          <div className="landing-card">
-            <div className="row">
-              {PULSE.glyph}
-              <b>Pulse</b>
-            </div>
-            <p>Product analytics for a SaaS: customers, plans, seats, monthly activity. On the web, or as a Windows app: the same drag works on the desktop.</p>
-            <div className="row small">
-              <a href={PULSE.url.replace(/overview$/, "")}>Open Pulse</a>
-              {DESKTOP.map((d) => (
-                <a key={d.label} href={d.url}>
-                  Download for {d.label}
-                </a>
-              ))}
-            </div>
-          </div>
-          <div className="landing-card">
-            <div className="row">
-              {SIGNALS.glyph}
-              <b>Signals</b>
-            </div>
-            <p>A market feed: what competitors launch, price and say. Point your agent at a headline here and a customer in Pulse, and ask what it means for them.</p>
-            <div className="row small">
-              <a href={SIGNALS.url}>Open Signals</a>
-            </div>
-          </div>
-        </div>
-        <p className="landing-note">
-          <b>A question to start with.</b> In Signals, drop your agent on <a href={TRY_POST}>Tallyfin's offer to Team teams in North America</a> and ask "Which of our customers did this offer take?". Then point it at <a href={TRY_CUSTOMER}>Deep Harbor Logistics</a> in Pulse, a customer who left, and ask how the two connect.
-        </p>
-        <p className="landing-note">
-          <b>Any web page, too.</b> With the <a href="/extension">browser extension</a>, you can drop your agent on a page that knows nothing of APC: it reads the part you pointed at.
-        </p>
-        <p className="landing-note">
-          <b>An app gave you its own MCP address?</b> Add it to your agent directly instead, with no dock in between: <a href={DIRECT_TRY}>Signals has one</a>. Same drag, and the same agent connected both ways shows as one.
-        </p>
-      </section>
-
-      <section id="build">
-        <h2 className="landing-eyebrow">Build it</h2>
-        <p className="landing-title">Make your app pointable</p>
-        <p className="landing-sub">
-          APC is an open standard over MCP. Your app keeps its data and answers the person's agent with just what they pointed at, through its own tools.
-        </p>
-        <Steps steps={BUILD_STEPS} />
-        <p className="landing-sub landing-example-caption">
-          What an agent connected to Pulse receives when the person drops it on March in the chart of active customers: <a href={`${DOCS}/spec#the-pin-and-the-focus-format`}>the focus</a>, ids and keys only, and the call that reads it.
-        </p>
-        <pre className="landing-code">
-          <code>{JSON.stringify(FOCUS_EXAMPLE, null, 2)}</code>
-        </pre>
-        <p className="landing-note">
-          <b>Works with the dock too.</b> An app that speaks the standard can also be paired with a person's dock, which relays its tools, so they connect their agent once. <a href={`${DOCS}/integrate#12-dock-agents-dragged-from-a-dock`}>Pairing with a dock</a>
-        </p>
-        <ul className="landing-refs">
-          {REFS.map((r) => (
-            <li key={r.title}>
-              <a href={r.href}>
-                <b>{r.title}</b>
-                <span>{r.text}</span>
-              </a>
-            </li>
-          ))}
-        </ul>
-      </section>
 
       <section>
         <h2 className="landing-title">What your agent can and cannot see</h2>
@@ -321,11 +153,7 @@ export function Landing() {
         </ul>
       </section>
 
-      <footer className="landing-foot">
-        <a href={DOCS}>Docs: the spec and how to integrate an app</a>
-        <a href={REPO}>GitHub</a>
-        <a className="muted" href="/v1/">Version 1, as described in the paper →</a>
-      </footer>
+      <SiteFooter />
     </main>
   );
 }
