@@ -177,9 +177,10 @@ test("the docs page has a source for every page, and says on every page that the
   assert.match(docs, /CC BY 4\.0/);
 });
 
-test("the landing (top bar and footer) and the extension page link to the docs", () => {
-  const landing = read("apps/dock/src/web/landing.tsx");
-  assert.ok((landing.match(/href=\{DOCS\}|href="\/docs"/g) ?? []).length >= 2, "the landing links /docs in its top bar and its footer");
+test("every page of the site (its top bar) and the extension page link to the docs", () => {
+  // The top bar has Docs on every page (TIN-627), so the footers, which never repeat their page, do not.
+  assert.match(read("apps/dock/src/web/site.tsx"), /<a href=\{DOCS\}>Docs<\/a>/);
+  assert.match(read("apps/dock/src/web/landing.tsx"), /<SiteHeader page="landing" \/>/);
   assert.match(read("apps/dock/src/web/extension.tsx"), /href="\/docs/);
 });
 
