@@ -285,3 +285,118 @@ export function cardOf<E>(start: E, own: ReadonlySet<string>, up: (e: E) => E | 
   }
   return card;
 }
+
+/** A box of text bigger than this is most of the page, not what the person pointed at. */
+export const BOX_MAX = 4000;
+/**
+ * A box with less text than this is a scrap, not a block (TIN-697): a badge ("5", "New"), a separator, an
+ * icon's word. The climb goes past it to the box around it, and takes it only when nothing else will do.
+ */
+export const BOX_MIN = 16;
+
+/** What blockAbove asks of each element on its way up. */
+export interface Climb<E> {
+  up: (e: E) => E | null;
+  /** Whether it is the page itself (body, html), where the climb stops. */
+  top: (e: E) => boolean;
+  /** An inline box with no alternative text of its own: its words belong to the box around it. */
+  inline: (e: E) => boolean;
+  /** One item of a list or grid (isItem): a card, which is a block whatever its text. */
+  item: (e: E) => boolean;
+  /** The length of its text as the person sees it, spaces folded; past BOX_MAX it may stop counting. */
+  text: (e: E) => number;
+}
+
+/** One item of a list, grid or table: an article, a list item, a figure, a table row, or an element with the role of one. */
+export const isItem = (tag: string, role: string | null): boolean => ["article", "li", "figure", "tr"].includes(tag.toLowerCase()) || role === "article" || role === "listitem" || role === "row";
+
+/**
+ * The block of text around an element that is no block of text itself (TIN-697): a photo, an empty link
+ * stretched over a card to make all of it clickable, a wrapper. From `start` up, the nearest box with
+ * BOX_MIN characters of text or more, or an item (isItem) with any. When the boxes around that one hold
+ * the same text up to an item, the item: a card's wrappers give the card itself, while a post's text in
+ * a page of nothing else stays the post's text, not the page's main box. A box with more than BOX_MAX
+ * characters is most of the page: the climb stops there. When it stops with nothing found, the first
+ * scrap of text it passed, or null (the page).
+ */
+export function blockAbove<E>(start: E, c: Climb<E>): E | null {
+  let scrap: E | null = null;
+  for (let at: E | null = start; at && !c.top(at); at = c.up(at)) {
+    if (c.inline(at)) continue;
+    const n = c.text(at);
+    if (!n) continue;
+    if (n > BOX_MAX) return scrap;
+    if (n < BOX_MIN && !c.item(at)) {
+      scrap ??= at;
+      continue;
+    }
+    if (c.item(at)) return at;
+    for (let p = c.up(at); p && !c.top(p); p = c.up(p)) {
+      if (c.inline(p)) continue;
+      if (c.text(p) !== n) break;
+      if (c.item(p)) return p;
+    }
+    return at;
+  }
+  return scrap;
+}
+
+/** A heading: h1 to h6, or an element with the heading role. */
+export const isHeading = (tag: string, role: string | null): boolean => /^h[1-6]$/i.test(tag) || role === "heading";
+
+/**
+ * Whose headings stay its own: an item of a list or grid (isItem), and a section, aside or nav. A heading
+ * inside one names that one, never what comes after it.
+ */
+export const ownsHeadings = (tag: string, role: string | null): boolean => isItem(tag, role) || ["section", "aside", "nav"].includes(tag.toLowerCase());
+
+/** What headingOf asks of the page. */
+export interface Outline<E> {
+  up: (e: E) => E | null;
+  children: (e: E) => readonly E[];
+  /** A heading the person sees (isHeading, with text). */
+  heading: (e: E) => boolean;
+  /** ownsHeadings. */
+  owns: (e: E) => boolean;
+}
+
+/** The first (or last) heading in an element, in the page's order, past the ones inside an element that owns its headings. */
+function headingIn<E>(e: E, t: Outline<E>, last: boolean): E | null {
+  const kids = last ? [...t.children(e)].reverse() : t.children(e);
+  for (const c of kids) {
+    if (t.heading(c)) return c;
+    if (t.owns(c)) continue;
+    const h = headingIn(c, t, last);
+    if (h) return h;
+  }
+  return null;
+}
+
+/**
+ * The heading an element is under (TIN-697): the heading it is in or is; else its own first heading, as a
+ * card's title, past the headings of the items inside it; else, going up, the nearest heading before it
+ * among what surrounds it, never one inside an item, section, aside or nav it is not in (ownsHeadings);
+ * leaving an item or section it is in with none found, that one's own first heading, as a photo above a
+ * card's title is under that title. In a grid of cards, a card is under its own title or the grid's
+ * heading, never under the card before it.
+ */
+export function headingOf<E>(el: E, t: Outline<E>): E | null {
+  for (let at: E | null = el; at; at = t.up(at)) if (t.heading(at)) return at;
+  const own = headingIn(el, t, false);
+  if (own) return own;
+  for (let child = el, at = t.up(el); at; child = at, at = t.up(at)) {
+    const kids = t.children(at);
+    for (let i = kids.indexOf(child) - 1; i >= 0; i--) {
+      const s = kids[i]!;
+      if (t.heading(s)) return s;
+      if (t.owns(s)) continue;
+      const h = headingIn(s, t, true);
+      if (h) return h;
+    }
+    if (t.owns(at)) {
+      const h = headingIn(at, t, false);
+      if (h) return h;
+    }
+  }
+  return null;
+}

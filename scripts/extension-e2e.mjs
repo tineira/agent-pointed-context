@@ -182,12 +182,20 @@ const GFORM = `<!doctype html><title>Event sign-up</title><h1>Event sign-up</h1>
 const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
 // A table, and a paragraph with what innerText reads badly: a formula next to a hidden copy of itself, as Wikipedia has, and images with and without alt text (TIN-422).
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+// A grid of cards as autio.cl draws them (TIN-697): a photo with a photo-count badge, the car's title as a heading,
+// and an empty link stretched over the whole card, its words only for screen readers.
+const SR = "position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap";
+const car = (id, title, price) => `<article id="${id}" style="position:relative;border:1px solid #ccc;width:220px"><div><div class="media" style="position:relative;height:60px;background:#ddd">
+<img src="${PIXEL}" alt="" style="width:100%;height:100%"><span style="pointer-events:none;position:absolute;top:4px;right:4px;z-index:3"><span aria-hidden="true">5</span><span style="${SR}">5 photos</span></span></div>
+<div><h2 style="font-size:14px">${title}</h2><p class="price">${price}</p></div></div><a href="#${id}" style="position:absolute;inset:0;z-index:2"><span style="${SR}">${title}</span></a></article>`;
+const CARDS = `<section><h2>Cars for sale</h2><div style="display:flex;gap:8px">${car("audi", "Audi A3 Attraction 2009", "$8.900.000")}${car("saveiro", "Volkswagen Saveiro Comfortline 2020", "$10.100.000")}</div></section>`;
 const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countries</h2>
 <table><thead><tr><th>Country</th><th>Population</th></tr></thead><tbody><tr><td>Peru</td><td>33</td></tr><tr><td>Chile</td><td id="cell">19.6</td></tr></tbody></table>
 <p id="formula">Churn is <math alttext="L \\times T"><mi>L</mi><mi>T</mi></math><span style="display:none"><math alttext="HIDDEN COPY"><mi>H</mi></math></span>, see <img src="${PIXEL}" alt="the churn chart" width="20" height="20"> and <img src="${PIXEL}" width="20" height="20"> and <img src="${PIXEL}" alt="" width="20" height="20">.</p>
 <table><tr style="display:none"><th>HIDDEN HEADER</th><th>HIDDEN HEADER</th></tr><tr><td>Row</td><td id="unseen">Plain</td></tr></table>
 <p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
-<p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>`;
+<p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>
+${CARDS}`;
 const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
@@ -943,7 +951,7 @@ try {
     const { sessionId: figuresSession } = await cdp("Target.attachToTarget", { targetId: figures.targetId, flatten: true });
     await sleep(2000);
     const dropOnFigures = async (selector) => {
-      const point = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, figuresSession)).result.value;
+      const point = (await cdp("Runtime.evaluate", { expression: `(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, figuresSession)).result.value;
       const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
       for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: point.x, y: point.y, data: dragged }, figuresSession);
     };
@@ -971,6 +979,17 @@ try {
     // As on Wikipedia: the MathML clipped out of sight beside an image of it, with the same text.
     await dropOnFigures("#twice");
     await until("a formula read once", async () => /Pointed at \(p\): Area is x\^\{2\} here\./.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    // A drop on a card's photo, under the link stretched over it, points at the card, under its own title (TIN-697).
+    await dropOnFigures("#saveiro .media");
+    const carCard = await until("the reading of a card", async () => {
+      const text = (await tool("page__get_reading")).structuredContent?.page_text ?? "";
+      return /Pointed at \(article\)/.test(text) ? text : null;
+    });
+    // Its text as the person sees it: the photo count first, as the badge shows it.
+    assert.match(carCard, /Under the heading: Volkswagen Saveiro Comfortline 2020\nPointed at \(article\): 5 Volkswagen Saveiro Comfortline 2020 \$10\.100\.000/);
+    // The card before it: under its own title too.
+    await dropOnFigures("#audi .media");
+    await until("the first card under its own title", async () => /Under the heading: Audi A3 Attraction 2009\nPointed at \(article\): 5 Audi A3/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     await cdp("Target.closeTarget", { targetId: figures.targetId });
     const listed = (await api(`${base}/state`)).agents[0].readings;
     assert.equal(listed[0].kept, true);

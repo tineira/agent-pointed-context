@@ -13,15 +13,13 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
-import { altText, ANYWHERE, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, intersect, OPACITY_MIN, showsIn, tableContext, within, type Control, type Rect, type Seen } from "./read.ts";
+import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
-const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
+const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,[role=heading],a,button,label,legend,summary";
 const FIELDS = "input,textarea,select,option,[contenteditable=''],[contenteditable='true']";
 const TEXT_MAX = 2048;
 const HEADER_MAX = 200;
-/** A box of text bigger than this is most of the page, not what the person pointed at. */
-const BOX_MAX = 4000;
 /** A form's card (a question, a field with its label) holds at most this much text (cardOf). */
 const CARD_TEXT_MAX = 1200;
 /** The most elements the content script looks through for a card's controls. */
@@ -369,22 +367,35 @@ function labelCard(block: Element): Element | null {
   return cardOf(common, own, parentOf, controlKeys, cardText, isPage, CARD_TEXT_MAX);
 }
 
-/** The nearest block of text around an element, or null (a form field, or a box that is most of the page). */
+/** An element's text as the person sees it, spaces folded, counted up to a little past BOX_MAX. */
+const seenLength = (e: Element) => readable(e, BOX_MAX + 1).replace(/\s+/g, " ").trim().length;
+
+/** blockAbove on the page, across shadow roots: inline boxes without alternative text give their words to the box around them. */
+const climb = {
+  up: parentOf,
+  top: isPage,
+  inline: (e: Element) => {
+    const display = getComputedStyle(e).display;
+    return (display === "inline" || display === "contents") && !altText(e);
+  },
+  item: (e: Element) => isItem(e.tagName, e.getAttribute("role")),
+  text: seenLength,
+};
+
+/**
+ * The nearest block of text around an element, or null (a form field, or a box that is most of the page).
+ * A block the person sees no text in is none (TIN-697): a link stretched over a card to make all of it
+ * clickable holds only words for screen readers, so a drop on the card's photo or text lands on it, and
+ * the card around it is what was pointed at. Pages built of divs and spans (X, many web apps) and a drop on
+ * a photo get the box around them (blockAbove).
+ */
 function blockOf(under: Element | null): Element | null {
   // A formula or a drawing as a whole, not the glyph or shape inside it.
   const at = under?.closest("math,svg") ?? under;
   if (!at || at.closest(FIELDS)) return null;
   const block = at.closest(BLOCKS);
-  if (block) return block;
-  // Pages built of divs and spans (X, many web apps): the nearest box with text in it, unless that
-  // box is most of the page.
-  for (let el: Element | null = at; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
-    const display = getComputedStyle(el).display;
-    if ((display === "inline" || display === "contents") && !altText(el)) continue;
-    const text = readable(el, BOX_MAX + 1).trim();
-    if (text) return text.length <= BOX_MAX ? el : null;
-  }
-  return null;
+  if (block && seenLength(block)) return block;
+  return blockAbove(at, climb);
 }
 
 /** Whether the person can see this element. display: contents has no box of its own, but what is in it shows. */
@@ -512,7 +523,7 @@ function readAt(x: number, y: number, scope: Element | null) {
           name: scope.getAttribute("aria-label") || (scope as HTMLElement).title || null,
           // A little past the cap, so a number cut at the end is still seen whole and left out.
           text: readable(scope, TEXT_MAX).slice(0, TEXT_MAX + 64),
-          heading: headingBefore(scope),
+          heading: headingFor(scope),
           ...(cell && table ? tableContext(table, cell, (c) => readable(c, HEADER_MAX).slice(0, HEADER_MAX)) : {}),
         }
       : null,
@@ -534,7 +545,7 @@ function selectionContext(pointed: Element | null, selection: string): { heading
   if (!at) return null;
   const block = blockOf(at);
   if (pointed && block && (block === pointed || pointed.contains(block))) return null;
-  const heading = headingBefore(block ?? at);
+  const heading = headingFor(block ?? at);
   const fold = (s: string) => s.replace(/\s+/g, " ").trim();
   const words = block ? fold(readable(block, CONTEXT_MAX)).slice(0, CONTEXT_MAX + 64) : "";
   // The whole block selected: its text is the selection already.
@@ -684,13 +695,18 @@ function textWithout(el: Element): string {
   return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-/** The nearest h1 to h3 before an element in the document, or its own text when it is one: its text as the person sees it (readable), never innerText. */
-function headingBefore(el: Element): string | null {
-  let found: Element | null = null;
-  for (const h of document.querySelectorAll("h1,h2,h3")) {
-    if (h === el || h.contains(el) || h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) found = h;
-    else break;
-  }
+/** headingOf on the page: headings the person sees, across open shadow roots. */
+const outline = {
+  up: parentOf,
+  // A host's shadow tree is what it shows, with its light children slotted in.
+  children: (e: Element) => [...(e.shadowRoot?.children ?? []), ...e.children],
+  heading: (e: Element) => isHeading(e.tagName, e.getAttribute("role")) && seenLength(e) > 0,
+  owns: (e: Element) => ownsHeadings(e.tagName, e.getAttribute("role")),
+};
+
+/** The heading an element is under (headingOf), as the person sees it (readable), never innerText. */
+function headingFor(el: Element): string | null {
+  const found = headingOf<Element>(el, outline);
   return found ? readable(found, 200).replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, NO_ALT, tableContext } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -84,4 +84,149 @@ test("empty headers count as none, and a cell not in the table finds nothing", (
   const cell = td("2");
   assert.deepEqual(place(table([th(" "), th("  ")], [td(""), cell]), cell), { column: null, row: null });
   assert.deepEqual(place(table([td("a")]), td("elsewhere")), { column: null, row: null });
+});
+
+/** A page as plain nodes, for blockAbove and headingOf: a tag, a role, its own text, and whether it is inline. */
+interface Node {
+  tag: string;
+  role: string | null;
+  own: string;
+  inline: boolean;
+  parent: Node | null;
+  kids: Node[];
+}
+const el = (tag: string, kids: (Node | string)[] = [], opts: { role?: string; inline?: boolean } = {}): Node => {
+  const node: Node = { tag, role: opts.role ?? null, own: "", inline: opts.inline ?? false, parent: null, kids: [] };
+  for (const k of kids) {
+    if (typeof k === "string") node.own += k;
+    else {
+      k.parent = node;
+      node.kids.push(k);
+    }
+  }
+  return node;
+};
+const textOf = (n: Node): string => [n.own, ...n.kids.map(textOf)].join(" ").replace(/\s+/g, " ").trim();
+const climb = (body: Node) => ({
+  up: (n: Node) => n.parent,
+  top: (n: Node) => n === body,
+  inline: (n: Node) => n.inline,
+  item: (n: Node) => isItem(n.tag, n.role),
+  text: (n: Node) => textOf(n).length,
+});
+const outline = {
+  up: (n: Node) => n.parent,
+  children: (n: Node) => n.kids,
+  heading: (n: Node) => isHeading(n.tag, n.role) && textOf(n).length > 0,
+  owns: (n: Node) => ownsHeadings(n.tag, n.role),
+};
+
+/** A car card as autio.cl draws one: a photo with a photo-count badge, a caption, and an empty link stretched over it all. */
+const card = (title: string, price: string) => {
+  const photo = el("img", [], { inline: true });
+  const badge = el("span", ["5"]);
+  const media = el("div", [photo, badge]);
+  const heading = el("h2", [title]);
+  const priceTag = el("p", [price]);
+  const facts = el("p", ["45.870 km · Manual · Bencina"]);
+  const caption = el("div", [el("div", [heading, priceTag]), facts]);
+  const link = el("a", [el("span")]); // its words are sr-only: the person sees none
+  const article = el("article", [el("div", [media, caption]), link]);
+  return { article, photo, badge, media, heading, priceTag, caption, link };
+};
+const grid = () => {
+  const audi = card("Audi A3 Attraction 2009", "$8.900.000");
+  const vw = card("Volkswagen Saveiro Comfortline 2020", "$10.100.000");
+  const lone = el("article", [el("p", ["A card with no title of its own"])]);
+  const section = el("section", [el("h2", ["Autos disponibles"]), el("div", [audi.article, vw.article, lone])]);
+  const body = el("body", [el("header", [el("h1", ["autio"])]), section]);
+  return { audi, vw, lone, section, body };
+};
+
+test("a drop on a card's photo or on the link stretched over it points at the card, not the page (blockAbove, TIN-697)", () => {
+  const { vw, body } = grid();
+  const block = (n: Node) => blockAbove(n, climb(body));
+  // The link over the card holds no text the person sees: the card around it is what was pointed at.
+  assert.equal(block(vw.link), vw.article);
+  // The photo: past the badge, a scrap of text; the box around the photo and the caption holds the card's
+  // text, and so does the card around it, so the card itself.
+  assert.equal(block(vw.photo), vw.article);
+  assert.equal(block(vw.badge), vw.article);
+  // A box with enough text of its own is the block, not the card around it.
+  assert.equal(block(vw.caption), vw.caption);
+});
+
+test("the climb takes an item with little text, stops at most of the page, and keeps a scrap rather than nothing (blockAbove)", () => {
+  const small = el("li", ["Home"]);
+  const list = el("ul", [small]);
+  const body = el("body", [list]);
+  assert.equal(blockAbove(small, climb(body)), small);
+  // A scrap inside a box that is most of the page: the scrap, since there is nothing between.
+  const scrap = el("span", ["5"]);
+  const huge = el("div", [scrap, "x".repeat(BOX_MAX + 1)]);
+  const page = el("body", [huge]);
+  assert.equal(blockAbove(scrap, climb(page)), scrap);
+  // An empty table cell: its row, an item of the table, not the whole table.
+  const blank = el("td");
+  const row = el("tr", [el("td", ["Alice"]), blank]);
+  const table = el("table", [el("tr", [el("th", ["Name"]), el("th", ["Score"])]), row]);
+  assert.equal(blockAbove(blank, climb(el("body", [table]))), row);
+  // No text at all on the way up: the page.
+  const empty = el("div");
+  assert.equal(blockAbove(empty, climb(el("body", [el("main", [empty])]))), null);
+  // An inline box gives its words to the box around it; boxes around that with the same text but no
+  // card among them (a feed like X's, one post on the page) leave it the post's text, not the main box.
+  const word = el("span", ["Churn rose in March after the offer"], { inline: true });
+  const para = el("div", [word]);
+  assert.equal(blockAbove(word, climb(el("body", [el("main", [el("div", [para])])]))), para);
+});
+
+test("a card is under its own title, never the card before it; in a card, the title above (headingOf, TIN-697)", () => {
+  const { audi, vw, lone, section } = grid();
+  const title = (n: Node) => {
+    const h = headingOf(n, outline);
+    return h ? textOf(h) : null;
+  };
+  assert.equal(title(vw.article), "Volkswagen Saveiro Comfortline 2020");
+  assert.equal(title(audi.article), "Audi A3 Attraction 2009");
+  // Inside a card: its own title, before it in the card.
+  assert.equal(title(vw.priceTag), "Volkswagen Saveiro Comfortline 2020");
+  // A card with no title: the grid's heading, past the cards before it.
+  assert.equal(title(lone), "Autos disponibles");
+  // The heading itself, or something in it.
+  assert.equal(title(vw.heading), "Volkswagen Saveiro Comfortline 2020");
+  // A photo box whose badge has text enough to be the block: still under its own card's title, which
+  // comes after it in the card, not under the card before it.
+  const media = el("div", [el("img", [], { inline: true }), el("span", ["12 photos · 360 view"])]);
+  const subaru = el("article", [media, el("h2", ["Subaru Forester 2021"])]);
+  el("div", [card("Audi A3 Attraction 2009", "$8.900.000").article, subaru]);
+  assert.equal(title(media), "Subaru Forester 2021");
+  // A list of cards: its own heading, not its first card's title.
+  assert.equal(title(section), "Autos disponibles");
+});
+
+test("a paragraph is under the heading before it, never one inside a section, item or nav before it (headingOf)", () => {
+  const p = el("p", ["Churn in EU-West rose 4.2% in March."]);
+  const cell = el("td", ["19.6"]);
+  const body = el("body", [
+    el("h1", ["Churn notes"]),
+    el("nav", [el("h2", ["Menu"])]),
+    el("div", [el("h2", ["EU-West"])]),
+    el("section", [el("h2", ["Another section"])]),
+    el("ul", [el("li", [el("h3", ["A step"])])]),
+    p,
+    el("h2", ["", ""]), // an empty heading: no one sees it
+    el("table", [el("tr", [el("td", ["Chile"]), cell])]),
+  ]);
+  const title = (n: Node) => {
+    const h = headingOf(n, outline);
+    return h ? textOf(h) : null;
+  };
+  // In a wrapper before it: still its heading; inside a section or a list item before it: not.
+  assert.equal(title(p), "EU-West");
+  assert.equal(title(cell), "EU-West");
+  // A heading by its role (Google Forms) counts as one.
+  const q = el("div", [el("div", ["Email"], { role: "heading" }), el("div", ["Your answer"])], { role: "listitem" });
+  assert.equal(title(q), "Email");
+  assert.equal(headingOf(el("p", ["alone"]), outline), null);
 });
