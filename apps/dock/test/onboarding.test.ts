@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { advanceOnboarding, newOnboarding, type Onboarding } from "../src/onboarding.ts";
+import { advanceOnboarding, CHECKLIST_LENGTH, newOnboarding, setupProgress, type Onboarding } from "../src/onboarding.ts";
 import { dockReadEntry, hubFocus } from "../src/worker/logic.ts";
 
 test("milestones can arrive in any order and survive a serialized reload", () => {
@@ -75,4 +75,26 @@ test("empty focus, failed reads and tool listings never credit an app", () => {
   const listing = dockReadEntry("list_app_tools", { structuredContent: { apps: [focus.app], focus } });
   assert.equal(listing.app, null);
   assert.equal(listing.pin, null);
+});
+
+test("the checklist is ready once every item but the optional last one is done (TIN-701)", () => {
+  const none = setupProgress([], newOnboarding());
+  assert.deepEqual(none, { done: [false, false, false, false, false], count: 0, ready: false, connected: false });
+  assert.equal(none.done.length, CHECKLIST_LENGTH);
+
+  let progress = newOnboarding();
+  for (const type of ["connected", "pin_read", "reading_sent"] as const) progress = advanceOnboarding(progress, { type });
+  assert.equal(setupProgress([], progress).ready, false, "a second app is still missing");
+  progress = { ...progress, second_app: true };
+  const ready = setupProgress([], progress);
+  assert.equal(ready.ready, true, "Keep it at hand is optional");
+  assert.equal(ready.count, 4);
+  assert.equal(setupProgress([], { ...progress, kept: true }).count, 5);
+});
+
+test("an agent the dock sees connected counts before the hub's milestone lands", () => {
+  const seen = setupProgress([{ client_name: "claude-code" }], newOnboarding());
+  assert.equal(seen.connected, true);
+  assert.equal(seen.count, 1);
+  assert.equal(setupProgress([{ client_name: null }], newOnboarding()).connected, false);
 });

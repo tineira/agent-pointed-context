@@ -127,23 +127,40 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .dock-head { display: flex; align-items: baseline; justify-content: space-between; }
 .dock-head h1 { margin: 0; font-size: 16px; }
 .tiles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-.tile { display: flex; flex-direction: column; gap: 6px; }
+/* An agent's card (TIN-700): Float in its corner, Details inside it. */
+.tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 10px 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
 .tile.dragging .tile-drag { opacity: 0.5; }
-.tile-drag { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 10px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); cursor: grab; user-select: none; text-align: center; }
+.tile-drag { display: flex; flex-direction: column; align-items: center; gap: 4px; align-self: stretch; cursor: grab; user-select: none; text-align: center; }
 .tile-drag:active { cursor: grabbing; }
 .tile-name { font-weight: 700; font-size: 15px; }
 .tile-where { font-size: 12px; color: var(--muted); }
 .tile-where .read { color: var(--ok); }
-.tile-details { font-size: 12px; }
+.tile-details { align-self: stretch; font-size: 12px; }
 .tile-details summary { cursor: pointer; color: var(--muted); padding: 2px 0; }
 .tile-details[open] { display: flex; flex-direction: column; gap: 8px; }
 .tile-details .apps, .tile-details .compat { padding-left: 0; }
-.footer { justify-content: center; }
-.dock-downloads { display: grid; gap: 8px; }
-.download-buttons { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
-.download-button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-width: 0; padding: 10px 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg); text-decoration: none; text-align: center; overflow-wrap: anywhere; font-size: 12px; line-height: 1.35; }
-.download-button:hover { border-color: var(--muted); }
-.download-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Icon buttons (TIN-699): an icon and a label; the footer hides the label from sight, not from screen readers. */
+.icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.icon-button svg { flex: none; }
+.icon-button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+button.primary.icon-button[aria-pressed="true"] { color: #fff; }
+/* The footer (TIN-702): one row of icons, + · Float · ⋯, and any note on its own line under it. */
+.footer { position: relative; justify-content: center; }
+.footer button.icon-button { width: 34px; height: 34px; padding: 0; border-radius: 9px; }
+.footer .icon-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* A note (none selected, an old Windows app's shortcut) goes on its own line under the icons. */
+.footer > .muted { order: 1; flex-basis: 100%; text-align: center; }
+/* The menu opens above the footer, centred on it, so it fits the narrowest dock window. */
+.dock-menu-list { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 20; width: max-content; min-width: min(250px, 100%); max-width: 100%; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: none; color: var(--fg); font-size: 13px; text-align: left; text-decoration: none; cursor: pointer; }
+.menu-item:hover { background: var(--chip); }
+.menu-item:focus-visible { background: var(--chip); outline: 2px solid var(--accent); outline-offset: -2px; }
+.menu-item span { white-space: nowrap; }
+.menu-item small { margin-left: auto; padding-left: 8px; white-space: nowrap; font-size: 10px; }
+.menu-danger { color: #c0392b; }
+@media (prefers-color-scheme: dark) { .menu-danger { color: #ff6b5b; } }
+.menu-separator { height: 1px; margin: 4px 6px; background: var(--line); }
+.menu-note { padding: 4px 10px; font-size: 11px; }
 .download-logos { display: flex; gap: 4px; }
 .download-note { font-size: 11px; color: var(--muted); }
 
@@ -184,10 +201,21 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .pet-waiting { opacity: 0.4; }
 
 /* The event-driven checklist (TIN-489). */
-.setup { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.setup { display: flex; flex-direction: column; gap: 12px; padding: 4px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.setup.open { padding-bottom: 14px; }
 .setup p { font-size: 13px; }
-.setup-title { margin: 0; }
-.setup-title { text-transform: none; letter-spacing: normal; color: var(--fg); font-size: 15px; }
+/* Folded (TIN-701): one line with how far along it is; once the dock is ready, a quiet line at the bottom. */
+.setup-heading { margin: 0; font: inherit; text-transform: none; letter-spacing: normal; }
+/* Once the dock is ready, the checklist is the last thing in it (its place in the page stays, so it keeps its state). */
+.setup.ready { order: 1; }
+.setup-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 0; border: 0; border-radius: 0; background: none; text-align: left; }
+.setup-title { font-weight: 600; color: var(--fg); font-size: 14px; }
+.setup-progress { font-size: 12px; color: var(--muted); }
+.setup-ok { color: var(--ok); font-weight: 700; }
+.setup.ready:not(.open) { border-style: dashed; background: none; }
+.setup.ready:not(.open) .setup-title { font-weight: 400; color: var(--muted); font-size: 13px; }
+.setup-items { display: flex; flex-direction: column; gap: 12px; }
+.setup-items[hidden] { display: none; }
 .checklist-items { list-style: none; padding: 0; margin: 0; }
 .checklist-items > li + li { border-top: 1px solid var(--line); }
 .checklist-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 0; border: 0; border-radius: 0; background: none; text-align: left; font-weight: 600; }
@@ -200,8 +228,6 @@ main.dock { max-width: 420px; margin: 0 auto; padding: 12px 14px 16px; gap: 12px
 .allow-guide { margin: 0; padding-left: 20px; font-size: 13px; color: var(--muted); }
 .allow-guide li + li { margin-top: 8px; }
 .allow-guide .current { color: var(--accent); font-weight: 600; }
-.dock-menu summary { cursor: pointer; color: var(--muted); }
-.dock-menu[open] { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .ok { color: var(--ok); }
 .copy-row { flex-wrap: nowrap; align-items: stretch; }
 .url-block { white-space: pre-wrap; }
@@ -358,9 +384,12 @@ main.docs { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; gap: 18px
 .docs-foot { display: grid; gap: 6px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; }
 
 /* An agent's page (TIN-419), at /dock/agents/<id>. */
-.tile-float { align-self: center; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
-.tile-float input { margin: 0; }
-.tile-more { align-self: center; font-size: 12px; color: var(--muted); text-decoration: none; padding: 2px 0; }
+.tile-float { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-color: transparent; border-radius: 8px; background: none; color: var(--muted); opacity: 0.75; }
+.tile-float:hover, .tile-float:focus-visible { opacity: 1; border-color: var(--line); }
+.tile-float[aria-pressed="true"] { color: var(--fg); opacity: 1; }
+.tile-float.floating { color: var(--accent); }
+.tile-name { max-width: calc(100% - 64px); overflow-wrap: anywhere; }
+.tile-more { font-size: 12px; color: var(--muted); text-decoration: none; padding: 2px 0; }
 .tile-more:hover { color: var(--fg); }
 .agent-page .back { font-size: 12px; }
 .agent-hero { display: flex; align-items: center; gap: 12px; }

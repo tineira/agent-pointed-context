@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
-import type { Onboarding } from "../onboarding.ts";
+import { setupProgress, type Onboarding } from "../onboarding.ts";
 import { askYourAgentPrompt, Qr, SCAN_HINT } from "../../../demo/src/web/qr.tsx";
+import { InstallIcon } from "./icons.tsx";
 
 export interface SetupAgent {
   id: string;
@@ -114,8 +115,9 @@ export function Install(props: { label?: string; children?: (button: ReactNode) 
     return () => window.removeEventListener("beforeinstallprompt", on);
   }, []);
   const button = prompt ? (
-    <button type="button" className="primary" onClick={() => void prompt.prompt().then(() => setPrompt(null))}>
-      {props.label ?? "Install"}
+    <button type="button" className="primary icon-button" title="Install the dock as an app" onClick={() => void prompt.prompt().then(() => setPrompt(null))}>
+      <InstallIcon />
+      <span className="icon-label">{props.label ?? "Install"}</span>
     </button>
   ) : null;
   return props.children ? props.children(button) : button;
@@ -129,12 +131,14 @@ export function Install(props: { label?: string; children?: (button: ReactNode) 
 export const DESKTOP = [{ label: "Windows", match: /Windows/, url: "https://github.com/tineira/agent-pointed-context/releases/download/pulse-desktop/PulseDesktop.exe", note: "Unsigned for now: Windows asks once (More info, then Run anyway)." }];
 
 const TITLES = ["Connect your agent", "Point it at something", "Add a second app", "Any page", "Keep it at hand"];
-
-/** Persistent, order-independent first run. The hub, never a Next button, checks each item. */
-export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAtHand: ReactNode }) {
-  const { agents, progress } = props;
-  const connected = progress.connected || agents.some((a) => !!a.client_name);
-  const done = [connected, progress.pin_read, progress.second_app, progress.reading_sent, progress.kept];
+/**
+ * Persistent, order-independent first run. The hub, never a Next button, checks each item. Folded to
+ * one line that says how far along it is (TIN-701); `open` and `toggle` are the dock's, so its menu
+ * can open it too.
+ */
+export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAtHand: ReactNode; open: boolean; toggle: () => void }) {
+  const { agents } = props;
+  const { done, count, ready, connected } = setupProgress(agents, props.progress);
   const first = done.findIndex((d) => !d);
   const [chosen, setChosen] = useState<number | null>(() => new URLSearchParams(location.search).has("float") ? 4 : null);
   const active = chosen ?? first;
@@ -144,7 +148,7 @@ export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAt
   const bodies = [
     <div key="connect">
       <p>Drag the plug above into your agent’s chat and send. Or add its URL as a remote MCP server.</p>
-      {!agents.length && <p>Add an agent below to get its plug and connection URL.</p>}
+      {!agents.length && <p>Add an agent with <b>+</b> below to get its plug and connection URL.</p>}
       {agents.filter((a) => !a.client_name).map((a) => <ConnectAgent key={a.id} agent={a} />)}
       {connected && <p className="ok">Your agent connected. This is the only connection it needs.</p>}
     </div>,
@@ -161,6 +165,11 @@ export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAt
     <div key="second">
       <p>Signals, a second example app on the <a href={HOME} target="_blank" rel="noreferrer">APC home page</a>, is a market feed about the same company as Pulse. Drop your agent on a post, then ask what explains the churn.</p>
       <p>Allow in Signals, then in the dock. Your agent uses the same connection to read both apps and join what they say. No new MCP connection needed.</p>
+      {DESKTOP.filter((d) => d.match.test(navigator.userAgent)).map((d) => <div className="choice" key={d.label}>
+        <a className="download" href={d.url}>Or try Pulse for {d.label}</a>
+        <p>A native app: open it, then drag your agent onto a bar. It shows the same data as Pulse on the web.</p>
+        <p className="small-note">{d.note}</p>
+      </div>)}
     </div>,
     <div key="page">
       <p>Add the extension, then drop your agent on any paragraph. Allow the site in the extension and this browser in the dock when asked.</p>
@@ -173,15 +182,17 @@ export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAt
       {!DESKTOP_SHELL && <p className="small-note">Float needs Chrome or Edge on a computer. To install, use your browser’s install option if no Install button appears.</p>}
       {DOCK_DESKTOP.offered && <><a className="download" href={DOCK_DESKTOP.url}>Get the dock for Windows</a><p>Your agents float on top of every window as desktop pets. {DESKTOP_SHORTCUT} shows and hides them.</p><p className="small-note">{DOCK_DESKTOP.note}</p></>}
       {DESKTOP_SHELL && <p>Your desktop pets are already at hand. {DESKTOP_SHORTCUT} shows and hides them.</p>}
-      {DESKTOP.filter((d) => d.match.test(navigator.userAgent)).map((d) => <div className="choice" key={d.label}>
-        <a className="download" href={d.url}>Try Pulse for {d.label}</a>
-        <p>Open it, then drag your agent onto a bar in the app. It shows the same data as Pulse on the web.</p>
-        <p className="small-note">{d.note}</p>
-      </div>)}
     </div>,
   ];
-  return <section className="setup checklist" aria-label="Try your dock">
-    <h2 className="setup-title">Try your dock</h2>
+  return <section id="try-your-dock" className={`setup checklist${props.open ? " open" : ""}${ready ? " ready" : ""}`} aria-label="Try your dock">
+    <h2 className="setup-heading">
+    <button type="button" className="setup-toggle" aria-expanded={props.open} aria-controls="try-dock-items" onClick={props.toggle}>
+      {ready ? <><span className="setup-ok" aria-hidden="true">✓</span><span className="setup-title">Dock ready</span><span className="setup-progress">see steps</span></>
+        : <><span className="setup-title">Try your dock</span><span className="setup-progress">{count} of {TITLES.length}</span></>}
+      <span className="checklist-caret" aria-hidden="true">{props.open ? "−" : "+"}</span>
+    </button>
+    </h2>
+    <div id="try-dock-items" className="setup-items" hidden={!props.open}>
     <p>Nothing to install first. Each item checks itself as you try it, in any order.</p>
     <ol className="checklist-items">
       {TITLES.map((title, i) => <li key={title} className={done[i] ? "done" : ""}>
@@ -193,5 +204,6 @@ export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAt
         <div id={`try-dock-${i}`} className="checklist-body" hidden={active !== i}>{bodies[i]}</div>
       </li>)}
     </ol>
+    </div>
   </section>;
 }
