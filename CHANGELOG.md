@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### A drop on a card points at the card, under its own title (2026-11-08, TIN-697)
+
+- **The browser extension reads the card when the agent is dropped on a card's photo or text, instead of the page, and puts it under the card's own title, not the previous card's.** On autio.cl a link stretched over each card (its words only for screen readers) was taken as the block, with no text, so the dock read "the page"; a block with no visible text now climbs to the nearest box with enough text or a list or grid item (`blockAbove`), and the heading is the one the element is in, its own first heading, or the nearest one before it outside other items and sections (`headingOf`). (`apps/extension/src/read.ts`, `apps/extension/src/content.ts`, `apps/extension/test/read.test.ts`, `scripts/extension-e2e.mjs`, `DESIGN.md`)
+
 ### Float per agent: choose which agents float (2026-11-08, TIN-698)
 
 - **Each agent in the dock has its own Float tick, and only the ticked agents float; the dock for Windows' tray has a Float submenu with Float on, a check per agent, All and None.** New agents start ticked, marks are kept per device by the agent's id (so they survive reconnects and restarts), ticking an agent while Float is off turns Float on, and Float on with none ticked says "Float on, no agents selected" (`apps/dock/src/web/float-marks.ts`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/pet.tsx`, `apps/dock-desktop/src/float.rs`, `apps/dock-desktop/src/main.rs`, `apps/dock-desktop/src/pets.rs`).
