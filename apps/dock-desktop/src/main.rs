@@ -153,16 +153,21 @@ fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )
 }
 
-/// Builds the tray's menu again, after Float or the dock's agents changed (float.rs).
+/// Builds the tray's menu again, after Float or the dock's agents changed (float.rs). On the main thread,
+/// where the menu lives: the dock's pages ask for changes from other threads.
 fn refresh_tray(app: &AppHandle) {
-    if let (Some(tray), Ok(menu)) = (app.tray_by_id("tray"), tray_menu(app)) {
-        let _ = tray.set_menu(Some(menu));
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let (Some(tray), Ok(menu)) = (handle.tray_by_id("tray"), tray_menu(&handle)) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    });
 }
 
 /// A click in the tray's Float menu. Ticking an agent marks it and turns Float on, as in the dock.
 fn float_event(app: &AppHandle, id: &str) {
     let ids = || float::agents(app).into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+    let before = float::marks(app);
     match id {
         "float" => {
             toggle_float(app);
@@ -185,8 +190,11 @@ fn float_event(app: &AppHandle, id: &str) {
             }
         }
     }
-    // A check item ticks itself when clicked: the menu is built again so it shows the marks as they are.
-    refresh_tray(app);
+    // A check item ticks itself when clicked: when nothing changed (float::change builds the menu again
+    // when something did), the menu is built again anyway so it shows the marks as they are.
+    if float::marks(app) == before {
+        refresh_tray(app);
+    }
 }
 
 fn tray(app: &AppHandle) -> tauri::Result<()> {

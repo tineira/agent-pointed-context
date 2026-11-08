@@ -26,8 +26,10 @@ test("Marking an agent while Float is off turns Float on", () => {
   const m = setMarks({ on: false, unmarked: [A.id, B.id] }, [A.id], true);
   assert.deepEqual(m, { on: true, unmarked: [B.id] });
   assert.deepEqual(floatingAgents(m, [A, B]), [A]);
-  // Unmarking while it is off leaves it off.
+  // Unmarking while it is off leaves it off; so does marking nothing (an empty All, a bad id).
   assert.equal(setMarks(off, [A.id], false).on, false);
+  assert.equal(setMarks(off, [], true).on, false);
+  assert.equal(setMarks(off, ["hint"], true).on, false);
 });
 
 test("A mark survives the agent leaving and coming back, and a restart", () => {

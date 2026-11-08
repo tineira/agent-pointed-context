@@ -608,7 +608,8 @@ function DesktopFloat(props: FloatProps) {
   const choice: FloatChoice = {
     marked: (id) => marked(marks, id),
     mark: (id, on) => {
-      setMarksState(setMarks(marks, [id], on));
+      // At once, from the latest marks (a second tick may come before the page draws again); the app's answer then settles it.
+      setMarksState((now) => now && setMarks(now, [id], on));
       send({ agent: id, marked: on });
     },
   };
@@ -762,7 +763,8 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
     if (!pip) return;
     if (win) return win.focus();
     const shown = latest.current.agents.filter((a) => marked(latest.current, a.id)).length;
-    const w = await pip.requestWindow({ width: 100 * Math.max(1, Math.min(3, shown)), height: 110, preferInitialWindowPlacement: true });
+    // With no agent ticked the window opens wide enough for its notice (NONE_SELECTED), not one logo's width.
+    const w = await pip.requestWindow({ width: shown ? 100 * Math.min(3, shown) : 260, height: 110, preferInitialWindowPlacement: true });
     for (const sheet of [...document.styleSheets]) {
       try {
         const style = w.document.createElement("style");
@@ -788,7 +790,8 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
     ? {
         marked: (id) => marked(marks, id),
         mark: (id, on) => {
-          const next = setMarks(marks, [id], on).unmarked;
+          // From the latest marks, not this render's: a second tick may come before the page draws again.
+          const next = setMarks({ on: !!win, unmarked: latest.current.unmarked }, [id], on).unmarked;
           setUnmarked(next);
           latest.current.unmarked = next;
           if (on && !win) void openFloat();

@@ -42,7 +42,8 @@ export function noneSelected(m: Marks, ids: string[]): boolean {
 /** Marks or unmarks agents. Marking also turns Float on, so the click always shows something. */
 export function setMarks(m: Marks, ids: string[], mark: boolean): Marks {
   const valid = [...new Set(ids.filter(isAgentId))];
-  if (mark) return { on: true, unmarked: m.unmarked.filter((id) => !valid.includes(id)) };
+  // Only a real mark turns Float on: All in an empty dock, or a bad id, leaves it as it is.
+  if (mark) return { on: m.on || valid.length > 0, unmarked: m.unmarked.filter((id) => !valid.includes(id)) };
   const unmarked = [...m.unmarked.filter((id) => !valid.includes(id)), ...valid];
   return { on: m.on, unmarked: unmarked.slice(-MAX_UNMARKED) };
 }

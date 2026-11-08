@@ -48,7 +48,8 @@ impl Marks {
         }
         self.unmarked.retain(|u| !valid.contains(&u));
         if mark {
-            self.on = true;
+            // Only a real mark turns Float on: All in an empty dock, or a bad id, leaves it as it is.
+            self.on |= !valid.is_empty();
         } else {
             self.unmarked.extend(valid.into_iter().cloned());
             let extra = self.unmarked.len().saturating_sub(MAX_UNMARKED);
@@ -140,10 +141,14 @@ pub fn change(app: &AppHandle, f: impl FnOnce(&mut Marks)) -> Marks {
         let mut marks = state.marks.lock().unwrap();
         let before = marks.clone();
         f(&mut marks);
+        // Saved under the lock, so two changes at once never share the temporary file, and the last
+        // change is the last one written.
+        if *marks != before {
+            save(app, &marks);
+        }
         (before, marks.clone())
     };
     if after != before {
-        save(app, &after);
         crate::pets::show_floating(app);
         crate::refresh_tray(app);
         tell_dock(app, &after);
@@ -220,6 +225,11 @@ mod tests {
         let mut off = Marks { on: false, unmarked: ids(&[A, B]) };
         off.set(&ids(&[A]), true);
         assert_eq!(off, Marks { on: true, unmarked: ids(&[B]) });
+        // Marking nothing (All in an empty dock, a bad id) leaves Float off.
+        let mut none = Marks::default();
+        none.set(&ids(&["hint"]), true);
+        none.set(&[], true);
+        assert!(!none.on);
     }
 
     #[test]
