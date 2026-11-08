@@ -1,6 +1,6 @@
 import { DESKTOP, DESKTOP_SHELL, DOCK_DESKTOP } from "./setup.tsx";
 import { downloadPlatform } from "./download-platform.ts";
-import { ExtensionOutdatedNotice, useExtensionInstalled, useExtensionOutdated } from "./extension.tsx";
+import { useExtensionInstalled, useExtensionOutdated } from "./extension.tsx";
 
 /** Small platform marks identify the downloads; their adjacent text supplies the accessible name. */
 function WindowsLogo() {
@@ -22,29 +22,28 @@ function BrowserLogos() {
   </span>;
 }
 
-/** Permanent offers below the dock controls, separate from checklist completion. */
-export function Downloads() {
+/**
+ * The downloads, as items of the dock's "⋯" menu (TIN-702): no longer cards below the dock, and
+ * also offered in the Try your dock steps they belong to (TIN-701). The dock for Windows is offered
+ * only outside the app itself.
+ */
+export function DownloadItems() {
   const installed = useExtensionInstalled();
   const { outdated } = useExtensionOutdated();
   const extensionLabel = outdated ? "Extension out of date" : installed ? "Extension installed ✓" : "Browser extension";
   const platform = downloadPlatform(navigator.userAgent, DESKTOP_SHELL);
-  if (!platform.computer) return <p className="download-note">Desktop apps and the browser extension need a computer.</p>;
+  if (!platform.computer) return <p role="none" className="menu-note">Desktop apps and the browser extension need a computer.</p>;
   const pulse = DESKTOP.find((d) => d.label === "Windows");
-  return <section className="dock-downloads" aria-label="Get apps and extension">
-    <nav className="download-buttons" aria-label="Downloads">
-      {platform.dock && <a className="download-button" href={DOCK_DESKTOP.url} title={DOCK_DESKTOP.note}>
-        <WindowsLogo /><span>Dock for Windows</span>
-        <small className="download-note">Unsigned for now</small>
-      </a>}
-      {platform.pulse && pulse && <a className="download-button" href={pulse.url} title={pulse.note}>
-        <WindowsLogo /><span>Pulse for Windows</span>
-        <small className="download-note">Unsigned for now</small>
-      </a>}
-      <a className="download-button" href="/extension" target="_blank" rel="noreferrer" aria-label={installed ? `${extensionLabel} — Chrome and Edge` : "Browser extension for Chrome and Edge"}>
-        <BrowserLogos /><span>{extensionLabel}</span>
-      </a>
-    </nav>
-    <ExtensionOutdatedNotice />
-    {platform.later && <p className="download-note">Windows apps available · Mac and Linux later</p>}
-  </section>;
+  return <>
+    {platform.dock && <a role="menuitem" className="menu-item" href={DOCK_DESKTOP.url} title={DOCK_DESKTOP.note}>
+      <WindowsLogo /><span>Dock for Windows</span><small className="download-note">Unsigned for now</small>
+    </a>}
+    {platform.pulse && pulse && <a role="menuitem" className="menu-item" href={pulse.url} title={pulse.note}>
+      <WindowsLogo /><span>Pulse for Windows</span><small className="download-note">Unsigned for now</small>
+    </a>}
+    <a role="menuitem" className="menu-item" href="/extension" target="_blank" rel="noreferrer" aria-label={`${extensionLabel}, for Chrome and Edge`}>
+      <BrowserLogos /><span>{extensionLabel}</span>
+    </a>
+    {platform.later && <p role="none" className="menu-note">Windows apps available · Mac and Linux later</p>}
+  </>;
 }

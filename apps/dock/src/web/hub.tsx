@@ -19,7 +19,11 @@ import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-
 import { marked, noneSelected, NONE_SELECTED, readUnmarked, setMarks, writeUnmarked, type Marks } from "./float-marks.ts";
 import { floatApp, PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
-import { Downloads } from "./downloads.tsx";
+import { setupProgress } from "../onboarding.ts";
+import { DownloadItems } from "./downloads.tsx";
+import { DockMenu } from "./dock-menu.tsx";
+import { ExtensionOutdatedNotice } from "./extension.tsx";
+import { FloatIcon, PlusIcon } from "./icons.tsx";
 import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
 import { buttonsOff, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
 
@@ -107,6 +111,13 @@ export function HubDock() {
   }, [notice]);
   const [shown, setShown] = useState<Set<string>>(new Set());
   const tickets = useRef(new Map<string, { ticket: string; expires_at: number }>());
+  /**
+   * Try your dock, open or folded (TIN-701): null until the person chooses, and then it opens by
+   * itself only while no agent is connected yet, or when the extension's Float asked (?float=1).
+   */
+  const [tryOpen, setTryOpen] = useState<boolean | null>(() => (new URLSearchParams(location.search).has("float") ? true : null));
+  /** Opens Start over's dialog, from the "⋯" menu (TIN-702). */
+  const startOver = useRef<(() => void) | null>(null);
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
   const [reopen, setReopen] = useState(0);
@@ -408,13 +419,33 @@ export function HubDock() {
     );
   }
 
-  const renderDock = (controls: ReactNode, float: FloatChoice | null) => (
+  const setup = setupProgress(state.agents, state.onboarding);
+  const showTry = () => {
+    setTryOpen(true);
+    // After React draws it open (the click's update is already committed by the next task).
+    setTimeout(() => {
+      const toggle = document.querySelector<HTMLElement>("#try-your-dock .setup-toggle");
+      toggle?.focus({ preventScroll: true });
+      toggle?.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    });
+  };
+  const renderDock = (controls: ReactNode, float: FloatChoice | null) => {
+    const checklist = (
+      <Setup
+        agents={state.agents}
+        progress={state.onboarding}
+        keepAtHand={<div className="row">{controls}</div>}
+        open={tryOpen ?? !setup.connected}
+        toggle={() => setTryOpen(!(tryOpen ?? !setup.connected))}
+      />
+    );
+    return (
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
       {noticeEl}
       {requests}
-      {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>Add an agent</b> below, then connect it.</p>}
+      {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>+</b> below, then connect it.</p>}
       <ul className="tiles">
         {state.agents.map((a) => {
           const connected = !!a.client_name;
@@ -453,6 +484,7 @@ export function HubDock() {
               {connected ? (
                 <a
                   className="tile-more"
+                  draggable={false}
                   href={`/dock/agents/${a.id}`}
                   onClick={(e) => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -476,20 +508,31 @@ export function HubDock() {
           );
         })}
       </ul>
-      <Setup agents={state.agents} progress={state.onboarding} keepAtHand={<div className="row">{controls}</div>} />
+      {checklist}
+      {/* One row of icons (TIN-702): add an agent, Float, and "⋯" for the rest. */}
       <div className="row small footer">
-        <button type="button" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
-          Add an agent
+        <button type="button" className="icon-button" title="Add an agent" onClick={() => void call(`${base}/agents`, {}).then(refresh)}>
+          <PlusIcon />
+          <span className="icon-label">Add an agent</span>
         </button>
         {controls}
-        <details className="dock-menu">
-          <summary>Menu</summary>
-          <StartOver site="Agent dock" className="" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} />
-        </details>
+        <DockMenu>
+          <button type="button" role="menuitem" className="menu-item" onClick={showTry}>
+            {setup.ready ? "Try your dock (done)" : `Try your dock · ${setup.count} of ${setup.done.length}`}
+          </button>
+          <div role="separator" className="menu-separator" />
+          <DownloadItems />
+          <div role="separator" className="menu-separator" />
+          <button type="button" role="menuitem" className="menu-item menu-danger" title="Delete this dock's agents, pairings and progress, after a confirm" onClick={() => startOver.current?.()}>
+            Start over…
+          </button>
+        </DockMenu>
       </div>
-      <Downloads />
+      <StartOver site="Agent dock" wipes={DOCK_WIPES} reset={() => call(`${base}/reset`, {})} opener={startOver} />
+      <ExtensionOutdatedNotice />
     </main>
-  );
+    );
+  };
   return (
     <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand} refusal={noticeEl}>
       {renderDock}
@@ -524,6 +567,8 @@ type Decision = "approve" | "approve_unverified" | "deny" | "unpair";
 
 /** Float per agent (TIN-698): each agent's mark, shown on its tile. Marking one also turns Float on. */
 interface FloatChoice {
+  /** Whether Float is on: a marked agent floats now only while it is. */
+  on: boolean;
   marked: (id: string) => boolean;
   mark: (id: string, on: boolean) => void;
 }
@@ -547,15 +592,16 @@ function KeepAtHand(props: FloatProps) {
   return <Float {...props}>{(float, choice) => <Install>{(install) => props.children(<>{float}{install}</>, choice)}</Install>}</Float>;
 }
 
-/** An agent's Float mark on its tile (TIN-698). */
+/** An agent's Float mark (TIN-698), an icon in its card's corner (TIN-700). */
 function FloatMark(props: { agent: DockAgent; float: FloatChoice }) {
   const { agent: a, float } = props;
   const on = float.marked(a.id);
+  // Pressed is the mark; the accent says it floats right now (marked while Float is on); unmarked draws an empty window.
+  const title = !on ? `Float ${a.name} on top of every window` : float.on ? `${a.name} is floating. Click to keep it in the dock only` : `${a.name} floats when Float is on. Click to keep it in the dock only`;
   return (
-    <label className="tile-float" title={on ? `${a.name} floats while Float is on. Untick to keep it in the dock only` : `Float ${a.name} on top of every window`}>
-      <input type="checkbox" checked={on} onChange={(e) => float.mark(a.id, e.currentTarget.checked)} />
-      Float
-    </label>
+    <button type="button" className={`tile-float${on && float.on ? " floating" : ""}`} draggable={false} aria-pressed={on} aria-label={`Float ${a.name}`} title={title} onClick={() => float.mark(a.id, !on)}>
+      <FloatIcon filled={on} />
+    </button>
   );
 }
 
@@ -606,6 +652,7 @@ function DesktopFloat(props: FloatProps) {
   if (!marks) return props.children(<span className="muted" title="The APC dock for Windows keeps your agents on top of every window">{DESKTOP_SHORTCUT} floats your agents</span>, null);
   const send = (change: Parameters<typeof floatApp.set>[0]) => void floatApp.set(change).then((m) => m && setMarksState(m));
   const choice: FloatChoice = {
+    on: marks.on,
     marked: (id) => marked(marks, id),
     mark: (id, on) => {
       // At once, from the latest marks (a second tick may come before the page draws again); the app's answer then settles it.
@@ -615,8 +662,9 @@ function DesktopFloat(props: FloatProps) {
   };
   return props.children(
     <>
-      <button type="button" aria-pressed={marks.on} title={`Show or hide your agents on top of every window (${DESKTOP_SHORTCUT})`} onClick={() => send({ on: !marks.on })}>
-        {marks.on ? "Floating" : "Float"}
+      <button type="button" className="icon-button" aria-pressed={marks.on} title={`${marks.on ? "Floating: hide" : "Float: show"} your agents on top of every window (${DESKTOP_SHORTCUT})`} onClick={() => send({ on: !marks.on })}>
+        <FloatIcon />
+        <span className="icon-label">{marks.on ? "Floating" : "Float"}</span>
       </button>
       {noneSelected(marks, props.agents.map((a) => a.id)) && <span className="muted">{NONE_SELECTED}</span>}
     </>,
@@ -788,6 +836,7 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
   // Marking an agent while Float is off opens Float: the tick is the click Chrome needs to open it.
   const choice: FloatChoice | null = pip
     ? {
+        on: !!win,
         marked: (id) => marked(marks, id),
         mark: (id, on) => {
           // From the latest marks, not this render's: a second tick may come before the page draws again.
@@ -803,8 +852,9 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
       {props.children(
         pip ? (
           <>
-            <button type="button" title="Keep your agents on top of every window, ready to drag" onClick={() => void openFloat()}>
-              {win ? "Floating" : "Float"}
+            <button type="button" className="icon-button" aria-pressed={!!win} title={win ? "Floating: click to stop floating your agents" : "Float: keep your agents on top of every window, ready to drag"} onClick={() => (win ? win.close() : void openFloat())}>
+              <FloatIcon />
+              <span className="icon-label">{win ? "Floating" : "Float"}</span>
             </button>
             {noneSelected(marks, props.agents.map((a) => a.id)) && <span className="muted">{NONE_SELECTED}</span>}
           </>
@@ -894,7 +944,7 @@ function FloatAgents(props: {
   // A refusal with no request left: said in place of the logos until it is closed.
   if (props.refusal) return <div className="float float-requests">{props.refusal}</div>;
   const shown = props.floats ? props.agents.filter((a) => props.floats!(a.id)) : props.agents;
-  if (shown.length === 0) return <div className="float float-empty">{NONE_SELECTED}. Tick Float on an agent in your dock.</div>;
+  if (shown.length === 0) return <div className="float float-empty">{NONE_SELECTED}. Turn one on with the Float icon on its card in your dock.</div>;
   return (
     <div className="float">
       {shown.map((a) => {

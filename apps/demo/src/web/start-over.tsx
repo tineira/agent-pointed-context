@@ -43,8 +43,26 @@ const danger: CSSProperties = { ...button, background: "#c0392b", borderColor: "
  * reset: the server call that deletes this site's data and cookie; then the page clears its own
  * storage (and service worker, caches) and reloads from the top.
  */
-export function StartOver(props: { site: (typeof APC_SITES)[number]["name"]; wipes: string[]; reset: () => Promise<unknown>; className?: string }) {
+export function StartOver(props: {
+  site: (typeof APC_SITES)[number]["name"];
+  wipes: string[];
+  reset: () => Promise<unknown>;
+  className?: string;
+  /**
+   * For a site that opens the dialog from its own control (the dock's "⋯" menu, TIN-702): receives
+   * the function that opens it, and no "Start over" button is drawn here.
+   */
+  opener?: { current: (() => void) | null };
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const { opener } = props;
+  useEffect(() => {
+    if (!opener) return;
+    opener.current = () => dialog.current?.showModal();
+    return () => {
+      opener.current = null;
+    };
+  }, [opener]);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const disconnect = askToDisconnectPrompt("APC", APC_SITES[0].host);
@@ -80,9 +98,11 @@ export function StartOver(props: { site: (typeof APC_SITES)[number]["name"]; wip
   };
   return (
     <>
-      <button type="button" {...(props.className === undefined ? { style: trigger } : { className: props.className })} onClick={() => dialog.current?.showModal()} title={`Delete this ${props.site}'s demo data and start from zero`}>
-        Start over
-      </button>
+      {!opener && (
+        <button type="button" {...(props.className === undefined ? { style: trigger } : { className: props.className })} onClick={() => dialog.current?.showModal()} title={`Delete this ${props.site}'s demo data and start from zero`}>
+          Start over
+        </button>
+      )}
       <dialog ref={dialog} style={box} aria-labelledby="start-over-title" onClick={(e) => e.target === dialog.current && !busy && dialog.current?.close()}>
         <h2 id="start-over-title" style={{ margin: "0 0 8px", fontSize: 17, fontWeight: 600, textTransform: "none", letterSpacing: "normal", color: "CanvasText" }}>
           Start over in {props.site}?
