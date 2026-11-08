@@ -16,7 +16,7 @@ import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sens
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
-const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,a,button,label,summary";
+const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,[role=heading],a,button,label,legend,summary";
 const FIELDS = "input,textarea,select,option,[contenteditable=''],[contenteditable='true']";
 const TEXT_MAX = 2048;
 const HEADER_MAX = 200;
@@ -370,9 +370,9 @@ function labelCard(block: Element): Element | null {
 /** An element's text as the person sees it, spaces folded, counted up to a little past BOX_MAX. */
 const seenLength = (e: Element) => readable(e, BOX_MAX + 1).replace(/\s+/g, " ").trim().length;
 
-/** blockAbove on the page: inline boxes without alternative text give their words to the box around them. */
+/** blockAbove on the page, across shadow roots: inline boxes without alternative text give their words to the box around them. */
 const climb = {
-  up: (e: Element) => e.parentElement,
+  up: parentOf,
   top: isPage,
   inline: (e: Element) => {
     const display = getComputedStyle(e).display;
@@ -695,10 +695,11 @@ function textWithout(el: Element): string {
   return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
-/** headingOf on the page: headings the person sees, across shadow roots going up. */
+/** headingOf on the page: headings the person sees, across open shadow roots. */
 const outline = {
   up: parentOf,
-  children: (e: Element) => [...e.children],
+  // A host's shadow tree is what it shows, with its light children slotted in.
+  children: (e: Element) => [...(e.shadowRoot?.children ?? []), ...e.children],
   heading: (e: Element) => isHeading(e.tagName, e.getAttribute("role")) && seenLength(e) > 0,
   owns: (e: Element) => ownsHeadings(e.tagName, e.getAttribute("role")),
 };

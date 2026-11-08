@@ -307,8 +307,8 @@ export interface Climb<E> {
   text: (e: E) => number;
 }
 
-/** One item of a list or grid: an article, a list item, a figure, or an element with the role of one. */
-export const isItem = (tag: string, role: string | null): boolean => ["article", "li", "figure"].includes(tag.toLowerCase()) || role === "article" || role === "listitem";
+/** One item of a list, grid or table: an article, a list item, a figure, a table row, or an element with the role of one. */
+export const isItem = (tag: string, role: string | null): boolean => ["article", "li", "figure", "tr"].includes(tag.toLowerCase()) || role === "article" || role === "listitem" || role === "row";
 
 /**
  * The block of text around an element that is no block of text itself (TIN-697): a photo, an empty link
@@ -375,8 +375,10 @@ function headingIn<E>(e: E, t: Outline<E>, last: boolean): E | null {
 /**
  * The heading an element is under (TIN-697): the heading it is in or is; else its own first heading, as a
  * card's title, past the headings of the items inside it; else, going up, the nearest heading before it
- * among what surrounds it, never one inside an item, section, aside or nav it is not in (ownsHeadings).
- * In a grid of cards, a card is under its own title or the grid's heading, never under the card before it.
+ * among what surrounds it, never one inside an item, section, aside or nav it is not in (ownsHeadings);
+ * leaving an item or section it is in with none found, that one's own first heading, as a photo above a
+ * card's title is under that title. In a grid of cards, a card is under its own title or the grid's
+ * heading, never under the card before it.
  */
 export function headingOf<E>(el: E, t: Outline<E>): E | null {
   for (let at: E | null = el; at; at = t.up(at)) if (t.heading(at)) return at;
@@ -389,6 +391,10 @@ export function headingOf<E>(el: E, t: Outline<E>): E | null {
       if (t.heading(s)) return s;
       if (t.owns(s)) continue;
       const h = headingIn(s, t, true);
+      if (h) return h;
+    }
+    if (t.owns(at)) {
+      const h = headingIn(at, t, false);
       if (h) return h;
     }
   }

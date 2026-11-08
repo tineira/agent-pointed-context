@@ -148,7 +148,8 @@ test("a drop on a card's photo or on the link stretched over it points at the ca
   const block = (n: Node) => blockAbove(n, climb(body));
   // The link over the card holds no text the person sees: the card around it is what was pointed at.
   assert.equal(block(vw.link), vw.article);
-  // The photo: past the badge, a scrap of text, to the card; its wrapper holds the same text, so the card itself.
+  // The photo: past the badge, a scrap of text; the box around the photo and the caption holds the card's
+  // text, and so does the card around it, so the card itself.
   assert.equal(block(vw.photo), vw.article);
   assert.equal(block(vw.badge), vw.article);
   // A box with enough text of its own is the block, not the card around it.
@@ -165,6 +166,11 @@ test("the climb takes an item with little text, stops at most of the page, and k
   const huge = el("div", [scrap, "x".repeat(BOX_MAX + 1)]);
   const page = el("body", [huge]);
   assert.equal(blockAbove(scrap, climb(page)), scrap);
+  // An empty table cell: its row, an item of the table, not the whole table.
+  const blank = el("td");
+  const row = el("tr", [el("td", ["Alice"]), blank]);
+  const table = el("table", [el("tr", [el("th", ["Name"]), el("th", ["Score"])]), row]);
+  assert.equal(blockAbove(blank, climb(el("body", [table]))), row);
   // No text at all on the way up: the page.
   const empty = el("div");
   assert.equal(blockAbove(empty, climb(el("body", [el("main", [empty])]))), null);
@@ -189,6 +195,12 @@ test("a card is under its own title, never the card before it; in a card, the ti
   assert.equal(title(lone), "Autos disponibles");
   // The heading itself, or something in it.
   assert.equal(title(vw.heading), "Volkswagen Saveiro Comfortline 2020");
+  // A photo box whose badge has text enough to be the block: still under its own card's title, which
+  // comes after it in the card, not under the card before it.
+  const media = el("div", [el("img", [], { inline: true }), el("span", ["12 photos · 360 view"])]);
+  const subaru = el("article", [media, el("h2", ["Subaru Forester 2021"])]);
+  el("div", [card("Audi A3 Attraction 2009", "$8.900.000").article, subaru]);
+  assert.equal(title(media), "Subaru Forester 2021");
   // A list of cards: its own heading, not its first card's title.
   assert.equal(title(section), "Autos disponibles");
 });
