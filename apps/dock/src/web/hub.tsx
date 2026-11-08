@@ -16,7 +16,8 @@ import { AgentPet } from "./apc-pet.tsx";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
-import { PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
+import { marked, noneSelected, NONE_SELECTED, readUnmarked, setMarks, writeUnmarked, type Marks } from "./float-marks.ts";
+import { floatApp, PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
 import { Downloads } from "./downloads.tsx";
 import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
@@ -220,10 +221,13 @@ export function HubDock() {
     return () => clearInterval(id);
   }, [ticketed, fetchTicket]);
 
-  // The pets tell the app the dock's agents on every change, so a pet comes and goes with each (TIN-479).
-  const agentList = state ? ids : null;
+  // The pets tell the app the dock's agents on every change, so a pet comes and goes with each (TIN-479),
+  // with their names for the tray's Float menu (TIN-698).
+  const agentList = state ? JSON.stringify(state.agents.map((a) => [a.id, a.name])) : null;
   useEffect(() => {
-    if (PET && agentList !== null) petApp.agents(agentList ? agentList.split(",") : []);
+    if (!PET || agentList === null) return;
+    const list = JSON.parse(agentList) as Array<[string, string]>;
+    petApp.agents(list.map(([id]) => id), list.map(([, name]) => name));
   }, [agentList]);
 
   // The strip and the pets have no one to read an error, and no window can reach the dock while the
@@ -404,7 +408,7 @@ export function HubDock() {
     );
   }
 
-  const renderDock = (controls: ReactNode) => (
+  const renderDock = (controls: ReactNode, float: FloatChoice | null) => (
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
@@ -445,6 +449,7 @@ export function HubDock() {
                   )}
                 </span>
               </div>
+              {float && <FloatMark agent={a} float={float} />}
               {connected ? (
                 <a
                   className="tile-more"
@@ -517,6 +522,12 @@ interface FloatRequest {
 /** What the person answers a request with; "approve_unverified" is only the warning's Approve (TIN-581). */
 type Decision = "approve" | "approve_unverified" | "deny" | "unpair";
 
+/** Float per agent (TIN-698): each agent's mark, shown on its tile. Marking one also turns Float on. */
+interface FloatChoice {
+  marked: (id: string) => boolean;
+  mark: (id: string, on: boolean) => void;
+}
+
 interface FloatProps {
   agents: DockAgent[];
   onUsed: () => void;
@@ -524,24 +535,104 @@ interface FloatProps {
   requests: FloatRequest[];
   decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
-  children: (button: ReactNode) => ReactNode;
+  /** The controls (for the checklist and the footer), and each agent's Float mark where Float is there to choose for. */
+  children: (controls: ReactNode, float: FloatChoice | null) => ReactNode;
   /** The hub's refusal of the last answer (Fix check 4 on #120). */
   refusal?: ReactNode;
 }
 
 /** One Float window and install event, with controls in both the checklist and permanent footer. */
 function KeepAtHand(props: FloatProps) {
-  if (DESKTOP_SHELL) return props.children(<span className="muted" title="The APC dock for Windows keeps your agents on top of every window">{DESKTOP_SHORTCUT} floats your agents</span>);
-  return <Float {...props}>{(float) => <Install>{(install) => props.children(<>{float}{install}</>)}</Install>}</Float>;
+  if (DESKTOP_SHELL) return <DesktopFloat {...props} />;
+  return <Float {...props}>{(float, choice) => <Install>{(install) => props.children(<>{float}{install}</>, choice)}</Install>}</Float>;
 }
 
-function Float(props: FloatProps) {
+/** An agent's Float mark on its tile (TIN-698). */
+function FloatMark(props: { agent: DockAgent; float: FloatChoice }) {
+  const { agent: a, float } = props;
+  const on = float.marked(a.id);
+  return (
+    <label className="tile-float" title={on ? `${a.name} floats while Float is on. Untick to keep it in the dock only` : `Float ${a.name} on top of every window`}>
+      <input type="checkbox" checked={on} onChange={(e) => float.mark(a.id, e.currentTarget.checked)} />
+      Float
+    </label>
+  );
+}
+
+/** The agents this browser took out of Float (TIN-698), kept per device; the dock's other tabs follow. */
+const UNMARKED_KEY = "apc.dock.float";
+function useUnmarked(): [string[], (next: string[]) => void] {
+  const [unmarked, setUnmarked] = useState<string[]>(() => {
+    try {
+      return readUnmarked(localStorage.getItem(UNMARKED_KEY));
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    const on = (e: StorageEvent) => e.key === UNMARKED_KEY && setUnmarked(readUnmarked(e.newValue));
+    addEventListener("storage", on);
+    return () => removeEventListener("storage", on);
+  }, []);
+  const set = useCallback((next: string[]) => {
+    setUnmarked(next);
+    try {
+      localStorage.setItem(UNMARKED_KEY, writeUnmarked(next));
+    } catch {
+      // storage off: the marks last as long as the page
+    }
+  }, []);
+  return [unmarked, set];
+}
+
+/**
+ * Float in the APC dock for Windows (TIN-698): the app keeps whether Float is on and the marks
+ * (apps/dock-desktop/src/float.rs), shared with its tray; the page asks for them, sets them, and hears
+ * of every change (an "apc-float" event the app sends). An app from before TIN-698 has none of this:
+ * the page then says how to show the pets, as before.
+ */
+function DesktopFloat(props: FloatProps) {
+  const [marks, setMarksState] = useState<Marks | null>(null);
+  useEffect(() => {
+    let live = true;
+    void floatApp.state().then((m) => live && m && setMarksState((now) => now ?? m));
+    const on = (e: Event) => setMarksState((e as CustomEvent<Marks>).detail);
+    addEventListener("apc-float", on);
+    return () => {
+      live = false;
+      removeEventListener("apc-float", on);
+    };
+  }, []);
+  if (!marks) return props.children(<span className="muted" title="The APC dock for Windows keeps your agents on top of every window">{DESKTOP_SHORTCUT} floats your agents</span>, null);
+  const send = (change: Parameters<typeof floatApp.set>[0]) => void floatApp.set(change).then((m) => m && setMarksState(m));
+  const choice: FloatChoice = {
+    marked: (id) => marked(marks, id),
+    mark: (id, on) => {
+      setMarksState(setMarks(marks, [id], on));
+      send({ agent: id, marked: on });
+    },
+  };
+  return props.children(
+    <>
+      <button type="button" aria-pressed={marks.on} title={`Show or hide your agents on top of every window (${DESKTOP_SHORTCUT})`} onClick={() => send({ on: !marks.on })}>
+        {marks.on ? "Floating" : "Float"}
+      </button>
+      {noneSelected(marks, props.agents.map((a) => a.id)) && <span className="muted">{NONE_SELECTED}</span>}
+    </>,
+    choice,
+  );
+}
+
+function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactNode, choice: FloatChoice | null) => ReactNode }) {
   const pip = (window as unknown as { documentPictureInPicture?: { requestWindow(o: { width: number; height: number; preferInitialWindowPlacement?: boolean }): Promise<Window> } }).documentPictureInPicture;
   const [win, setWin] = useState<Window | null>(null);
+  // Float per agent (TIN-698): Float is on while its window is open; only the marked agents show in it.
+  const [unmarked, setUnmarked] = useUnmarked();
+  const marks: Marks = { on: !!win, unmarked };
   const [asked, setAsked] = useState(() => new URLSearchParams(location.search).has("float"));
   const root = useRef<Root | null>(null);
-  const latest = useRef(props);
-  latest.current = props;
+  const latest = useRef({ ...props, unmarked });
+  latest.current = { ...props, unmarked };
   // Chrome resizes a Picture-in-Picture window only during a user activation (TIN-480): a request
   // shows a compact notice, and the click on it (the activation) grows the window to the card.
   // float-size.ts keeps the bookkeeping: the size to give back, and the request the card was opened for.
@@ -602,6 +693,7 @@ function Float(props: FloatProps) {
     root.current.render(
       <FloatAgents
         agents={props.agents}
+        floats={(id) => marked({ unmarked }, id)}
         requests={props.requests}
         refusal={props.refusal}
         decide={(id, action) => {
@@ -622,7 +714,7 @@ function Float(props: FloatProps) {
         }}
       />,
     );
-  }, [win, props.agents, props.requests, props.refusal, showCard, size.opened]);
+  }, [win, props.agents, unmarked, props.requests, props.refusal, showCard, size.opened]);
   // Where a browser allows a resize without a click, the card shows at once (the window then fits);
   // otherwise the notice stays until the click. With no request left, back to the logos' size.
   useEffect(() => {
@@ -669,7 +761,8 @@ function Float(props: FloatProps) {
   async function openFloat(): Promise<void> {
     if (!pip) return;
     if (win) return win.focus();
-    const w = await pip.requestWindow({ width: 100 * Math.max(1, Math.min(3, props.agents.length)), height: 110, preferInitialWindowPlacement: true });
+    const shown = latest.current.agents.filter((a) => marked(latest.current, a.id)).length;
+    const w = await pip.requestWindow({ width: 100 * Math.max(1, Math.min(3, shown)), height: 110, preferInitialWindowPlacement: true });
     for (const sheet of [...document.styleSheets]) {
       try {
         const style = w.document.createElement("style");
@@ -690,11 +783,31 @@ function Float(props: FloatProps) {
     setWin(w);
     props.onUsed();
   }
+  // Marking an agent while Float is off opens Float: the tick is the click Chrome needs to open it.
+  const choice: FloatChoice | null = pip
+    ? {
+        marked: (id) => marked(marks, id),
+        mark: (id, on) => {
+          const next = setMarks(marks, [id], on).unmarked;
+          setUnmarked(next);
+          latest.current.unmarked = next;
+          if (on && !win) void openFloat();
+        },
+      }
+    : null;
   return (
     <>
-      {props.children(pip ? <button type="button" title="Keep your agents on top of every window, ready to drag" onClick={() => void openFloat()}>
-        {win ? "Floating" : "Float"}
-      </button> : null)}
+      {props.children(
+        pip ? (
+          <>
+            <button type="button" title="Keep your agents on top of every window, ready to drag" onClick={() => void openFloat()}>
+              {win ? "Floating" : "Float"}
+            </button>
+            {noneSelected(marks, props.agents.map((a) => a.id)) && <span className="muted">{NONE_SELECTED}</span>}
+          </>
+        ) : null,
+        choice,
+      )}
       {prompt}
     </>
   );
@@ -706,6 +819,8 @@ function Float(props: FloatProps) {
  */
 function FloatAgents(props: {
   agents: DockAgent[];
+  /** Float per agent (TIN-698): which agents show here. The strip (older Windows builds) shows them all. */
+  floats?: (id: string) => boolean;
   requests: FloatRequest[];
   decide: (id: string, action: Decision) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
@@ -775,9 +890,11 @@ function FloatAgents(props: {
   if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;
   // A refusal with no request left: said in place of the logos until it is closed.
   if (props.refusal) return <div className="float float-requests">{props.refusal}</div>;
+  const shown = props.floats ? props.agents.filter((a) => props.floats!(a.id)) : props.agents;
+  if (shown.length === 0) return <div className="float float-empty">{NONE_SELECTED}. Tick Float on an agent in your dock.</div>;
   return (
     <div className="float">
-      {props.agents.map((a) => {
+      {shown.map((a) => {
         const d = props.dragProps(a);
         return (
           <div

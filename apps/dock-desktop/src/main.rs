@@ -4,22 +4,18 @@
 //! with a global shortcut or from the tray. The pages are the web dock's own, so the hub, pairing
 //! and the drag are unchanged; only the windows are native. Closing a window hides it; Quit is in
 //! the tray. The tray names the build and checks for updates; a little after it starts the app checks
-//! too, and updates itself on the person's yes (TIN-615, update.rs).
+//! too, and updates itself on the person's yes (TIN-615, update.rs). Which agents float is the person's
+//! choice, per agent, from the tray's Float menu or the dock (TIN-698, float.rs).
 //!
 //! APC_DOCK_ORIGIN points it at another dock (a local `pnpm --dir apps/dock dev`, say).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod float;
 mod pets;
 mod update;
 
-use std::{
-    fs,
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-};
-
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     webview::NewWindowResponse,
     AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
@@ -35,6 +31,16 @@ const DOCK_ORIGIN: &str = "https://apc.tineira.com";
 fn origin() -> Url {
     let dock = std::env::var("APC_DOCK_ORIGIN").unwrap_or_else(|_| DOCK_ORIGIN.into());
     Url::parse(&dock).expect("APC_DOCK_ORIGIN is a URL")
+}
+
+/// The dock pages that may call the app's commands (the pets', float.rs's): a release build grants only
+/// the deployed dock, whatever APC_DOCK_ORIGIN says; a debug build the dock it loads (a local one, say).
+fn granted() -> Url {
+    if cfg!(debug_assertions) {
+        origin()
+    } else {
+        Url::parse(DOCK_ORIGIN).expect("DOCK_ORIGIN is a URL")
+    }
 }
 
 /// The dock page, or with view=pet a pet.
@@ -97,65 +103,104 @@ fn show_dock(app: &AppHandle) {
     }
 }
 
-/// Whether the pets show (Float agents in the tray), for pets opened later.
-struct Floating(AtomicBool);
-
-fn floating(app: &AppHandle) -> bool {
-    app.try_state::<Floating>().is_some_and(|f| f.0.load(Ordering::Relaxed))
-}
-
-/// Whether the pets were showing when the app last ran (shown on the first run).
-fn float_flag(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|dir| dir.join("float"))
-}
-
-/// Builds before the pets kept the same flag for the strip, as `strip`: read once when `float` is not there yet.
-fn float_was_shown(app: &AppHandle) -> bool {
-    let dir = app.path().app_config_dir().ok();
-    let read = |name: &str| dir.as_ref().and_then(|d| fs::read_to_string(d.join(name)).ok());
-    read("float").or_else(|| read("strip")).is_none_or(|s| s != "0")
-}
-
-fn set_float(app: &AppHandle, shown: bool) {
-    if let Some(f) = app.try_state::<Floating>() {
-        f.0.store(shown, Ordering::Relaxed);
-    }
-    pets::show_all(app, shown);
-    if let Some(item) = app.try_state::<CheckMenuItem<Wry>>() {
-        let _ = item.set_checked(shown);
-    }
-    if let Some(flag) = float_flag(app) {
-        let _ = flag.parent().map(fs::create_dir_all);
-        let _ = fs::write(flag, if shown { "1" } else { "0" });
-    }
-}
-
 fn toggle_float(app: &AppHandle) {
-    set_float(app, !floating(app));
+    float::change(app, |m| m.on = !m.on);
 }
 
-fn tray(app: &AppHandle, shown: bool) -> tauri::Result<()> {
+/// The tray's id for an agent's item in the Float menu.
+const AGENT_ITEM: &str = "float-agent:";
+
+/// An agent's name as a menu item: "&" would underline the next letter, a tab would start a shortcut.
+fn menu_text(name: &str) -> String {
+    let clean: String = name.chars().filter(|c| !c.is_control()).take(40).collect();
+    clean.replace('&', "&&")
+}
+
+/// The tray's Float menu (TIN-698): Float on, a check per agent in the dock, All and None. While Float
+/// is on with no agent marked, its first item says so.
+fn float_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    let (marks, agents) = (float::marks(app), float::agents(app));
+    let ids: Vec<String> = agents.iter().map(|(id, _)| id.clone()).collect();
+    let on = if marks.none_selected(&ids) { float::NONE_SELECTED } else { "Float on" };
+    let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = vec![
+        Box::new(CheckMenuItem::with_id(app, "float", format!("{on}\t{SHORTCUT}"), true, marks.on, None::<&str>)?),
+        Box::new(PredefinedMenuItem::separator(app)?),
+    ];
+    for (id, name) in &agents {
+        items.push(Box::new(CheckMenuItem::with_id(app, format!("{AGENT_ITEM}{id}"), menu_text(name), true, marks.marked(id), None::<&str>)?));
+    }
+    if agents.is_empty() {
+        items.push(Box::new(MenuItem::with_id(app, "float-empty", "No agents in your dock", false, None::<&str>)?));
+    }
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(app, "float-all", "All", !agents.is_empty(), None::<&str>)?));
+    items.push(Box::new(MenuItem::with_id(app, "float-none", "None", !agents.is_empty(), None::<&str>)?));
+    let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|i| i.as_ref()).collect();
+    Submenu::with_items(app, "Float", true, &refs)
+}
+
+fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     // The build, greyed out at the top: "APC dock 0.2.N (abc1234)" (TIN-615).
     let build = update::label(&app.package_info().version.to_string());
     let about = MenuItem::with_id(app, "build", &build, false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open dock", true, None::<&str>)?;
-    let float = CheckMenuItem::with_id(app, "float", format!("Float agents\t{SHORTCUT}"), true, shown, None::<&str>)?;
+    let float = float_menu(app)?;
     let updates = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit APC Dock", true, None::<&str>)?;
-    let menu = Menu::with_items(
+    Menu::with_items(
         app,
         &[&about, &PredefinedMenuItem::separator(app)?, &open, &float, &PredefinedMenuItem::separator(app)?, &updates, &quit],
-    )?;
-    app.manage(float);
+    )
+}
+
+/// Builds the tray's menu again, after Float or the dock's agents changed (float.rs).
+fn refresh_tray(app: &AppHandle) {
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("tray"), tray_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+/// A click in the tray's Float menu. Ticking an agent marks it and turns Float on, as in the dock.
+fn float_event(app: &AppHandle, id: &str) {
+    let ids = || float::agents(app).into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+    match id {
+        "float" => {
+            toggle_float(app);
+        }
+        "float-all" => {
+            let all = ids();
+            float::change(app, |m| m.set(&all, true));
+        }
+        "float-none" => {
+            let all = ids();
+            float::change(app, |m| m.set(&all, false));
+        }
+        _ => {
+            if let Some(agent) = id.strip_prefix(AGENT_ITEM) {
+                let agent = agent.to_string();
+                float::change(app, |m| {
+                    let mark = !m.marked(&agent);
+                    m.set(&[agent], mark);
+                });
+            }
+        }
+    }
+    // A check item ticks itself when clicked: the menu is built again so it shows the marks as they are.
+    refresh_tray(app);
+}
+
+fn tray(app: &AppHandle) -> tauri::Result<()> {
+    let build = update::label(&app.package_info().version.to_string());
+    let menu = tray_menu(app)?;
     let mut builder = TrayIconBuilder::with_id("tray")
         .tooltip(&build)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_dock(app),
-            "float" => toggle_float(app),
             "update" => update::check_now(app),
             "quit" => app.exit(0),
+            id if id == "float" || id.starts_with("float-") => float_event(app, id),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -182,13 +227,12 @@ fn main() {
         // which the dock page (remote, with no capability in the dock's window) cannot use, so the
         // links did nothing. Without it a click is a new window request, and on_new_window opens the
         // link (tauri_plugin_opener's open_url needs no plugin).
-        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_bubble, pets::pet_grip, pets::pet_move, pets::pet_open_dock])
+        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_bubble, pets::pet_grip, pets::pet_move, pets::pet_open_dock, float::float_state, float::float_set])
         .setup(|app| {
             let app = app.handle();
+            float::start(app)?;
             dock(app)?;
-            let shown = float_was_shown(app);
-            app.manage(Floating(AtomicBool::new(shown)));
-            tray(app, shown)?;
+            tray(app)?;
             // The pets resume the dock this window opens and wait for it on a first run, so both can
             // open at once (POST /api/dock with { resume: true }).
             pets::start(app)?;
@@ -207,7 +251,7 @@ fn main() {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 if window.label().starts_with(pets::PREFIX) {
-                    set_float(window.app_handle(), false);
+                    float::change(window.app_handle(), |m| m.on = false);
                 } else {
                     let _ = window.hide();
                 }

@@ -358,6 +358,8 @@ main.docs { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; gap: 18px
 .docs-foot { display: grid; gap: 6px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; }
 
 /* An agent's page (TIN-419), at /dock/agents/<id>. */
+.tile-float { align-self: center; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.tile-float input { margin: 0; }
 .tile-more { align-self: center; font-size: 12px; color: var(--muted); text-decoration: none; padding: 2px 0; }
 .tile-more:hover { color: var(--fg); }
 .agent-page .back { font-size: 12px; }

@@ -182,7 +182,7 @@ fn save(app: &AppHandle) {
 }
 
 /// An agent id as the dock makes them (ag_ and hex): the only names a pet window takes.
-fn is_agent(id: &str) -> bool {
+pub fn is_agent(id: &str) -> bool {
     id.len() <= 64 && id.strip_prefix("ag_").is_some_and(|hex| !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
@@ -330,15 +330,16 @@ fn open(app: &AppHandle, key: &str) -> tauri::Result<WebviewWindow> {
     place(app, &w);
     // A subclass is set from the window's own thread (pet_agents runs on another), and before the pet
     // shows, so no click comes first. Without it a pet only risks the title bar, so it still shows.
-    // Whether the pets show is read there, not before the hop: a toggle in between is not undone.
-    let (pet, handle) = (w.clone(), app.clone());
+    // Whether the pet shows (Float on and its agent marked, TIN-698) is read there, not before the hop:
+    // a toggle in between is not undone.
+    let (pet, handle, agent) = (w.clone(), app.clone(), key.to_string());
     let hooked = w.run_on_main_thread(move || {
         no_title_bar(&pet);
-        if crate::floating(&handle) {
+        if crate::float::shows(&handle, &agent) {
             show(&pet, true);
         }
     });
-    if hooked.is_err() && crate::floating(app) {
+    if hooked.is_err() && crate::float::shows(app, key) {
         show(&w, true);
     }
     Ok(w)
@@ -360,15 +361,17 @@ fn show(window: &WebviewWindow, shown: bool) {
     let _ = if shown { window.show() } else { window.hide() };
 }
 
-/// Shows or hides every pet. A hidden pet gets no pointerleave, so its grip stops taking clicks here.
-pub fn show_all(app: &AppHandle, shown: bool) {
-    if !shown {
-        if let Some(state) = app.try_state::<Pets>() {
-            state.hovered.lock().unwrap().clear();
-        }
-    }
+/// Shows the pets that float (Float on, their agent marked: float.rs) and hides the others. A hidden
+/// pet gets no pointerleave, so its grip stops taking clicks here.
+pub fn show_floating(app: &AppHandle) {
+    let marks = crate::float::marks(app);
     for w in pet_windows(app) {
+        let Some(k) = key(&w) else { continue };
+        let shown = marks.shows(&k);
         if !shown {
+            if let Some(state) = app.try_state::<Pets>() {
+                state.hovered.lock().unwrap().remove(&k);
+            }
             reshape(app, &w);
         }
         show(&w, shown);
@@ -404,12 +407,10 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
         keys.push(HINT.into());
     }
     // The pets' page is the dock's own, remote: only it, in pet windows, may call these commands
-    // (pet_move moves only the window that calls it). A release build grants only the deployed dock, whatever
-    // APC_DOCK_ORIGIN says; a debug build the dock it loads (a local one, say).
-    let granted = if cfg!(debug_assertions) { crate::origin() } else { tauri::Url::parse(crate::DOCK_ORIGIN).expect("DOCK_ORIGIN is a URL") };
+    // (pet_move moves only the window that calls it).
     app.add_capability(
         CapabilityBuilder::new("pets")
-            .remote(format!("{}/*", granted.origin().ascii_serialization()))
+            .remote(format!("{}/*", crate::granted().origin().ascii_serialization()))
             .window(format!("{PREFIX}*"))
             .permission("allow-pet-agents")
             .permission("allow-pet-bubble")
@@ -437,12 +438,24 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// The dock's agents, from a pet's page on every change: one pet each, opened or closed to match.
+/// The dock's agents, from a pet's page on every change: one pet each, opened or closed to match. Their
+/// names, in the same order, are for the tray's Float menu (TIN-698); a page from before sends none.
 #[tauri::command]
-pub async fn pet_agents(app: AppHandle, agents: Vec<String>) -> Result<(), String> {
+pub async fn pet_agents(app: AppHandle, agents: Vec<String>, names: Option<Vec<String>>) -> Result<(), String> {
     let state = app.state::<Pets>();
     let _one = state.sync.lock().unwrap();
-    let mut wanted: HashSet<String> = agents.into_iter().filter(|a| is_agent(a)).take(MAX_PETS).collect();
+    let known = crate::float::agents(&app);
+    let named = |i: usize, id: &str| {
+        names.as_ref().and_then(|n| n.get(i)).cloned().or_else(|| known.iter().find(|(k, _)| k == id).map(|(_, n)| n.clone())).unwrap_or_else(|| id.to_string())
+    };
+    let mut listed: Vec<(String, String)> = Vec::new();
+    for (i, id) in agents.iter().enumerate() {
+        if is_agent(id) && listed.len() < MAX_PETS && !listed.iter().any(|(k, _)| k == id) {
+            listed.push((id.clone(), named(i, id)));
+        }
+    }
+    crate::float::set_agents(&app, listed.clone());
+    let mut wanted: HashSet<String> = listed.into_iter().map(|(id, _)| id).collect();
     // Saved spots of agents no longer in the dock go.
     let before = state.at.lock().unwrap().len();
     state.at.lock().unwrap().retain(|k, _| wanted.contains(k));
