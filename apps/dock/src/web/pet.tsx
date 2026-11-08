@@ -10,6 +10,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
+import type { Marks } from "./float-marks.ts";
 import { AgentPet } from "./apc-pet.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
 import { UnverifiedRequest, type UnverifiedAction } from "./unverified.tsx";
@@ -31,8 +32,8 @@ interface Side {
 const tauri = (window as { __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } }).__TAURI_INTERNALS__;
 const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T | null> => (tauri ? tauri.invoke<T>(cmd, args).catch(() => null) : Promise.resolve(null));
 export const petApp = {
-  /** The dock's agents: the app opens a pet for each and closes the others. */
-  agents: (ids: string[]) => void invoke("pet_agents", { agents: ids }),
+  /** The dock's agents: the app opens a pet for each and closes the others, and lists them by name in its tray's Float menu (TIN-698; an older app ignores the names). */
+  agents: (ids: string[], names: string[]) => void invoke("pet_agents", { agents: ids, names }),
   /** The mouse is over the pet, or left it: the app lets the grip take clicks while it is. */
   grip: (shown: boolean) => void invoke("pet_grip", { shown }),
   /**
@@ -43,6 +44,15 @@ export const petApp = {
   /** The bubble's size, or null when it goes: the app sizes the window and says which way it opens. */
   bubble: (size: { width: number; height: number } | null) => invoke<Side>("pet_bubble", { bubble: size && [size.width, size.height] }),
   openDock: () => void invoke("pet_open_dock"),
+};
+
+/**
+ * Float per agent in the app (TIN-698, float.rs), for the dock's own window: whether Float is on and
+ * which agents it took out, and changes to them. Null from an app before TIN-698, or outside the app.
+ */
+export const floatApp = {
+  state: () => invoke<Marks>("float_state"),
+  set: (change: { on?: boolean; agent?: string; marked?: boolean }) => invoke<Marks>("float_set", change),
 };
 
 export interface PetRequest {
