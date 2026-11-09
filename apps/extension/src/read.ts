@@ -182,6 +182,41 @@ export const showsIn = (box: Rect, clip: Rect): boolean => {
   return i.right - i.left > 1 && i.bottom - i.top > 1;
 };
 
+/** A token longer than this many UTF-16 units that spans lines is cut at its line breaks coarsely, not grapheme by grapheme. */
+const TOKEN_SPLIT_MAX = 20000;
+const graphemes = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+
+/**
+ * The part of a text that shows inside a clip, word by word (TIN-622): `rectsOf(start, end)` gives the
+ * client rects of that slice of the text. A word is kept whole when any of its rects shows, and the
+ * spaces between kept words stay. A token with no space that spans lines (a CJK paragraph, `break-all`,
+ * `overflow-wrap: anywhere`) is cut into graphemes (so a surrogate pair or a combining mark is never
+ * split) and only the graphemes that show are kept, joined with no space: CJK has none to put back.
+ * Graphemes, not `Intl.Segmenter` words: a CJK dictionary word can itself straddle a line break, and a
+ * grapheme never does.
+ */
+export function visibleWords(data: string, rectsOf: (start: number, end: number) => Rect[], clip: Rect): string {
+  let out = "";
+  let pending = "";
+  for (const m of data.matchAll(/\s+|\S+/g)) {
+    if (/^\s/.test(m[0])) {
+      pending = m[0];
+      continue;
+    }
+    const rects = rectsOf(m.index, m.index + m[0].length).filter((r) => r.right > r.left || r.bottom > r.top);
+    let kept = "";
+    if (rects.length > 1 && graphemes && m[0].length <= TOKEN_SPLIT_MAX && rects.some((r) => !within(r, clip))) {
+      for (const g of graphemes.segment(m[0])) {
+        const at = m.index + g.index;
+        if (rectsOf(at, at + g.segment.length).some((r) => showsIn(r, clip))) kept += g.segment;
+      }
+    } else if (rects.some((r) => showsIn(r, clip))) kept = m[0];
+    if (kept) out += (out ? pending : "") + kept;
+    pending = "";
+  }
+  return out;
+}
+
 /** What a CSS filter does to opacity: opacity(0.5) or opacity(50%), multiplied; 1 without one. */
 export function filterOpacity(filter: string): number {
   let out = 1;

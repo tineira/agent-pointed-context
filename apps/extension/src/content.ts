@@ -13,7 +13,7 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
-import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, within, type Control, type Rect, type Seen } from "./read.ts";
+import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,[role=heading],a,button,label,legend,summary";
@@ -455,21 +455,15 @@ function readable(el: Element, max: number): string {
     const rects = [...range.getClientRects()].filter((r) => r.width > 0 || r.height > 0);
     if (!rects.some((r) => showsIn(r, clip))) return "";
     if (rects.every((r) => within(r, clip))) return node.data;
-    let out = "";
-    let pending = "";
-    for (const m of node.data.matchAll(/\s+|\S+/g)) {
-      if (/^\s/.test(m[0])) {
-        pending = m[0];
-        continue;
-      }
-      range.setStart(node, m.index);
-      range.setEnd(node, m.index + m[0].length);
-      if ([...range.getClientRects()].some((r) => showsIn(r, clip))) {
-        out += (out ? pending : "") + m[0];
-      }
-      pending = "";
-    }
-    return out;
+    return visibleWords(
+      node.data,
+      (start, end) => {
+        range.setStart(node, start);
+        range.setEnd(node, end);
+        return [...range.getClientRects()];
+      },
+      clip,
+    );
   };
   const parent = parentOf(el);
   const walk = (e: Element, opacity: number, clip: Rect) => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext, visibleWords, type Rect } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -229,4 +229,47 @@ test("a paragraph is under the heading before it, never one inside a section, it
   const q = el("div", [el("div", ["Email"], { role: "heading" }), el("div", ["Your answer"])], { role: "listitem" });
   assert.equal(title(q), "Email");
   assert.equal(headingOf(el("p", ["alone"]), outline), null);
+});
+
+// TIN-622: a token with no space that spans lines is kept only where it shows.
+/** A text laid out `perLine` UTF-16 units to a line, 20 px high, as a Range over a slice reports it: one rect per line the slice touches. */
+const layout = (perLine: number) => (start: number, end: number): Rect[] => {
+  const rects: Rect[] = [];
+  for (let l = Math.floor(start / perLine); l <= Math.floor((end - 1) / perLine); l++) {
+    const from = Math.max(start, l * perLine) - l * perLine;
+    const to = Math.min(end, (l + 1) * perLine) - l * perLine;
+    rects.push({ left: from * 10, top: l * 20, right: to * 10, bottom: l * 20 + 20 });
+  }
+  return rects;
+};
+/** A scroll box 100 px wide that shows the first two lines. */
+const twoLines: Rect = { left: 0, top: 0, right: 100, bottom: 40 };
+
+test("a CJK paragraph in a box that shows two of its lines gives only those lines, with no spaces (TIN-622)", () => {
+  const text = "一二三四五六七八九十" + "甲乙丙丁戊己庚辛壬癸" + "子丑寅卯辰巳午未申酉" + "春夏秋冬東南西北中央";
+  assert.equal(visibleWords(text, layout(10), twoLines), "一二三四五六七八九十甲乙丙丁戊己庚辛壬癸");
+  assert.equal(visibleWords(text, layout(10), { ...twoLines, top: 40, bottom: 80 }), "子丑寅卯辰巳午未申酉春夏秋冬東南西北中央");
+  assert.equal(visibleWords(text, layout(10), { left: 0, top: 100, right: 100, bottom: 140 }), "");
+});
+
+test("a break-all hash partly clipped gives only its visible part (TIN-622)", () => {
+  const hash = "0123456789abcdef".repeat(13).slice(0, 200); // 200 characters, 20 to a line
+  // "sha " takes 4 units, so the hash starts on line 0 and the box shows up to unit 40.
+  assert.equal(visibleWords(`sha ${hash} end`, layout(20), { ...twoLines, right: 200 }), `sha ${hash.slice(0, 36)}`);
+});
+
+test("a word wrapped across a clip keeps its visible graphemes only: a surrogate pair and a combining mark are never split (TIN-622)", () => {
+  // Lines of 4 UTF-16 units: line 0 is "a", a surrogate pair, "b"; line 1 starts with e + U+0301.
+  const text = "a\u{1D4B3}bécdXYZ12345";
+  assert.equal(visibleWords(text, layout(4), { left: 0, top: 0, right: 100, bottom: 20 }), "a\u{1D4B3}b");
+  // The box shows line 1 only: "e" and its accent stay together.
+  assert.equal(visibleWords(text, layout(4), { left: 0, top: 20, right: 100, bottom: 40 }), "écd");
+});
+
+test("ordinary text is read as before: whole words that show, the spaces between them, a one-line word partly cut stays whole (TIN-622)", () => {
+  // 8 units to a line, each line a whole number of words: the box shows the first two lines.
+  assert.equal(visibleWords("aaa bbb ccc ddd eee fff", layout(8), twoLines), "aaa bbb ccc ddd");
+  const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
+  assert.equal(visibleWords("alpha beta", oneLine, { left: 0, top: 0, right: 80, bottom: 20 }), "alpha beta");
+  assert.equal(visibleWords("alpha beta", oneLine, { left: 0, top: 0, right: 50, bottom: 20 }), "alpha");
 });
