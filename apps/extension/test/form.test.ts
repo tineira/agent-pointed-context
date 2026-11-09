@@ -250,6 +250,6 @@ test("nothing is read outside a drop: the content script reads the page only in 
   assert.equal(source.match(/formIn\(/g)?.length, 2, "its definition and readAt");
   assert.equal(source.match(/selectionContext\(/g)?.length, 2, "its definition and readAt");
   // The drop and the pin's release read what was outlined (lit), not what is under the pointer by then.
-  assert.match(source, /const outlined = lit;\s*light\(null\);/);
-  assert.match(source, /const outlined = lit;\s*end\(\);/);
+  assert.match(source, /const outlined = outlining\.lit\(\);\s*light\(null\);/);
+  assert.match(source, /const outlined = outlining\.lit\(\);\s*end\(\);/);
 });
