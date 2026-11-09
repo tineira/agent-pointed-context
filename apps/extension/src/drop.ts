@@ -141,6 +141,94 @@ export function directOnlyGate(lookUp: () => Promise<DirectOnlyLookup>, pageAnsw
   };
 }
 
+/**
+ * The attribute `@tineira/apc-web` sets on the page's root while `enablePinning` takes dock agents' drops
+ * itself (APC_DROPS_ATTR in packages/web/src/pinning.ts; a test keeps the two equal).
+ */
+export const NATIVE_DROPS_ATTR = "data-apc-native-drops";
+
+/**
+ * Whether a page is an APC app (TIN-476, TIN-703): it carries one of the standard's own marks, the agent
+ * bar (`apc-agents`), an agent mark (`[data-apc-mark]`), or the attribute `enablePinning` sets while it
+ * takes dock drops (set at mount, before the bar has loaded). Never by `data-focus`: that name is generic,
+ * and a page that uses it for something else (or a UI library that sets it on the focused element) lost
+ * every drop.
+ */
+export function isApcApp(root: { hasAttribute(name: string): boolean; querySelector(selector: string): unknown } | null): boolean {
+  if (!root) return false;
+  return root.hasAttribute(NATIVE_DROPS_ATTR) || !!root.querySelector("apc-agents, [data-apc-mark]");
+}
+
+/**
+ * The card for a dock agent's drop that nothing on an APC app took (TIN-703): the app answers its own
+ * drops, and this one it let pass, so without the card the browser would refuse it with no word.
+ */
+export const NOT_TAKEN_TEXT = "This page did not take your agent here. It is an APC app: drop your agent on something it highlights. Nothing was sent.";
+
+/** Where a reply about a drop goes (TIN-752): the frame the drop came from, never every frame of the tab. */
+export function replyTarget(sender: { tab?: { id?: number }; frameId?: number }): { tabId: number; frameId: number } | null {
+  if (typeof sender.tab?.id !== "number") return null;
+  return { tabId: sender.tab.id, frameId: typeof sender.frameId === "number" && sender.frameId >= 0 ? sender.frameId : 0 };
+}
+
+/** Whether a host pattern list lets the extension into an origin: the grant for any page (for its scheme), or the site by itself. */
+export function covered(origin: string, patterns: readonly string[]): boolean {
+  const u = new URL(origin);
+  if (patterns.includes(`${u.protocol}//*/*`)) return true;
+  return grantedAlone(origin, patterns);
+}
+
+/**
+ * The origins of a tab's frames that the extension may not enter (TIN-752): http(s) frames other than the
+ * top one whose origin the granted patterns do not cover, docks left out, each once, in order.
+ */
+export function framesOutside(frames: ReadonlyArray<{ url?: string; frameId?: number }>, patterns: readonly string[], dev: boolean): string[] {
+  const out: string[] = [];
+  for (const f of frames) {
+    if (f.frameId === 0) continue;
+    const site = sitePattern(f.url);
+    if (!site || hubAllowed(site.origin, dev) || out.includes(site.origin) || covered(site.origin, patterns)) continue;
+    out.push(site.origin);
+  }
+  return out;
+}
+
+/**
+ * What allowing a site asks Chrome for (TIN-752, "ask for the whole site"): the site, and with it, in the
+ * same prompt, the origins of the tab's frames not allowed yet, so a dashboard in a frame from another
+ * origin (Tableau in Datamind) takes the agent too.
+ */
+export function siteGrant(site: { origin: string; pattern: string }, frames: ReadonlyArray<{ url?: string; frameId?: number }>, patterns: readonly string[], dev: boolean): string[] {
+  return [site.pattern, ...framesOutside(frames, patterns, dev).filter((o) => o !== site.origin).map((o) => `${o}/*`)];
+}
+
+/** The note when the person drags over a frame the extension may not enter (TIN-752): it cannot see that drop at all. */
+export function frameNote(origins: readonly string[]): string {
+  const from = origins.length === 1 ? new URL(origins[0]!).host : "another site";
+  return `This part of the page comes from ${from}. Allow this site again in the APC extension to include it.`;
+}
+
+/**
+ * A reading's title when it came from a frame (TIN-752): the tab's title, which the person sees, then the
+ * frame's own when it says something else. The reading's address stays the frame's: that is where the text came from.
+ */
+export function frameTitle(tabTitle: string | undefined, title: string | undefined): string {
+  const tab = tabTitle?.trim() ?? "";
+  const own = title?.trim() ?? "";
+  if (!tab) return own;
+  if (!own || own === tab) return tab;
+  return `${tab} · ${own}`;
+}
+
+/**
+ * The granted patterns the content script is registered on: whole hosts only, never a dev dock's. With
+ * matchOriginAsFallback Chrome refuses the whole registration for a pattern with any other path, and the
+ * dock's own paths (which the presence script's matches add to the granted list) are excluded anyway.
+ */
+export function scriptMatches(patterns: readonly string[], docks: ReadonlySet<string>): string[] {
+  return patterns.filter((p) => !docks.has(p) && /^[^:/]+:\/\/[^/]+\/\*$/.test(p));
+}
+
 /** The docks this extension sends readings to. A drag naming any other hub is refused: a page could forge one. */
 export const HUB_ORIGINS = ["https://apc.tineira.com"];
 

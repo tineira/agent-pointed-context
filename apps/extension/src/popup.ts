@@ -6,7 +6,7 @@
  */
 import { agoLabel, sizeLabel, type ReadingRow } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { ANY_PAGE, grantedAlone, devHubHosts, hubAllowed, isDockPage, isSensitive, sensitiveMode, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { ANY_PAGE, framesOutside, grantedAlone, devHubHosts, siteGrant, hubAllowed, isDockPage, isSensitive, sensitiveMode, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}) => Object.assign(document.createElement(tag), props);
@@ -86,6 +86,10 @@ async function render(): Promise<void> {
   const stored = await chrome.storage.local.get(["mode", "sites", "last", "readers", "sensitive"]);
   const mode = (stored.mode as Mode | undefined) ?? "ask";
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
+  // The tab's frames (TIN-752): allowing a site asks for the origins of its frames in the same prompt.
+  const frames = typeof tab?.id === "number" ? ((await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => null)) ?? []) : [];
+  const outside = framesOutside(frames, origins, __APC_DEV__).filter((o) => o !== site?.origin);
+  const fromOthers = outside.length ? `Parts of this page come from ${outside.map(hostOf).join(", ")}` : "";
 
   // This site: its choice, or how to let the agent be dropped here.
   const here = $("here");
@@ -93,8 +97,12 @@ async function render(): Promise<void> {
   if (!site || isDockPage(tab?.url, __APC_DEV__)) {
     here.append(el("p", { className: "muted", textContent: site ? "This is your dock: drag your agent from here onto other pages." : "Open a web page to drop your agent on it." }));
   } else if (!anyPage && !grantedAlone(site.origin, alone)) {
-    here.append(el("p", { textContent: `Your agent cannot be dropped on ${hostOf(site.origin)} yet.` }), el("div", { className: "row" }));
-    here.lastElementChild!.append(button(`Allow on ${hostOf(site.origin)}`, () => void chrome.permissions.request({ origins: [site.pattern] }).then(render), true));
+    here.append(el("p", { textContent: `Your agent cannot be dropped on ${hostOf(site.origin)} yet.` }));
+    if (fromOthers) here.append(el("p", { className: "muted", textContent: `${fromOthers}: allowing the site includes them.` }));
+    here.append(el("div", { className: "row" }));
+    // One prompt for the whole site: the site and its frames' origins (siteGrant).
+    const grant = siteGrant(site, frames, origins, __APC_DEV__);
+    here.lastElementChild!.append(button(`Allow on ${hostOf(site.origin)}`, () => void chrome.permissions.request({ origins: grant }).then(render), true));
   } else {
     // A government, .bank or .insurance domain always asks (TIN-478); any other site asks every time once the person marks it.
     const byDomain = isSensitive(hostOf(site.origin));
@@ -107,6 +115,12 @@ async function render(): Promise<void> {
     if (!byDomain) row.append(button("Always ask", () => void setChoice(site.origin, "sensitive"), choice === "sensitive"));
     row.append(button("Not here", () => void setChoice(site.origin, "never"), choice === "never"));
     if (mode !== "never_ask") here.append(row);
+    // A frame from an origin not allowed yet (TIN-752): the extension cannot see a drop there. Allowing the site again asks for them.
+    if (fromOthers) {
+      here.append(el("p", { className: "muted", textContent: `${fromOthers}, which your agent cannot be dropped on yet.` }), el("div", { className: "row" }));
+      const grant = siteGrant(site, frames, origins, __APC_DEV__);
+      here.lastElementChild!.append(button(`Allow ${hostOf(site.origin)} again, with them`, () => void chrome.permissions.request({ origins: grant }).then(render), true));
+    }
   }
 
   // The one grant for any page.

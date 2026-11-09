@@ -12,7 +12,7 @@
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { connectLabel, directOnlyGate, hubAllowed, INCLUDE_LABEL, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { connectLabel, directOnlyGate, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -26,14 +26,18 @@ const CARD_TEXT_MAX = 1200;
 const ELEMENTS_SCANNED = 5000;
 
 /**
- * An APC app (Pulse, Signals): a page with APC targets (data-focus), the agent bar (apc-agents) or
- * agent marks (data-apc-mark). It takes the agent itself, so there the extension does nothing at all:
- * no outline, no reading, no pin (TIN-476; it used to step back only when the app had taken the drop,
- * and moving an app's own pin left a second pin from the extension). Checked at each drag, since these
- * apps render their targets after load. Other pages that handle drags for their own sake, such as X,
- * are not APC apps: there the extension takes the agent (TIN-472).
+ * An APC app (Pulse, Signals): a page with the standard's own marks (isApcApp: the agent bar apc-agents,
+ * agent marks data-apc-mark, or the attribute enablePinning sets while it takes dock drops; never the
+ * generic data-focus, TIN-703). It takes the agent itself, so there the extension reads nothing and pins
+ * nothing (TIN-476; it used to step back only when the app had taken the drop, and moving an app's own pin
+ * left a second pin from the extension). Checked at each drag, since these apps render their marks after
+ * load. Other pages that handle drags for their own sake, such as X, are not APC apps: there the
+ * extension takes the agent (TIN-472).
  */
-const apcApp = () => !!document.querySelector("[data-focus], apc-agents, [data-apc-mark]");
+const apcApp = () => isApcApp(document.documentElement);
+
+/** The tab's top frame; a frame inside it (TIN-752) takes its own drops, in its own coordinates. */
+const isTop = window === window.top;
 
 /**
  * One exception (APC 0.5): an APC app that connects agents only directly (its apc.json lists no
@@ -72,6 +76,8 @@ function listen(): void {
   const pending = new Map<string, { target: Target; x: number; y: number }>();
   let lit: HTMLElement | null = null;
   let litOutline = "";
+  /** On an APC app, whether nothing on the page took the last dragover, so the extension did (TIN-703). */
+  let unanswered = false;
   // A copy left from before the extension was reloaded or updated has lost its extension: it stands
   // back, so the fresh copy injected next to it takes the drop.
   const carriesAgent = (e: DragEvent) => !!chrome.runtime?.id && !!e.dataTransfer && [...e.dataTransfer.types].includes(APC_AGENT_TYPE);
@@ -88,9 +94,15 @@ function listen(): void {
   const onDragover = (e: DragEvent) => {
     if (!e.isTrusted || !carriesAgent(e)) return;
     if (apcApp()) {
-      if (!directOnly.accepts()) return;
-      // A Direct-only app that would lose the drop (or one that may be, its file still on its way): take it
-      // anywhere, to answer it. Nothing is outlined: there is nothing to read.
+      unanswered = false;
+      if (!directOnly.accepts()) {
+        // The app answers its own drops, and its handlers ran before this one (keepLast). When none took this
+        // dragover, the browser would refuse the drop with no word (TIN-703): the extension takes it, to say so.
+        if (e.defaultPrevented) return;
+        unanswered = true;
+      }
+      // A Direct-only app that would lose the drop (or one that may be, its file still on its way), or a drop
+      // nothing on the page takes: take it anywhere, to answer it. Nothing is outlined: there is nothing to read.
       e.preventDefault();
       e.dataTransfer!.dropEffect = "link";
       keepLast();
@@ -114,7 +126,13 @@ function listen(): void {
   /** An APC app's drop (APC 0.5): the app's own, unless it is Direct-only and would lose it. */
   const onAppDrop = (e: DragEvent) => {
     const answer = directOnly.drop();
-    if (!answer) return;
+    if (!answer) {
+      // Nothing on the page took the drag (TIN-703): the card of a drop an app cannot take (TIN-579), not silence.
+      if (!unanswered) return;
+      unanswered = false;
+      e.preventDefault();
+      return answerDirectOnly({ name: "", host: location.host, connect: null, message: NOT_TAKEN_TEXT }, e.clientX, e.clientY);
+    }
     // The extension took the drop on dragover, so the browser's own action (opening what was dropped) never runs.
     e.preventDefault();
     if ("now" in answer) {
@@ -174,11 +192,49 @@ function listen(): void {
     "dragenter",
     (e) => {
       if (!e.isTrusted || !carriesAgent(e)) return;
+      if (isTop) cancelFrameHint();
+      else tellTop();
       if (apcApp()) directOnly.start();
       keepLast();
     },
     true,
   );
+
+  /**
+   * A frame the extension may not enter (TIN-752): drags over it go to that frame's document, which has no
+   * content script, so the browser refuses the drop and the extension never sees it. The top frame notices
+   * the agent leaving its document for a frame, waits a moment for a frame with the content script to say it
+   * has the drag (frame_drag, through the service worker), and otherwise asks the service worker which of the
+   * tab's frames no grant covers: only when some are does it show the note, at most once in HINT_MS.
+   */
+  let hintTimer = 0;
+  let hintedAt = -Infinity;
+  const HINT_MS = 10_000;
+  const hinted = () => Date.now() - hintedAt < HINT_MS;
+  /** Bumped when the drag comes back or a frame has it, so an answer on its way is not shown. */
+  let hintRound = 0;
+  function cancelFrameHint() {
+    clearTimeout(hintTimer);
+    hintTimer = 0;
+    hintRound++;
+  }
+  const tagOf = (el: EventTarget | null) => (el instanceof Element ? el.tagName : "");
+  const intoFrame = (e: DragEvent) => ["IFRAME", "FRAME"].includes(tagOf(e.target)) || ["IFRAME", "FRAME"].includes(tagOf(document.elementFromPoint(e.clientX, e.clientY)));
+  const frameHint = async () => {
+    hintTimer = 0;
+    const round = hintRound;
+    const r = await chrome.runtime.sendMessage<{ origins?: string[] } | null>({ type: "frames_outside" }).catch(() => null);
+    if (round !== hintRound || hinted() || !r?.origins?.length) return;
+    hintedAt = Date.now();
+    notice(frameNote(r.origins), "frame", 6000);
+  };
+  /** A frame with the content script has the agent's drag: the top frame's note would be wrong. */
+  let toldAt = 0;
+  function tellTop() {
+    if (Date.now() - toldAt < 300) return;
+    toldAt = Date.now();
+    void chrome.runtime.sendMessage({ type: "frame_drag" }).catch(() => {});
+  }
   // The drop before any handler of the page (TIN-573): a page that stops drop on document or body, as it
   // may for its own drags, no longer keeps it from the extension. It used to listen in the bubble phase.
   window.addEventListener(
@@ -196,6 +252,9 @@ function listen(): void {
   );
   window.addEventListener("dragleave", (e) => {
     if (!e.relatedTarget) light(null);
+    if (!isTop || hinted() || !e.isTrusted || !carriesAgent(e) || !intoFrame(e)) return;
+    cancelFrameHint();
+    hintTimer = window.setTimeout(() => void frameHint(), 400);
   });
   window.addEventListener("dragend", () => {
     light(null);
@@ -204,6 +263,8 @@ function listen(): void {
   // The service worker's later word, once the person answered in the dock.
   chrome.runtime.onMessage.addListener((m) => {
     const msg = m as Reply & { type?: string };
+    // A frame of this tab has the agent's drag (TIN-752).
+    if (msg.type === "frame_drag") return cancelFrameHint();
     if (msg.type !== "status" || !msg.status || !(msg.status in STATUS_TEXT)) return;
     // The drop this word is about, by its id: never whichever drop came last.
     const drop = msg.id ? pending.get(msg.id) : undefined;
@@ -508,7 +569,9 @@ function readAt(x: number, y: number, scope: Element | null) {
   const cell = scope?.closest<HTMLTableCellElement>("td,th");
   const table = cell?.closest("table");
   return {
-    url: location.href,
+    // In a frame (TIN-752), the frame's own address: where the text came from. A frame without one of its own
+    // (about:blank, srcdoc) gives the origin it belongs to.
+    url: /^https?:/.test(location.href) || location.origin === "null" ? location.href : `${location.origin}/`,
     title: document.title,
     element: scope
       ? {
@@ -815,10 +878,12 @@ function answerDirectOnly(app: DirectOnly, x: number, y: number): void {
   const card = document.createElement("div");
   card.setAttribute("role", "status");
   card.setAttribute("aria-label", "APC");
+  // Which answer it is: a Direct-only app's, or a drop nothing on an APC app took (TIN-703).
+  card.dataset.apcAnswer = app.message === NOT_TAKEN_TEXT ? "not_taken" : "direct_only";
   const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
   const top = Math.max(8, Math.min(y + 12, innerHeight - 150));
   card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 30px 12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
-  // The domain first, as the dock names an app it does not know; the name is only what the page says it is.
+  // The domain first, as the dock names an app it does not know; the name, when there is one, is only what the page says it is.
   const domain = document.createElement("p");
   domain.style.cssText = "margin:0 0 4px;font-weight:600";
   domain.textContent = app.host;
@@ -1053,13 +1118,19 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
 
 /** A short note in the page's corner, in its own shadow root so the page's styles cannot touch it. */
 function say(status: DropStatus): void {
+  notice(STATUS_TEXT[status], status, status === "asking" ? 8000 : 3500);
+}
+
+/** A note in the corner of this frame (the page, or the frame a drop landed in): what it says, which note it is, how long it stays. */
+function notice(text: string, kind: string, ms: number): void {
   const host = cardHost();
   const root = host.attachShadow({ mode: "closed" });
   const note = document.createElement("div");
-  note.textContent = STATUS_TEXT[status];
+  note.textContent = text;
+  note.dataset.apcNote = kind;
   note.setAttribute("role", "status");
   note.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:320px;padding:10px 14px;border-radius:10px;background:#1f1f1f;color:#fff;font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.25)";
   root.append(note);
   document.documentElement.append(host);
-  setTimeout(() => host.remove(), status === "asking" ? 8000 : 3500);
+  setTimeout(() => host.remove(), ms);
 }

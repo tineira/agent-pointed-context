@@ -8,7 +8,7 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, grantedAlone, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, scriptMatches, frameTitle, framesOutside, grantedAlone, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -79,19 +79,32 @@ chrome.runtime.onStartup.addListener(() => void syncScripts());
 chrome.commands.onCommand.addListener((command) => {
   if (command === "open-dock" || command === "float") void openDock(command === "float");
 });
-chrome.permissions.onAdded.addListener((p) => void syncScripts().then(() => injectOpenTabs(p.origins)));
+// Every granted tab, not only those whose address is a new origin: a frame's origin granted alone (TIN-752) is
+// in tabs whose top page is another site. A copy already in a frame stands back (__apcDrop).
+chrome.permissions.onAdded.addListener(() => void syncScripts().then(() => injectOpenTabs()));
 chrome.permissions.onRemoved.addListener(() => void syncScripts());
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const m = message as (Partial<Omit<Drop, "type">> & { type?: string; hub?: string; agent?: string }) | null;
-  if (typeof sender.tab?.id !== "number") return;
+  const from = replyTarget(sender);
+  if (!from) return;
   if (m?.type === "drop" && m.drag) {
-    void handleDrop(m as Drop, sender.tab.id).then(reply);
+    void handleDrop({ ...(m as Drop), reading: inFrame(m.reading, sender) }, from, sender).then(reply);
     return true;
   }
   // A pin dragged to another paragraph of its page (TIN-471): the new reading, with no new consent.
   if (m?.type === "move" && typeof m.hub === "string" && typeof m.agent === "string") {
-    void handleMove(m.hub, m.agent, m.reading, readingId(m.id)).then(reply);
+    void handleMove(m.hub, m.agent, inFrame(m.reading, sender), readingId(m.id)).then(reply);
+    return true;
+  }
+  // An agent dragged into a frame that has the content script (TIN-752): the top frame then shows no note about frames it cannot enter.
+  if (m?.type === "frame_drag") {
+    if (from.frameId !== 0) void chrome.tabs.sendMessage(from.tabId, { type: "frame_drag" }, { frameId: 0 }).catch(() => {});
+    return;
+  }
+  // The top frame saw the agent go into a frame and heard nothing from it (TIN-752): the tab's frames the extension may not enter.
+  if (m?.type === "frames_outside") {
+    void outsideFrames(from.tabId).then(reply);
     return true;
   }
   // "Include them this time" (TIN-619): only the reading kept for that drop's id, never what the page sends now.
@@ -107,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
   // An APC app the agent is dragged over (APC 0.5): whether it connects agents only directly, from its apc.json.
   if (m?.type === "apc_json") {
-    void directOnlyOf(sender.tab.url).then(reply);
+    void directOnlyOf(sender.url ?? sender.tab?.url).then(reply);
     return true;
   }
 });
@@ -148,28 +161,49 @@ async function pinCall(what: "state" | "clear", hub: string, agent: string): Pro
   }
 }
 
-/** The content script runs on the sites the person granted, and never on a dock. */
+/**
+ * A reading from a frame (TIN-752): its address is the frame's, where the text came from; its title is the
+ * tab's, which the person sees, then the frame's own. The top frame's reading is left as it is.
+ */
+function inFrame(raw: unknown, sender: chrome.runtime.MessageSender): unknown {
+  if (!sender.frameId || !raw || typeof raw !== "object") return raw;
+  const reading = raw as { title?: unknown };
+  return { ...reading, title: frameTitle(sender.tab?.title, typeof reading.title === "string" ? reading.title : undefined) };
+}
+
+/** The origins of a tab's frames that no grant covers (TIN-752). Empty when the frames cannot be listed. */
+async function outsideFrames(tabId: number): Promise<{ origins: string[] }> {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+  const { origins = [] } = await chrome.permissions.getAll();
+  return { origins: framesOutside(frames ?? [], origins, __APC_DEV__) };
+}
+
+/**
+ * The content script runs on the sites the person granted, and never on a dock: in every frame (TIN-752),
+ * so a drop on a frame from a granted origin (a dashboard from another site) lands; the frames Chrome makes
+ * without an address of their own (about:blank, srcdoc, blob:) count by the origin that made them.
+ */
 async function syncScripts(): Promise<void> {
   const docks = new Set(devHubHosts(__APC_DEV__));
   const { origins = [] } = await chrome.permissions.getAll();
-  const matches = origins.filter((o) => !docks.has(o));
+  const matches = scriptMatches(origins, docks);
   const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] });
   if (!matches.length) {
     if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
     return;
   }
   // document_start: its capture listeners on window come before any of the page's own (TIN-573).
-  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: hubPatterns(__APC_DEV__), runAt: "document_start" as const, allFrames: false, persistAcrossSessions: true };
+  const script = { id: SCRIPT_ID, js: ["content.js"], matches, excludeMatches: hubPatterns(__APC_DEV__), runAt: "document_start" as const, allFrames: true, matchOriginAsFallback: true, persistAcrossSessions: true };
   await (existing.length ? chrome.scripting.updateContentScripts([script]) : chrome.scripting.registerContentScripts([script]));
 }
 
-/** Inject the content script into the open tabs on granted sites (all granted sites when none are given). */
+/** Inject the content script into the open tabs on granted sites (all granted sites when none are given), in each frame it may enter. */
 async function injectOpenTabs(origins?: string[]): Promise<void> {
   const docks = new Set(devHubHosts(__APC_DEV__));
   const patterns = (origins ?? (await chrome.permissions.getAll()).origins ?? []).filter((o) => !docks.has(o));
   if (!patterns.length) return;
   for (const tab of await chrome.tabs.query({ url: patterns })) {
-    if (typeof tab.id === "number") await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] }).catch(() => {});
+    if (typeof tab.id === "number") await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["content.js"] }).catch(() => {});
   }
 }
 
@@ -191,7 +225,7 @@ function sensitiveReply(count: number, mode: SensitiveMode, included: boolean): 
   return count ? { sensitive: { count, mode, offer: mode === "ask" && !included } } : {};
 }
 
-async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
+async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sender: chrome.runtime.MessageSender): Promise<DropReply> {
   const { hub, agent, ticket } = m.drag;
   if (!hubAllowed(hub, __APC_DEV__)) return { status: "unknown_dock" };
   const id = readingId(m.id);
@@ -206,7 +240,9 @@ async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   const offered = id && sensitive.sensitive?.offer;
   // This drop's reading, kept as taken for "Include them this time": usable only once this drop's consent is given.
   if (offered) await hold(id, { raw: m.reading, hub, agent, consented: false });
-  const consented = await consent(new URL(reading.url).origin, m.consent);
+  // Consent is the site's the person sees in the address bar; a frame from another origin is part of it (TIN-752).
+  const frameOrigin = new URL(reading.url).origin;
+  const consented = await consent(sitePattern(sender.tab?.url)?.origin ?? frameOrigin, m.consent, frameOrigin);
   if (consented !== true) return { status: consented, ...sensitive, ...(id ? { id } : {}) };
   if (offered) await hold(id, { raw: m.reading, hub, agent, consented: true });
   const key = readerKey(hub, agent);
@@ -221,7 +257,7 @@ async function handleDrop(m: Drop, tabId: number): Promise<DropReply> {
   }
   const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
   if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error"), ...(id ? { id } : {}) };
-  void waitForAnswer(hub, agent, asked.claim, reading, tabId, { ...sensitive, ...(id ? { id } : {}) });
+  void waitForAnswer(hub, agent, asked.claim, reading, from, { ...sensitive, ...(id ? { id } : {}) });
   return { status: await note(hub, reading.url, "asking"), ...(id ? { id } : {}) };
 }
 
@@ -281,11 +317,13 @@ async function sendWithToken(hub: string, agent: string, reading: PageReading): 
  * (the card, or a note). An answer from the card is kept: Always and Not here for the site; Always is
  * never kept for a sensitive site, which asks every time.
  */
-async function consent(origin: string, answer: Consent | undefined): Promise<true | DropStatus> {
+async function consent(origin: string, answer: Consent | undefined, frameOrigin = origin): Promise<true | DropStatus> {
   const stored = await chrome.storage.local.get(["mode", "sites", NOTICE_SITES, NOTICE_ALL]);
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
   const mode = (stored.mode as Mode | undefined) ?? "ask";
-  const sensitive = isSensitive(new URL(origin).host);
+  // A frame from a sensitive domain, or one the person said Not here to, counts too (TIN-752).
+  const sensitive = isSensitive(new URL(origin).host) || isSensitive(new URL(frameOrigin).host);
+  if (!answer && sites[frameOrigin] === "never") return "blocked";
   const noticeSites = (stored[NOTICE_SITES] ?? []) as string[];
   if (answer) {
     // Any answer on a card means the person read what readings carry now (TIN-571, TIN-619): on this site,
@@ -308,7 +346,7 @@ async function consent(origin: string, answer: Consent | undefined): Promise<tru
 }
 
 /** Poll the dock until the person answers; then send the held reading, or drop it. */
-async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, tabId: number, about: { sensitive?: Sensitive; id?: string }): Promise<void> {
+async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, to: { tabId: number; frameId: number }, about: { sensitive?: Sensitive; id?: string }): Promise<void> {
   const until = Date.now() + ASK_MS;
   let status: DropStatus = "timeout";
   let pin: PinMark | undefined;
@@ -330,7 +368,8 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     break;
   }
   await note(hub, reading.url, status);
-  await chrome.tabs.sendMessage(tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(about.id ? { id: about.id } : {}), ...(status === "sent" && about.sensitive ? { sensitive: about.sensitive } : {}) }).catch(() => {});
+  // To the frame the drop came from (TIN-752): another frame of the tab would show the note too.
+  await chrome.tabs.sendMessage(to.tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(about.id ? { id: about.id } : {}), ...(status === "sent" && about.sensitive ? { sensitive: about.sensitive } : {}) }, { frameId: to.frameId }).catch(() => {});
 }
 
 
