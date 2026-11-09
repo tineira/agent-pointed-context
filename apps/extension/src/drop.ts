@@ -2,7 +2,7 @@
  * The extension's pure parts (TIN-421, DESIGN.md 13): which docks it talks to, what it calls this
  * browser, and how it keeps one reader token per dock and agent. No chrome.* APIs here, so the tests run it.
  */
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest } from "@tineira/apc-protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest, parseFocusAttrs } from "@tineira/apc-protocol";
 
 /** An APC app that connects agents only directly (APC 0.5): what the extension tells a person who drops a dock agent on it. */
 export interface DirectOnly {
@@ -141,6 +141,162 @@ export function directOnlyGate(lookUp: () => Promise<DirectOnlyLookup>, pageAnsw
   };
 }
 
+/**
+ * The attribute `@tineira/apc-web` sets on the page's root while `enablePinning` takes dock agents' drops
+ * itself (APC_DROPS_ATTR in packages/web/src/pinning.ts; a test keeps the two equal).
+ */
+export const NATIVE_DROPS_ATTR = "data-apc-native-drops";
+
+/**
+ * Whether a page is an APC app (TIN-476, TIN-703): it carries one of the standard's own marks, the agent
+ * bar (`apc-agents`), an agent mark (`[data-apc-mark]`), or the attribute `enablePinning` sets while it
+ * takes dock drops (set at mount, before the bar has loaded). Never by `data-focus`: that name is generic,
+ * and a page that uses it for something else (or a UI library that sets it on the focused element) lost
+ * every drop.
+ */
+export function isApcApp(root: { hasAttribute(name: string): boolean; querySelector(selector: string): unknown } | null): boolean {
+  if (!root) return false;
+  return root.hasAttribute(NATIVE_DROPS_ATTR) || !!root.querySelector("apc-agents, [data-apc-mark]");
+}
+
+/**
+ * The card for a dock agent's drop that nothing on an APC app took (TIN-703): the app answers its own
+ * drops, and this one it let pass, so without the card the browser would refuse it with no word.
+ */
+export const NOT_TAKEN_TEXT = "This page did not take your agent here. It is an APC app: drop your agent on something it highlights. Nothing was sent.";
+
+/** Where a reply about a drop goes (TIN-752): the frame the drop came from, never every frame of the tab. */
+export function replyTarget(sender: { tab?: { id?: number }; frameId?: number }): { tabId: number; frameId: number } | null {
+  if (typeof sender.tab?.id !== "number") return null;
+  return { tabId: sender.tab.id, frameId: typeof sender.frameId === "number" && sender.frameId >= 0 ? sender.frameId : 0 };
+}
+
+/** Whether a host pattern list lets the extension into an origin: the grant for any page (for its scheme), or the site by itself. */
+export function covered(origin: string, patterns: readonly string[]): boolean {
+  const u = new URL(origin);
+  if (patterns.includes(`${u.protocol}//*/*`)) return true;
+  return grantedAlone(origin, patterns);
+}
+
+/**
+ * The origins of a tab's frames that the extension may not enter (TIN-752): http(s) frames other than the
+ * top one whose origin the granted patterns do not cover, docks left out, each once, in order.
+ */
+export function framesOutside(frames: ReadonlyArray<{ url?: string; frameId?: number }>, patterns: readonly string[], dev: boolean): string[] {
+  const out: string[] = [];
+  for (const f of frames) {
+    if (f.frameId === 0) continue;
+    const site = sitePattern(f.url);
+    if (!site || hubAllowed(site.origin, dev) || out.includes(site.origin) || covered(site.origin, patterns)) continue;
+    out.push(site.origin);
+  }
+  return out;
+}
+
+/**
+ * What allowing a site asks Chrome for (TIN-752, "ask for the whole site"): the site, and with it, in the
+ * same prompt, the origins of the tab's frames not allowed yet, so a dashboard in a frame from another
+ * origin (Tableau in Datamind) takes the agent too.
+ */
+export function siteGrant(site: { origin: string; pattern: string }, frames: ReadonlyArray<{ url?: string; frameId?: number }>, patterns: readonly string[], dev: boolean): string[] {
+  return [site.pattern, ...framesOutside(frames, patterns, dev).filter((o) => o !== site.origin).map((o) => `${o}/*`)];
+}
+
+/**
+ * The note when the person drags over a frame the extension may not enter (TIN-752): it cannot see that
+ * drop at all. It names the frame's host only when it is the frame under the pointer (frameOutside);
+ * otherwise "another site".
+ */
+export function frameNote(origin: string | null): string {
+  const from = origin ? new URL(origin).host : "another site";
+  return `This part of the page comes from ${from}. Allow this site again in the APC extension to include it.`;
+}
+
+/**
+ * What the top frame says about the frame under the pointer (TIN-752), from the tab's frames: that frame
+ * known (runtime.getFrameId) and outside every grant, its origin; known and inside one, nothing (its content
+ * script has the drag, or will); not known, "another site" when some frame of the tab is outside.
+ */
+export function frameOutside(frames: ReadonlyArray<{ url?: string; frameId?: number }>, frameId: number | null, patterns: readonly string[], dev: boolean): { note: true; origin: string | null } | { note: false } {
+  if (frameId !== null && frameId > 0) {
+    const frame = frames.find((f) => f.frameId === frameId);
+    if (!frame) return { note: false };
+    const [origin] = framesOutside([frame], patterns, dev);
+    return origin ? { note: true, origin } : { note: false };
+  }
+  return framesOutside(frames, patterns, dev).length ? { note: true, origin: null } : { note: false };
+}
+
+/**
+ * What a frame's own origin adds to the consent of the tab's site (TIN-752): a sensitive domain, or a site
+ * the person set to Always ask, makes the drop ask every time; a site set to Not here sends nothing. The
+ * card's answers are still kept for the tab's site.
+ */
+export function frameConsent(frameOrigin: string | null, sites: Readonly<Record<string, SiteChoice>>): { sensitive: boolean; blocked: boolean } {
+  if (!frameOrigin) return { sensitive: false, blocked: false };
+  return { sensitive: isSensitive(new URL(frameOrigin).host) || sites[frameOrigin] === "sensitive", blocked: sites[frameOrigin] === "never" };
+}
+
+/** The origin of an http(s) address, or null (an opaque frame's about:blank, data: or "null"): never a URL parse that throws. */
+export const originOf = (url: string | null | undefined): string | null => sitePattern(url ?? undefined)?.origin ?? null;
+
+/** What appTakes reads of an element: a DOM Element has all of it. */
+export interface FocusNode {
+  closest(selector: string): FocusNode | null;
+  getAttribute(name: string): string | null;
+  readonly parentElement: FocusNode | null;
+}
+
+/**
+ * Whether an APC app takes a drop on this element (TIN-703): the app's own rule, `targetOf` in
+ * packages/web/src/pinning.ts, step for step. From the element at the drop point (the document's
+ * elementFromPoint, as `targetAt` starts), the nearest `[data-focus]` by `closest` (never across a shadow
+ * root), parsed by the protocol's `parseFocusAttrs`; one that does not parse (`data-focus=""`, `"true"`, no
+ * `kind:id`) is skipped for the next one above its parent element. The app pins only on a target it parses,
+ * so the extension's "not taken" card stays silent only then, whatever the last dragover said.
+ */
+export function appTakes(start: FocusNode | null): boolean {
+  let node: FocusNode | null = start;
+  while (node) {
+    const host = node.closest("[data-focus]");
+    if (!host) return false;
+    if (parseFocusAttrs(host.getAttribute("data-focus"), host.getAttribute("data-focus-part"), host.getAttribute("data-focus-params"))) return true;
+    node = host.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Whose setting makes a drop ask every time (TIN-752, fix check on #142), for the card to name it: the
+ * tab's site when its own domain or the person's Always ask says so, else the frame's when its domain or
+ * its own Always ask does; the tab's site otherwise.
+ */
+export function askingSite(tabOrigin: string, frameOrigin: string | null, sites: Readonly<Record<string, SiteChoice>>): string {
+  const marked = (o: string) => isSensitive(new URL(o).host) || sites[o] === "sensitive";
+  return !marked(tabOrigin) && frameOrigin && marked(frameOrigin) ? frameOrigin : tabOrigin;
+}
+
+/**
+ * A reading's title when it came from a frame (TIN-752): the tab's title, which the person sees, then the
+ * frame's own when it says something else. The reading's address stays the frame's: that is where the text came from.
+ */
+export function frameTitle(tabTitle: string | undefined, title: string | undefined): string {
+  const tab = tabTitle?.trim() ?? "";
+  const own = title?.trim() ?? "";
+  if (!tab) return own;
+  if (!own || own === tab) return tab;
+  return `${tab} · ${own}`;
+}
+
+/**
+ * The granted patterns the content script is registered on: whole hosts only, never a dev dock's. With
+ * matchOriginAsFallback Chrome refuses the whole registration for a pattern with any other path, and the
+ * dock's own paths (which the presence script's matches add to the granted list) are excluded anyway.
+ */
+export function scriptMatches(patterns: readonly string[], docks: ReadonlySet<string>): string[] {
+  return patterns.filter((p) => !docks.has(p) && /^[^:/]+:\/\/[^/]+\/\*$/.test(p));
+}
+
 /** The docks this extension sends readings to. A drag naming any other hub is refused: a page could forge one. */
 export const HUB_ORIGINS = ["https://apc.tineira.com"];
 
@@ -226,6 +382,9 @@ export function isSensitive(host: string): boolean {
   return tld === "bank" || tld === "insurance";
 }
 
+/** A URL's port, the scheme's default when it names none. */
+const portOf = (u: URL) => (u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80);
+
 /**
  * Whether the person granted this page's site by itself (from the popup), not only through the grant
  * for any page: a match pattern for its scheme and host. A pattern names no port, so it covers them all.
@@ -237,7 +396,10 @@ export function grantedAlone(origin: string, patterns: readonly string[]): boole
     const m = p.match(/^(https?|\*):\/\/([^/]+)\/\*$/);
     if (!m) return false;
     const [, scheme, host] = m as unknown as [string, string, string];
-    const hostname = host.replace(/:\d+$/, "");
+    const port = /:(\d+)$/.exec(host)?.[1];
+    const hostname = port ? host.slice(0, -port.length - 1) : host;
+    // A pattern with a port covers that port only (the popup's grant for a page on a port of its own); one without, every port.
+    if (port && Number(port) !== portOf(u)) return false;
     return (scheme === "*" || `${scheme}:` === u.protocol) && (hostname === u.hostname || (hostname.startsWith("*.") && u.hostname.endsWith(hostname.slice(1))));
   });
 }
@@ -273,7 +435,7 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 }
 
 /** What the content script tells the person after a drop. */
-export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed";
+export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed" | "opaque_frame";
 
 /** The link on the card for a Direct-only app. */
 export const connectLabel = (host: string) => `Connect an agent on ${host}`;
@@ -375,4 +537,5 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
   outline_changed: "The page changed what was outlined: nothing was sent. Drop again.",
+  opaque_frame: "This part of the page has no address of its own, so your agent cannot read it: nothing was sent.",
 };

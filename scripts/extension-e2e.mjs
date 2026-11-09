@@ -114,14 +114,24 @@ const PAGE = `<!doctype html><title>Churn notes</title><h1>Churn notes</h1><h2>E
 <p id="c">Refund to card 4111 1111 1111 1111 by Friday.</p>
 <p id="d">Wire the deposit to DE89 3704 0044 0532 0130 00 today.</p>
 <input id="secret" value="hunter2">`;
-// An APC app, as Pulse is: targets (data-focus) that take the drop, and text around them that does not.
-const APC = `<!doctype html><title>APC-like app</title><h1>Churn</h1><p id="note">Text of the app, outside any target.</p>
+// An APC app, as Pulse is: its agent bar (apc-agents, the mark the extension knows it by, TIN-703), targets (data-focus)
+// that take the drop, and text around them that does not.
+const APC = `<!doctype html><title>APC-like app</title><apc-agents></apc-agents><h1>Churn</h1><p id="note">Text of the app, outside any target.</p>
 <div id="app" data-focus="figure:kpi" style="padding:30px;background:#eef">APC app area</div>
 <script>
 const app = document.getElementById("app");
 app.addEventListener("dragover", (e) => e.preventDefault());
 app.addEventListener("drop", (e) => { e.preventDefault(); app.textContent = "app took it"; });
 </script>`;
+// A page that uses data-focus for its own sake, with no APC mark (TIN-703): an ordinary page to the extension.
+const FOCUS = `<!doctype html><title>Focus page</title><h1>Ledger</h1><div data-focus="row:1"><p id="row">Rent paid on the 3rd, 410,000 CLP.</p></div>`;
+// A page with a dashboard in a frame from another origin (TIN-752): the frame's page is served by a second server, on its own port.
+const INNER = `<!doctype html><title>Embedded dashboard</title><body style="margin:0"><p id="fig" style="margin:0;padding:20px">Net revenue in Q3 was 12.4 M, up 8%.</p></body>`;
+const framed = (host) => `<!doctype html><title>Framed page</title><h1>Report</h1><p id="top">The dashboard below comes from another origin.</p>
+<iframe id="dash" src="http://${host}:${inner.address().port}/inner" style="width:600px;height:200px;border:1px solid #ccc"></iframe>
+<iframe id="boxed" sandbox="allow-scripts" srcdoc="<p style='margin:0;padding:20px'>Sandboxed text with an opaque origin.</p>" style="width:600px;height:100px;border:1px solid #ccc"></iframe>`;
+const inner = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(INNER)).listen(0, "::");
+await new Promise((r) => inner.once("listening", r));
 // Every host name gets the same page: *.localhost names (Chrome resolves them to this machine) are separate sites.
 // A page like X: its text in divs and spans, and drag handlers of its own (for attaching files) that
 // take every dragover with "copy", which would refuse the agent's "link" drag.
@@ -196,7 +206,7 @@ const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countr
 <p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
 <p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>
 ${CARDS}`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : PAGE)).listen(0, "::");
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -474,6 +484,32 @@ try {
       walk(root);
       return found;
     };
+    /** Pins in the top document and in its frames' documents (same-site frames are in the same tree). */
+    const pinsByDocument = async (sid) => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+      const found = { top: 0, inFrames: 0 };
+      const walk = (n, framed) => {
+        if ((n.attributes ?? []).includes("data-apc-pin-state")) found[framed ? "inFrames" : "top"]++;
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c, framed);
+        if (n.contentDocument) walk(n.contentDocument, true);
+      };
+      walk(root, false);
+      return found;
+    };
+    /** The extension's cards for a drop an app cannot take (data-apc-answer), through their closed shadow roots. */
+    const marked = async (sid, attr) => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+      const found = [];
+      const walk = (n) => {
+        const a = n.attributes ?? [];
+        const i = a.indexOf(attr);
+        if (i >= 0) found.push(a[i + 1]);
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c);
+      };
+      walk(root);
+      return found;
+    };
+    const answers = (sid) => marked(sid, "data-apc-answer");
     const centreOf = async (nodeId) => {
       const q = (await cdp("DOM.getBoxModel", { nodeId }, sessionId)).model.border;
       return { x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2 };
@@ -588,8 +624,75 @@ try {
     await dropOn(apc, "#note");
     assert.equal((await pinNodes(apc)).states.length, 0, "no pin from the extension on an APC app");
     assert.match((await tool("page__get_reading")).structuredContent.page_text, /SPRING/);
+    // A drop nothing on the app took is answered, not refused in silence (TIN-703); a drop the app took is not.
+    assert.deepEqual(await answers(apc), ["not_taken"], "one card for the drop the app left alone");
     await cdp("Target.closeTarget", { targetId: apcId });
-    console.log("3. on an APC app the app keeps the drop, and the extension sends nothing and pins nothing");
+    console.log("3. on an APC app the app keeps the drop, and the extension sends nothing and pins nothing; a drop the app leaves says so");
+
+    // 3b. data-focus alone is not an APC app (TIN-703): the page takes the agent and its reading goes.
+    const { targetId: focusId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/focus") });
+    const { sessionId: focus } = await cdp("Target.attachToTarget", { targetId: focusId, flatten: true });
+    await sleep(2500);
+    await dropOn(focus, "#row");
+    await until("the reading of a data-focus page", async () => /Rent paid on the 3rd/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    await until("a pin on the data-focus page", async () => (await pinNodes(focus)).states.length === 1);
+    await cdp("Target.closeTarget", { targetId: focusId });
+    console.log("3b. a page with data-focus but no APC mark takes the agent's drop and reading");
+
+    // 3c. A drop on a frame from another origin of a granted host (another port) lands in the frame (TIN-752): read from the
+    // frame (its address, the tab's title then its own), pinned in the frame's document, and the top frame takes nothing.
+    const { targetId: framedId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/framed") });
+    const { sessionId: framedSid } = await cdp("Target.attachToTarget", { targetId: framedId, flatten: true });
+    await sleep(3000);
+    const dash = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.getElementById("dash").getBoundingClientRect(); return { x: r.x, y: r.y }; })()`, returnByValue: true }, framedSid)).result.value;
+    const inFrameAt = { x: dash.x + 60, y: dash.y + 31 };
+    const frameData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    for (const type of ["dragEnter", "dragOver", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, ...inFrameAt, data: frameData }, framedSid);
+    const framedReading = await until("the reading from the frame", async () => {
+      const r = (await tool("page__get_reading")).structuredContent;
+      return /Net revenue in Q3/.test(r?.page_text ?? "") ? r : null;
+    });
+    assert.match(framedReading.page_text, new RegExp(`Address: http://127\\.0\\.0\\.1:${inner.address().port}/inner`), "the frame's address");
+    assert.match(framedReading.page_text, /Page: Framed page · Embedded dashboard/, "the tab's title, then the frame's");
+    const framePins = await until("one pin, in the frame", async () => {
+      const n = await pinsByDocument(framedSid);
+      return n.inFrames === 1 ? n : null;
+    });
+    assert.equal(framePins.top, 0, "the top frame drew no pin");
+    // A sandboxed frame (an opaque origin) has no address a reading could name: it says so, and nothing is sent (review on #142).
+    const boxed = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.getElementById("boxed").getBoundingClientRect(); return { x: r.x + 60, y: r.y + 31 }; })()`, returnByValue: true }, framedSid)).result.value;
+    const boxedData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    // Chrome puts a sandboxed frame in a process of its own: the drag goes to that frame's own target, in its coordinates.
+    const boxedTarget = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "iframe" && t.url === "about:srcdoc");
+    const boxedSid = boxedTarget ? (await cdp("Target.attachToTarget", { targetId: boxedTarget.targetId, flatten: true })).sessionId : framedSid;
+    const boxedAt = boxedTarget ? { x: 60, y: 31 } : boxed;
+    for (const type of ["dragEnter", "dragOver", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, ...boxedAt, data: boxedData }, boxedSid);
+    await until("the opaque frame's note", async () => (await marked(boxedSid, "data-apc-note")).includes("opaque_frame"), 8000);
+    assert.match((await tool("page__get_reading")).structuredContent.page_text, /Net revenue in Q3/, "nothing was sent from the sandboxed frame");
+    await cdp("Target.closeTarget", { targetId: framedId });
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("3c. a drop in a frame from another origin lands there: read from the frame, pinned in it, and only there; a sandboxed frame says it cannot be read");
+
+    // 3d. A frame from an origin not granted (nothere.localhost, another site, so another process): no content script there,
+    // so the drop is refused and nothing is sent. The service worker lists the tab's frames by their real origins
+    // (webNavigation), which the popup asks for with the site and the top frame's note names (TIN-752).
+    // Not checked here: the note itself. Drags sent through the DevTools Protocol never reach an out-of-process frame, and
+    // the top page gets no dragleave for them either (it sees dragenter and dragover over its own content only).
+    const { targetId: outId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/framed-out") });
+    const { sessionId: outSid } = await cdp("Target.attachToTarget", { targetId: outId, flatten: true });
+    await sleep(3000);
+    const outFrame = (await cdp("Runtime.evaluate", { expression: `(() => { const f = document.getElementById("dash").getBoundingClientRect(); return { x: f.x + 60, y: f.y + 31 }; })()`, returnByValue: true }, outSid)).result.value;
+    const outData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, ...outFrame, data: outData }, outSid);
+    await sleep(1500);
+    assert.match((await tool("page__get_reading")).structuredContent.page_text, /SPRING/, "nothing was sent from the frame");
+    const swTarget = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
+    const { sessionId: swSid } = await cdp("Target.attachToTarget", { targetId: swTarget.targetId, flatten: true });
+    const frameOrigins = (await cdp("Runtime.evaluate", { expression: `chrome.tabs.query({ url: "http://127.0.0.1/framed-out*" }).then(([tab]) => chrome.webNavigation.getAllFrames({ tabId: tab.id })).then((frames) => frames.map((f) => new URL(f.url).origin))`, awaitPromise: true, returnByValue: true }, swSid)).result.value;
+    assert.ok(frameOrigins.includes(`http://nothere.localhost:${inner.address().port}`), `the frame's origin is listed: ${JSON.stringify(frameOrigins)}`);
+    await cdp("Target.closeTarget", { targetId: outId });
+    console.log("3d. a frame from an origin not granted takes nothing, and the service worker lists it by its real origin (the note itself is not checked: see above)");
 
     // 4. A drag naming another hub is refused in the page.
     await drag("#a", JSON.stringify({ v: 1, agent: agent.id, hub: "https://evil.example", ticket: "x".repeat(32) }));
@@ -1045,6 +1148,7 @@ try {
   await Promise.race([cdp("Browser.close").catch(() => {}), sleep(5000)]);
   if (!(await Promise.race([exited.then(() => true), sleep(10_000).then(() => false)]))) browser.kill();
   server.close();
+  inner.close();
   for (const dir of [profile, ...(PROD || CONSENT ? [EXT] : [])]) {
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });

@@ -7,6 +7,10 @@ declare namespace chrome {
     interface MessageSender {
       tab?: chrome.tabs.Tab;
       id?: string;
+      /** The frame that sent the message: 0 is the tab's top frame. */
+      frameId?: number;
+      /** The sending frame's address. */
+      url?: string;
     }
     function sendMessage<T = unknown>(message: unknown): Promise<T>;
     const onMessage: {
@@ -14,6 +18,8 @@ declare namespace chrome {
     };
     const onInstalled: { addListener(callback: (details: { reason: "install" | "update" | "chrome_update" | "shared_module_update" }) => void): void };
     function getURL(path: string): string;
+    /** A frame element's (or window's) frameId in its tab, -1 when unknown (Chrome 106+, content scripts). */
+    function getFrameId(target: Element | Window): number;
     function getManifest(): { version: string; version_name?: string; name: string };
     const onStartup: { addListener(callback: () => void): void };
     const id: string;
@@ -51,13 +57,23 @@ declare namespace chrome {
       excludeMatches?: string[];
       runAt?: "document_start" | "document_end" | "document_idle";
       allFrames?: boolean;
+      /** Also into about:blank, about:srcdoc, blob: and data: frames, by the origin that made them. */
+      matchOriginAsFallback?: boolean;
       persistAcrossSessions?: boolean;
     }
     function getRegisteredContentScripts(filter?: { ids?: string[] }): Promise<RegisteredContentScript[]>;
     function registerContentScripts(scripts: RegisteredContentScript[]): Promise<void>;
     function updateContentScripts(scripts: RegisteredContentScript[]): Promise<void>;
     function unregisterContentScripts(filter?: { ids?: string[] }): Promise<void>;
-    function executeScript(injection: { target: { tabId: number }; files: string[] }): Promise<unknown[]>;
+    function executeScript(injection: { target: { tabId: number; allFrames?: boolean }; files: string[] }): Promise<unknown[]>;
+  }
+  namespace webNavigation {
+    interface Frame {
+      frameId: number;
+      parentFrameId: number;
+      url: string;
+    }
+    function getAllFrames(details: { tabId: number }): Promise<Frame[] | null>;
   }
   namespace windows {
     function create(props: { url: string; type?: "normal" | "popup"; width?: number; height?: number; focused?: boolean }): Promise<{ id?: number }>;
@@ -70,11 +86,12 @@ declare namespace chrome {
     interface Tab {
       id?: number;
       url?: string;
+      title?: string;
       windowId?: number;
     }
     function query(q: { active?: boolean; currentWindow?: boolean; url?: string | string[] }): Promise<Tab[]>;
     function update(tabId: number, props: { active?: boolean; url?: string }): Promise<Tab>;
-    function sendMessage(tabId: number, message: unknown): Promise<unknown>;
+    function sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;
     function create(props: { url: string }): Promise<Tab>;
   }
 }
