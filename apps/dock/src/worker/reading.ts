@@ -293,6 +293,10 @@ function rutCheck(body: string): string {
 const TEXT_RUT = /(?<![\dA-Za-z])(\d{1,2})[.\s]?(\d{3})[.\s]?(\d{3})\s*-\s*([\dkK])(?![\dA-Za-z])/g;
 /** Between two groups of a number's digits: separators, or a few other characters (letters a page may put between them). */
 const joinsGroups = (gap: string) => /^[\s,./-]*$/.test(gap) || gap.length <= 6 || (gap.length <= 16 && !/\s/.test(gap));
+/** The fewest digits in each group of a written card number but its last (4111 1111 1111 1111, 3782 822463 10005, 4111 1111 1111 1111 110). */
+const CARD_GROUP_MIN = 4;
+/** What marks a figure, not a card: a percent or per-mille sign, or a currency sign (any script's, after secretForm). */
+const FIGURE_MARK = /[%‰‱\p{Sc}]/u;
 
 /**
  * Visible text as the checks read it, character by character: secretForm's folding for each character of
@@ -320,30 +324,59 @@ function folded(text: string): { norm: string; from: number[]; to: number[] } {
 /**
  * Where visible text holds a sensitive number (TIN-617, TIN-619), as [start, end) of the text, each
  * found by what the number is, not by how many digits there are:
- * - a payment card: 13 to 19 digits, in groups joined by spaces, commas, dots, slashes, dashes or up to 6
- *   other characters (16 with no space between, as letters a page put inside a number), starting as the
- *   card networks' numbers do and passing the Luhn check;
+ * - a payment card, by the grammar below;
  * - an IBAN with valid check digits, written in groups or with letters between its digits;
  * - a RUN or RUT with its dash and a valid check character.
- * A list of years, dates, scores and phone numbers pass none of these.
+ * A list of years, dates, scores, phone numbers, percentages and amounts pass none of these.
+ *
+ * A card number as it is written (TIN-619, TIN-762). One rule for every way of writing it, not a list of
+ * separators patched one at a time:
+ * - its digits come in groups: one unbroken run (or one written digit by digit, "4 1 1 1 …"), or groups of
+ *   at least CARD_GROUP_MIN digits (4-4-4-4, 4-6-5, 4-6-4, 4-4-5, 6-13), of which only the last may be
+ *   shorter (4-4-4-4-3);
+ * - between two groups, only what joinsGroups lets through (spaces, dashes, dots, commas, slashes, or the
+ *   few letters a page may put inside a number, kept so a page cannot hide a card from the check), and
+ *   never a FIGURE_MARK: a percent, per-mille or currency sign between two groups ends the candidate;
+ * - 13 to 19 digits in all, starting as the card networks' numbers do and passing the Luhn check.
+ * A figure's digits come in groups of 1 to 3 (a decimal part, thousands, a percentage, a day or a month),
+ * where no card starts and after which none goes on, and often next to a percent or currency sign: so a
+ * run of percentages ("98,51% 96,23% 90,42%") or of amounts ("$293.460.353 $332.718.794") is never a card
+ * candidate, whatever separates its figures, and neither swallows a card written next to it.
  */
 function sensitiveSpans(text: string): Array<[number, number]> {
   const { norm, from, to } = folded(text);
   const spans: Array<[number, number]> = [];
   const add = (start: number, end: number) => spans.push([from[start]!, to[end - 1]!]);
-  // Cards: runs of digit groups, and in each the groups that make a valid card number.
-  const groups = [...norm.matchAll(/\d+/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, digits: m[0] }));
+  // A number written digit by digit, one space or dash apart ("4 1 1 1 1 1 …", each digit in a box of its
+  // own), is one group: single digits run together while one space or dash is all that separates them.
+  const groups: Array<{ start: number; end: number; digits: string; byDigit: boolean }> = [];
+  for (const m of norm.matchAll(/\d+/g)) {
+    const last = groups.at(-1);
+    if (m[0].length === 1 && last?.byDigit && /^[\s-]$/.test(norm.slice(last.end, m.index))) {
+      last.digits += m[0];
+      last.end = m.index + 1;
+    } else groups.push({ start: m.index, end: m.index + m[0].length, digits: m[0], byDigit: m[0].length === 1 });
+  }
+  // Cards: from each group a card can start with, the groups after it while the grammar holds, until their
+  // digits make a valid card number.
   for (let a = 0; a < groups.length; a++) {
+    if (groups[a]!.digits.length < CARD_GROUP_MIN) continue;
     let digits = "";
     for (let b = a; b < groups.length; b++) {
-      if (b > a && !joinsGroups(norm.slice(groups[b - 1]!.end, groups[b]!.start))) break;
-      digits += groups[b]!.digits;
+      const group = groups[b]!;
+      if (b > a) {
+        const gap = norm.slice(groups[b - 1]!.end, group.start);
+        if (!joinsGroups(gap) || FIGURE_MARK.test(gap)) break;
+      }
+      digits += group.digits;
       if (digits.length > 19) break;
       if (digits.length >= 13 && CARD_START.test(digits) && luhnValid(digits)) {
-        add(groups[a]!.start, groups[b]!.end);
+        add(groups[a]!.start, group.end);
         a = b;
         break;
       }
+      // A group shorter than CARD_GROUP_MIN can only be a card's last: nothing after it joins.
+      if (group.digits.length < CARD_GROUP_MIN) break;
     }
   }
   // IBANs: from a country code and two digits, the country's length in letters and digits (spaces and dashes skipped),

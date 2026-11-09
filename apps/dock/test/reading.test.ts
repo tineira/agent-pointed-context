@@ -250,6 +250,48 @@ test("Grok's review of the span rule: every card number it leaked is left out, e
   for (const text of ["Years: 2019 2020 2021 2022 were fine.", "from 2020-01-01 2020-12-31", "Scores were 12 34 56 78 90 12 today", "2026-11-04", "1234 5678"]) assert.deepEqual(redactNumbers(text), { text, count: 0 }, text);
 });
 
+test("a run of percentages or amounts is not a card number, whatever separates its figures; a card among them still is (TIN-762)", () => {
+  // A whole-chart reading of an Instock-like bar chart (Datamind's "Instock promedio"), with and without spaces between the labels.
+  for (const text of [
+    "98,51% 96,23% 90,42% 87,67% 94,81%",
+    "98,51%96,23%90,42%87,67%94,81%",
+    "Instock promedio SMU 98,51% Tottus 96,23% Lider 90,42% Unimarc 87,67% Jumbo 94,81%",
+    "98.51 % 96.23 % 90.42 % 87.67 % 94.81 %",
+    "$293.460.353 $332.718.794",
+    "$293.460.353$332.718.794",
+    "Ventas $293.460.353 $332.718.794 $301.112.640",
+    "1.234,56 € 7.890,12 € 4.111,11 €",
+    // Figures of 4 or more digits marked as amounts or percentages: their digits would pass as a card (4125038900 52306 is Luhn-valid).
+    "$41250 $38900 $52306",
+    "41250% 38900% 52306%",
+    "41250 € 38900 € 52306 €",
+  ]) {
+    assert.deepEqual(redactNumbers(text), { text, count: 0 }, text);
+    const reading = shapeReadingCounted({ ...raw, element: { tag: "svg", text } })!;
+    assert.equal(reading.reading.element!.text, text, text);
+    assert.equal(reading.withheld, 0, text);
+  }
+  // A card number is still one: split by spaces, among percentages and amounts, and in each card network's layout.
+  for (const [text, out] of [
+    ["4111 1111 1111 1111", NUMBER_LEFT_OUT],
+    ["98,51% 4111 1111 1111 1111 96,23%", `98,51% ${NUMBER_LEFT_OUT} 96,23%`],
+    ["$293.460.353 card 4111-1111-1111-1111 $332.718.794", `$293.460.353 card ${NUMBER_LEFT_OUT} $332.718.794`],
+    ["Total 87,67% paid with 4111111111111111.", `Total 87,67% paid with ${NUMBER_LEFT_OUT}.`],
+    ["Amex 3782 822463 10005", `Amex ${NUMBER_LEFT_OUT}`],
+    ["Card 4000 0000 0000 0001 103 on file", `Card ${NUMBER_LEFT_OUT} on file`],
+    ["UnionPay 622202 1000000000009", `UnionPay ${NUMBER_LEFT_OUT}`],
+    ["Card 6011 8587 6596 62 today", `Card ${NUMBER_LEFT_OUT} today`],
+    // Written digit by digit (each digit in a box of its own), with or without a wider gap between the groups.
+    ["Card 4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 today", `Card ${NUMBER_LEFT_OUT} today`],
+    ["Card 4 1 1 1  1 1 1 1  1 1 1 1  1 1 1 1", `Card ${NUMBER_LEFT_OUT}`],
+    // A figure just before a card no longer starts the candidate, which then left the card's last digits out of the span.
+    ["Paid 56,52% via 6011 aa 858765-9662 today", `Paid 56,52% via ${NUMBER_LEFT_OUT} today`],
+    ["Paid 3,40% via 2720 aa 618243 then 37839 today", `Paid 3,40% via ${NUMBER_LEFT_OUT} today`],
+  ] as const) assert.equal(redactNumbers(text).text, out, text);
+  // A page's numbering is not one (the old rule took "2 3 … 13" for a card).
+  assert.deepEqual(redactNumbers("1 2 3 4 5 6 7 8 9 10 11 12 13 14"), { text: "1 2 3 4 5 6 7 8 9 10 11 12 13 14", count: 0 });
+});
+
 test("the hub leaves sensitive numbers out of the outlined text and the selection's block, unless the person chose to send them (TIN-617, TIN-619)", () => {
   const card = "Pay 4111aaaaaaaa1111aaaaaaaa1111aaaaaaaa1111 today";
   const page = { ...raw, element: { tag: "p", text: card, heading: "Billing" }, selection: "today", selection_context: { heading: "Other", text: "Wire to DE89 3704 0044 0532 0130 00." } };
