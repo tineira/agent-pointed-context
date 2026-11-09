@@ -8,7 +8,7 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { askingSite, browserLabel, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -223,6 +223,8 @@ interface DropReply {
   sensitive?: Sensitive;
   /** The drop this answers, so the page offers "Include them this time" for that drop and no other. */
   id?: string;
+  /** On consent_sensitive: the host whose setting or domain makes the drop ask (askingSite). */
+  asks?: string;
 }
 
 /** What to say of sensitive values for a reading sent (or about to be) under this setting, or nothing when there were none. */
@@ -251,7 +253,10 @@ async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sen
   const site = originOf(sender.tab?.url) ?? frameOrigin;
   if (!site) return { status: "opaque_frame", ...(id ? { id } : {}) };
   const consented = await consent(site, m.consent, frameOrigin);
-  if (consented !== true) return { status: consented, ...sensitive, ...(id ? { id } : {}) };
+  if (consented !== true) {
+    const asks = consented === "consent_sensitive" ? new URL(askingSite(site, frameOrigin, ((await chrome.storage.local.get("sites")).sites ?? {}) as Record<string, SiteChoice>)).host : undefined;
+    return { status: consented, ...sensitive, ...(id ? { id } : {}), ...(asks ? { asks } : {}) };
+  }
   if (offered) await hold(id, { raw: m.reading, hub, agent, consented: true });
   const key = readerKey(hub, agent);
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;

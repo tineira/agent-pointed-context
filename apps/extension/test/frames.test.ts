@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { parseFocusAttrs } from "@tineira/apc-protocol";
 import { test } from "node:test";
-import { ANY_PAGE, covered, frameConsent, frameNote, frameOutside, framesOutside, frameTitle, grantedAlone, inAppTarget, isApcApp, originOf, STATUS_TEXT, NATIVE_DROPS_ATTR, NOT_TAKEN_TEXT, replyTarget, scriptMatches, siteGrant } from "../src/drop.ts";
+import { ANY_PAGE, covered, frameConsent, frameNote, frameOutside, framesOutside, frameTitle, appTakes, askingSite, type FocusNode, grantedAlone, isApcApp, originOf, STATUS_TEXT, NATIVE_DROPS_ATTR, NOT_TAKEN_TEXT, replyTarget, scriptMatches, siteGrant } from "../src/drop.ts";
 
 /** A page's root as isApcApp reads it: its attributes, and what a selector finds under it. */
 function page(attrs: string[], found: (selector: string) => boolean = () => false) {
@@ -109,19 +110,57 @@ test("a port-specific grant covers that port only; a pattern without a port cove
   assert.deepEqual(framesOutside(frames, ["http://127.0.0.1:8080/*"], false), ["http://127.0.0.1:9090"]);
 });
 
-test("a drop on an APC app's target is the app's, whatever the last dragover said (TIN-703, review on #142)", () => {
-  // A small tree: a target holding a shadow host, whose shadow root holds the element under the pointer.
-  interface N { up: N | null; focus?: boolean }
-  const target: N = { up: null, focus: true };
-  const host: N = { up: target };
-  const inner: N = { up: host };
-  const margin: N = { up: null };
-  const up = (n: N) => n.up;
-  const isTarget = (n: N) => !!n.focus;
-  assert.equal(inAppTarget(inner, up, isTarget), true);
-  assert.equal(inAppTarget(target, up, isTarget), true);
-  assert.equal(inAppTarget(margin, up, isTarget), false);
-  assert.equal(inAppTarget<N>(null, up, isTarget), false);
+/** An element as appTakes reads it, with closest() as the DOM's (parent elements only, never across a shadow root). */
+class El implements FocusNode {
+  readonly parentElement: El | null;
+  readonly attrs: Record<string, string>;
+  constructor(parentElement: El | null, attrs: Record<string, string> = {}) {
+    this.parentElement = parentElement;
+    this.attrs = attrs;
+  }
+  getAttribute(name: string) {
+    return this.attrs[name] ?? null;
+  }
+  closest(selector: string): El | null {
+    assert.equal(selector, "[data-focus]");
+    for (let e: El | null = this; e; e = e.parentElement) if (e.getAttribute("data-focus") !== null) return e;
+    return null;
+  }
+}
+
+test("the extension's 'the app takes this drop' is the app's own targetOf rule (TIN-703, fix check on #142)", () => {
+  // A valid kind:id target, at the point or above it.
+  const kpi = new El(null, { "data-focus": "figure:kpi" });
+  assert.equal(appTakes(kpi), true);
+  assert.equal(appTakes(new El(new El(kpi))), true);
+  // A generic data-focus the protocol does not parse: empty, "true", no kind:id. The app does not pin there.
+  for (const value of ["", "true", "row1", ":id"]) assert.equal(appTakes(new El(new El(null, { "data-focus": value }))), false, `data-focus="${value}"`);
+  // One that does not parse is skipped for a target above it, as targetOf does.
+  assert.equal(appTakes(new El(new El(kpi, { "data-focus": "true" }))), true);
+  // Bad params make a target not parse.
+  assert.equal(appTakes(new El(null, { "data-focus": "figure:kpi", "data-focus-params": "{nope" })), false);
+  // A target only across a shadow root: the element at the point (the host, from the document's elementFromPoint) has
+  // no data-focus above it, and closest() never reaches into or out of the shadow root, so the app does not take it.
+  // (Inside the shadow root a target would be its own tree: an element there, with no parent element out of the root.)
+  const insideShadow = new El(null, { "data-focus": "figure:kpi" });
+  assert.equal(appTakes(insideShadow), true, "only when the point itself is in that tree, which elementFromPoint never gives");
+  const hostAtPoint = new El(new El(null));
+  assert.equal(appTakes(hostAtPoint), false);
+  // Nothing at the point.
+  assert.equal(appTakes(null), false);
+  // The result is the protocol's: the rule above follows parseFocusAttrs, not a look-alike.
+  assert.ok(parseFocusAttrs("figure:kpi", null, null));
+  assert.equal(parseFocusAttrs("true", null, null), null);
+});
+
+test("the card that asks every time names the site whose setting it is (fix check on #142)", () => {
+  const tab = "https://aggregator.example";
+  const frame = "https://private.example";
+  assert.equal(askingSite(tab, frame, { [tab]: "always", [frame]: "sensitive" }), frame);
+  assert.equal(askingSite(tab, "https://data.gob.cl", { [tab]: "always" }), "https://data.gob.cl");
+  assert.equal(askingSite(tab, frame, { [tab]: "sensitive", [frame]: "sensitive" }), tab);
+  assert.equal(askingSite("https://sii.gob.cl", frame, {}), "https://sii.gob.cl");
+  assert.equal(askingSite(tab, null, {}), tab);
 });
 
 test("a reading from a frame keeps the frame's address and adds the tab's title (TIN-752)", () => {

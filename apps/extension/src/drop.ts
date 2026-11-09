@@ -2,7 +2,7 @@
  * The extension's pure parts (TIN-421, DESIGN.md 13): which docks it talks to, what it calls this
  * browser, and how it keeps one reader token per dock and agent. No chrome.* APIs here, so the tests run it.
  */
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest } from "@tineira/apc-protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest, parseFocusAttrs } from "@tineira/apc-protocol";
 
 /** An APC app that connects agents only directly (APC 0.5): what the extension tells a person who drops a dock agent on it. */
 export interface DirectOnly {
@@ -240,13 +240,40 @@ export function frameConsent(frameOrigin: string | null, sites: Readonly<Record<
 /** The origin of an http(s) address, or null (an opaque frame's about:blank, data: or "null"): never a URL parse that throws. */
 export const originOf = (url: string | null | undefined): string | null => sitePattern(url ?? undefined)?.origin ?? null;
 
+/** What appTakes reads of an element: a DOM Element has all of it. */
+export interface FocusNode {
+  closest(selector: string): FocusNode | null;
+  getAttribute(name: string): string | null;
+  readonly parentElement: FocusNode | null;
+}
+
 /**
- * Whether the element at a drop point is in one of an APC app's targets (`[data-focus]`), across open
- * shadow roots (TIN-703): the app takes such a drop at that point, whatever the last dragover said.
+ * Whether an APC app takes a drop on this element (TIN-703): the app's own rule, `targetOf` in
+ * packages/web/src/pinning.ts, step for step. From the element at the drop point (the document's
+ * elementFromPoint, as `targetAt` starts), the nearest `[data-focus]` by `closest` (never across a shadow
+ * root), parsed by the protocol's `parseFocusAttrs`; one that does not parse (`data-focus=""`, `"true"`, no
+ * `kind:id`) is skipped for the next one above its parent element. The app pins only on a target it parses,
+ * so the extension's "not taken" card stays silent only then, whatever the last dragover said.
  */
-export function inAppTarget<E>(at: E | null, up: (e: E) => E | null, isTarget: (e: E) => boolean): boolean {
-  for (let e = at, depth = 0; e && depth < 200; e = up(e), depth++) if (isTarget(e)) return true;
+export function appTakes(start: FocusNode | null): boolean {
+  let node: FocusNode | null = start;
+  while (node) {
+    const host = node.closest("[data-focus]");
+    if (!host) return false;
+    if (parseFocusAttrs(host.getAttribute("data-focus"), host.getAttribute("data-focus-part"), host.getAttribute("data-focus-params"))) return true;
+    node = host.parentElement;
+  }
   return false;
+}
+
+/**
+ * Whose setting makes a drop ask every time (TIN-752, fix check on #142), for the card to name it: the
+ * tab's site when its own domain or the person's Always ask says so, else the frame's when its domain or
+ * its own Always ask does; the tab's site otherwise.
+ */
+export function askingSite(tabOrigin: string, frameOrigin: string | null, sites: Readonly<Record<string, SiteChoice>>): string {
+  const marked = (o: string) => isSensitive(new URL(o).host) || sites[o] === "sensitive";
+  return !marked(tabOrigin) && frameOrigin && marked(frameOrigin) ? frameOrigin : tabOrigin;
 }
 
 /**

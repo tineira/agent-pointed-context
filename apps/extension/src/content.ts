@@ -12,7 +12,7 @@
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { connectLabel, directOnlyGate, frameNote, hubAllowed, inAppTarget, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { connectLabel, directOnlyGate, appTakes, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -141,7 +141,8 @@ function listen(): void {
       // Nothing on the page took the drag (TIN-703): the card of a drop an app cannot take (TIN-579), not silence.
       // Decided at the drop point too: the last dragover may have been off a target and the drop on one, which
       // the app then takes (it decides from the drop point as well).
-      const stale = !unanswered || inAppTarget(deepElementAt(e.clientX, e.clientY), parentOf, (el) => el.matches("[data-focus]"));
+      // The app's own rule (appTakes = its targetOf), from the element its targetAt starts at.
+      const stale = !unanswered || appTakes(document.elementFromPoint(e.clientX, e.clientY));
       unanswered = false;
       if (stale) return;
       e.preventDefault();
@@ -192,7 +193,7 @@ function listen(): void {
         .sendMessage<Reply>({ type: "drop", id, drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
         .then((r) => {
           const status = r?.status ?? "error";
-          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send, r?.sensitive);
+          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send, r?.sensitive, r?.asks);
           if (status !== "asking") pending.delete(id);
           sent(r ?? { status }, target, e.clientX, e.clientY);
         })
@@ -316,6 +317,8 @@ interface Reply {
   sensitive?: { count: number; mode: SensitiveMode; offer: boolean };
   /** The drop it is about (its reading's id). */
   id?: string;
+  /** On a card that asks every time: the host whose setting or domain makes it ask (the tab's, or a frame's own). */
+  asks?: string;
 }
 
 /**
@@ -805,7 +808,7 @@ function headingFor(el: Element): string | null {
  * The consent card (13.3), where the agent was dropped, in a closed shadow root. Its buttons take
  * trusted clicks only. A sensitive site gets Send and Not now, never Always.
  */
-function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void, sensitive?: Reply["sensitive"]): void {
+function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void, sensitive?: Reply["sensitive"], asks?: string): void {
   const host = cardHost();
   const root = host.attachShadow({ mode: "closed" });
   const card = document.createElement("div");
@@ -818,7 +821,9 @@ function ask(status: "consent" | "consent_sensitive" | "consent_update", x: numb
   text.style.cssText = "margin:0 0 10px";
   // In a frame (TIN-752) the answers are kept for the tab's site, not the frame's: the card says so by name.
   const tabSite = isTop ? null : tabHost();
-  text.textContent = tabSite ? STATUS_TEXT[status].replace("This site is set", `${tabSite} is set`) : STATUS_TEXT[status];
+  // "is set to ask every time" names whichever site carries that setting: the tab's, or the frame's own (askingSite).
+  const setBy = isTop ? null : (asks ?? tabSite);
+  text.textContent = setBy ? STATUS_TEXT[status].replace("This site is set", `${setBy} is set`) : STATUS_TEXT[status];
   // What happens to the sensitive values in this outline, by the person's setting (TIN-619).
   if (sensitive?.count) {
     const note = document.createElement("b");
