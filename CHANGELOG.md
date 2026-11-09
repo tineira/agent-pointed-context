@@ -8,7 +8,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### A long token partly inside a scroll box gives only the part that shows (2026-11-09, TIN-622)
 
-- **When the browser extension reads text cut off by an overflow box, a word with no space that spans several lines (a CJK paragraph, or `word-break: break-all` / `overflow-wrap: anywhere`) is now cut into characters and only those that show go, instead of the whole token.** The cut is by grapheme (`Intl.Segmenter`), so a surrogate pair or a combining mark is never split, and no spaces are put between the kept characters; ordinary words are read as before. (`apps/extension/src/read.ts`, `apps/extension/src/content.ts`, `apps/extension/test/read.test.ts`)
+- **When the browser extension reads text cut off by an overflow box, a word with no space that spans several lines (a CJK paragraph, or `word-break: break-all` / `overflow-wrap: anywhere`) is now cut into characters and only those that show go, instead of the whole token.** The cut is by grapheme (`Intl.Segmenter`), so a surrogate pair or a combining mark is never split, and no spaces are put between the kept characters; ordinary words are read as before, a long or CJK token cut by the edge of a one-line box is cut too, and a token over 200,000 units that is partly cut is dropped, never sent whole. (`apps/extension/src/read.ts`, `apps/extension/src/content.ts`, `apps/extension/test/read.test.ts`)
 
 ### A compact dock: Float in each agent's card, Try your dock on one line, a footer of icons (2026-11-08, TIN-699, TIN-700, TIN-701, TIN-702)
 

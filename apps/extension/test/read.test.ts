@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext, visibleWords, type Rect } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -272,4 +272,39 @@ test("ordinary text is read as before: whole words that show, the spaces between
   const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
   assert.equal(visibleWords("alpha beta", oneLine, { left: 0, top: 0, right: 80, bottom: 20 }), "alpha beta");
   assert.equal(visibleWords("alpha beta", oneLine, { left: 0, top: 0, right: 50, bottom: 20 }), "alpha");
+});
+
+test("a token over the cut cap that is partly clipped is never sent whole (TIN-622, review P1)", () => {
+  const big = "字".repeat(TOKEN_CUT_MAX + 1);
+  assert.equal(visibleWords(big, layout(10), twoLines), "", "dropped, not sent whole");
+  // Just under the cap it is cut, by bisection: 20 characters of 200,000 show, and few slices are asked about.
+  const text = "字".repeat(TOKEN_CUT_MAX);
+  let asked = 0;
+  const counted = (s: number, e: number) => (asked++, layout(10)(s, e));
+  assert.equal(visibleWords(text, counted, twoLines), "字".repeat(20));
+  assert.ok(asked < 400, `asked about ${asked} slices`);
+});
+
+test("a token with no rect showing is skipped before any per-part work (TIN-622, review P2)", () => {
+  const text = "ok " + "字".repeat(5000);
+  let asked = 0;
+  const rectsOf = (s: number, _e: number): Rect[] => (asked++, s < 2 ? [{ left: 0, top: 0, right: 20, bottom: 20 }] : [{ left: 0, top: 500, right: 100, bottom: 520 }, { left: 0, top: 520, right: 100, bottom: 540 }]);
+  assert.equal(visibleWords(text, rectsOf, { left: 0, top: 0, right: 100, bottom: 40 }), "ok");
+  assert.equal(asked, 2, "one question per token");
+});
+
+test("zero-size rects do not make a one-line word several lines (TIN-622, review P2)", () => {
+  const rectsOf = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }, { left: e * 10, top: 0, right: e * 10, bottom: 20 }, { left: 0, top: 0, right: 0, bottom: 0 }];
+  assert.equal(visibleWords("alpha beta", rectsOf, { left: 0, top: 0, right: 80, bottom: 20 }), "alpha beta");
+});
+
+test("BiDi runs on one line are one line; a long or CJK token cut by a clip's edge on one line is cut (TIN-622, review P2)", () => {
+  const runs = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: s * 10 + 20, bottom: 20 }, { left: s * 10 + 20, top: 0, right: e * 10, bottom: 20 }];
+  assert.equal(visibleWords("مرحبا123", runs, { left: 0, top: 0, right: 50, bottom: 20 }), "مرحبا123", "a short word on one line stays whole");
+  const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
+  const nowrap: Rect = { left: 0, top: 0, right: 100, bottom: 20 };
+  assert.equal(visibleWords("字".repeat(30), oneLine, nowrap), "字".repeat(10), "CJK on one line, clipped at the right");
+  const hash = "0123456789abcdef".repeat(13).slice(0, 200);
+  assert.equal(visibleWords(hash, oneLine, nowrap), hash.slice(0, 10), "a 200-character hash on one line");
+  assert.equal(visibleWords("x".repeat(WORD_UNITS_MAX), oneLine, nowrap), "x".repeat(WORD_UNITS_MAX), "an ordinary word cut stays whole");
 });
