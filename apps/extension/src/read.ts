@@ -182,6 +182,88 @@ export const showsIn = (box: Rect, clip: Rect): boolean => {
   return i.right - i.left > 1 && i.bottom - i.top > 1;
 };
 
+/** A partly clipped token longer than this many UTF-16 units is dropped, not cut: the cut needs its grapheme boundaries in memory. */
+export const TOKEN_CUT_MAX = 200000;
+/** A token on one line, partly cut, stays whole when it is no longer than this and has no CJK in it: an ordinary word. */
+export const WORD_UNITS_MAX = 32;
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+
+/** Where each grapheme of a text starts, and its end last: a surrogate pair or a combining mark is never split. */
+function boundaries(text: string): number[] {
+  const at: number[] = [];
+  if (segmenter) for (const g of segmenter.segment(text)) at.push(g.index);
+  else {
+    let i = 0;
+    for (const c of text) {
+      at.push(i);
+      i += c.length;
+    }
+  }
+  at.push(text.length);
+  return at;
+}
+
+/** How many lines a token's rects lie on: rects whose vertical extents overlap by half the smaller one share a line (a BiDi run or a tag boundary on one line adds none). */
+function linesOf(rects: Rect[]): number {
+  const lines: Rect[] = [];
+  for (const r of rects) {
+    const same = lines.find((l) => Math.min(l.bottom, r.bottom) - Math.max(l.top, r.top) >= Math.min(l.bottom - l.top, r.bottom - r.top) / 2);
+    if (same) {
+      same.top = Math.min(same.top, r.top);
+      same.bottom = Math.max(same.bottom, r.bottom);
+    } else lines.push({ ...r });
+  }
+  return lines.length;
+}
+
+/**
+ * The part of a text that shows inside a clip, word by word (TIN-622). `rectsOf(start, end)` gives the
+ * client rects of that slice of the text. One rule for a token with no space: sent whole only when every
+ * one of its rects lies within the clip; skipped when none shows (before any per-part work); otherwise cut
+ * to the parts that show. The cut bisects the token down to its graphemes (a surrogate pair or a combining
+ * mark is never split), so it asks about few parts however long the token is, a slice with no rect showing
+ * is dropped whole and one wholly within is kept whole, and the kept parts are joined with no space: CJK has
+ * none to put back. Graphemes, not `Intl.Segmenter` words: a CJK dictionary word can itself straddle a
+ * line break, and a grapheme never does.
+ *
+ * One exception, to keep an ordinary word readable (TIN-622): a token on a single line, partly cut by
+ * the clip's edge, stays whole when it is at most WORD_UNITS_MAX units long and has no CJK in it. A token
+ * over TOKEN_CUT_MAX units that is partly cut is dropped.
+ */
+export function visibleWords(data: string, rectsOf: (start: number, end: number) => Rect[], clip: Rect): string {
+  let out = "";
+  let pending = "";
+  const solid = (r: Rect) => r.right > r.left && r.bottom > r.top;
+  for (const m of data.matchAll(/\s+|\S+/g)) {
+    if (/^\s/.test(m[0])) {
+      pending = m[0];
+      continue;
+    }
+    const token = m[0];
+    const rects = rectsOf(m.index, m.index + token.length).filter(solid);
+    let kept = "";
+    if (!rects.some((r) => showsIn(r, clip))) kept = "";
+    else if (rects.every((r) => within(r, clip))) kept = token;
+    else if (linesOf(rects) === 1 && token.length <= WORD_UNITS_MAX && !CJK.test(token)) kept = token;
+    else if (token.length <= TOKEN_CUT_MAX) {
+      const at = boundaries(token);
+      const cut = (lo: number, hi: number): string => {
+        const part = token.slice(at[lo], at[hi]);
+        const found = rectsOf(m.index + at[lo]!, m.index + at[hi]!).filter(solid);
+        if (!found.some((r) => showsIn(r, clip))) return "";
+        if (hi - lo === 1 || found.every((r) => within(r, clip))) return part;
+        const mid = (lo + hi) >> 1;
+        return cut(lo, mid) + cut(mid, hi);
+      };
+      kept = cut(0, at.length - 1);
+    }
+    if (kept) out += (out ? pending : "") + kept;
+    pending = "";
+  }
+  return out;
+}
+
 /** What a CSS filter does to opacity: opacity(0.5) or opacity(50%), multiplied; 1 without one. */
 export function filterOpacity(filter: string): number {
   let out = 1;

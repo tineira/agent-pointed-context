@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -229,4 +229,82 @@ test("a paragraph is under the heading before it, never one inside a section, it
   const q = el("div", [el("div", ["Email"], { role: "heading" }), el("div", ["Your answer"])], { role: "listitem" });
   assert.equal(title(q), "Email");
   assert.equal(headingOf(el("p", ["alone"]), outline), null);
+});
+
+// TIN-622: a token with no space that spans lines is kept only where it shows.
+/** A text laid out `perLine` UTF-16 units to a line, 20 px high, as a Range over a slice reports it: one rect per line the slice touches. */
+const layout = (perLine: number) => (start: number, end: number): Rect[] => {
+  const rects: Rect[] = [];
+  for (let l = Math.floor(start / perLine); l <= Math.floor((end - 1) / perLine); l++) {
+    const from = Math.max(start, l * perLine) - l * perLine;
+    const to = Math.min(end, (l + 1) * perLine) - l * perLine;
+    rects.push({ left: from * 10, top: l * 20, right: to * 10, bottom: l * 20 + 20 });
+  }
+  return rects;
+};
+/** A scroll box 100 px wide that shows the first two lines. */
+const twoLines: Rect = { left: 0, top: 0, right: 100, bottom: 40 };
+
+test("a CJK paragraph in a box that shows two of its lines gives only those lines, with no spaces (TIN-622)", () => {
+  const text = "一二三四五六七八九十" + "甲乙丙丁戊己庚辛壬癸" + "子丑寅卯辰巳午未申酉" + "春夏秋冬東南西北中央";
+  assert.equal(visibleWords(text, layout(10), twoLines), "一二三四五六七八九十甲乙丙丁戊己庚辛壬癸");
+  assert.equal(visibleWords(text, layout(10), { ...twoLines, top: 40, bottom: 80 }), "子丑寅卯辰巳午未申酉春夏秋冬東南西北中央");
+  assert.equal(visibleWords(text, layout(10), { left: 0, top: 100, right: 100, bottom: 140 }), "");
+});
+
+test("a break-all hash partly clipped gives only its visible part (TIN-622)", () => {
+  const hash = "0123456789abcdef".repeat(13).slice(0, 200); // 200 characters, 20 to a line
+  // "sha " takes 4 units, so the hash starts on line 0 and the box shows up to unit 40.
+  assert.equal(visibleWords(`sha ${hash} end`, layout(20), { ...twoLines, right: 200 }), `sha ${hash.slice(0, 36)}`);
+});
+
+test("a word wrapped across a clip keeps its visible graphemes only: a surrogate pair and a combining mark are never split (TIN-622)", () => {
+  // Lines of 4 UTF-16 units: line 0 is "a", a surrogate pair, "b"; line 1 starts with e + U+0301.
+  const text = "a\u{1D4B3}bécdXYZ12345";
+  assert.equal(visibleWords(text, layout(4), { left: 0, top: 0, right: 100, bottom: 20 }), "a\u{1D4B3}b");
+  // The box shows line 1 only: "e" and its accent stay together.
+  assert.equal(visibleWords(text, layout(4), { left: 0, top: 20, right: 100, bottom: 40 }), "écd");
+});
+
+test("ordinary text is read as before: whole words that show, the spaces between them, a one-line word partly cut stays whole (TIN-622)", () => {
+  // 8 units to a line, each line a whole number of words: the box shows the first two lines.
+  assert.equal(visibleWords("aaa bbb ccc ddd eee fff", layout(8), twoLines), "aaa bbb ccc ddd");
+  const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
+  assert.equal(visibleWords("alpha beta", oneLine, { left: 0, top: 0, right: 80, bottom: 20 }), "alpha beta");
+  assert.equal(visibleWords("alpha beta", oneLine, { left: 0, top: 0, right: 50, bottom: 20 }), "alpha");
+});
+
+test("a token over the cut cap that is partly clipped is never sent whole (TIN-622, review P1)", () => {
+  const big = "字".repeat(TOKEN_CUT_MAX + 1);
+  assert.equal(visibleWords(big, layout(10), twoLines), "", "dropped, not sent whole");
+  // Just under the cap it is cut, by bisection: 20 characters of 200,000 show, and few slices are asked about.
+  const text = "字".repeat(TOKEN_CUT_MAX);
+  let asked = 0;
+  const counted = (s: number, e: number) => (asked++, layout(10)(s, e));
+  assert.equal(visibleWords(text, counted, twoLines), "字".repeat(20));
+  assert.ok(asked < 400, `asked about ${asked} slices`);
+});
+
+test("a token with no rect showing is skipped before any per-part work (TIN-622, review P2)", () => {
+  const text = "ok " + "字".repeat(5000);
+  let asked = 0;
+  const rectsOf = (s: number, _e: number): Rect[] => (asked++, s < 2 ? [{ left: 0, top: 0, right: 20, bottom: 20 }] : [{ left: 0, top: 500, right: 100, bottom: 520 }, { left: 0, top: 520, right: 100, bottom: 540 }]);
+  assert.equal(visibleWords(text, rectsOf, { left: 0, top: 0, right: 100, bottom: 40 }), "ok");
+  assert.equal(asked, 2, "one question per token");
+});
+
+test("zero-size rects do not make a one-line word several lines (TIN-622, review P2)", () => {
+  const rectsOf = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }, { left: e * 10, top: 0, right: e * 10, bottom: 20 }, { left: 0, top: 0, right: 0, bottom: 0 }];
+  assert.equal(visibleWords("alpha beta", rectsOf, { left: 0, top: 0, right: 80, bottom: 20 }), "alpha beta");
+});
+
+test("BiDi runs on one line are one line; a long or CJK token cut by a clip's edge on one line is cut (TIN-622, review P2)", () => {
+  const runs = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: s * 10 + 20, bottom: 20 }, { left: s * 10 + 20, top: 0, right: e * 10, bottom: 20 }];
+  assert.equal(visibleWords("مرحبا123", runs, { left: 0, top: 0, right: 50, bottom: 20 }), "مرحبا123", "a short word on one line stays whole");
+  const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
+  const nowrap: Rect = { left: 0, top: 0, right: 100, bottom: 20 };
+  assert.equal(visibleWords("字".repeat(30), oneLine, nowrap), "字".repeat(10), "CJK on one line, clipped at the right");
+  const hash = "0123456789abcdef".repeat(13).slice(0, 200);
+  assert.equal(visibleWords(hash, oneLine, nowrap), hash.slice(0, 10), "a 200-character hash on one line");
+  assert.equal(visibleWords("x".repeat(WORD_UNITS_MAX), oneLine, nowrap), "x".repeat(WORD_UNITS_MAX), "an ordinary word cut stays whole");
 });
