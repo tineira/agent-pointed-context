@@ -209,9 +209,11 @@ ${CARDS}`;
 // Charts drawn in SVG (TIN-760), as Datamind's Highcharts draws them: "Venta neta", a line chart with a marker per month
 // (path.highcharts-point under a tracker line), the title "SMU" and only "0" and "1 000M" on its value axis; "Instock
 // promedio", horizontal bars with a data label at each end drawn twice (a text-outline copy under it); and a plain SVG
-// bar chart with no classes at all, one bar with a <title> of its own.
+// bar chart with no classes at all, one bar with a <title> of its own. The line chart also has a plot band (shading, not
+// data), a tooltip left on screen from an earlier hover (February's), an HTML data label over October's point (useHTML),
+// and a data label for July's point that the plot's clip path hides.
 const MONTHS = ["E", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
-const VENTA = [520, 610, 480, 700, 650, 590, 820, 760, 930, 880, 640, 710];
+const VENTA = [520, 610, 480, 700, 650, 590, 980, 760, 930, 880, 640, 710];
 const lineY = (m) => 260 - m * 0.2;
 const linePath = VENTA.map((m, i) => `${i ? "L" : "M"} ${80 + i * 40} ${lineY(m)}`).join(" ");
 const text = (x, y, words, anchor = "middle", extra = "") => `<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="middle" style="font:11px sans-serif"${extra}>${words}</text>`;
@@ -224,6 +226,8 @@ const CHARTS = `<!doctype html><title>Ventas</title><body style="margin:20px;fon
 <div class="highcharts-container" id="line" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
 <rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
 <rect class="highcharts-plot-background" x="60" y="40" width="520" height="220" fill="#ffffff"/>
+<defs><clipPath id="plotclip"><rect x="60" y="56" width="520" height="204"/></clipPath></defs>
+<g class="highcharts-plot-bands-0"><rect class="highcharts-plot-band" id="band" x="60" y="200" width="520" height="40" fill="rgba(68,170,213,0.2)"/></g>
 <g class="highcharts-grid highcharts-yaxis-grid"><path d="M 60 60 L 580 60" stroke="#e6e6e6" fill="none"/><path d="M 60 260 L 580 260" stroke="#e6e6e6" fill="none"/></g>
 <g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-line-series"><path class="highcharts-graph" d="${linePath}" fill="none" stroke="#2f7ed8" stroke-width="2"/></g>
 <g class="highcharts-markers highcharts-series-0 highcharts-tracker">${VENTA.map((m, i) => `<path class="highcharts-point" id="m${i}" fill="#2f7ed8" d="M ${80 + i * 40 - 4} ${lineY(m) - 4} h 8 v 8 h -8 Z"/>`).join("")}</g>
@@ -231,7 +235,9 @@ const CHARTS = `<!doctype html><title>Ventas</title><body style="margin:20px;fon
 ${text(300, 20, "SMU", "middle", ' class="highcharts-title"')}
 <g class="highcharts-axis-labels highcharts-xaxis-labels">${MONTHS.map((m, i) => text(80 + i * 40, 276, m)).join("")}</g>
 <g class="highcharts-axis-labels highcharts-yaxis-labels">${text(50, 260, "0", "end")}${text(50, 60, "1 000M", "end")}</g>
-</svg></div>
+<g class="highcharts-data-labels highcharts-series-0" clip-path="url(#plotclip)">${text(320, 48, "999M")}</g>
+<g class="highcharts-label highcharts-tooltip" transform="translate(500,190)"><path fill="#ffffff" stroke="#333333" d="M 0 0 h 80 v 34 h -80 Z"/>${text(6, 10, "F", "start")}${text(6, 24, "SMU: 400 M", "start")}</g>
+</svg><div class="highcharts-data-labels highcharts-series-0" style="position:absolute;left:0;top:0"><div class="highcharts-label highcharts-data-label" id="octlabel" style="position:absolute;left:420px;top:${lineY(880) - 8}px;width:40px;text-align:center;font:11px sans-serif;background:rgba(255,255,255,0.6)"><span>880M</span></div></div></div>
 <h2>Instock promedio</h2>
 <div class="highcharts-container" id="bars" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
 <rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
@@ -1021,7 +1027,16 @@ try {
       const before = (await latestReading())?.reading?.taken_at;
       const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
       for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x, y, data: dragged }, charts);
-      const outlined = await inCharts(`(() => { const box = document.querySelector("[data-apc-outline]"); const r = box?.getBoundingClientRect(); return { box: r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null, outlined: [...document.querySelectorAll("div,figure,svg")].filter((e) => e.style.outline.includes("solid")).map((e) => e.id || e.tagName) }; })()`);
+      // The box is in a closed shadow root: DevTools sees through it.
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, charts);
+      let boxNode = null;
+      const walk = (n) => {
+        if ((n.attributes ?? []).includes("data-apc-outline-box")) boxNode = n.nodeId;
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      const q = boxNode ? (await cdp("DOM.getBoxModel", { nodeId: boxNode }, charts)).model.border : null;
+      const outlined = { box: q ? { left: q[0], top: q[1], right: q[4], bottom: q[5] } : null, outlined: await inCharts(`[...document.querySelectorAll("div,figure,svg")].filter((e) => e.style.outline.includes("solid")).map((e) => e.id || e.tagName)`) };
       await cdp("Input.dispatchDragEvent", { type: "drop", x, y, data: dragged }, charts);
       return { outlined, text: await nextReading(`the chart at ${Math.round(x)},${Math.round(y)}`, before) };
     };
@@ -1048,11 +1063,25 @@ try {
     });
     const sepNow = await boxOf("#m8");
     assert.ok(pinOnPoint.right <= sepNow.left && sepNow.left - pinOnPoint.right < 12 && Math.abs(pinOnPoint.top - sepNow.top) < 3, `the pin sits at the point: ${JSON.stringify({ pinOnPoint, sepNow })}`);
-    // The line chart's background: the whole chart, as before.
+    // February's tooltip is still on screen: September's value is not taken from it (above: approximate, ≈ 930M).
+    assert.doesNotMatch(point.text, /400 M/);
+    // July's data label is hidden by the plot's clip path: July is read off the axis, not from "999M".
+    const jul = await boxOf("#m6");
+    assert.match((await dropOnChart(jul.x, jul.y)).text, /Pointed at \(path, chart point\): SMU · J · ≈ (9[6-9]0M|1 000M) \(approximate/m);
+    // October's HTML data label lies over its point (useHTML): a drop on it finds the point, and the label is its value.
+    const oct = await boxOf("#octlabel");
+    const october = await dropOnChart(oct.x, oct.y);
+    assert.match(october.text, /Pointed at \(path, chart point\): SMU · O · 880M$/m);
+    assert.ok(around(october.outlined.box, await boxOf("#m9")), `the outline is a box around October's point: ${JSON.stringify(october.outlined)}`);
+    // The line chart's background, and its plot band (shading, not data): the whole chart, as before.
     const line = await boxOf("#line svg");
-    const lineBackground = await dropOnChart(line.left + 40, line.top + 240);
-    assert.equal(lineBackground.outlined.box, null, "no box over a mark");
-    assert.match(lineBackground.text, /Under the heading: Venta neta\nPointed at \(div\): SMU E F M A M J J A S O N D 0 1 000M$/m);
+    for (const at of [{ x: line.left + 40, y: line.top + 180 }, { x: line.left + 300, y: line.top + 220 }]) {
+      const background = await dropOnChart(at.x, at.y);
+      assert.equal(background.outlined.box, null, "no box over a mark");
+      assert.deepEqual(background.outlined.outlined, ["line"], "the chart is outlined");
+      assert.match(background.text, /Under the heading: Venta neta\nPointed at \(div\): SMU E F M A M J J A S O N D 0 1 000M/m);
+      assert.doesNotMatch(background.text, /999M/, "a label the plot's clip path hides is not read");
+    }
     // The SMU bar: its category and its exact label.
     const smu = await boxOf("#bar3");
     const smuBar = await dropOnChart(smu.x, smu.y);
