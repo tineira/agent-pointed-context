@@ -206,7 +206,48 @@ const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countr
 <p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
 <p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>
 ${CARDS}`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
+// Charts drawn in SVG (TIN-760), as Datamind's Highcharts draws them: "Venta neta", a line chart with a marker per month
+// (path.highcharts-point under a tracker line), the title "SMU" and only "0" and "1 000M" on its value axis; "Instock
+// promedio", horizontal bars with a data label at each end drawn twice (a text-outline copy under it); and a plain SVG
+// bar chart with no classes at all, one bar with a <title> of its own.
+const MONTHS = ["E", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+const VENTA = [520, 610, 480, 700, 650, 590, 820, 760, 930, 880, 640, 710];
+const lineY = (m) => 260 - m * 0.2;
+const linePath = VENTA.map((m, i) => `${i ? "L" : "M"} ${80 + i * 40} ${lineY(m)}`).join(" ");
+const text = (x, y, words, anchor = "middle", extra = "") => `<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="middle" style="font:11px sans-serif"${extra}>${words}</text>`;
+const STORES = [["CENCOSUD", 98.51], ["WALMART", 96.23], ["TOTTUS", 90.42], ["SMU", 87.67], ["Total General", 94.81]];
+const barY = (i) => 40 + i * 44;
+const barEnd = (v) => 110 + v * 4;
+const pct = (v) => `${v.toFixed(2).replace(".", ",")}%`;
+const CHARTS = `<!doctype html><title>Ventas</title><body style="margin:20px;font:14px sans-serif"><h1>Tendencia de ventas</h1>
+<h2>Venta neta</h2>
+<div class="highcharts-container" id="line" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
+<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
+<rect class="highcharts-plot-background" x="60" y="40" width="520" height="220" fill="#ffffff"/>
+<g class="highcharts-grid highcharts-yaxis-grid"><path d="M 60 60 L 580 60" stroke="#e6e6e6" fill="none"/><path d="M 60 260 L 580 260" stroke="#e6e6e6" fill="none"/></g>
+<g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-line-series"><path class="highcharts-graph" d="${linePath}" fill="none" stroke="#2f7ed8" stroke-width="2"/></g>
+<g class="highcharts-markers highcharts-series-0 highcharts-tracker">${VENTA.map((m, i) => `<path class="highcharts-point" id="m${i}" fill="#2f7ed8" d="M ${80 + i * 40 - 4} ${lineY(m) - 4} h 8 v 8 h -8 Z"/>`).join("")}</g>
+<path class="highcharts-tracker-line" d="${linePath}" fill="none" stroke="rgba(192,192,192,0.0001)" stroke-width="22"/></g>
+${text(300, 20, "SMU", "middle", ' class="highcharts-title"')}
+<g class="highcharts-axis-labels highcharts-xaxis-labels">${MONTHS.map((m, i) => text(80 + i * 40, 276, m)).join("")}</g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels">${text(50, 260, "0", "end")}${text(50, 60, "1 000M", "end")}</g>
+</svg></div>
+<h2>Instock promedio</h2>
+<div class="highcharts-container" id="bars" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
+<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
+<g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-bar-series highcharts-tracker">${STORES.map(([, v], i) => `<path class="highcharts-point" id="bar${i}" fill="#2f7ed8" d="M 110 ${barY(i) - 12} H ${barEnd(v)} V ${barY(i) + 12} H 110 Z"/>`).join("")}</g></g>
+<g class="highcharts-data-labels highcharts-series-0">${STORES.map(([, v], i) => `<g class="highcharts-label highcharts-data-label"><text x="${barEnd(v) + 5}" y="${barY(i)}" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">${pct(v)}</tspan><tspan x="${barEnd(v) + 5}">${pct(v)}</tspan></text></g>`).join("")}</g>
+<g class="highcharts-axis-labels highcharts-xaxis-labels">${STORES.map(([name], i) => text(100, barY(i), name, "end")).join("")}</g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels">${Array.from({ length: 11 }, (_, i) => text(110 + i * 40, 280, `${i * 10}%`)).join("")}</g>
+</svg></div>
+<h2>Revenue by quarter</h2>
+<figure id="plain" style="margin:0;width:400px"><svg width="400" height="260">
+${text(200, 12, "Revenue")}
+<g>${text(40, 230, "0", "end")}${text(40, 130, "50", "end")}${text(40, 30, "100", "end")}</g>
+<g>${text(100, 248, "Q1")}${text(200, 248, "Q2")}${text(300, 248, "Q3")}</g>
+<g fill="#c0602a"><rect id="q1" x="80" y="130" width="40" height="100"/><rect id="q2" x="180" y="80" width="40" height="150"/><rect id="q3" x="280" y="50" width="40" height="180"><title>Q3: 90</title></rect></g>
+</svg></figure></body>`;
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/charts") ? CHARTS : req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -966,6 +1007,78 @@ try {
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("11. a Google-Forms-like card: a drop on its title, its margin or its answer outlines the card and sends that answer only");
+
+    // 12. Charts (TIN-760): a drop on a line chart's point outlines that point (a box drawn over it: CSS draws no outline on
+    // SVG shapes), pins there and reads its series, category and value; on a bar, its category and exact data label; on
+    // the background, the whole chart, each label once.
+    const { targetId: chartsId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/charts") });
+    const { sessionId: charts } = await cdp("Target.attachToTarget", { targetId: chartsId, flatten: true });
+    await sleep(2500);
+    const inCharts = async (expr) => (await cdp("Runtime.evaluate", { expression: expr, returnByValue: true }, charts)).result.value;
+    const boxOf = (selector) => inCharts(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    /** Drag over (x, y), return what the outline is then, drop, and return the new reading. */
+    const dropOnChart = async (x, y) => {
+      const before = (await latestReading())?.reading?.taken_at;
+      const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+      for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x, y, data: dragged }, charts);
+      const outlined = await inCharts(`(() => { const box = document.querySelector("[data-apc-outline]"); const r = box?.getBoundingClientRect(); return { box: r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null, outlined: [...document.querySelectorAll("div,figure,svg")].filter((e) => e.style.outline.includes("solid")).map((e) => e.id || e.tagName) }; })()`);
+      await cdp("Input.dispatchDragEvent", { type: "drop", x, y, data: dragged }, charts);
+      return { outlined, text: await nextReading(`the chart at ${Math.round(x)},${Math.round(y)}`, before) };
+    };
+    const around = (outer, inner) => outer && outer.left <= inner.left && outer.top <= inner.top && outer.right >= inner.right && outer.bottom >= inner.bottom && outer.right - outer.left < inner.right - inner.left + 12;
+    // The September point of SMU, under the tracker line laid over the series.
+    const sep = await boxOf("#m8");
+    const point = await dropOnChart(sep.x, sep.y);
+    assert.ok(around(point.outlined.box, sep), `the outline is a box around the point: ${JSON.stringify(point.outlined)}`);
+    assert.deepEqual(point.outlined.outlined, [], "nothing else is outlined");
+    assert.match(point.text, /Under the heading: Venta neta\nPointed at \(path, chart point\): SMU · S · ≈ 9[2-4]0M \(approximate, read from the chart's position\)$/m);
+    assert.doesNotMatch(point.text, /Instock|CENCOSUD|Revenue/, "nothing outside the chart");
+    // The pin, in the point's left margin, at its top.
+    const pinOnPoint = await until("the pin at the point", async () => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, charts);
+      let badge = null;
+      const walk = (n) => {
+        if ((n.attributes ?? []).includes("data-apc-pin-state")) badge = n.nodeId;
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      if (!badge) return null;
+      const q = (await cdp("DOM.getBoxModel", { nodeId: badge }, charts)).model.border;
+      return { left: q[0], top: q[1], right: q[4] };
+    });
+    const sepNow = await boxOf("#m8");
+    assert.ok(pinOnPoint.right <= sepNow.left && sepNow.left - pinOnPoint.right < 12 && Math.abs(pinOnPoint.top - sepNow.top) < 3, `the pin sits at the point: ${JSON.stringify({ pinOnPoint, sepNow })}`);
+    // The line chart's background: the whole chart, as before.
+    const line = await boxOf("#line svg");
+    const lineBackground = await dropOnChart(line.left + 40, line.top + 240);
+    assert.equal(lineBackground.outlined.box, null, "no box over a mark");
+    assert.match(lineBackground.text, /Under the heading: Venta neta\nPointed at \(div\): SMU E F M A M J J A S O N D 0 1 000M$/m);
+    // The SMU bar: its category and its exact label.
+    const smu = await boxOf("#bar3");
+    const smuBar = await dropOnChart(smu.x, smu.y);
+    assert.ok(around(smuBar.outlined.box, smu), `the outline is a box around the bar: ${JSON.stringify(smuBar.outlined)}`);
+    assert.match(smuBar.text, /Under the heading: Instock promedio\nPointed at \(path, chart bar\): SMU · 87,67%$/m);
+    // Another bar, near its end: its own row and label.
+    const cencosud = await boxOf("#bar0");
+    assert.match((await dropOnChart(cencosud.right - 10, cencosud.y)).text, /Pointed at \(path, chart bar\): CENCOSUD · 98,51%$/m);
+    // The bar chart's background: the chart, each value once.
+    // Under Ask per drop the hub takes a run of these percentages for a card number (their digits pass the Luhn check)
+    // and leaves part of it out; with Send, the text is checked as the extension read it.
+    await setSensitive("send");
+    const bars = await boxOf("#bars svg");
+    const barsBackground = await dropOnChart(bars.right - 20, bars.top + 12);
+    await setSensitive("ask");
+    assert.match(barsBackground.text, /Pointed at \(div\): 98,51% 96,23% 90,42% 87,67% 94,81% CENCOSUD WALMART TOTTUS SMU Total General 0% 10% 20%/);
+    assert.doesNotMatch(barsBackground.text, /98,51%\s*98,51%/, "each label once");
+    // A plain SVG chart: the axes found by their place, the title above them names the series; a bar's own <title> is exact.
+    const q2 = await boxOf("#q2");
+    assert.match((await dropOnChart(q2.x, q2.y)).text, /Under the heading: Revenue by quarter\nPointed at \(rect, chart bar\): Revenue · Q2 · ≈ 7[4-6](\.\d)? \(approximate, read from the chart's position\)$/m);
+    const q3 = await boxOf("#q3");
+    assert.match((await dropOnChart(q3.x, q3.y)).text, /Pointed at \(rect, chart bar\): Revenue · Q3: 90$/m);
+    await cdp("Target.closeTarget", { targetId: chartsId });
+    await drag("#b", await payload());
+    await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
+    console.log("12. a chart's point or bar is outlined, pinned and read as series, category and value; its background reads the whole chart, each label once");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });

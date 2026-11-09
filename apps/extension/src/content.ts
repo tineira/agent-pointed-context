@@ -13,6 +13,7 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, appTakes, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { describeMark, isOutlineCopy, type Chart, type ChartLabel, type LabelRole, type MarkReading, type SvgText } from "./chart.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -85,22 +86,13 @@ interface Target {
 function listen(): void {
   /** Each drop's place, by its id: its pin and its "Include them this time" may come later, once the person allowed this browser in the dock. */
   const pending = new Map<string, { target: Target; x: number; y: number }>();
-  let lit: HTMLElement | null = null;
-  let litOutline = "";
+  const outlining = outliner();
+  const light = outlining.light;
   /** On an APC app, whether nothing on the page took the last dragover, so the extension did (TIN-703). */
   let unanswered = false;
   // A copy left from before the extension was reloaded or updated has lost its extension: it stands
   // back, so the fresh copy injected next to it takes the drop.
   const carriesAgent = (e: DragEvent) => !!chrome.runtime?.id && !!e.dataTransfer && [...e.dataTransfer.types].includes(APC_AGENT_TYPE);
-  const light = (el: HTMLElement | null) => {
-    if (lit === el) return;
-    if (lit) lit.style.outline = litOutline;
-    lit = el;
-    if (el) {
-      litOutline = el.style.outline;
-      el.style.outline = "2px solid #d4733a";
-    }
-  };
 
   const onDragover = (e: DragEvent) => {
     if (!e.isTrusted || !carriesAgent(e)) return;
@@ -123,7 +115,7 @@ function listen(): void {
     // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
     // The outline is what goes (TIN-619): the same element is read on the drop.
-    light(scopeAt(e.clientX, e.clientY) as HTMLElement | null);
+    light(scopeAt(e.clientX, e.clientY));
     keepLast();
   };
   // Whichever handler answers last wins, and a page's own can come after this one and refuse every
@@ -274,7 +266,7 @@ function listen(): void {
     "drop",
     (e) => {
       // What was outlined when the agent was let go is what is read (TIN-619).
-      const outlined = lit;
+      const outlined = outlining.lit();
       light(null);
       scopeCache = null;
       if (!e.isTrusted || !carriesAgent(e)) return;
@@ -355,16 +347,63 @@ function cardHost(): HTMLDivElement {
   return host;
 }
 
-/** The last scope found while dragging, by the element under the pointer: dragover comes many times a second. */
-let scopeCache: { under: Element | null; scope: Element | null } | null = null;
+/**
+ * The last scope found while dragging, by the element under the pointer and the chart mark there (an
+ * SVG overlay such as a chart's tracker can lie over many marks): dragover comes many times a second.
+ */
+let scopeCache: { under: Element | null; mark: Element | null; scope: Element | null } | null = null;
 
-/** What the outline covers at a point (scopeOf), as the person drags. */
+/**
+ * What the outline covers at a point (scopeOf), as the person drags: a chart's mark (a point, a bar) when
+ * the drop lands on one the chart says something about (TIN-760), otherwise scopeOf.
+ */
 function scopeAt(x: number, y: number): Element | null {
   const under = deepElementAt(x, y);
-  if (scopeCache?.under === under && (!scopeCache.scope || scopeCache.scope.isConnected)) return scopeCache.scope;
-  const scope = scopeOf(under, elementAt(x, y));
-  scopeCache = { under, scope };
+  const mark = markAt(x, y, under);
+  if (scopeCache?.under === under && scopeCache.mark === mark && (!scopeCache.scope || scopeCache.scope.isConnected)) return scopeCache.scope;
+  const scope = mark && readMark(mark) ? mark : scopeOf(under, elementAt(x, y));
+  scopeCache = { under, mark, scope };
   return scope;
+}
+
+/** Whether CSS draws an outline on the element: an HTML element, or a drawing's outermost <svg>. */
+const outlines = (el: Element | null): el is HTMLElement | SVGSVGElement => el instanceof HTMLElement || (el instanceof SVGSVGElement && !el.ownerSVGElement);
+
+/**
+ * What the person sees around the extension's outline: an outline on the element itself (style.outline,
+ * put back as it was), or, for an SVG element inside a drawing (a chart's mark), where CSS draws none, a
+ * box over it in the extension's own host, which takes no pointer and is put where the element is on
+ * each call (the page may scroll while the agent is dragged).
+ */
+function outliner(): { light: (el: Element | null) => void; lit: () => Element | null } {
+  let lit: Element | null = null;
+  let litOutline = "";
+  let box: HTMLDivElement | null = null;
+  const place = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    box!.style.cssText = `position:fixed!important;z-index:2147483646!important;pointer-events:none!important;box-sizing:border-box!important;left:${r.left - 3}px!important;top:${r.top - 3}px!important;width:${r.width + 6}px!important;height:${r.height + 6}px!important;border:2px solid #d4733a!important;border-radius:3px!important;margin:0!important;padding:0!important;background:none!important;display:block!important`;
+  };
+  const light = (el: Element | null) => {
+    if (lit === el) {
+      if (el && box) place(el);
+      return;
+    }
+    if (outlines(lit)) lit.style.outline = litOutline;
+    box?.remove();
+    box = null;
+    lit = el;
+    if (outlines(el)) {
+      litOutline = el.style.outline;
+      el.style.outline = "2px solid #d4733a";
+    } else if (el) {
+      box = cardHost();
+      box.dataset.apcOutline = "";
+      box.setAttribute("aria-hidden", "true");
+      place(el);
+      document.documentElement.append(box);
+    }
+  };
+  return { light, lit: () => lit };
 }
 
 /**
@@ -496,6 +535,162 @@ function blockOf(under: Element | null): Element | null {
   return blockAbove(at, climb);
 }
 
+// ---- chart marks (TIN-760) ----
+
+/** The shapes a chart draws its data with. */
+const SHAPES = "path,circle,rect,ellipse,polygon";
+/** Words in a class that name something a chart draws other than its data: a shape in one is never a mark. */
+const NOT_DATA = new Set(["legend", "axis", "xaxis", "yaxis", "grid", "gridline", "tooltip", "title", "subtitle", "credits", "navigator", "scrollbar", "background", "crosshair", "tick", "ticks", "label", "labels", "annotation", "annotations", "border", "button", "domain"]);
+/** An element's class, in words ("highcharts-data-label" is highcharts, data, label). */
+const classWords = (e: Element) => (e.getAttribute("class") ?? "").toLowerCase().split(/[\s_-]+/).filter(Boolean);
+/** The most labels and shapes looked at in one chart. */
+const CHART_SCANNED = 600;
+
+/** The drawing an element is in: its outermost <svg>. */
+function drawingOf(el: Element): SVGSVGElement | null {
+  let svg = el.closest("svg");
+  while (svg?.ownerSVGElement) svg = svg.ownerSVGElement;
+  return svg;
+}
+
+/** A box's area. */
+const area = (r: Rect) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+
+/**
+ * Whether an element is a chart's data mark: a filled shape the person sees (a point, a bar), at most a
+ * quarter of its drawing, and not a part of its axes, grid, legend, labels, title, tooltip or background,
+ * nor a tracker or hover halo laid over the data. Highcharts' points (`path.highcharts-point`) are such shapes.
+ */
+function isMark(el: Element): boolean {
+  if (!(el instanceof SVGGraphicsElement) || !el.matches(SHAPES) || el.closest("defs,clipPath,mask,marker,pattern,symbol")) return false;
+  if (classWords(el).some((w) => w === "tracker" || w === "halo")) return false;
+  const svg = drawingOf(el);
+  if (!svg) return false;
+  for (let at: Element | null = el; at && at !== svg; at = at.parentElement) if (classWords(at).some((w) => NOT_DATA.has(w))) return false;
+  const style = getComputedStyle(el);
+  if (style.fill === "none" || alpha(style.fill) < OPACITY_MIN || Number(style.fillOpacity) < OPACITY_MIN || effectiveOpacity(el) < OPACITY_MIN || !rendered(el)) return false;
+  const box = area(boxOf(el));
+  return box > 0 && box <= area(boxOf(svg)) / 4;
+}
+
+/**
+ * The chart mark at a point, or null: going down the elements at the point inside the drawing the pointer
+ * is on, the first that is a mark. A data label or a tracker over a bar passes through to the bar; a drop
+ * on the background, a gridline, an axis or the title finds none.
+ */
+function markAt(x: number, y: number, deep: Element | null): Element | null {
+  const svg = deep instanceof SVGElement ? drawingOf(deep) : null;
+  if (!svg) return null;
+  const root = deep!.getRootNode() as Document | ShadowRoot;
+  for (const el of root.elementsFromPoint(x, y)) if (el !== svg && svg.contains(el) && isMark(el)) return el;
+  return null;
+}
+
+/** The series an element of a chart belongs to, when the markup says (Highcharts' `highcharts-series-N`). */
+function seriesOf(el: Element, top: Element): number | null {
+  for (let at: Element | null = el; at && at !== top; at = at.parentElement) {
+    const m = /(?:^|\s)highcharts-series-(\d+)(?:\s|$)/.exec(at.getAttribute("class") ?? "");
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+/** What a label of a chart is (LabelRole), by the classes on it and around it in the chart. */
+function roleOf(el: Element, top: Element): LabelRole {
+  for (let at: Element | null = el; at && at !== top; at = at.parentElement) {
+    const cls = (at.getAttribute("class") ?? "").toLowerCase();
+    const words = classWords(at);
+    if (words.includes("tooltip")) return "tooltip";
+    if (words.includes("legend")) return "legend";
+    if (/data-?labels?\b|datalabel/.test(cls)) return "data";
+    if ((words.includes("axis") && words.includes("title")) || words.some((w) => w === "subtitle" || w === "credits" || w === "caption")) return "other";
+    if (words.includes("title")) return "title";
+    if (words.some((w) => w === "axis" || w === "xaxis" || w === "yaxis" || w === "tick")) return "axis";
+  }
+  return null;
+}
+
+/** An SVG text element as isOutlineCopy takes it. */
+const svgTextOf = (e: Element): SvgText => {
+  const style = getComputedStyle(e);
+  return { tagName: e.tagName, getAttribute: (n) => e.getAttribute(n), textContent: e.textContent, stroked: style.stroke !== "none" && parseFloat(style.strokeWidth) > 0 };
+};
+
+/** Whether an SVG text or tspan is the outline copy of a label drawn twice (isOutlineCopy). */
+function outlineCopy(e: Element): boolean {
+  if (!(e instanceof SVGTextElement || e instanceof SVGTSpanElement)) return false;
+  const own = svgTextOf(e);
+  if (isOutlineCopy(own, [])) return true;
+  if (!own.stroked) return false;
+  const siblings = [...(e.parentElement?.children ?? [])].filter((s) => s !== e && s.tagName === e.tagName);
+  return isOutlineCopy(own, [own, ...siblings.map(svgTextOf)]);
+}
+
+/** An SVG label's words, its outline copies left out; a tspan that starts a new line starts a new word. */
+function labelText(t: Element): string {
+  const parts: string[] = [];
+  const walk = (e: Element) => {
+    if (outlineCopy(e)) return;
+    if (e !== t && e.tagName === "tspan" && (e.hasAttribute("dy") || e.hasAttribute("x"))) parts.push(" ");
+    for (const node of e.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) parts.push(node.textContent ?? "");
+      else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element);
+    }
+  };
+  walk(t);
+  return parts.join("").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * What the chart around a mark draws, as describeMark takes it: every label the person sees in its
+ * drawing (and, for Highcharts, the HTML labels in its container), with its box, its role and its series,
+ * and how many series it draws. Nothing outside the chart is read.
+ */
+function chartOf(mark: Element): Chart {
+  const svg = drawingOf(mark)!;
+  const container = svg.parentElement?.classList.contains("highcharts-container") ? svg.parentElement : null;
+  const top = container ?? svg;
+  const seen = (e: Element) => rendered(e) && effectiveOpacity(e) >= OPACITY_MIN;
+  const labels: ChartLabel[] = [];
+  for (const t of [...svg.querySelectorAll("text")].slice(0, CHART_SCANNED)) {
+    if (!seen(t) || outlineCopy(t)) continue;
+    const text = labelText(t);
+    if (text) labels.push({ text, box: boxOf(t), role: roleOf(t, top), series: seriesOf(t, top) });
+  }
+  // Highcharts draws some labels as HTML (useHTML), in its container beside the drawing.
+  if (container) {
+    for (const e of [...container.querySelectorAll("[class*='highcharts-'] span, [class*='highcharts-'] div")].slice(0, CHART_SCANNED)) {
+      if (svg.contains(e) || e.children.length || !seen(e)) continue;
+      const text = (e.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (text) labels.push({ text, box: boxOf(e), role: roleOf(e, top), series: seriesOf(e, top) });
+    }
+  }
+  // How many series: Highcharts' series groups, or else the groups the marks are drawn in.
+  const groups = new Set<number | Element>();
+  const highcharts = svg.querySelectorAll(".highcharts-series-group .highcharts-series");
+  if (highcharts.length) {
+    for (const g of highcharts) if (seen(g)) groups.add(seriesOf(g, svg) ?? g);
+  } else {
+    for (const s of [...svg.querySelectorAll(SHAPES)].slice(0, CHART_SCANNED)) if (s.parentElement && isMark(s)) groups.add(s.parentElement);
+  }
+  return { labels, series: groups.size };
+}
+
+/** A mark's own accessible text: aria-label, or its <title> or <desc>. */
+function accessibleOf(mark: Element): string | null {
+  const label = mark.getAttribute("aria-label")?.trim();
+  if (label) return label;
+  for (const child of mark.children) if (child.tagName === "title" || child.tagName === "desc") return child.textContent?.trim() || null;
+  return null;
+}
+
+/** What the person sees at a mark (describeMark), or null when the chart tells neither its category nor its value. */
+function readMark(mark: Element): MarkReading | null {
+  const svg = drawingOf(mark);
+  if (!svg) return null;
+  return describeMark({ box: boxOf(mark), series: seriesOf(mark, svg), accessible: accessibleOf(mark) }, chartOf(mark), headingFor(mark));
+}
+
 /** Whether the person can see this element. display: contents has no box of its own, but what is in it shows. */
 function rendered(el: Element): boolean {
   const style = getComputedStyle(el);
@@ -565,7 +760,8 @@ function readable(el: Element, max: number): string {
   };
   const parent = parentOf(el);
   const walk = (e: Element, opacity: number, clip: Rect) => {
-    if (size > max || !rendered(e) || e.matches(NOT_TEXT)) return;
+    // A chart's label drawn twice (its halo under it) is read once (TIN-760).
+    if (size > max || !rendered(e) || e.matches(NOT_TEXT) || outlineCopy(e)) return;
     const style = getComputedStyle(e);
     const seen = opacity * Number(style.opacity) * filterOpacity(style.filter);
     if (seen < OPACITY_MIN || clipPathHides(style.clipPath)) return;
@@ -578,7 +774,8 @@ function readable(el: Element, max: number): string {
     }
     const inner = style.overflowX !== "visible" || style.overflowY !== "visible" ? intersect(clip, boxOf(e)) : clip;
     const inked = Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)) >= OPACITY_MIN;
-    const apart = e.tagName === "BR" || !style.display.startsWith("inline");
+    // An SVG <text> is a label of its own, drawn apart from the next, though SVG calls it inline.
+    const apart = e.tagName === "BR" || !style.display.startsWith("inline") || e instanceof SVGTextElement;
     if (apart) add(" ");
     for (const node of e.childNodes) {
       if (size > max) break;
@@ -603,6 +800,9 @@ function readable(el: Element, max: number): string {
  */
 function readAt(x: number, y: number, scope: Element | null) {
   const selection = String(getSelection() ?? "").slice(0, TEXT_MAX);
+  // A chart's mark (TIN-760): what the person sees at it, as a "chart point" or "chart bar", under the chart's heading.
+  // Should the chart no longer tell anything about it at the drop, the mark has no text and nothing beyond it is read.
+  const mark = scope instanceof SVGElement && isMark(scope) ? readMark(scope) : null;
   const cell = scope?.closest<HTMLTableCellElement>("td,th");
   const table = cell?.closest("table");
   return {
@@ -610,7 +810,9 @@ function readAt(x: number, y: number, scope: Element | null) {
     // (about:blank, srcdoc) gives the origin it belongs to.
     url: /^https?:/.test(location.href) || location.origin === "null" ? location.href : `${location.origin}/`,
     title: document.title,
-    element: scope
+    element: mark
+      ? { tag: scope!.tagName.toLowerCase(), role: `chart ${mark.kind}`, name: null, text: mark.text.slice(0, TEXT_MAX), heading: headingFor(scope!) }
+      : scope
       ? {
           tag: scope.tagName.toLowerCase(),
           role: scope.getAttribute("role"),
@@ -1107,17 +1309,8 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
     down.preventDefault();
     handle.setPointerCapture(down.pointerId);
     let moving = false;
-    let lit: HTMLElement | null = null;
-    let litOutline = "";
-    const light = (el: HTMLElement | null) => {
-      if (lit === el) return;
-      if (lit) lit.style.outline = litOutline;
-      lit = el;
-      if (el) {
-        litOutline = el.style.outline;
-        el.style.outline = "2px solid #d4733a";
-      }
-    };
+    const outlining = outliner();
+    const light = outlining.light;
     const end = () => {
       light(null);
       badge.classList.remove("moving");
@@ -1132,10 +1325,10 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
       badge.classList.add("moving");
       badge.style.left = `${Math.round(e.pageX - 14)}px`;
       badge.style.top = `${Math.round(e.pageY - 14)}px`;
-      light(scopeAt(e.clientX, e.clientY) as HTMLElement | null);
+      light(scopeAt(e.clientX, e.clientY));
     };
     const onUp = (e: PointerEvent) => {
-      const outlined = lit;
+      const outlined = outlining.lit();
       end();
       scopeCache = null;
       if (moving && e.isTrusted && drop(e.clientX, e.clientY, outlined)) return;
