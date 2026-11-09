@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { ANY_PAGE, covered, frameNote, framesOutside, frameTitle, isApcApp, NATIVE_DROPS_ATTR, NOT_TAKEN_TEXT, replyTarget, scriptMatches, siteGrant } from "../src/drop.ts";
+import { ANY_PAGE, covered, frameConsent, frameNote, frameOutside, framesOutside, frameTitle, grantedAlone, inAppTarget, isApcApp, originOf, STATUS_TEXT, NATIVE_DROPS_ATTR, NOT_TAKEN_TEXT, replyTarget, scriptMatches, siteGrant } from "../src/drop.ts";
 
 /** A page's root as isApcApp reads it: its attributes, and what a selector finds under it. */
 function page(attrs: string[], found: (selector: string) => boolean = () => false) {
@@ -62,9 +62,66 @@ test("allowing a site asks for its frames' origins in the same prompt (TIN-752)"
   assert.equal(covered("http://127.0.0.1:5001", ["http://127.0.0.1/*"]), true);
 });
 
-test("a note names the one frame the extension cannot enter, or says another site (TIN-752)", () => {
-  assert.equal(frameNote(["https://tableau.example.com"]), "This part of the page comes from tableau.example.com. Allow this site again in the APC extension to include it.");
-  assert.match(frameNote(["https://a.example", "https://b.example"]), /comes from another site\./);
+test("the note names a host only for the frame under the pointer, else another site (TIN-752, review on #142)", () => {
+  assert.equal(frameNote("https://tableau.example.com"), "This part of the page comes from tableau.example.com. Allow this site again in the APC extension to include it.");
+  assert.match(frameNote(null), /comes from another site\./);
+  const frames = [
+    { frameId: 0, url: "https://site.example/" },
+    { frameId: 3, url: "https://tracker.example/pixel" },
+    { frameId: 4, url: "https://tableau.example.com/view" },
+  ];
+  const granted = ["https://site.example/*", "https://tableau.example.com/*"];
+  // The pointer is on the granted dashboard: no note, though a hidden tracker frame is outside every grant.
+  assert.deepEqual(frameOutside(frames, 4, granted, false), { note: false });
+  // On the tracker's frame itself: named.
+  assert.deepEqual(frameOutside(frames, 3, granted, false), { note: true, origin: "https://tracker.example" });
+  // The frame under the pointer is not known: never a host, only "another site" when some frame is outside.
+  assert.deepEqual(frameOutside(frames, null, granted, false), { note: true, origin: null });
+  assert.deepEqual(frameOutside(frames, null, [...granted, "https://tracker.example/*"], false), { note: false });
+  // A frame id the tab no longer has: nothing.
+  assert.deepEqual(frameOutside(frames, 9, granted, false), { note: false });
+});
+
+test("a frame's own origin adds Always ask and Not here to the tab's consent; an opaque one adds nothing (TIN-752, review on #142)", () => {
+  const sites = { "https://private.example": "sensitive", "https://nope.example": "never", "https://ok.example": "always" } as const;
+  assert.deepEqual(frameConsent("https://private.example", sites), { sensitive: true, blocked: false });
+  assert.deepEqual(frameConsent("https://nope.example", sites), { sensitive: false, blocked: true });
+  assert.deepEqual(frameConsent("https://data.gob.cl", sites), { sensitive: true, blocked: false });
+  // A frame's Always does not loosen the tab's consent.
+  assert.deepEqual(frameConsent("https://ok.example", sites), { sensitive: false, blocked: false });
+  assert.deepEqual(frameConsent(null, sites), { sensitive: false, blocked: false });
+  // No URL parse that throws on an opaque frame's address.
+  for (const url of ["about:blank", "about:srcdoc", "data:text/html,hi", "null", "", undefined]) assert.equal(originOf(url), null);
+  assert.equal(originOf("https://b2b.datamind.cl/oauth/authorize?code=x"), "https://b2b.datamind.cl");
+  assert.match(STATUS_TEXT.opaque_frame, /nothing was sent/);
+});
+
+test("a port-specific grant covers that port only; a pattern without a port covers them all (review on #142)", () => {
+  assert.equal(grantedAlone("http://127.0.0.1:8080", ["http://127.0.0.1:8080/*"]), true);
+  assert.equal(grantedAlone("http://127.0.0.1:9090", ["http://127.0.0.1:8080/*"]), false);
+  assert.equal(covered("http://127.0.0.1:9090", ["http://127.0.0.1:8080/*"]), false);
+  assert.equal(grantedAlone("http://127.0.0.1:9090", ["http://127.0.0.1/*"]), true);
+  // A default port written out is the same as none.
+  assert.equal(grantedAlone("https://site.example", ["https://site.example:443/*"]), true);
+  assert.equal(grantedAlone("https://site.example:8443", ["https://site.example:443/*"]), false);
+  // So the popup asks for a frame on another port of the same host.
+  const frames = [{ frameId: 0, url: "http://127.0.0.1:8080/" }, { frameId: 2, url: "http://127.0.0.1:9090/inner" }];
+  assert.deepEqual(framesOutside(frames, ["http://127.0.0.1:8080/*"], false), ["http://127.0.0.1:9090"]);
+});
+
+test("a drop on an APC app's target is the app's, whatever the last dragover said (TIN-703, review on #142)", () => {
+  // A small tree: a target holding a shadow host, whose shadow root holds the element under the pointer.
+  interface N { up: N | null; focus?: boolean }
+  const target: N = { up: null, focus: true };
+  const host: N = { up: target };
+  const inner: N = { up: host };
+  const margin: N = { up: null };
+  const up = (n: N) => n.up;
+  const isTarget = (n: N) => !!n.focus;
+  assert.equal(inAppTarget(inner, up, isTarget), true);
+  assert.equal(inAppTarget(target, up, isTarget), true);
+  assert.equal(inAppTarget(margin, up, isTarget), false);
+  assert.equal(inAppTarget<N>(null, up, isTarget), false);
 });
 
 test("a reading from a frame keeps the frame's address and adds the tab's title (TIN-752)", () => {

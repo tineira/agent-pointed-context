@@ -8,7 +8,7 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { browserLabel, decide, scriptMatches, frameTitle, framesOutside, grantedAlone, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { browserLabel, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -104,7 +104,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   }
   // The top frame saw the agent go into a frame and heard nothing from it (TIN-752): the tab's frames the extension may not enter.
   if (m?.type === "frames_outside") {
-    void outsideFrames(from.tabId).then(reply);
+    const frame = (m as { frame?: unknown }).frame;
+    void outsideFrames(from.tabId, typeof frame === "number" ? frame : null).then(reply);
     return true;
   }
   // "Include them this time" (TIN-619): only the reading kept for that drop's id, never what the page sends now.
@@ -171,11 +172,15 @@ function inFrame(raw: unknown, sender: chrome.runtime.MessageSender): unknown {
   return { ...reading, title: frameTitle(sender.tab?.title, typeof reading.title === "string" ? reading.title : undefined) };
 }
 
-/** The origins of a tab's frames that no grant covers (TIN-752). Empty when the frames cannot be listed. */
-async function outsideFrames(tabId: number): Promise<{ origins: string[] }> {
+/**
+ * Whether the top frame should say that the frame under the pointer is one the extension may not enter
+ * (TIN-752), and which origin to name (frameOutside). Nothing when the frames cannot be listed.
+ */
+async function outsideFrames(tabId: number, frameId: number | null): Promise<{ note: boolean; origin?: string | null }> {
   const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+  if (!frames) return { note: false };
   const { origins = [] } = await chrome.permissions.getAll();
-  return { origins: framesOutside(frames ?? [], origins, __APC_DEV__) };
+  return frameOutside(frames, frameId, origins, __APC_DEV__);
 }
 
 /**
@@ -241,8 +246,11 @@ async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sen
   // This drop's reading, kept as taken for "Include them this time": usable only once this drop's consent is given.
   if (offered) await hold(id, { raw: m.reading, hub, agent, consented: false });
   // Consent is the site's the person sees in the address bar; a frame from another origin is part of it (TIN-752).
-  const frameOrigin = new URL(reading.url).origin;
-  const consented = await consent(sitePattern(sender.tab?.url)?.origin ?? frameOrigin, m.consent, frameOrigin);
+  // Never a URL parse that throws: an address that is not http(s) (an opaque frame's) has no origin here.
+  const frameOrigin = originOf(reading.url);
+  const site = originOf(sender.tab?.url) ?? frameOrigin;
+  if (!site) return { status: "opaque_frame", ...(id ? { id } : {}) };
+  const consented = await consent(site, m.consent, frameOrigin);
   if (consented !== true) return { status: consented, ...sensitive, ...(id ? { id } : {}) };
   if (offered) await hold(id, { raw: m.reading, hub, agent, consented: true });
   const key = readerKey(hub, agent);
@@ -317,13 +325,15 @@ async function sendWithToken(hub: string, agent: string, reading: PageReading): 
  * (the card, or a note). An answer from the card is kept: Always and Not here for the site; Always is
  * never kept for a sensitive site, which asks every time.
  */
-async function consent(origin: string, answer: Consent | undefined, frameOrigin = origin): Promise<true | DropStatus> {
+async function consent(origin: string, answer: Consent | undefined, frameOrigin: string | null = origin): Promise<true | DropStatus> {
   const stored = await chrome.storage.local.get(["mode", "sites", NOTICE_SITES, NOTICE_ALL]);
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
   const mode = (stored.mode as Mode | undefined) ?? "ask";
-  // A frame from a sensitive domain, or one the person said Not here to, counts too (TIN-752).
-  const sensitive = isSensitive(new URL(origin).host) || isSensitive(new URL(frameOrigin).host);
-  if (!answer && sites[frameOrigin] === "never") return "blocked";
+  // The key is the tab's site; a frame's own origin adds two exceptions (TIN-752, frameConsent): a sensitive
+  // domain or a site the person set to Always ask makes the drop ask every time, and Not here sends nothing.
+  const frame = frameConsent(frameOrigin, sites);
+  const sensitive = isSensitive(new URL(origin).host) || frame.sensitive;
+  if (!answer && frame.blocked) return "blocked";
   const noticeSites = (stored[NOTICE_SITES] ?? []) as string[];
   if (answer) {
     // Any answer on a card means the person read what readings carry now (TIN-571, TIN-619): on this site,

@@ -12,7 +12,7 @@
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { connectLabel, directOnlyGate, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { connectLabel, directOnlyGate, frameNote, hubAllowed, inAppTarget, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -38,6 +38,17 @@ const apcApp = () => isApcApp(document.documentElement);
 
 /** The tab's top frame; a frame inside it (TIN-752) takes its own drops, in its own coordinates. */
 const isTop = window === window.top;
+
+/** In a frame, the host of the tab's page (the last of location.ancestorOrigins), or null when Chrome does not say. */
+function tabHost(): string | null {
+  const origins = location.ancestorOrigins;
+  const top = origins?.length ? origins[origins.length - 1] : null;
+  try {
+    return top && top !== "null" ? new URL(top).host : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * One exception (APC 0.5): an APC app that connects agents only directly (its apc.json lists no
@@ -128,8 +139,11 @@ function listen(): void {
     const answer = directOnly.drop();
     if (!answer) {
       // Nothing on the page took the drag (TIN-703): the card of a drop an app cannot take (TIN-579), not silence.
-      if (!unanswered) return;
+      // Decided at the drop point too: the last dragover may have been off a target and the drop on one, which
+      // the app then takes (it decides from the drop point as well).
+      const stale = !unanswered || inAppTarget(deepElementAt(e.clientX, e.clientY), parentOf, (el) => el.matches("[data-focus]"));
       unanswered = false;
+      if (stale) return;
       e.preventDefault();
       return answerDirectOnly({ name: "", host: location.host, connect: null, message: NOT_TAKEN_TEXT }, e.clientX, e.clientY);
     }
@@ -165,6 +179,8 @@ function listen(): void {
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
     if (!drag?.hub || !drag.ticket) return say("no_ticket");
     if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock");
+    // A frame with an opaque origin (sandboxed, data:): it has no address a reading could name, so nothing is read (TIN-752).
+    if (location.origin === "null") return say("opaque_frame");
     // The page took away what was outlined: what is under the pointer now is not what the person saw outlined, so nothing goes.
     if (outlined && !outlined.isConnected) return say("outline_changed");
     const reading = readAt(e.clientX, e.clientY, outlined);
@@ -213,20 +229,36 @@ function listen(): void {
   const hinted = () => Date.now() - hintedAt < HINT_MS;
   /** Bumped when the drag comes back or a frame has it, so an answer on its way is not shown. */
   let hintRound = 0;
+  /** Removes the note shown, when a frame with the content script turns out to have the drag after all. */
+  let hintShown: (() => void) | null = null;
   function cancelFrameHint() {
     clearTimeout(hintTimer);
     hintTimer = 0;
     hintRound++;
+    hintShown?.();
+    hintShown = null;
   }
-  const tagOf = (el: EventTarget | null) => (el instanceof Element ? el.tagName : "");
-  const intoFrame = (e: DragEvent) => ["IFRAME", "FRAME"].includes(tagOf(e.target)) || ["IFRAME", "FRAME"].includes(tagOf(document.elementFromPoint(e.clientX, e.clientY)));
-  const frameHint = async () => {
+  const isFrame = (el: EventTarget | null): el is HTMLIFrameElement | HTMLFrameElement => el instanceof Element && (el.tagName === "IFRAME" || el.tagName === "FRAME");
+  /** The frame element the agent went into, if the event says. */
+  const frameInto = (e: DragEvent) => {
+    const at = document.elementFromPoint(e.clientX, e.clientY);
+    return isFrame(at) ? at : isFrame(e.target) ? e.target : null;
+  };
+  const frameHint = async (frame: Element) => {
     hintTimer = 0;
     const round = hintRound;
-    const r = await chrome.runtime.sendMessage<{ origins?: string[] } | null>({ type: "frames_outside" }).catch(() => null);
-    if (round !== hintRound || hinted() || !r?.origins?.length) return;
+    // That frame's id, so the note names its origin only when it is the frame under the pointer (-1 when Chrome cannot tell).
+    let id: number | null = null;
+    try {
+      const found = chrome.runtime.getFrameId?.(frame);
+      id = typeof found === "number" && found > 0 ? found : null;
+    } catch {
+      id = null;
+    }
+    const r = await chrome.runtime.sendMessage<{ note?: boolean; origin?: string | null } | null>({ type: "frames_outside", frame: id }).catch(() => null);
+    if (round !== hintRound || hinted() || !r?.note) return;
     hintedAt = Date.now();
-    notice(frameNote(r.origins), "frame", 6000);
+    hintShown = notice(frameNote(typeof r.origin === "string" ? r.origin : null), "frame", 6000);
   };
   /** A frame with the content script has the agent's drag: the top frame's note would be wrong. */
   let toldAt = 0;
@@ -252,9 +284,11 @@ function listen(): void {
   );
   window.addEventListener("dragleave", (e) => {
     if (!e.relatedTarget) light(null);
-    if (!isTop || hinted() || !e.isTrusted || !carriesAgent(e) || !intoFrame(e)) return;
+    if (!isTop || hinted() || !e.isTrusted || !carriesAgent(e)) return;
+    const frame = frameInto(e);
+    if (!frame) return;
     cancelFrameHint();
-    hintTimer = window.setTimeout(() => void frameHint(), 400);
+    hintTimer = window.setTimeout(() => void frameHint(frame), 400);
   });
   window.addEventListener("dragend", () => {
     light(null);
@@ -782,7 +816,9 @@ function ask(status: "consent" | "consent_sensitive" | "consent_update", x: numb
   card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
   const text = document.createElement("p");
   text.style.cssText = "margin:0 0 10px";
-  text.textContent = STATUS_TEXT[status];
+  // In a frame (TIN-752) the answers are kept for the tab's site, not the frame's: the card says so by name.
+  const tabSite = isTop ? null : tabHost();
+  text.textContent = tabSite ? STATUS_TEXT[status].replace("This site is set", `${tabSite} is set`) : STATUS_TEXT[status];
   // What happens to the sensitive values in this outline, by the person's setting (TIN-619).
   if (sensitive?.count) {
     const note = document.createElement("b");
@@ -792,7 +828,7 @@ function ask(status: "consent" | "consent_sensitive" | "consent_update", x: numb
   }
   const row = document.createElement("div");
   row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
-  const choices: Array<[Consent | null, string]> = status === "consent_sensitive" ? [["once", "Send"], [null, "Not now"]] : [["once", "Just this once"], ["always", "Always on this site"], ["never", "Not here"]];
+  const choices: Array<[Consent | null, string]> = status === "consent_sensitive" ? [["once", "Send"], [null, "Not now"]] : [["once", "Just this once"], ["always", tabSite ? `Always on ${tabSite}` : "Always on this site"], ["never", tabSite ? `Not on ${tabSite}` : "Not here"]];
   const close = () => host.remove();
   for (const [consent, label] of choices) {
     const b = document.createElement("button");
@@ -1121,8 +1157,8 @@ function say(status: DropStatus): void {
   notice(STATUS_TEXT[status], status, status === "asking" ? 8000 : 3500);
 }
 
-/** A note in the corner of this frame (the page, or the frame a drop landed in): what it says, which note it is, how long it stays. */
-function notice(text: string, kind: string, ms: number): void {
+/** A note in the corner of this frame (the page, or the frame a drop landed in): what it says, which note it is, how long it stays. Returns what removes it. */
+function notice(text: string, kind: string, ms: number): () => void {
   const host = cardHost();
   const root = host.attachShadow({ mode: "closed" });
   const note = document.createElement("div");
@@ -1133,4 +1169,5 @@ function notice(text: string, kind: string, ms: number): void {
   root.append(note);
   document.documentElement.append(host);
   setTimeout(() => host.remove(), ms);
+  return () => host.remove();
 }

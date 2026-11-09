@@ -128,7 +128,8 @@ const FOCUS = `<!doctype html><title>Focus page</title><h1>Ledger</h1><div data-
 // A page with a dashboard in a frame from another origin (TIN-752): the frame's page is served by a second server, on its own port.
 const INNER = `<!doctype html><title>Embedded dashboard</title><body style="margin:0"><p id="fig" style="margin:0;padding:20px">Net revenue in Q3 was 12.4 M, up 8%.</p></body>`;
 const framed = (host) => `<!doctype html><title>Framed page</title><h1>Report</h1><p id="top">The dashboard below comes from another origin.</p>
-<iframe id="dash" src="http://${host}:${inner.address().port}/inner" style="width:600px;height:200px;border:1px solid #ccc"></iframe>`;
+<iframe id="dash" src="http://${host}:${inner.address().port}/inner" style="width:600px;height:200px;border:1px solid #ccc"></iframe>
+<iframe id="boxed" sandbox="allow-scripts" srcdoc="<p style='margin:0;padding:20px'>Sandboxed text with an opaque origin.</p>" style="width:600px;height:100px;border:1px solid #ccc"></iframe>`;
 const inner = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(INNER)).listen(0, "::");
 await new Promise((r) => inner.once("listening", r));
 // Every host name gets the same page: *.localhost names (Chrome resolves them to this machine) are separate sites.
@@ -503,7 +504,7 @@ try {
         const a = n.attributes ?? [];
         const i = a.indexOf(attr);
         if (i >= 0) found.push(a[i + 1]);
-        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c);
       };
       walk(root);
       return found;
@@ -658,10 +659,20 @@ try {
       return n.inFrames === 1 ? n : null;
     });
     assert.equal(framePins.top, 0, "the top frame drew no pin");
+    // A sandboxed frame (an opaque origin) has no address a reading could name: it says so, and nothing is sent (review on #142).
+    const boxed = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.getElementById("boxed").getBoundingClientRect(); return { x: r.x + 60, y: r.y + 31 }; })()`, returnByValue: true }, framedSid)).result.value;
+    const boxedData = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+    // Chrome puts a sandboxed frame in a process of its own: the drag goes to that frame's own target, in its coordinates.
+    const boxedTarget = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "iframe" && t.url === "about:srcdoc");
+    const boxedSid = boxedTarget ? (await cdp("Target.attachToTarget", { targetId: boxedTarget.targetId, flatten: true })).sessionId : framedSid;
+    const boxedAt = boxedTarget ? { x: 60, y: 31 } : boxed;
+    for (const type of ["dragEnter", "dragOver", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, ...boxedAt, data: boxedData }, boxedSid);
+    await until("the opaque frame's note", async () => (await marked(boxedSid, "data-apc-note")).includes("opaque_frame"), 8000);
+    assert.match((await tool("page__get_reading")).structuredContent.page_text, /Net revenue in Q3/, "nothing was sent from the sandboxed frame");
     await cdp("Target.closeTarget", { targetId: framedId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
-    console.log("3c. a drop in a frame from another origin lands there: read from the frame, pinned in it, and only there");
+    console.log("3c. a drop in a frame from another origin lands there: read from the frame, pinned in it, and only there; a sandboxed frame says it cannot be read");
 
     // 3d. A frame from an origin not granted (nothere.localhost, another site, so another process): no content script there,
     // so the drop is refused and nothing is sent. The service worker lists the tab's frames by their real origins

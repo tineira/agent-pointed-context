@@ -202,10 +202,51 @@ export function siteGrant(site: { origin: string; pattern: string }, frames: Rea
   return [site.pattern, ...framesOutside(frames, patterns, dev).filter((o) => o !== site.origin).map((o) => `${o}/*`)];
 }
 
-/** The note when the person drags over a frame the extension may not enter (TIN-752): it cannot see that drop at all. */
-export function frameNote(origins: readonly string[]): string {
-  const from = origins.length === 1 ? new URL(origins[0]!).host : "another site";
+/**
+ * The note when the person drags over a frame the extension may not enter (TIN-752): it cannot see that
+ * drop at all. It names the frame's host only when it is the frame under the pointer (frameOutside);
+ * otherwise "another site".
+ */
+export function frameNote(origin: string | null): string {
+  const from = origin ? new URL(origin).host : "another site";
   return `This part of the page comes from ${from}. Allow this site again in the APC extension to include it.`;
+}
+
+/**
+ * What the top frame says about the frame under the pointer (TIN-752), from the tab's frames: that frame
+ * known (runtime.getFrameId) and outside every grant, its origin; known and inside one, nothing (its content
+ * script has the drag, or will); not known, "another site" when some frame of the tab is outside.
+ */
+export function frameOutside(frames: ReadonlyArray<{ url?: string; frameId?: number }>, frameId: number | null, patterns: readonly string[], dev: boolean): { note: true; origin: string | null } | { note: false } {
+  if (frameId !== null && frameId > 0) {
+    const frame = frames.find((f) => f.frameId === frameId);
+    if (!frame) return { note: false };
+    const [origin] = framesOutside([frame], patterns, dev);
+    return origin ? { note: true, origin } : { note: false };
+  }
+  return framesOutside(frames, patterns, dev).length ? { note: true, origin: null } : { note: false };
+}
+
+/**
+ * What a frame's own origin adds to the consent of the tab's site (TIN-752): a sensitive domain, or a site
+ * the person set to Always ask, makes the drop ask every time; a site set to Not here sends nothing. The
+ * card's answers are still kept for the tab's site.
+ */
+export function frameConsent(frameOrigin: string | null, sites: Readonly<Record<string, SiteChoice>>): { sensitive: boolean; blocked: boolean } {
+  if (!frameOrigin) return { sensitive: false, blocked: false };
+  return { sensitive: isSensitive(new URL(frameOrigin).host) || sites[frameOrigin] === "sensitive", blocked: sites[frameOrigin] === "never" };
+}
+
+/** The origin of an http(s) address, or null (an opaque frame's about:blank, data: or "null"): never a URL parse that throws. */
+export const originOf = (url: string | null | undefined): string | null => sitePattern(url ?? undefined)?.origin ?? null;
+
+/**
+ * Whether the element at a drop point is in one of an APC app's targets (`[data-focus]`), across open
+ * shadow roots (TIN-703): the app takes such a drop at that point, whatever the last dragover said.
+ */
+export function inAppTarget<E>(at: E | null, up: (e: E) => E | null, isTarget: (e: E) => boolean): boolean {
+  for (let e = at, depth = 0; e && depth < 200; e = up(e), depth++) if (isTarget(e)) return true;
+  return false;
 }
 
 /**
@@ -314,6 +355,9 @@ export function isSensitive(host: string): boolean {
   return tld === "bank" || tld === "insurance";
 }
 
+/** A URL's port, the scheme's default when it names none. */
+const portOf = (u: URL) => (u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80);
+
 /**
  * Whether the person granted this page's site by itself (from the popup), not only through the grant
  * for any page: a match pattern for its scheme and host. A pattern names no port, so it covers them all.
@@ -325,7 +369,10 @@ export function grantedAlone(origin: string, patterns: readonly string[]): boole
     const m = p.match(/^(https?|\*):\/\/([^/]+)\/\*$/);
     if (!m) return false;
     const [, scheme, host] = m as unknown as [string, string, string];
-    const hostname = host.replace(/:\d+$/, "");
+    const port = /:(\d+)$/.exec(host)?.[1];
+    const hostname = port ? host.slice(0, -port.length - 1) : host;
+    // A pattern with a port covers that port only (the popup's grant for a page on a port of its own); one without, every port.
+    if (port && Number(port) !== portOf(u)) return false;
     return (scheme === "*" || `${scheme}:` === u.protocol) && (hostname === u.hostname || (hostname.startsWith("*.") && u.hostname.endsWith(hostname.slice(1))));
   });
 }
@@ -361,7 +408,7 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 }
 
 /** What the content script tells the person after a drop. */
-export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed";
+export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed" | "opaque_frame";
 
 /** The link on the card for a Direct-only app. */
 export const connectLabel = (host: string) => `Connect an agent on ${host}`;
@@ -463,4 +510,5 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   blocked: "You chose not to send from this site. Change it in the APC extension.",
   not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
   outline_changed: "The page changed what was outlined: nothing was sent. Drop again.",
+  opaque_frame: "This part of the page has no address of its own, so your agent cannot read it: nothing was sent.",
 };
