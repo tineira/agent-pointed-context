@@ -236,8 +236,10 @@ export function pageLocale(explicit?: string | null): string {
 }
 
 /** A time or date for the person, in the page's locale (see `pageLocale`). For an app's own labels, such as a pin's "read 12:04". */
-export function formatPageTime(value: Date | number | string, options: Intl.DateTimeFormatOptions & { locale?: string | null } = { dateStyle: "medium", timeStyle: "short" }): string {
-  const { locale, ...format } = options;
+export function formatPageTime(value: Date | number | string, options?: Intl.DateTimeFormatOptions & { locale?: string | null }): string {
+  const { locale, ...given } = options ?? {};
+  // No format option at all: a date and a time, in the medium and short styles.
+  const format: Intl.DateTimeFormatOptions = Object.keys(given).length ? given : { dateStyle: "medium", timeStyle: "short" };
   const date = value instanceof Date ? value : new Date(value);
   return new Intl.DateTimeFormat(pageLocale(locale), format).format(date);
 }

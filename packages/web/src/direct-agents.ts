@@ -32,13 +32,13 @@ export type DirectAgentsEvent = "apc-add" | "apc-rename";
  * asked in the chat, so it asks for that first, under a name the person will recognise, and for the
  * steps only if the agent cannot.
  */
-export function connectPrompt(url: string, appName: string, strings: Pick<DirectStrings, "prompt"> = DEFAULT_DIRECT_STRINGS): string {
-  return strings.prompt(url, appName);
+export function connectPrompt(url: string, appName: string, strings?: Partial<DirectStrings> | null): string {
+  return resolveStrings(DEFAULT_DIRECT_STRINGS, strings).prompt(url, appName);
 }
 
 /** The words of one agent's line. Pure, so it is tested. */
-export function directAgentStatus(a: DirectAgent, strings: Pick<DirectStrings, "status"> = DEFAULT_DIRECT_STRINGS): string {
-  return strings.status(a);
+export function directAgentStatus(a: DirectAgent, strings?: Partial<DirectStrings> | null): string {
+  return resolveStrings(DEFAULT_DIRECT_STRINGS, strings).status(a);
 }
 
 const STYLE_ID = "apc-direct-style";

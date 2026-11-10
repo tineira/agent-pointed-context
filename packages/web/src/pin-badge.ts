@@ -57,7 +57,8 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
 const BOT = '<svg class="apc-pin__img" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 12h2v5H2v-5Zm18 0h2v5h-2v-5Z"/></svg>';
 
 /** The words a badge says, for its tooltip and screen readers. Pure, so it is tested. */
-export function pinBadgeLabels(a: Pick<PinAgent, "name" | "seen">, strings: PinStrings = DEFAULT_PIN_STRINGS): { title: string; unpin: string } {
+export function pinBadgeLabels(a: Pick<PinAgent, "name" | "seen">, given?: Partial<PinStrings> | null): { title: string; unpin: string } {
+  const strings = resolveStrings(DEFAULT_PIN_STRINGS, given);
   return { title: strings.title(a.name, a.seen), unpin: strings.unpinAria(a.name) };
 }
 

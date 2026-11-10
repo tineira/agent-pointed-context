@@ -133,7 +133,8 @@ export interface DockUnsupported {
  * replaces it: never a stack of notes.
  */
 let shownNote: { box: HTMLElement; timer: ReturnType<typeof setTimeout> } | null = null;
-export function showDockUnsupported(answer: DockUnsupported, strings: Pick<PinningStrings, "connectLink" | "close"> = DEFAULT_PINNING_STRINGS): HTMLElement {
+export function showDockUnsupported(answer: DockUnsupported, given?: Partial<PinningStrings> | null): HTMLElement {
+  const strings = resolveStrings(DEFAULT_PINNING_STRINGS, given);
   if (shownNote) {
     clearTimeout(shownNote.timer);
     shownNote.box.remove();

@@ -64,10 +64,10 @@ export const REVOKE_CONFIRM_MS = 4000;
  * target once), unread until both are read, and "here" only when both targets are on screen (so the
  * dot still opens the one that is not). No pin at all is null.
  */
-export function mergePins<P extends { label: string; seen: boolean; here: boolean }>(pins: ReadonlyArray<P | null | undefined>, strings: Pick<BarStrings, "joinPins"> = DEFAULT_BAR_STRINGS): P | null {
+export function mergePins<P extends { label: string; seen: boolean; here: boolean }>(pins: ReadonlyArray<P | null | undefined>, strings?: Partial<BarStrings> | null): P | null {
   const some = pins.filter((p): p is P => !!p);
   if (some.length < 2) return some[0] ?? null;
-  return { ...some[0]!, label: strings.joinPins([...new Set(some.map((p) => p.label))]), seen: some.every((p) => p.seen), here: some.every((p) => p.here) };
+  return { ...some[0]!, label: resolveStrings(DEFAULT_BAR_STRINGS, strings).joinPins([...new Set(some.map((p) => p.label))]), seen: some.every((p) => p.seen), here: some.every((p) => p.here) };
 }
 
 /** The hint that offers the dock to a Direct user, and where it leads. */
@@ -76,8 +76,9 @@ const COLLAPSED_KEY = "apc-agents.collapsed";
 const HINT_KEY = "apc-agents.dock-hint";
 
 /** The words for the path an agent came by, for its tag. Null when the app does not say. */
-export function pathLabel(paths: readonly ApcProfile[] | undefined, strings: BarStrings = DEFAULT_BAR_STRINGS): { text: string; title: string } | null {
+export function pathLabel(paths: readonly ApcProfile[] | undefined, given?: Partial<BarStrings> | null): { text: string; title: string } | null {
   if (!paths?.length) return null;
+  const strings = resolveStrings(DEFAULT_BAR_STRINGS, given);
   if (paths.includes("direct") && paths.includes("dock")) return { text: strings.pathBoth, title: strings.pathBothTitle };
   return paths[0] === "direct" ? { text: strings.pathDirect, title: strings.pathDirectTitle } : { text: strings.pathDock, title: strings.pathDockTitle };
 }
@@ -96,7 +97,8 @@ export function barCanCollapse(agents: readonly BarAgent[], mobile = false): boo
 }
 
 /** Who is reading, for the collapsed indicator: the agents that connected. */
-export function readingSummary(agents: readonly BarAgent[], strings: BarStrings = DEFAULT_BAR_STRINGS): string {
+export function readingSummary(agents: readonly BarAgent[], given?: Partial<BarStrings> | null): string {
+  const strings = resolveStrings(DEFAULT_BAR_STRINGS, given);
   const names = agents.filter((a) => a.state !== "off").map((a) => a.name);
   return names.length ? strings.reading(names) : strings.nobodyReading;
 }
@@ -187,7 +189,8 @@ html.apc-bar-fixed body { padding-bottom: var(--apc-bar-height, 0px); }
 const BOT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 12h2v5H2v-5Zm18 0h2v5h-2v-5Z"/></svg>';
 
 /** The words a mark, its dot and its revoke button say, for tooltips and screen readers. Pure, so it is tested. */
-export function agentLabels(a: BarAgent, strings: BarStrings = DEFAULT_BAR_STRINGS): { mark: string; dot: string | null; revoke: string; revokeArmed: string } {
+export function agentLabels(a: BarAgent, given?: Partial<BarStrings> | null): { mark: string; dot: string | null; revoke: string; revokeArmed: string } {
+  const strings = resolveStrings(DEFAULT_BAR_STRINGS, given);
   const mark = strings.markTitle(a.name, a.state !== "off");
   const both = !!a.paths?.includes("direct") && !!a.paths.includes("dock");
   const revoke = strings.revokeTitle(a.name, both);

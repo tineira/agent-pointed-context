@@ -10,214 +10,13 @@ import { couldNotCheckNote, directOnlyNote } from "@tineira/apc-protocol";
  * what the components drew must come from it, and every key must have been drawn at least once.
  */
 
-class Text {
-  parentElement: El | null = null;
-  data: string;
-  constructor(data: string) {
-    this.data = data;
-  }
-}
-class El {
-  tagName: string;
-  attrs = new Map<string, string>();
-  children: Array<El | Text> = [];
-  parentElement: El | null = null;
-  className = "";
-  own = "";
-  hidden = false;
-  type = "";
-  title = "";
-  placeholder = "";
-  alt = "";
-  value = "";
-  href = "";
-  maxLength = 0;
-  dataset: Record<string, string> = {};
-  style: Record<string, string> & { setProperty?: (k: string, v: string) => void; removeProperty?: (k: string) => void } = {};
-  listeners = new Map<string, Array<(e: unknown) => void>>();
-  classes = new Set<string>();
-  classList = {
-    add: (...c: string[]) => c.forEach((x) => this.classes.add(x)),
-    remove: (...c: string[]) => c.forEach((x) => this.classes.delete(x)),
-    contains: (c: string) => this.classes.has(c),
-  };
-  constructor(tag = "div") {
-    this.tagName = tag.toUpperCase();
-  }
-  get textContent(): string {
-    return this.own + this.children.map((c) => (c instanceof Text ? c.data : c.textContent)).join("");
-  }
-  set textContent(v: string) {
-    this.children = [];
-    this.own = v;
-  }
-  set innerHTML(_v: string) {
-    this.children = [];
-    this.own = "";
-  }
-  get isConnected(): boolean {
-    for (let n: El | null = this; n; n = n.parentElement) if (n === doc.documentElement) return true;
-    return false;
-  }
-  setAttribute(k: string, v: string) {
-    this.attrs.set(k, v);
-  }
-  getAttribute(k: string) {
-    return this.attrs.get(k) ?? null;
-  }
-  hasAttribute(k: string) {
-    return this.attrs.has(k);
-  }
-  removeAttribute(k: string) {
-    this.attrs.delete(k);
-  }
-  focus() {}
-  setSelectionRange() {}
-  append(...nodes: Array<El | Text>) {
-    for (const n of nodes) {
-      if (n instanceof El) n.remove();
-      n.parentElement = this;
-      this.children.push(n);
-    }
-    if (this.isConnected) for (const n of nodes) if (n instanceof El) n.connect();
-  }
-  appendChild(n: El) {
-    this.append(n);
-  }
-  replaceChildren(...nodes: Array<El | Text>) {
-    this.children = [];
-    this.own = "";
-    this.append(...nodes);
-  }
-  remove() {
-    if (!this.parentElement) return;
-    this.parentElement.children.splice(this.parentElement.children.indexOf(this), 1);
-    this.parentElement = null;
-  }
-  connect() {
-    (this as unknown as { connectedCallback?: () => void }).connectedCallback?.();
-    for (const c of this.children) if (c instanceof El) c.connect();
-  }
-  addEventListener(type: string, fn: (e: unknown) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn]);
-  }
-  removeEventListener(type: string, fn: (e: unknown) => void) {
-    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((f) => f !== fn));
-  }
-  dispatchEvent(e: Event) {
-    for (const fn of this.listeners.get(e.type) ?? []) fn(e);
-    return true;
-  }
-  /** Fires the listeners of this element, then its ancestors' (bubbling). */
-  fire(type: string, init: Record<string, unknown> = {}) {
-    const event = { type, target: this, button: 0, isTrusted: true, preventDefault() {}, ...init };
-    for (let n: El | null = this; n; n = n.parentElement) for (const fn of n.listeners.get(type) ?? []) fn(event);
-  }
-  elements(): El[] {
-    const out: El[] = [];
-    const walk = (n: El) => {
-      for (const c of n.children) if (c instanceof El) (out.push(c), walk(c));
-    };
-    walk(this);
-    return out;
-  }
-  matches(selector: string): boolean {
-    const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1];
-    if (attr) return this.attrs.has(attr);
-    return false;
-  }
-  querySelectorAll(selector: string): El[] {
-    const scoped = /^:scope > \.([\w-]+)$/.exec(selector)?.[1];
-    if (scoped) return this.children.filter((c): c is El => c instanceof El && c.classes.has(scoped) || (c instanceof El && c.className.split(" ").includes(scoped)));
-    return this.elements().filter((e) => e.matches(selector));
-  }
-  querySelector(selector: string): El | null {
-    const cls = /^\.([\w-]+)$/.exec(selector)?.[1];
-    if (cls) return this.elements().find((e) => e.className.split(" ").includes(cls)) ?? null;
-    return this.querySelectorAll(selector)[0] ?? null;
-  }
-  closest(selector: string): El | null {
-    const name = /^\[([\w-]+)\]$/.exec(selector)?.[1];
-    for (let n: El | null = this; n; n = n.parentElement) if (name && n.attrs.has(name)) return n;
-    return null;
-  }
-  cloneNode() {
-    const copy = new El(this.tagName);
-    copy.attrs = new Map(this.attrs);
-    return copy;
-  }
-  /** Own visible text of this element only (not its children's). */
-  ownText(): string {
-    return this.own + this.children.map((c) => (c instanceof Text ? c.data : "")).join("");
-  }
-}
-
-class FakeHTMLElement extends El {}
-
-const windowListeners = new Map<string, Array<(e: unknown) => void>>();
-const doc = {
-  documentElement: Object.assign(new El("html"), { lang: "" }),
-  head: new El("head"),
-  body: new El("body"),
-  visibilityState: "visible",
-  getElementById: (id: string) => doc.head.children.find((c) => c instanceof El && c.attrs.get("id") === id) ?? null,
-  createElement: (tag: string) => {
-    const e = new El(tag);
-    Object.defineProperty(e, "id", { set: (v: string) => e.setAttribute("id", v) });
-    return e;
-  },
-  createTextNode: (data: string) => new Text(data),
-  querySelectorAll: (selector: string): El[] => doc.documentElement.querySelectorAll(selector),
-  elementFromPoint: (): El | null => hovered,
-};
-doc.documentElement.append(doc.head, doc.body);
-doc.documentElement.style.setProperty = () => {};
-doc.documentElement.style.removeProperty = () => {};
-let hovered: El | null = null;
-const defined = new Map<string, new () => El>();
-const store = new Map<string, string>();
-Object.assign(globalThis, {
-  document: doc,
-  HTMLElement: FakeHTMLElement,
-  customElements: { get: (t: string) => defined.get(t), define: (t: string, c: new () => El) => void defined.set(t, c) },
-  localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) },
-  location: { href: "https://app.test/", origin: "https://app.test" },
-  window: {
-    dispatchEvent: () => true,
-    addEventListener: (t: string, fn: (e: unknown) => void) => windowListeners.set(t, [...(windowListeners.get(t) ?? []), fn]),
-    removeEventListener: (t: string, fn: (e: unknown) => void) => windowListeners.set(t, (windowListeners.get(t) ?? []).filter((f) => f !== fn)),
-  },
-});
-const press = (type: string, init: Record<string, unknown> = {}) => (windowListeners.get(type) ?? []).slice().forEach((fn) => fn({ type, clientX: 0, clientY: 0, isTrusted: true, ...init }));
+import { defined, doc, El, press, setHovered, store, visible, locale } from "./fake-dom.ts";
 
 const { defineAgentBar, mergePins, pathLabel, readingSummary, agentLabels, DOCK_HINT } = await import("../src/agents-bar.ts");
 const { definePinBadge, pinBadgeLabels } = await import("../src/pin-badge.ts");
 const { defineDirectAgents, connectPrompt, directAgentStatus } = await import("../src/direct-agents.ts");
 const { enablePinning, showDockUnsupported, REFUSED_NOTE, UNKNOWN_AGENT_NOTE } = await import("../src/pinning.ts");
 const { DEFAULT_BAR_STRINGS, DEFAULT_PIN_STRINGS, DEFAULT_DIRECT_STRINGS, DEFAULT_PINNING_STRINGS, formatPageTime, pageLocale, resolveStrings } = await import("../src/strings.ts");
-
-/** The test locale: every key replaced by a marked string; every function by one that marks its arguments. Records which were used. */
-function locale<T extends object>(defaults: T, used: Set<string>): T {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(defaults)) {
-    out[key] =
-      typeof value === "function"
-        ? (...args: unknown[]) => (used.add(key), `«${key}:${args.map((a) => (Array.isArray(a) ? a.join("+") : typeof a === "object" && a ? "obj" : String(a))).join("|")}»`)
-        : `«${key}»`;
-  }
-  return out as T;
-}
-
-/** Everything the person can read or hear in a tree: text, aria-label, title, placeholder, alt. */
-function visible(root: El): string[] {
-  const out: string[] = [];
-  for (const el of [root, ...root.elements()]) {
-    const text = el.ownText().trim();
-    if (text) out.push(text);
-    for (const v of [el.getAttribute("aria-label"), el.title, el.getAttribute("title"), el.placeholder, el.alt]) if (v) out.push(v);
-  }
-  return out;
-}
 
 /** What may appear without coming from the strings: symbols with no language, and what the app passes in. */
 const SYMBOLS = new Set(["×", "⊘", "‹", "!", "✓"]);
@@ -544,7 +343,7 @@ test("with a test locale, everything enablePinning tells the person comes from t
   mark.fire("click", { detail: 0 });
   const note = doc.body.elements().find((e) => e.attrs.has("data-apc-tap-pin"))!;
   assert.ok(visible(note).includes("«cancel»"));
-  hovered = row;
+  setHovered(row);
   press("pointerdown", { clientX: 10, clientY: 10, target: row });
   press("pointerup", { clientX: 10, clientY: 10, target: row });
   assert.deepEqual(drawn(), ["«refusedTap»", "«cancel»"]);
@@ -610,4 +409,72 @@ test("resolveStrings keeps the default for a key left out or set to undefined", 
   const merged = resolveStrings({ a: "A", b: "B" }, { b: undefined, a: "x" });
   assert.deepEqual(merged, { a: "x", b: "B" });
   assert.deepEqual(resolveStrings({ a: "A" }, null), { a: "A" });
+});
+
+test("every exported helper takes a partial strings object, or none, and falls back per key (TIN-668)", () => {
+  const pins = [{ label: "a", seen: true, here: true }, { label: "b", seen: true, here: true }];
+  const agent = { id: "g", name: "Claude", state: "idle" as const, paths: ["direct", "dock"] as Array<"direct" | "dock">, pin: { label: "post_1", seen: false, here: false } };
+  const drag = { v: 1 as const, agent: "ag_1" };
+  const noUndefined = (value: unknown, where: string) => assert.ok(!JSON.stringify(value).includes("undefined"), `${where}: "undefined" in output`);
+  const all = (strings: Record<string, unknown> | null | undefined, onlyKey: string | null): void => {
+    const where = JSON.stringify(Object.keys(strings ?? {}));
+    // Typed loosely on purpose: the partial object an app holds may hold anything it set.
+    const s = strings as never;
+    const outputs: unknown[] = [
+      mergePins(pins, s)?.label,
+      pathLabel(["direct"], s),
+      pathLabel(["dock"], s),
+      pathLabel(["direct", "dock"], s),
+      readingSummary([agent, { ...agent, id: "h", name: "Codex" }], s),
+      readingSummary([{ ...agent, state: "off" }], s),
+      agentLabels(agent, s),
+      pinBadgeLabels({ name: "Claude", seen: true }, s),
+      connectPrompt("https://x/mcp/a/b", "Signals", s),
+      directAgentStatus({ id: "g", name: "A", url: "u", connected: true, client: "c", linked: true }, s),
+    ];
+    for (const o of outputs) noUndefined(o, where);
+    const note = showDockUnsupported({ drag, target: null, name: "Autio", connect: "https://app.test/connect", reason: "direct_only", message: "m" }, s) as unknown as El;
+    noUndefined(visible(note), where);
+    note.remove();
+    if (!onlyKey) {
+      // Nothing given: the English, as before.
+      assert.equal(mergePins(pins, s)?.label, "a and b");
+      assert.equal(pathLabel(["dock"], s)?.text, "via dock");
+      assert.equal(readingSummary([agent], s), "Claude is reading");
+      assert.equal(agentLabels(agent, s).revoke, DEFAULT_BAR_STRINGS.revokeTitle("Claude", true));
+      assert.equal(pinBadgeLabels({ name: "Claude", seen: true }, s).unpin, "Remove Claude's pin");
+      assert.equal(connectPrompt("u", "N", s), DEFAULT_DIRECT_STRINGS.prompt("u", "N"));
+      assert.equal(directAgentStatus({ id: "g", name: "A", url: "u", connected: false }, s), "not connected yet");
+      assert.deepEqual(visible(showDockUnsupported({ drag, target: null, name: "Autio", connect: "https://app.test/connect", reason: "direct_only", message: "m" }, s) as unknown as El), ["m", "Connect an agent to Autio", "×", "Close"]);
+    }
+  };
+  for (const given of [undefined, null, {}, { markTitle: undefined }]) all(given as never, null);
+  // One key only: that one is used, the rest are English.
+  assert.equal(mergePins(pins, { joinPins: (l) => l.join(" y ") })?.label, "a y b");
+  assert.equal(pathLabel(["direct"], { pathDirect: "directo" })?.text, "directo");
+  assert.equal(pathLabel(["direct"], { pathDirect: "directo" })?.title, DEFAULT_BAR_STRINGS.pathDirectTitle);
+  assert.equal(readingSummary([agent], { reading: (n) => `Lee ${n[0]}` }), "Lee Claude");
+  assert.equal(readingSummary([{ ...agent, state: "off" }], { reading: () => "x" }), "No agent is reading");
+  assert.equal(agentLabels(agent, { markTitle: (n) => `«${n}»` }).mark, "«Claude»");
+  assert.equal(agentLabels(agent, { markTitle: (n) => `«${n}»` }).revoke, DEFAULT_BAR_STRINGS.revokeTitle("Claude", true));
+  assert.equal(pinBadgeLabels({ name: "Claude", seen: true }, { title: (n) => n }).title, "Claude");
+  assert.equal(pinBadgeLabels({ name: "Claude", seen: true }, { title: (n) => n }).unpin, "Remove Claude's pin");
+  assert.equal(connectPrompt("u", "N", { prompt: () => "P" }), "P");
+  assert.equal(directAgentStatus({ id: "g", name: "A", url: "u", connected: false }, { status: () => "S" }), "S");
+  assert.deepEqual(visible(showDockUnsupported({ drag, target: null, name: "Autio", connect: "https://app.test/connect", reason: "direct_only", message: "m" }, { close: "Cerrar" }) as unknown as El), ["m", "Connect an agent to Autio", "×", "Cerrar"]);
+  assert.deepEqual(visible(showDockUnsupported({ drag, target: null, name: "Autio", connect: "https://app.test/connect", reason: "direct_only", message: "m" }, { connectLink: (n) => `Conectar a ${n}` }) as unknown as El), ["m", "Conectar a Autio", "×", "Close"]);
+  // A key set to undefined falls back too.
+  assert.equal(mergePins(pins, { joinPins: undefined })?.label, "a and b");
+});
+
+test("formatPageTime with only a locale still shows a date and a time (TIN-668)", () => {
+  const when = new Date(Date.UTC(2026, 10, 10, 15, 4));
+  doc.documentElement.lang = "en";
+  const withLocale = formatPageTime(when, { locale: "es-CL" });
+  assert.equal(withLocale, new Intl.DateTimeFormat("es-CL", { dateStyle: "medium", timeStyle: "short" }).format(when));
+  assert.match(withLocale, /:/, "it has a time");
+  assert.equal(formatPageTime(when), new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(when));
+  const custom = formatPageTime(when, { locale: "es-CL", timeStyle: "short", timeZone: "UTC" });
+  assert.equal(custom, new Intl.DateTimeFormat("es-CL", { timeStyle: "short", timeZone: "UTC" }).format(when), "any format option given replaces the default");
+  doc.documentElement.lang = "";
 });

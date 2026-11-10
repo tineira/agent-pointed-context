@@ -6,6 +6,7 @@ import { demoDataset } from "../model/demo-world.ts";
 import { displayNames, motionFor, type AgentMotion } from "./agent-brands.ts";
 import { AgentIcon } from "./agent-icon.tsx";
 import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
+import { usePulseStrings } from "./apc-strings.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
 import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
@@ -194,12 +195,15 @@ function Sandbox({ sid }: { sid: string }) {
   }, [report, route, filters]);
 
   // Drag a mark onto anything with data-focus. A restricted agent cannot be dropped outside its regions.
+  const pulseStrings = usePulseStrings();
   const regionOf = useMemo(() => new Map(data.customers.map((c) => [c.id, c.region])), [data]);
   useEffect(
     () =>
       enablePinning({
         // APC v2 (TIN-369): drops of an agent dragged from a dock in another window, only with ?apc=v2.
         acceptNativeDrops: v2,
+        // The words enablePinning shows (TIN-668): Pulse passes none, so they stay English.
+        strings: pulseStrings?.pinning,
         // A grant id: the bridge dock (TIN-370). An agent from a hub dock is never resolved here; it goes below.
         resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
         // An agent from a hub dock (TIN-389): every drop goes to the server, which decides (TIN-606). One paired
@@ -244,7 +248,7 @@ function Sandbox({ sid }: { sid: string }) {
           setTimeout(() => setNotice(null), 4000);
         },
       }),
-    [api, regionOf, v2, hubMode, navigate],
+    [api, regionOf, v2, hubMode, navigate, pulseStrings?.pinning],
   );
 
   // Show each pin on its target when the target is on this page.
@@ -295,7 +299,7 @@ function Sandbox({ sid }: { sid: string }) {
         icon: g.client_icon,
         state: motion,
         // A linked agent holds two grants, so up to two pins: the bar shows both (TIN-607).
-        pin: mergePins([g, other].map((x) => (x?.pin ? { label: pinLabel(x.pin), seen: isSeen(x.pin), here: onScreen.has(x.id) } : null))),
+        pin: mergePins([g, other].map((x) => (x?.pin ? { label: pinLabel(x.pin), seen: isSeen(x.pin), here: onScreen.has(x.id) } : null)), pulseStrings?.bar),
         warning: activeConflict(g) ? `${productName(activeConflict(g)!.client_name, activeConflict(g)!.user_agent)} is using ${names.get(g.id)}'s URL. Open Agents to give it its own.` : null,
         restricted: !!g.regions,
         paths: partner ? ["direct", "dock"] : dockGrants.has(g.id) ? ["dock"] : ["direct"],

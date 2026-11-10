@@ -4,10 +4,11 @@
  * Each agent shows the path it came by, a linked one both with Unlink (APC 0.4), and the bar offers
  * the dock to a Direct user (on by default).
  */
-import { defineAgentBar, type ApcAgentsElement, type BarAgent } from "@tineira/apc-web";
+import { defineAgentBar, type ApcAgentsElement, type BarAgent, type BarStrings } from "@tineira/apc-web";
 import { createElement, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "./agent-icon.tsx";
+import { forwardStrings, usePulseStrings } from "./apc-strings.ts";
 
 defineAgentBar();
 
@@ -26,7 +27,11 @@ export function AgentBar(props: {
   onWarning: (id: string) => void;
   onRevoke: (id: string) => void;
   onUnlink: (id: string) => void;
+  /** The bar's words, for another language; left out, from `PulseStringsContext`, else English. */
+  strings?: Partial<BarStrings>;
 }) {
+  const fromContext = usePulseStrings()?.bar;
+  const strings = props.strings ?? fromContext;
   const ref = useRef<ApcAgentsElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -57,6 +62,10 @@ export function AgentBar(props: {
     ];
     return () => offs.forEach((off) => off());
   }, []);
+
+  useEffect(() => {
+    if (ref.current) forwardStrings(ref.current, strings);
+  }, [strings]);
 
   useEffect(() => {
     if (ref.current) ref.current.agents = props.agents;
