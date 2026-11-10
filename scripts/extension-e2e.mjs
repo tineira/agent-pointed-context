@@ -118,6 +118,7 @@ const PAGE = `<!doctype html><title>Churn notes</title><h1>Churn notes</h1><h2>E
 // that take the drop, and text around them that does not.
 const APC = `<!doctype html><title>APC-like app</title><apc-agents></apc-agents><h1>Churn</h1><p id="note">Text of the app, outside any target.</p>
 <div id="app" data-focus="figure:kpi" style="padding:30px;background:#eef">APC app area</div>
+<div id="ignored" data-focus="figure:mute" style="padding:30px;background:#fee">Target of an app that takes no native drops</div>
 <script>
 const app = document.getElementById("app");
 app.addEventListener("dragover", (e) => e.preventDefault());
@@ -518,10 +519,27 @@ try {
       return found;
     };
     const answers = (sid) => marked(sid, "data-apc-answer");
-    const centreOf = async (nodeId) => {
-      const q = (await cdp("DOM.getBoxModel", { nodeId }, sessionId)).model.border;
-      return { x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2 };
+    // A node id from DOM.getDocument names one element for as long as it lives, and the extension replaces a pin's
+    // host (pin() removes the old one and appends a new one on each drop and move). An id taken, then used a moment
+    // later, can name a pin that is gone: DOM.getBoxModel "Could not find node with given id" (the flake of 2c).
+    // So the element is looked up again, with `find` (a fresh pinNodes() each time), until its box is read.
+    const centreOf = async (find) => {
+      for (let attempt = 0; ; attempt++) {
+        const nodeId = await find();
+        if (nodeId) {
+          try {
+            const q = (await cdp("DOM.getBoxModel", { nodeId }, sessionId)).model.border;
+            return { x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2 };
+          } catch (e) {
+            if (!/Could not find node/.test(String(e?.message ?? e))) throw e;
+          }
+        }
+        if (attempt >= 40) throw new Error("timed out: the pin's box (no pin node stayed long enough to measure)");
+        await sleep(100);
+      }
     };
+    const pinMarkNode = async () => (await pinNodes()).mark;
+    const pinCloseNode = async () => (await pinNodes()).close;
     // 2b's drop on #b left a pin there; this drop on #a moves it.
     const paraAt = await evaluate(`(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top }; })()`);
     await drag("#a", await payload());
@@ -529,7 +547,7 @@ try {
     const onA = (at) => (at.x < paraAt.left || at.x > paraAt.right - 40) && Math.abs(at.y - (paraAt.top + 14)) < 12;
     await until("one unread pin at the start of #a", async () => {
       const n = await pinNodes();
-      return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(n.mark));
+      return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(pinMarkNode));
     });
     const shot = async (name) => {
       if (!SHOTS) return;
@@ -545,10 +563,10 @@ try {
       const n = await pinNodes();
       return n.states.length === 1 && n.states[0] === "unread";
     });
-    const hover = await centreOf((await pinNodes()).mark);
+    const hover = await centreOf(pinMarkNode);
     await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: hover.x, y: hover.y }, sessionId);
     await sleep(300);
-    const closeAt = await centreOf((await pinNodes()).close);
+    const closeAt = await centreOf(pinCloseNode);
     for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: closeAt.x, y: closeAt.y, button: "left", clickCount: 1 }, sessionId);
     await until("the pin is gone", async () => (await pinNodes()).states.length === 0);
     await until("the dock forgot the reading", async () => (await tool("page__get_reading")).isError === true);
@@ -576,7 +594,7 @@ try {
     console.log("2d. a newer drop on another page turns the first page's pin grey");
 
     // 2e. Dragging the pin to another paragraph moves the agent's focus there, with no new consent (TIN-471).
-    const pinAt = async () => centreOf((await until("a pin", async () => (await pinNodes()).mark)));
+    const pinAt = async () => centreOf(pinMarkNode);
     const glide = async (from, to, finish) => {
       await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y }, sessionId);
       await cdp("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 }, sessionId);
@@ -594,7 +612,7 @@ try {
     await until("the reading of #a, after moving the pin", async () => /EU-West rose/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     await until("one unread pin at #a", async () => {
       const n = await pinNodes();
-      return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(n.mark));
+      return n.states.length === 1 && n.states[0] === "unread" && onA(await centreOf(pinMarkNode));
     });
     // Esc puts it back: no new reading.
     const before = await pinAt();
@@ -635,6 +653,15 @@ try {
     // A drop nothing on the app took is answered, not refused in silence (TIN-703); a drop the app took is not.
     assert.deepEqual(await answers(apc), ["not_taken"], "one card for the drop the app left alone");
     await cdp("Target.closeTarget", { targetId: apcId });
+    // An APC app that takes no dock drops (Pulse without v2) leaves the dragover over its own target unanswered, and
+    // ignores the drop there: the card too, not silence (TIN-756). A new page, since a new card replaces the old.
+    const { targetId: muteId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/apc") });
+    const { sessionId: mute } = await cdp("Target.attachToTarget", { targetId: muteId, flatten: true });
+    await sleep(2500);
+    await dropOn(mute, "#ignored");
+    assert.deepEqual(await answers(mute), ["not_taken"], "a target the app does not answer is not silent");
+    assert.equal((await pinNodes(mute)).states.length, 0);
+    await cdp("Target.closeTarget", { targetId: muteId });
     console.log("3. on an APC app the app keeps the drop, and the extension sends nothing and pins nothing; a drop the app leaves says so");
 
     // 3b. data-focus alone is not an APC app (TIN-703): the page takes the agent and its reading goes.

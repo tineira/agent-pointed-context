@@ -166,6 +166,45 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
   return box;
 }
 
+/** What the person is told when an app answered a dock agent's drop and then cannot place it (TIN-756). */
+export const REFUSED_NOTE = "This agent cannot point at that. Drop it on another highlighted item.";
+export const UNKNOWN_AGENT_NOTE = "This app does not know that agent.";
+
+/** A short note on the page for a refused drop: the Direct-only note's box, with no link. */
+function showRefusal(message: string): void {
+  showDockUnsupported({ drag: { v: 1, agent: "" }, target: null, name: "", connect: null, reason: "direct_only", message });
+}
+
+/**
+ * What an app does with a native drop of a dock agent it answered on dragover (`preventDefault`): pins it, hands an
+ * agent it does not know to `onUnknownAgent`, or says why it did nothing with `tell`. A drop the browser delivered
+ * is never left without a word (TIN-756): the extension stands back from an app that answered the dragover, so a
+ * silent refusal here was a drop with no answer at all.
+ */
+export function placeNativeDrop(
+  options: Pick<PinningOptions, "canTarget" | "onPin" | "resolveAgent" | "onUnknownAgent">,
+  drag: AgentDrag | null,
+  hit: { element: Element; target: FocusTarget } | null,
+  tell: (message: string) => void,
+): "pinned" | "unknown_agent" | "refused" | "none" {
+  if (!drag || !hit) return "none";
+  const grantId = options.resolveAgent ? options.resolveAgent(drag.agent) : drag.agent;
+  if (!grantId) {
+    if (drag.hub && drag.ticket && options.onUnknownAgent) {
+      options.onUnknownAgent({ ...drag, hub: drag.hub, ticket: drag.ticket }, hit.target, hit.element);
+      return "unknown_agent";
+    }
+    tell(UNKNOWN_AGENT_NOTE);
+    return "refused";
+  }
+  if (options.canTarget && !options.canTarget(grantId, hit.target)) {
+    tell(REFUSED_NOTE);
+    return "refused";
+  }
+  options.onPin(grantId, hit.target, hit.element);
+  return "pinned";
+}
+
 /** What an agent's drag carries. hub and ticket come with pairing (TIN-382): the hub's origin and a single-use, short-lived ticket. */
 export interface AgentDrag {
   v: 1;
@@ -583,14 +622,7 @@ export function enablePinning(options: PinningOptions): () => void {
     }
     // A drop held while the profiles loaded, on an app that turns out to offer Dock but takes no native drops.
     if (!options.acceptNativeDrops) return;
-    if (!drag || !hit) return;
-    const grantId = options.resolveAgent ? options.resolveAgent(drag.agent) : drag.agent;
-    if (!grantId) {
-      if (drag.hub && drag.ticket) options.onUnknownAgent?.({ ...drag, hub: drag.hub, ticket: drag.ticket }, hit.target, hit.element);
-      return;
-    }
-    if (options.canTarget && !options.canTarget(grantId, hit.target)) return;
-    options.onPin(grantId, hit.target, hit.element);
+    placeNativeDrop(options, drag, hit, showRefusal);
   };
   const onKey = (event: KeyboardEvent) => {
     swallowClickUntil = 0; // a new key press: nothing from before is swallowed

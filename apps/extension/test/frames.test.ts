@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { parseFocusAttrs } from "@tineira/apc-protocol";
 import { test } from "node:test";
-import { ANY_PAGE, covered, frameConsent, frameNote, frameOutside, framesOutside, frameTitle, appTakes, askingSite, type FocusNode, grantedAlone, isApcApp, originOf, STATUS_TEXT, NATIVE_DROPS_ATTR, NOT_TAKEN_TEXT, replyTarget, scriptMatches, siteGrant } from "../src/drop.ts";
+import { ANY_PAGE, notTaken, covered, frameConsent, frameNote, frameOutside, framesOutside, frameTitle, appTakes, askingSite, type FocusNode, grantedAlone, isApcApp, originOf, STATUS_TEXT, NATIVE_DROPS_ATTR, NOT_TAKEN_TEXT, replyTarget, scriptMatches, siteGrant } from "../src/drop.ts";
 
 /** A page's root as isApcApp reads it: its attributes, and what a selector finds under it. */
 function page(attrs: string[], found: (selector: string) => boolean = () => false) {
@@ -182,4 +182,15 @@ test("the content script runs in every frame, and the extension can list a tab's
 test("the content script is registered on whole hosts only: with matchOriginAsFallback a path refuses it all (TIN-752)", () => {
   const granted = ["http://127.0.0.1/*", "http://localhost/*", "https://apc.tineira.com/", "https://apc.tineira.com/*", "https://apc.tineira.com/?*", "https://apc.tineira.com/dock*", "https://*/*", "*://*.example.com/*"];
   assert.deepEqual(scriptMatches(granted, new Set(["http://localhost/*"])), ["http://127.0.0.1/*", "https://apc.tineira.com/*", "https://*/*", "*://*.example.com/*"]);
+});
+
+test("a drop on an APC app gets the not-taken card unless the app took it (TIN-756)", () => {
+  // notTaken(unanswered, overTarget, takesAtDrop)
+  assert.equal(notTaken(false, false, false), false, "the app answered the dragover: its own drop");
+  assert.equal(notTaken(false, true, true), false);
+  assert.equal(notTaken(true, false, false), true, "text outside any target");
+  assert.equal(notTaken(true, false, true), false, "a fast release onto a target the last dragover was not over: the app takes it");
+  // Pulse without v2: the app left the dragover over its own target unanswered, and ignores the drop there.
+  assert.equal(notTaken(true, true, true), true);
+  assert.equal(notTaken(true, true, false), true);
 });

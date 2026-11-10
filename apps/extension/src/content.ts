@@ -12,7 +12,7 @@
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { connectLabel, directOnlyGate, appTakes, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { connectLabel, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { chartAxes, describeMark, describeNamed, isMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type MarkReading, type SvgText } from "./chart.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
@@ -90,6 +90,8 @@ function listen(): void {
   const light = outlining.light;
   /** On an APC app, whether nothing on the page took the last dragover, so the extension did (TIN-703). */
   let unanswered = false;
+  /** With `unanswered`: whether the last dragover was over something the app takes (appTakes), so an app that left it unanswered ignores drops on its own targets (Pulse without v2). */
+  let overTarget = false;
   // A copy left from before the extension was reloaded or updated has lost its extension: it stands
   // back, so the fresh copy injected next to it takes the drop.
   const carriesAgent = (e: DragEvent) => !!chrome.runtime?.id && !!e.dataTransfer && [...e.dataTransfer.types].includes(APC_AGENT_TYPE);
@@ -103,6 +105,7 @@ function listen(): void {
         // dragover, the browser would refuse the drop with no word (TIN-703): the extension takes it, to say so.
         if (e.defaultPrevented) return;
         unanswered = true;
+        overTarget = appTakes(document.elementFromPoint(e.clientX, e.clientY));
       }
       // A Direct-only app that would lose the drop (or one that may be, its file still on its way), or a drop
       // nothing on the page takes: take it anywhere, to answer it. Nothing is outlined: there is nothing to read.
@@ -142,9 +145,11 @@ function listen(): void {
       // Nothing on the page took the drag (TIN-703): the card of a drop an app cannot take (TIN-579), not silence.
       // Decided at the drop point too: the last dragover may have been off a target and the drop on one, which
       // the app then takes (it decides from the drop point as well).
-      // The app's own rule (appTakes = its targetOf), from the element its targetAt starts at.
-      const stale = !unanswered || appTakes(document.elementFromPoint(e.clientX, e.clientY));
+      // The app's own rule (appTakes = its targetOf), from the element its targetAt starts at. An app that left the
+      // last dragover unanswered ON a target does not take drops there at all (Pulse without v2, TIN-756): the card.
+      const stale = !notTaken(unanswered, overTarget, appTakes(document.elementFromPoint(e.clientX, e.clientY)));
       unanswered = false;
+      overTarget = false;
       if (stale) return;
       e.preventDefault();
       return answerDirectOnly({ name: "", host: location.host, connect: null, message: NOT_TAKEN_TEXT }, e.clientX, e.clientY);
