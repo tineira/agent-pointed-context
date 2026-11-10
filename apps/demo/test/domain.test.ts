@@ -28,6 +28,40 @@ test("a by-id screen outside the grant is null, the same as no view; a region ou
   const trimmed = trimView(overview, latam, data, ORIGIN);
   assert.deepEqual(trimmed?.params, { month: "2026-03" });
   assert.equal(trimmed?.app_url, `${ORIGIN}/overview?month=2026-03`, "the deep link is rebuilt from what survived, never copied");
+  assert.deepEqual(trimmed?.trimmed, { hidden_params: ["region"] }, "it says which param was cut, not its value");
+  assert.ok(!JSON.stringify(trimmed).includes('"na"'), "the region the grant may not see is not in the payload");
+});
+
+test("a view from which nothing was removed has no trimmed key at all", () => {
+  const inGrant = sanitizeView({ screen: "overview", params: { month: "2026-03", region: "latam" } }, data);
+  for (const [grant, view] of [[latam, inGrant], [full, sanitizeView({ screen: "overview", params: { month: "2026-03", region: "na" } }, data)], [latam, sanitizeView({ screen: "overview", params: { month: "2026-03" } }, data)]] as const) {
+    const out = trimView(view, grant, data, ORIGIN);
+    assert.ok(out && !("trimmed" in out), JSON.stringify(out));
+  }
+  assert.deepEqual(trimView(inGrant, latam, data, ORIGIN)?.params, { month: "2026-03", region: "latam" });
+});
+
+test("a churned customer carries the seats it had the month before, only where the grant could see it", () => {
+  const month = "2026-09";
+  const whole = figureAnswer(data, full, "customer_bridge", { month, step: "churned" }, ORIGIN);
+  const cut = figureAnswer(data, latam, "customer_bridge", { month, step: "churned" }, ORIGIN);
+  assert.ok(!("error" in whole) && !("error" in cut));
+  const churned = whole.breakdown.churned!;
+  assert.ok(churned.length > 0);
+  for (const f of churned) {
+    const prev = data.activity.find((a) => a.customer_id === f.customer_id && a.month === "2026-08")!;
+    assert.equal(f.seats, 0);
+    assert.equal(f.seats_prev, prev.seats);
+  }
+  const mine = cut.breakdown.churned!;
+  assert.deepEqual(mine.map((f) => f.customer_id), churned.filter((f) => f.region === "latam").map((f) => f.customer_id));
+  assert.ok(mine.every((f) => f.region === "latam" && typeof f.seats_prev === "number"));
+  assert.ok(churned.some((f) => f.region !== "latam"), "the full read has churned customers outside latam, so the cut above is a real cut");
+  for (const f of churned.filter((x) => x.region !== "latam")) assert.ok(!JSON.stringify(cut).includes(f.customer_id), "no churned id outside the grant");
+  const note = resolveFocus(pin({ part: "step:churned", params: { key: "customer_bridge", month } }), latam, data, ORIGIN)?.part_note;
+  assert.match(note ?? "", /seats_prev/);
+  const other = resolveFocus(pin({ part: "step:new", params: { key: "customer_bridge", month } }), latam, data, ORIGIN)?.part_note;
+  assert.doesNotMatch(other ?? "", /seats_prev/);
 });
 
 test("a restricted agent cannot be pointed outside its regions", () => {

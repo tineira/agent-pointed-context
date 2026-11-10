@@ -14,7 +14,7 @@ export function registerPulseTools(server: McpServer, data: Dataset, grant: Gran
     "get_figure",
     {
       title: "Read a computed figure",
-      description: `Recomputes a figure Pulse draws, with the same function the page uses, over the regions this connection may see. Keys: ${FIGURE_KEYS.join(", ")}. Returns values, breakdown (customers with plan, region, seats), inputs.customers (external ids, the same ids as the person's billing) and trimmed when some regions are hidden from this connection. Usually called with the next_args of a focus.`,
+      description: `Recomputes a figure Pulse draws, with the same function the page uses, over the regions this connection may see. Keys: ${FIGURE_KEYS.join(", ")}. Returns values, breakdown (customers with plan, region, seats; a churned customer also seats_prev, its seats in the previous month), inputs.customers (external ids, the same ids as the person's billing) and trimmed when some regions are hidden from this connection. Usually called with the next_args of a focus.`,
       inputSchema: {
         key: z.string(),
         params: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),

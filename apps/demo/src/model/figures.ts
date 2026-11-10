@@ -16,6 +16,8 @@ export interface CustomerFact {
   plan: Plan;
   region: Region;
   seats: number;
+  /** Churned customers only: the seats they had in the previous month (seats is 0 for them). */
+  seats_prev?: number;
 }
 
 export interface FigureResult {
@@ -109,7 +111,7 @@ export function customerBridge(data: Dataset, args: BridgeArgs, scope: Scope): F
       if (!before) steps.new.push(fact(now.seats));
       else if (!before.active) steps.reactivated.push(fact(now.seats));
     } else if (before?.active) {
-      steps.churned.push(fact(0));
+      steps.churned.push({ ...fact(0), seats_prev: before.seats });
     }
   }
   const values = Object.fromEntries(BRIDGE_STEPS.map((s) => [s, steps[s].length])) as Record<BridgeStep, number>;
@@ -168,7 +170,7 @@ const bridgeSpec: FigureSpec<BridgeArgs> = {
   nextParams: (args, part) => ({ ...args, ...(part?.startsWith("step:") ? { step: part.slice(5) } : {}) }),
   partNote: (part) =>
     part?.startsWith("step:")
-      ? `${part.slice(5)} is one of the five steps in values; its customers are in breakdown.${part.slice(5)}.`
+      ? `${part.slice(5)} is one of the five steps in values; its customers are in breakdown.${part.slice(5)}.${part === "step:churned" ? " Each churned customer has seats 0 this month and seats_prev, the seats it had in the previous month: their sum is the seats lost." : ""}`
       : "values holds the five steps (start + new + reactivated - churned = end); breakdown lists the customers of each.",
   path: (args) => `/overview?month=${args.month}${args.region ? `&region=${args.region}` : ""}`,
 };
