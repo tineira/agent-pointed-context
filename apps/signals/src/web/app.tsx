@@ -189,7 +189,7 @@ function Feed({ sid }: { sid: string }) {
         profiles: () => loadApcProfiles(),
         direct: { name: "Signals", connect: `${location.origin}/?connect` },
         onDockUnsupported: (answer) => {
-          setConnectOpen(true);
+          if (answer.reason !== "refused") setConnectOpen(true);
           say(answer.message);
         },
         // Every dock drop goes to the server, which decides (TIN-606): an agent with no grant here comes back

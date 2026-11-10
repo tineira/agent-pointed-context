@@ -267,6 +267,17 @@ export function appTakes(start: FocusNode | null): boolean {
 }
 
 /**
+ * Whether a drop on an APC app gets the "not taken" card (TIN-703, TIN-756). `unanswered`: no handler on the page
+ * answered the last dragover. `overTarget`: that dragover was over something the app takes (`appTakes`).
+ * `takesAtDrop`: the drop point is on something it takes. The app answered, or the drop is on a target while the
+ * last dragover was off one (a fast release: the app then takes it): no card. An app that left a dragover over its
+ * own target unanswered does not take drops at all (Pulse without v2): the card, since nothing else answers.
+ */
+export function notTaken(unanswered: boolean, overTarget: boolean, takesAtDrop: boolean): boolean {
+  return unanswered && (overTarget || !takesAtDrop);
+}
+
+/**
  * Whose setting makes a drop ask every time (TIN-752, fix check on #142), for the card to name it: the
  * tab's site when its own domain or the person's Always ask says so, else the frame's when its domain or
  * its own Always ask does; the tab's site otherwise.

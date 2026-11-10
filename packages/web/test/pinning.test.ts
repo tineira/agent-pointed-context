@@ -66,3 +66,42 @@ test("tap to pin: tap an agent, then a target; the armed one again lets go (APC 
   assert.deepEqual(pins, [["g_restricted", "customer:cus_2"]]);
   assert.deepEqual(changes, ["g_1", null, "g_1", "g_restricted", null, "g_1", null]);
 });
+
+test("a native drop the app answered is placed, or the person is told why not (TIN-756)", async () => {
+  const { placeNativeDrop, REFUSED_NOTE, UNKNOWN_AGENT_NOTE } = await import("../src/pinning.ts");
+  const hit = { element: {} as Element, target: { kind: "customer", id: "cus_9", part: null, params: null } };
+  const pins: string[] = [];
+  const unknown: string[] = [];
+  const told: string[] = [];
+  const options = {
+    canTarget: (grant: string, target: { id: string | null }) => !(grant === "g_restricted" && target.id === "cus_9"),
+    resolveAgent: (handle: string) => (handle.startsWith("g_") ? handle : null),
+    onPin: (grant: string) => pins.push(grant),
+    onUnknownAgent: (drag: { agent: string }) => unknown.push(drag.agent),
+  };
+  const tell = (m: string) => told.push(m);
+  assert.equal(placeNativeDrop(options, { v: 1, agent: "g_1" }, hit, tell), "pinned");
+  assert.deepEqual(pins, ["g_1"]);
+  assert.equal(placeNativeDrop(options, { v: 1, agent: "g_restricted" }, hit, tell), "refused", "canTarget said no after the dragover was answered");
+  assert.deepEqual(told, [REFUSED_NOTE]);
+  assert.equal(pins.length, 1, "nothing pinned");
+  assert.equal(placeNativeDrop(options, { v: 1, agent: "ag_x", hub: "https://apc.tineira.com", ticket: "0123456789abcdef0" }, hit, tell), "unknown_agent");
+  assert.deepEqual(unknown, ["ag_x"]);
+  assert.equal(told.length, 1, "pairing answers by itself");
+  const { onUnknownAgent: _unused, ...noPairing } = options;
+  assert.equal(placeNativeDrop(noPairing, { v: 1, agent: "ag_x", hub: "https://apc.tineira.com", ticket: "0123456789abcdef0" }, hit, tell), "refused", "an app without onUnknownAgent still says so");
+  assert.equal(told.at(-1), UNKNOWN_AGENT_NOTE);
+  assert.equal(placeNativeDrop(options, null, hit, tell), "none");
+  assert.equal(placeNativeDrop(options, { v: 1, agent: "g_1" }, null, tell), "none");
+});
+
+test("a refused native drop goes through the app's onDockUnsupported, with no box of the library's own (TIN-756)", async () => {
+  const { placeNativeDrop, refusalTeller, REFUSED_NOTE } = await import("../src/pinning.ts");
+  const hit = { element: {} as Element, target: { kind: "customer", id: "cus_9", part: null, params: null } };
+  const answers: Array<{ reason: string; message: string; connect: string | null; name: string }> = [];
+  // This test runs without a document: the library's own note would throw if it were used.
+  assert.equal(typeof (globalThis as { document?: unknown }).document, "undefined");
+  const options = { canTarget: () => false, onPin: () => assert.fail("pinned"), onDockUnsupported: (a: { reason: string; message: string; connect: string | null; name: string }) => answers.push(a), direct: { name: "Pulse", connect: null } };
+  assert.equal(placeNativeDrop(options, { v: 1, agent: "g_1" }, hit, refusalTeller(options)), "refused");
+  assert.deepEqual(answers.map((a) => [a.reason, a.message, a.connect, a.name]), [["refused", REFUSED_NOTE, null, "Pulse"]]);
+});
