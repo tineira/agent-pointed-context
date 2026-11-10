@@ -611,6 +611,46 @@ try {
     await reads(/EU-West rose/, "a.localhost");
     console.log("C3. on an Always site, drops are sent without a card");
 
+    // C3b. The first drop of an agent whose reading is still on its way at 75 s (fix check on #155): the waiting card says
+    // its answer did not arrive, and when the reading then goes, "Sent to …" and the pin are drawn at that drop after all.
+    // The service worker is held by the debugger on the line it reaches once the dock said yes, past the page's 75 s.
+    const swC3 = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
+    const { sessionId: swC3Session } = await cdp("Target.attachToTarget", { targetId: swC3.targetId, flatten: true });
+    await cdp("Runtime.evaluate", { expression: "chrome.storage.local.remove('readers')", awaitPromise: true }, swC3Session);
+    const workerLines = readFileSync(join(EXT, "worker.js"), "utf8").split("\n");
+    const sendingLine = workerLines.findIndex((l) => l.includes('phases.set(about.id, "sending")'));
+    assert.ok(sendingLine >= 0, "the worker's line where the dock said yes");
+    await cdp("Debugger.enable", {}, swC3Session);
+    const { breakpointId } = await cdp("Debugger.setBreakpointByUrl", { urlRegex: "worker\\.js$", lineNumber: sendingLine }, swC3Session);
+    /** The pins' node ids on a.localhost: a pin drawn anew has a new one. */
+    const pinIds = async () => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, a.sid);
+      const ids = [];
+      const walk = (n) => {
+        if ((n.attributes ?? []).includes("data-apc-pin-state")) ids.push(n.nodeId);
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      return ids;
+    };
+    const pinsBefore = await pinIds();
+    // #a again, so the latest reading stays the one the steps below expect.
+    await a.drop("#a");
+    await until("the waiting card on a.localhost", async () => (await attrsIn(a.sid, "data-apc-note")).includes("asking"), 10_000);
+    const late = await until("a new reader request in the dock", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
+    await api(`${base}/pairings/${late.id}`, { action: "approve" });
+    await until("the 75 s line", async () => (await attrsIn(a.sid, "data-apc-note")).includes("wait_lost"), 90_000);
+    await cdp("Debugger.removeBreakpoint", { breakpointId }, swC3Session);
+    await cdp("Debugger.resume", {}, swC3Session);
+    await cdp("Debugger.disable", {}, swC3Session);
+    await until("the late Sent word, in place of the line", async () => {
+      const notes = await attrsIn(a.sid, "data-apc-note");
+      return notes.includes("sent") && !notes.includes("wait_lost");
+    }, 15_000);
+    assert.ok((await pinIds()).some((id) => !pinsBefore.includes(id)), "and a new pin");
+    await reads(/EU-West rose/, "a.localhost");
+    console.log("C3b. a reading that goes after the 75 s line is still drawn at its drop: the Sent word and the pin");
+
     // C4. Not here: nothing now, nothing later.
     const other = await open("other.localhost");
     await other.drop("#b");

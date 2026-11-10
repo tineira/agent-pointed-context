@@ -92,8 +92,11 @@ function listen(): void {
   let question: Question | null = null;
   // A pin dragged to another paragraph closes the question as Not now before its own outline lights.
   closeQuestion = () => question?.end("drag");
-  // A drop whose last word was drawn (the waiting card's lost-wait line) can produce no outcome any more.
-  dropDone = (id) => pending.delete(id);
+  // The lost-wait line keeps the drop's place for a later outcome, but not the page's element: it is drawn at the drop's point.
+  dropLost = (id) => {
+    const target = pending.get(id);
+    if (target) target.anchor = null;
+  };
   /** A trusted drag of an agent starts: the open question closes as Not now, before the outline moves. */
   const newDrag = () => question?.end("drag");
   /** Whether a drop's outline is held for its question: then only that question's end clears it. */
@@ -449,8 +452,8 @@ interface Question {
 
 /** Closes the open question as Not now: set by listen(), for a pin's drag. */
 let closeQuestion: (() => void) | null = null;
-/** Forgets a drop's place once it can produce no outcome: set by listen(). */
-let dropDone: ((id: string) => void) | null = null;
+/** Lets go of a waiting drop's element when its lost-wait line shows, keeping its point: set by listen(). */
+let dropLost: ((id: string) => void) | null = null;
 
 /** The drop's reading the worker keeps for Include goes: its card closed, or its question did, with nothing sent. */
 function forgetHeld(id: string): void {
@@ -1571,7 +1574,6 @@ function placeQuestion(box: HTMLElement, q: Question): void {
   let top: number;
   if (q.node) {
     const r = q.node.getBoundingClientRect();
-    box.style.visibility = r.bottom < 0 || r.top > height || r.right < 0 || r.left > width ? "hidden" : "";
     if (height - r.bottom >= h + 2 * m) top = Math.max(m, r.bottom + m);
     else if (r.top >= h + 2 * m) top = Math.min(r.top - h - m, height - h - m);
     else top = height - h - m;
@@ -1858,7 +1860,7 @@ function waitingCard(id: string, hub: string, at: Point): void {
       const mine = shown.card === me;
       me.close();
       if (mine) notice({ lead: null, text: WAIT_LOST_TEXT, failed: true }, "wait_lost", 8000, at, id);
-      dropDone?.(id);
+      dropLost?.(id);
     }, WAIT_LOST_MS),
   );
 }

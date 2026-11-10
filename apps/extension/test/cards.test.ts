@@ -70,3 +70,12 @@ test("the agent's name is a text node between isolates, never markup (TIN-786)",
   assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|outerHTML\s*=/);
   assert.match(body("function sentLine("), /document\.createTextNode\(SENT_TO\), document\.createTextNode\(name \? isolate\(name\) : AGENT_FALLBACK\)/);
 });
+
+test("the 75 s line keeps the drop's entry, so a later outcome is still drawn at its point (TIN-786, fix check on #155)", () => {
+  const waiting = body("function waitingCard(");
+  assert.doesNotMatch(waiting, /pending\.delete|dropDone/);
+  assert.match(waiting, /dropLost\?\.\(id\);/);
+  assert.match(source, /dropLost = \(id\) => \{\s*const target = pending\.get\(id\);\s*if \(target\) target\.anchor = null;\s*\};/);
+  // The consent card is never hidden while it can be answered (no visibility, inert or blur on it).
+  assert.doesNotMatch(body("function placeQuestion("), /visibility|inert|blur/);
+});
