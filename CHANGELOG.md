@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The popup's "Your sites" no longer lists the extension's own patterns (2026-11-10, TIN-786)
+
+- **On a fresh install the browser extension's popup listed five rows under "Your sites" that the person never chose (apc.tineira.com and four of its dock paths), each with a Revoke button that Chrome always refused; they are no longer shown.** They are the manifest's required host permission and its content script's match patterns, so the popup now leaves out every pattern the manifest declares and lists only the sites the person allowed. (`apps/extension/src/drop.ts`, `apps/extension/src/popup.ts`, `apps/extension/test/drop.test.ts`)
+
 ### Tibetan, Javanese and Balinese text cut by a one-line box is cut to what shows too (2026-11-10, TIN-769)
 
 - **When the browser extension reads a word of Tibetan, Javanese or Balinese (up to 32 units, on one line) that the edge of a scroll box cuts, it now gives only the characters that show, instead of the whole word with the part the person cannot see.** Like Thai and Khmer, these scripts have no spaces between words; Sundanese does, so it is unchanged. (`apps/extension/src/read.ts`, `apps/extension/test/read.test.ts`, `DESIGN.md`)

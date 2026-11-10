@@ -20,7 +20,7 @@ declare namespace chrome {
     function getURL(path: string): string;
     /** A frame element's (or window's) frameId in its tab, -1 when unknown (Chrome 106+, content scripts). */
     function getFrameId(target: Element | Window): number;
-    function getManifest(): { version: string; version_name?: string; name: string };
+    function getManifest(): { version: string; version_name?: string; name: string; host_permissions?: string[]; content_scripts?: Array<{ matches?: string[] }> };
     const onStartup: { addListener(callback: () => void): void };
     const id: string;
   }
