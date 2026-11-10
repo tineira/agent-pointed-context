@@ -187,7 +187,7 @@ export const TOKEN_CUT_MAX = 200000;
 /** A token on one line, partly cut, stays whole when it is no longer than this and has no character of a script written without spaces between words in it: an ordinary word. */
 export const WORD_UNITS_MAX = 32;
 /** The scripts written without spaces between words: a run of them on one line is a phrase, not a word, so it is cut to what shows. */
-const NO_SPACE_SCRIPTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+const NO_SPACE_SCRIPTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\p{Script=Tibetan}\p{Script=Javanese}\p{Script=Balinese}]/u;
 const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
 
 /** Where each grapheme of a text starts, and its end last: a surrogate pair or a combining mark is never split. */
@@ -225,12 +225,12 @@ function linesOf(rects: Rect[]): number {
  * to the parts that show. The cut bisects the token down to its graphemes (a surrogate pair or a combining
  * mark is never split), so it asks about few parts however long the token is, a slice with no rect showing
  * is dropped whole and one wholly within is kept whole, and the kept parts are joined with no space: scripts
- * written without spaces (CJK, Thai, Lao, Khmer, Burmese) have none to put back. Graphemes, not `Intl.Segmenter` words: a CJK dictionary word can itself straddle a
+ * written without spaces (CJK, Thai, Lao, Khmer, Burmese, Tibetan, Javanese, Balinese) have none to put back. Graphemes, not `Intl.Segmenter` words: a CJK dictionary word can itself straddle a
  * line break, and a grapheme never does.
  *
  * One exception, to keep an ordinary word readable (TIN-622): a token on a single line, partly cut by
  * the clip's edge, stays whole when it is at most WORD_UNITS_MAX units long and has no character of a script written without spaces (Han, Kana,
- * Hangul, Thai, Lao, Khmer, Myanmar) in it. A token
+ * Hangul, Thai, Lao, Khmer, Myanmar, Tibetan, Javanese, Balinese) in it. A token
  * over TOKEN_CUT_MAX units that is partly cut is dropped.
  */
 export function visibleWords(data: string, rectsOf: (start: number, end: number) => Rect[], clip: Rect): string {
