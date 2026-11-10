@@ -5,61 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>APC: point your agent at any page</title>
     <style>
-      :root { color-scheme: light dark; --bg: #faf8f5; --fg: #1f1f1f; --muted: #6b6b6b; --accent: #d4733a; --line: #e2ddd6; --card: #fff; --warn: #a23b1d; }
-      @media (prefers-color-scheme: dark) { :root { --bg: #161514; --fg: #f1efec; --muted: #a39f99; --line: #34312d; --card: #1f1e1c; --warn: #f08a6a; } }
+      :root { color-scheme: light dark; --bg: #faf8f5; --fg: #1f1f1f; --muted: #6b6b6b; --accent: #d4733a; --line: #e2ddd6; --card: #fff; --ok: #2e8b57; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #161514; --fg: #f1efec; --muted: #a39f99; --line: #34312d; --card: #1f1e1c; --ok: #4cb37c; } }
       body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, sans-serif; }
       main { max-width: 640px; margin: 0 auto; padding: 48px 16px 64px; display: grid; gap: 20px; }
       h1 { font-size: 26px; margin: 0; line-height: 1.25; }
-      h2 { font-size: 16px; margin: 0 0 6px; }
       p { margin: 0; }
-      .muted { color: var(--muted); }
-      .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; display: grid; gap: 10px; }
-      ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
-      button { font: inherit; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; justify-self: start; }
+      ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; counter-reset: step; }
+      ol > li { counter-increment: step; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; align-items: start; }
+      ol > li::before { content: counter(step) / ""; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font: 700 14px system-ui, sans-serif; margin-top: 3px; }
+      ol > li.done::before { content: "\2713" / ""; background: var(--ok); }
+      .step { display: grid; gap: 10px; justify-items: start; align-content: center; min-height: 34px; }
+      button { font: inherit; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
+      button.primary { border-color: var(--accent); background: var(--accent); color: #fff; font-weight: 600; }
       button:disabled { opacity: .6; cursor: default; }
-      label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
-      input[type="radio"] { margin-top: 4px; accent-color: var(--accent); }
-      .warn { color: var(--warn); }
-      .ok { color: #2e8b57; font-weight: 600; }
+      button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .ok { color: var(--ok); font-weight: 600; }
+      .gest { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; justify-self: stretch; margin: 0; padding: 0; list-style: none; }
+      .gest > li { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px; display: grid; gap: 6px; font-size: 13px; text-align: center; }
+      .mini { height: 62px; border-radius: 6px; background: var(--card); position: relative; overflow: hidden; }
+      .mini i { position: absolute; left: 30%; right: 8%; height: 5px; border-radius: 3px; background: var(--line); }
+      .mini .a { position: absolute; width: 18px; height: 18px; border-radius: 5px; background: var(--accent); color: #fff; font: 700 10px/18px system-ui, sans-serif; text-align: center; }
+      .mini .o { position: absolute; left: 26%; right: 5%; top: 22px; height: 22px; border: 2px solid var(--accent); border-radius: 3px; }
+      .mini .pin { background: var(--card); color: var(--fg); box-shadow: 0 1px 4px rgb(0 0 0 / .25); }
+      .mini .check { width: 12px; height: 12px; border-radius: 50%; background: var(--ok); font-size: 8px; line-height: 12px; }
+      details summary { cursor: pointer; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; width: fit-content; }
+      details dl { margin: 10px 0 0; display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px 12px; }
+      details dt { font: 600 11px system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 3px; }
+      details dd { margin: 0; }
     </style>
   </head>
   <body>
     <main>
       <h1>Point your agent at any page</h1>
-      <p>Drag your agent from your APC dock or Float onto anything on a web page, and ask it about "this". While you drag, an outline shows what your agent will get: everything you can see inside it goes along, including what you typed in a form there, and any text you selected. Card, account and id numbers go only as you choose below; passwords and codes never. It reaches your agent through your dock.</p>
-
-      <section class="card">
-        <h2>1. Let pages take your agent</h2>
-        <p>So any page can notice the drop, the extension needs access to the pages you visit. It does nothing with them until you drop your agent on one: it only listens for that drop. Chrome will warn that it can "read and change" your data on all sites; you can turn this off at any time.</p>
-        <button type="button" id="grant">Let me drop my agent on any page</button>
-        <p id="granted" class="ok" hidden>Done: you can drop your agent on any page.</p>
-        <p class="muted">Prefer to choose site by site? Skip this, then use the extension's icon on each site you want.</p>
-      </section>
-
-      <section class="card">
-        <h2>2. When to ask you</h2>
-        <label><input type="radio" name="mode" value="ask" /> <span><b>Ask the first time on each site</b> (recommended). A card asks where you drop: <i>Just this once</i>, <i>Always on this site</i> or <i>Not here</i>. Government sites (such as <i>.gob</i> and <i>.gov</i>) and <i>.bank</i> and <i>.insurance</i> sites ask every time, and so does any site you set to <i>Always ask</i> from the extension's icon. Your bank, email or health sites are not recognised by name: set them to <i>Always ask</i> yourself.</span></label>
-        <label><input type="radio" name="mode" value="never_ask" /> <span><b>Never ask.</b> <span class="warn">Every drop is sent to your agent at once, on any site, including the ones set to ask every time.</span> You still have to drop your agent: nothing is sent without that.</span></label>
-      </section>
-
-      <section class="card">
-        <h2>3. Sensitive numbers</h2>
-        <p>Card, account and id numbers (such as an IBAN or a RUT) inside the outline, on every site. You can change this from the extension's icon.</p>
-        <label><input type="radio" name="sensitive" value="ask" /> <span><b>Ask per drop</b> (recommended). They are left out, and after the drop a card offers <i>Include them this time</i>.</span></label>
-        <label><input type="radio" name="sensitive" value="send" /> <span><b>Send if it's in the outline.</b> <span class="warn">They go along with the rest, with no question.</span></span></label>
-        <label><input type="radio" name="sensitive" value="never" /> <span><b>Always leave out.</b></span></label>
-        <p class="muted">Passwords and one-time codes are never sent, whatever you choose.</p>
-      </section>
-
-      <section class="card">
-        <h2>4. The first drop</h2>
-        <ol>
-          <li>Drag your agent from the dock or Float onto a paragraph.</li>
-          <li>The first time, your dock asks you to allow this browser: click <b>Allow</b> there.</li>
-          <li>Ask your agent "what is this?".</li>
-        </ol>
-        <p class="muted">What you drop your agent on passes through the APC hub of your dock, on Cloudflare, which keeps it 10 minutes at most, and then goes to your agent's provider. Its log keeps only the site, the time and the size. Your agent is told it is page text, never instructions. On APC apps (Pulse, Signals and other apps that speak APC) the app itself decides what your agent sees; this extension reads only other pages.</p>
-      </section>
+      <ol>
+        <li id="step1">
+          <div class="step">
+            <button type="button" id="grant" class="primary">Allow on every site</button>
+            <p id="granted" class="ok" hidden>Allowed on every site</p>
+          </div>
+        </li>
+        <li>
+          <div class="step"><button type="button" id="open-dock">Open dock</button></div>
+        </li>
+        <li>
+          <div class="step">
+            <b>Drag your agent onto a page</b>
+            <ul class="gest">
+              <li><div class="mini" aria-hidden="true"><span class="a" style="left:8px;top:22px">A</span><i style="top:14px"></i><i style="top:28px"></i><i style="top:42px"></i></div><span>Drag</span></li>
+              <li><div class="mini" aria-hidden="true"><i style="top:8px"></i><span class="o"></span><i style="top:30px"></i><i style="top:52px"></i></div><span>Drop</span></li>
+              <li><div class="mini" aria-hidden="true"><span class="a pin" style="left:10px;top:22px">A</span><span class="a check" style="left:21px;top:33px">&#10003;</span><i style="top:14px"></i><i style="top:28px"></i><i style="top:42px"></i></div><span>Read</span></li>
+            </ul>
+          </div>
+        </li>
+      </ol>
+      <details>
+        <summary id="sent-label"></summary>
+        <dl>
+          <dt id="goes-label"></dt><dd id="goes"></dd>
+          <dt id="held-label"></dt><dd id="held"></dd>
+          <dt id="where-label"></dt><dd id="where"></dd>
+        </dl>
+      </details>
     </main>
     <script type="module" src="welcome.js"></script>
   </body>

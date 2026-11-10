@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, WHATS_SENT, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -275,4 +275,15 @@ test("Your sites leaves out the extension's own patterns, and keeps what the per
   const withSites = [...fresh, "https://news.example.com/*", "http://localhost:8080/*", "https://*/*", "http://*/*"];
   assert.deepEqual(grantedByPerson(withSites, own), ["https://news.example.com/*", "http://localhost:8080/*"]);
   assert.deepEqual(grantedByPerson(["https://*/*", "http://*/*"], []), []);
+});
+
+test("What's sent? says the same three lines everywhere, and Held back follows the numbers setting (TIN-786)", () => {
+  assert.equal(WHATS_SENT.label, "What's sent?");
+  assert.deepEqual(WHATS_SENT.labels, { goes: "Goes", heldBack: "Held back", where: "Where" });
+  assert.equal(WHATS_SENT.goes, "What's inside the outline, typed text included.");
+  assert.equal(WHATS_SENT.heldBack("ask"), "Passwords and codes, always. Card, account and id numbers, unless you include them.");
+  assert.equal(WHATS_SENT.heldBack("send"), "Passwords and codes, always. Card, account and id numbers go too.");
+  assert.equal(WHATS_SENT.heldBack("never"), "Passwords and codes, always. Card, account and id numbers too.");
+  assert.equal(WHATS_SENT.heldBack(sensitiveMode(undefined)), WHATS_SENT.heldBack("ask"), "no stored value reads as ask");
+  assert.equal(WHATS_SENT.where, "Your dock's hub on Cloudflare (10 minutes at most), then your agent's provider.");
 });
