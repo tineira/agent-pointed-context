@@ -3,25 +3,13 @@
  * here, so the tests run them. popup.ts reads storage and Chrome, asks these what to draw, and carries out the
  * plan a click returns. Nothing here changes what a stored value means: `decide` in drop.ts is the one reader of them.
  */
-import { grantedAlone, isSensitive, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { agentName, grantedAlone, isolate, isSensitive, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+
+/** The agent's name as the popup draws it: the same cleaner the page's notes and `last` use (drop.ts). */
+export { agentName };
 
 /** What a site's control can select: "ask" is no stored value. */
 export type Choice = "ask" | SiteChoice;
-
-/**
- * The agent's name as the popup draws it. Stand-in for Part 2's `agentName` in drop.ts (v2 item 13), replaced at the
- * rebase: a string with a newline is rejected, C0 and C1 controls and bidi controls (U+061C, U+200E-200F,
- * U+202A-202E, U+2066-2069) are dropped, the rest trimmed and cut to 60 code points. Empty or rejected: no name.
- */
-export function agentName(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  const codes = [...raw].map((c) => c.codePointAt(0)!);
-  if (codes.some((c) => c === 0x0a || c === 0x0d || c === 0x2028 || c === 0x2029)) return null;
-  const dropped = (c: number) => c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x61c || c === 0x200e || c === 0x200f || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
-  const cleaned = [...raw].filter((c) => !dropped(c.codePointAt(0)!)).join("").trim();
-  const name = [...cleaned].slice(0, 60).join("").trim();
-  return name || null;
-}
 
 /** "Government domain", ".bank domain" or ".insurance domain": why a domain always asks. */
 export function domainKind(host: string): string {
@@ -252,7 +240,9 @@ export function lastView(last: unknown, now: number, known?: { readers: Readonly
     case "sent": {
       const n = typeof l.leftOut === "number" && Number.isInteger(l.leftOut) && l.leftOut >= 1 ? l.leftOut : 0;
       const out = n ? ` · ${n === 1 ? "1 number" : `${n} numbers`} left out` : "";
-      return { kind: "sent", lead: `✓ Sent to ${agentName(l.agent) ?? nameOnHub(l.hub, known) ?? "your agent"}`, at: l.at, detail: `${site}${out}` };
+      // The name between bidi isolates, as the page draws it, so it cannot reorder "Sent to" (TIN-786).
+      const name = agentName(l.agent) ?? nameOnHub(l.hub, known);
+      return { kind: "sent", lead: `✓ Sent to ${name ? isolate(name) : "your agent"}`, at: l.at, detail: `${site}${out}` };
     }
     case "waiting":
       return { kind: "waiting", text: "Allow this browser in your dock", hub: typeof l.hub === "string" ? l.hub : null };

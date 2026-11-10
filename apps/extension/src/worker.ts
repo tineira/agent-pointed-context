@@ -8,7 +8,7 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { askingSite, browserLabel, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { agentName, AGENT_FALLBACK, askingSite, mayWriteTimeout, type WaitPhase, browserLabel, HELD_MS, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -30,10 +30,57 @@ async function heldReadings(): Promise<Record<string, Held>> {
   return ((await chrome.storage.session.get("held")).held ?? {}) as Record<string, Held>;
 }
 
-/** Keep a drop's reading for "Include them this time", or update it (its consent given). */
-async function hold(id: string, entry: Omit<Held, "at">): Promise<void> {
+/** Keep a drop's reading for "Include them this time", or update it (its consent given). Returns until when it is kept. */
+async function hold(id: string, entry: Omit<Held, "at">): Promise<number> {
   const held = await heldReadings();
-  await chrome.storage.session.set({ held: holdReading(held, id, { ...entry, at: held[id]?.at ?? Date.now() }, Date.now()) });
+  const at = held[id]?.at ?? Date.now();
+  await chrome.storage.session.set({ held: holdReading(held, id, { ...entry, at }, Date.now()) });
+  return at + HELD_MS;
+}
+
+/** A drop's held reading, gone: the person closed its card, or its question, without sending (TIN-786). */
+async function forget(id: string): Promise<void> {
+  const held = await heldReadings();
+  if (!(id in held)) return;
+  delete held[id];
+  await chrome.storage.session.set({ held });
+}
+
+/**
+ * The first drops of an agent waiting for the dock's Allow, by id (TIN-786), in session storage so a service
+ * worker that stops mid-wait leaves them behind: "polling" until the reading is being sent, then "sending".
+ * The page's waiting card says when no word came; the popup's last drop then says the dock did not answer,
+ * unless the reading may already have gone.
+ */
+interface Waiting {
+  state: WaitPhase;
+  hub: string;
+  url: string;
+  /** When its "asking" note was written: a later `last` is never replaced by its "timeout". */
+  askedAt?: string;
+}
+/** The same phase, in memory: set to "sending" the moment the dock says yes, before anything else is awaited. */
+const phases = new Map<string, WaitPhase>();
+async function waitingDrops(): Promise<Record<string, Waiting>> {
+  return ((await chrome.storage.session.get("waiting")).waiting ?? {}) as Record<string, Waiting>;
+}
+async function setWaiting(id: string, entry: Waiting | null): Promise<void> {
+  const waiting = await waitingDrops();
+  if (entry) waiting[id] = entry;
+  else delete waiting[id];
+  await chrome.storage.session.set({ waiting });
+}
+
+/** The page's waiting card got no word in time: if the dock was still being asked, the popup says it did not answer. */
+async function waitLost(id: string): Promise<void> {
+  const lastNow = async () => (await chrome.storage.local.get("last")).last as { at?: unknown } | undefined;
+  const entry = (await waitingDrops())[id];
+  if (!entry || !mayWriteTimeout(entry.state, phases.get(id), entry.askedAt, await lastNow())) return;
+  await setWaiting(id, null);
+  // Asked again after the awaits, just before the write: the dock's yes, or another drop's note, may have come meanwhile.
+  const last = await lastNow();
+  if (!mayWriteTimeout("polling", phases.get(id), entry.askedAt, last)) return;
+  await note(entry.hub, entry.url, "timeout");
 }
 
 /** What the person chose for sensitive numbers (TIN-619): read at each drop, so a change takes effect on the next one. */
@@ -113,6 +160,24 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     const id = readingId(m.id);
     void (id ? handleInclude(id) : Promise.resolve<DropReply>({ status: "error" })).then(reply);
     return true;
+  }
+  // A card closed without sending (TIN-786): that drop's held reading goes, and nothing else is written.
+  if (m?.type === "forget") {
+    const id = readingId(m.id);
+    if (id) void forget(id);
+    return;
+  }
+  // The waiting card's Open dock (TIN-786): exactly the dock of the drop that asked, `${hub}/dock`, and only one this
+  // extension talks to. Checked here, so openDock never falls back to another dock in its place.
+  if (m?.type === "open_dock") {
+    if (typeof m.hub === "string" && hubAllowed(m.hub, __APC_DEV__)) void openDock(false, m.hub);
+    return;
+  }
+  // The waiting card got no word in time (TIN-786).
+  if (m?.type === "wait_lost") {
+    const id = readingId(m.id);
+    if (id) void waitLost(id);
+    return;
   }
   // The pin on the page (TIN-469): whether the agent read the reading, and × to clear it.
   if ((m?.type === "pin_state" || m?.type === "pin_clear") && typeof m.hub === "string" && typeof m.agent === "string") {
@@ -225,7 +290,23 @@ interface DropReply {
   id?: string;
   /** On consent_sensitive: the host whose setting or domain makes the drop ask (askingSite). */
   asks?: string;
+  /** On a consent card: the numbers setting, for its What's sent? (TIN-786). */
+  mode?: SensitiveMode;
+  /** When sent: the agent's name as the hub gave it, made safe (agentName); absent when there is none. */
+  agent?: string;
+  /** When sent with an Include offer: until when the worker keeps that drop's reading (ms since the epoch). */
+  holdUntil?: number;
 }
+
+/** What `last` adds when a reading went (TIN-786): the agent's name, and how many numbers this reading left out, only when it did. */
+interface LastExtra {
+  agent?: string;
+  leftOut?: number;
+}
+const sentExtra = (agent: string | undefined, sensitive: { sensitive?: Sensitive }): LastExtra => ({
+  ...(agent ? { agent } : {}),
+  ...(sensitive.sensitive && sensitive.sensitive.mode !== "send" ? { leftOut: sensitive.sensitive.count } : {}),
+});
 
 /** What to say of sensitive values for a reading sent (or about to be) under this setting, or nothing when there were none. */
 function sensitiveReply(count: number, mode: SensitiveMode, included: boolean): { sensitive?: Sensitive } {
@@ -255,23 +336,40 @@ async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sen
   const consented = await consent(site, m.consent, frameOrigin);
   if (consented !== true) {
     const asks = consented === "consent_sensitive" ? new URL(askingSite(site, frameOrigin, ((await chrome.storage.local.get("sites")).sites ?? {}) as Record<string, SiteChoice>)).host : undefined;
-    return { status: consented, ...sensitive, ...(id ? { id } : {}), ...(asks ? { asks } : {}) };
+    const card = consented === "consent" || consented === "consent_sensitive" || consented === "consent_update";
+    return { status: consented, ...sensitive, ...(id ? { id } : {}), ...(asks ? { asks } : {}), ...(card ? { mode } : {}) };
   }
-  if (offered) await hold(id, { raw: m.reading, hub, agent, consented: true });
+  const holdUntil = offered ? await hold(id, { raw: m.reading, hub, agent, consented: true }) : undefined;
   const key = readerKey(hub, agent);
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[key];
   if (token) {
     const sent = await send(hub, token, reading);
-    if (sent.result !== "not_paired") return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}), ...sensitive, ...(id ? { id } : {}) };
+    if (sent.result !== "not_paired") {
+      const ok = sent.result === true;
+      return {
+        status: await note(hub, reading.url, ok ? "sent" : "error", ok ? sentExtra(sent.agent, sensitive) : {}),
+        ...(sent.pin ? { pin: sent.pin } : {}),
+        ...(ok && sent.agent ? { agent: sent.agent } : {}),
+        ...(ok && holdUntil ? { holdUntil } : {}),
+        ...sensitive,
+        ...(id ? { id } : {}),
+      };
+    }
     // The person unpaired this browser in the dock, or the dock expired: ask again with this drag's ticket.
     delete tokens[key];
     await chrome.storage.local.set({ readers: tokens });
   }
   const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
   if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error"), ...(id ? { id } : {}) };
-  void waitForAnswer(hub, agent, asked.claim, reading, from, { ...sensitive, ...(id ? { id } : {}) });
-  return { status: await note(hub, reading.url, "asking"), ...(id ? { id } : {}) };
+  // Kept before the page hears "asking", so a waiting card on screen always has its entry (TIN-786).
+  const askedAt = new Date().toISOString();
+  if (id) {
+    phases.set(id, "polling");
+    await setWaiting(id, { state: "polling", hub, url: reading.url, askedAt });
+  }
+  void waitForAnswer(hub, agent, asked.claim, reading, from, { ...sensitive, ...(id ? { id } : {}), ...(holdUntil ? { holdUntil } : {}) });
+  return { status: await note(hub, reading.url, "asking", {}, askedAt), ...(id ? { id } : {}) };
 }
 
 /**
@@ -287,8 +385,9 @@ async function handleMove(hub: string, agent: string, raw: unknown, id: string |
   const prepared = include ? prepare(raw, true) : without;
   if (!without || !prepared) return { status: "error" };
   const sensitive = sensitiveReply(without.withheld, mode, include);
-  if (id && sensitive.sensitive?.offer) await hold(id, { raw, hub, agent, consented: true });
-  return { ...(await sendWithToken(hub, agent, prepared.reading)), ...sensitive, ...(id ? { id } : {}) };
+  const holdUntil = id && sensitive.sensitive?.offer ? await hold(id, { raw, hub, agent, consented: true }) : undefined;
+  const r = await sendWithToken(hub, agent, prepared.reading, sensitive);
+  return { ...r, ...sensitive, ...(id ? { id } : {}), ...(r.status === "sent" && holdUntil ? { holdUntil } : {}) };
 }
 
 /**
@@ -310,8 +409,11 @@ async function handleInclude(id: string): Promise<DropReply> {
   return { ...(await sendWithToken(entry.hub, entry.agent, prepared.reading)), id };
 }
 
-/** Send a reading with this browser's token for that agent: no ticket, so without a token the person drags again. */
-async function sendWithToken(hub: string, agent: string, reading: PageReading): Promise<DropReply> {
+/**
+ * Send a reading with this browser's token for that agent: no ticket, so without a token the person drags again.
+ * `sensitive` is what this reading left out, for `last`; an Include sends everything, so it passes none.
+ */
+async function sendWithToken(hub: string, agent: string, reading: PageReading, sensitive: { sensitive?: Sensitive } = {}): Promise<DropReply> {
   const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
   const token = tokens[readerKey(hub, agent)];
   if (!token) return { status: await note(hub, reading.url, "no_ticket") };
@@ -321,7 +423,8 @@ async function sendWithToken(hub: string, agent: string, reading: PageReading): 
     await chrome.storage.local.set({ readers: tokens });
     return { status: await note(hub, reading.url, "no_ticket") };
   }
-  return { status: await note(hub, reading.url, sent.result ? "sent" : "error"), ...(sent.pin ? { pin: sent.pin } : {}) };
+  const ok = sent.result === true;
+  return { status: await note(hub, reading.url, ok ? "sent" : "error", ok ? sentExtra(sent.agent, sensitive) : {}), ...(sent.pin ? { pin: sent.pin } : {}), ...(ok && sent.agent ? { agent: sent.agent } : {}) };
 }
 
 
@@ -344,13 +447,20 @@ async function consent(origin: string, answer: Consent | undefined, frameOrigin:
     // Any answer on a card means the person read what readings carry now (TIN-571, TIN-619): on this site,
     // and under Never ask, everywhere. A new install read it on the welcome page and the card (NOTICE_ALL).
     const noticed = new Set(noticeSites).add(origin);
-    await chrome.storage.local.set({ [NOTICE_SITES]: [...noticed], ...(mode === "never_ask" ? { [NOTICE_ALL]: true } : {}) });
+    const notice = { [NOTICE_SITES]: [...noticed], ...(mode === "never_ask" ? { [NOTICE_ALL]: true } : {}) };
+    if (answer === "never") {
+      // One write (TIN-786): a stop between two could leave the notice seen and the site not set, and the next drop would go.
+      sites[origin] = "never";
+      await chrome.storage.local.set({ ...notice, sites });
+      return "not_here";
+    }
+    await chrome.storage.local.set(notice);
     // Always is never kept for a sensitive site, by its domain or set to Always ask by the person (TIN-478).
-    if (answer === "never" || (answer === "always" && !sensitive && sites[origin] !== "sensitive")) {
+    if (answer === "always" && !sensitive && sites[origin] !== "sensitive") {
       sites[origin] = answer;
       await chrome.storage.local.set({ sites });
     }
-    return answer === "never" ? "not_here" : true;
+    return true;
   }
   const { origins = [] } = await chrome.permissions.getAll();
   const decision = decide(mode, sites[origin], sensitive, grantedAlone(origin, origins));
@@ -361,10 +471,11 @@ async function consent(origin: string, answer: Consent | undefined, frameOrigin:
 }
 
 /** Poll the dock until the person answers; then send the held reading, or drop it. */
-async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, to: { tabId: number; frameId: number }, about: { sensitive?: Sensitive; id?: string }): Promise<void> {
+async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, to: { tabId: number; frameId: number }, about: { sensitive?: Sensitive; id?: string; holdUntil?: number }): Promise<void> {
   const until = Date.now() + ASK_MS;
   let status: DropStatus = "timeout";
   let pin: PinMark | undefined;
+  let name: string | undefined;
   while (Date.now() < until) {
     await new Promise((r) => setTimeout(r, POLL_MS));
     // An extension API call keeps the service worker alive between polls (it stops after 30 s idle, 13.1).
@@ -372,19 +483,31 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     const answer = await post(`${hub}/apc/reader/status`, { claim });
     if (answer?.status === "pending") continue;
     if (answer?.status === "paired" && typeof answer.token === "string") {
+      // Before anything else is awaited: from here a lost wait may no longer say the dock did not answer.
+      if (about.id) phases.set(about.id, "sending");
       tokens[readerKey(hub, agent)] = answer.token;
       await chrome.storage.local.set({ readers: tokens });
+      // From here the reading may go: a waiting card that hears nothing no longer makes the popup say "timeout".
+      if (about.id) await setWaiting(about.id, { state: "sending", hub, url: reading.url });
       const sent = await send(hub, answer.token, reading);
       status = sent.result === true ? "sent" : "error";
       pin = sent.pin;
+      name = sent.agent;
     } else {
       status = answer ? "denied" : "error";
     }
     break;
   }
-  await note(hub, reading.url, status);
+  await note(hub, reading.url, status, status === "sent" ? sentExtra(name, about) : {});
+  if (about.id) {
+    await setWaiting(about.id, null);
+    phases.delete(about.id);
+  }
   // To the frame the drop came from (TIN-752): another frame of the tab would show the note too.
-  await chrome.tabs.sendMessage(to.tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(about.id ? { id: about.id } : {}), ...(status === "sent" && about.sensitive ? { sensitive: about.sensitive } : {}) }, { frameId: to.frameId }).catch(() => {});
+  const ok = status === "sent";
+  await chrome.tabs
+    .sendMessage(to.tabId, { type: "status", status, ...(pin ? { pin } : {}), ...(about.id ? { id: about.id } : {}), ...(ok && about.sensitive ? { sensitive: about.sensitive } : {}), ...(ok && name ? { agent: name } : {}), ...(ok && about.holdUntil ? { holdUntil: about.holdUntil } : {}) }, { frameId: to.frameId })
+    .catch(() => {});
 }
 
 
@@ -393,7 +516,7 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
  * "not_paired" when it no longer knows this token. A network error or a 5xx is tried once more:
  * sending the same reading again only replaces it.
  */
-async function send(hub: string, token: string, reading: unknown): Promise<{ result: true | false | "not_paired"; pin?: PinMark }> {
+async function send(hub: string, token: string, reading: unknown): Promise<{ result: true | false | "not_paired"; pin?: PinMark; agent?: string }> {
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 500));
     try {
@@ -402,9 +525,10 @@ async function send(hub: string, token: string, reading: unknown): Promise<{ res
       if (r.status >= 500) continue;
       if (!r.ok) return { result: false };
       const body = (await r.json().catch(() => ({}))) as { agent?: { name?: unknown; icon?: unknown }; taken_at?: unknown };
-      const name = typeof body.agent?.name === "string" ? body.agent.name.slice(0, 60) : "Your agent";
+      // The name is the hub's word: made safe once here, for the pin, the page's notes and `last` (TIN-786).
+      const agent = agentName(body.agent?.name) ?? undefined;
       const icon = typeof body.agent?.icon === "string" && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(body.agent.icon) ? body.agent.icon : null;
-      return { result: true, ...(typeof body.taken_at === "string" ? { pin: { name, icon, taken_at: body.taken_at } } : {}) };
+      return { result: true, ...(agent ? { agent } : {}), ...(typeof body.taken_at === "string" ? { pin: { name: agent ?? AGENT_FALLBACK, icon, taken_at: body.taken_at } } : {}) };
     } catch {
       // network: try again
     }
@@ -421,8 +545,11 @@ async function post(url: string, body: unknown): Promise<Record<string, unknown>
   }
 }
 
-/** The last drop's outcome, for the popup: the site and what happened, never the text. */
-async function note(hub: string, url: string, status: DropStatus): Promise<DropStatus> {
-  await chrome.storage.local.set({ last: { at: new Date().toISOString(), hub, site: new URL(url).host, status } });
+/**
+ * The last drop's outcome, for the popup: the site and what happened, never the text; when sent, the agent's
+ * name and how many numbers this reading left out (TIN-786). Replaced whole each time.
+ */
+async function note(hub: string, url: string, status: DropStatus, extra: LastExtra = {}, at = new Date().toISOString()): Promise<DropStatus> {
+  await chrome.storage.local.set({ last: { at, hub, site: new URL(url).host, status, ...extra } });
   return status;
 }
