@@ -18,6 +18,7 @@
  * script has no customElements, and it moves the badge with its own drag, since a moved reading is
  * sent again from the page. Keep the two in step.
  */
+import { DEFAULT_PIN_STRINGS, resolveStrings, type PinStrings } from "./strings.ts";
 
 export interface PinAgent {
   /** The app's id for the agent (its grant): what the mark drags as. */
@@ -56,11 +57,8 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
 const BOT = '<svg class="apc-pin__img" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 12h2v5H2v-5Zm18 0h2v5h-2v-5Z"/></svg>';
 
 /** The words a badge says, for its tooltip and screen readers. Pure, so it is tested. */
-export function pinBadgeLabels(a: Pick<PinAgent, "name" | "seen">): { title: string; unpin: string } {
-  return {
-    title: `${a.name}: ${a.seen ? "read this pin" : "has not read this pin yet"}. Drag to point it at something else.`,
-    unpin: `Remove ${a.name}'s pin`,
-  };
+export function pinBadgeLabels(a: Pick<PinAgent, "name" | "seen">, strings: PinStrings = DEFAULT_PIN_STRINGS): { title: string; unpin: string } {
+  return { title: strings.title(a.name, a.seen), unpin: strings.unpinAria(a.name) };
 }
 
 /** The element's constructor, defined only where custom elements exist (a browser), so importing this module in Node is safe. */
@@ -74,6 +72,18 @@ export function definePinBadge(tag = "apc-pin"): void {
     private iconKey = "";
     private stopDim: (() => void) | null = null;
     private draw: ((agent: PinAgent, into: HTMLElement) => void) | null = null;
+    private words: PinStrings = DEFAULT_PIN_STRINGS;
+    private given: Partial<PinStrings> | null = null;
+
+    /** Every string the badge shows (TIN-668): the keys you set, over the English defaults. */
+    get strings(): Partial<PinStrings> | null {
+      return this.given;
+    }
+    set strings(next: Partial<PinStrings> | null) {
+      this.given = next;
+      this.words = resolveStrings(DEFAULT_PIN_STRINGS, next);
+      this.render();
+    }
 
     /**
      * The app draws the agent's icon into this element itself (for example with its own logos). Called on every update.
@@ -108,7 +118,7 @@ export function definePinBadge(tag = "apc-pin"): void {
     connectedCallback(): void {
       // A property set before the element was defined (a framework, a script) sits on the instance: take it in through the setter.
       const own = this as unknown as Record<string, unknown>;
-      for (const key of ["agent", "renderIcon"]) {
+      for (const key of ["agent", "renderIcon", "strings"]) {
         if (!Object.hasOwn(own, key)) continue;
         const value = own[key];
         delete own[key];
@@ -169,12 +179,12 @@ export function definePinBadge(tag = "apc-pin"): void {
       const a = this.value;
       if (!this.parts || !a) return;
       const { mark, icon, check, unpin } = this.parts;
-      const labels = pinBadgeLabels(a);
+      const labels = pinBadgeLabels(a, this.words);
       this.setAttribute("title", labels.title);
       this.setAttribute("data-apc-pin-state", a.seen ? "seen" : "waiting");
       mark.setAttribute("data-grant", a.id);
       mark.setAttribute("role", "img");
-      mark.setAttribute("aria-label", `${a.name}, ${a.seen ? "has read its pin" : "has not read its pin yet"}`);
+      mark.setAttribute("aria-label", this.words.markAria(a.name, a.seen));
       check.hidden = !a.seen;
       unpin.setAttribute("aria-label", labels.unpin);
       if (this.draw) this.draw(a, icon);
@@ -200,4 +210,6 @@ export interface ApcPinElement extends HTMLElement {
   readonly mark: HTMLElement | null;
   readonly iconHost: HTMLElement | null;
   renderIcon: ((agent: PinAgent, into: HTMLElement) => void) | null;
+  /** The badge's strings (TIN-668): set the keys you translate; the rest stay English. */
+  strings: Partial<PinStrings> | null;
 }

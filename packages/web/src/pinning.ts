@@ -1,4 +1,5 @@
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, couldNotCheckNote, directOnlyNote, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
+import { DEFAULT_PINNING_STRINGS, resolveStrings, type PinningStrings } from "./strings.ts";
 
 const profileLoads = new Map<string, Promise<ApcRole[] | null>>();
 
@@ -100,6 +101,12 @@ export interface PinningOptions {
    * A test that sends events of its own passes `() => true`; nothing in a page can reach this.
    */
   trusted?: (event: Event) => boolean;
+  /**
+   * The words enablePinning shows the person (TIN-668): the tap-to-pin note, the answers to a refused
+   * drop, and the note for a dock agent dropped on a Direct-only app (`directOnlyNote`, `couldNotCheckNote`
+   * replace the protocol's English ones). The keys you leave out stay English.
+   */
+  strings?: Partial<PinningStrings>;
 }
 
 /** The answer to a dock agent dropped on a Direct-only app: who it was, what to tell the person, and where they connect instead. */
@@ -126,7 +133,7 @@ export interface DockUnsupported {
  * replaces it: never a stack of notes.
  */
 let shownNote: { box: HTMLElement; timer: ReturnType<typeof setTimeout> } | null = null;
-export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
+export function showDockUnsupported(answer: DockUnsupported, strings: Pick<PinningStrings, "connectLink" | "close"> = DEFAULT_PINNING_STRINGS): HTMLElement {
   if (shownNote) {
     clearTimeout(shownNote.timer);
     shownNote.box.remove();
@@ -146,13 +153,13 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
   if (connect) {
     const link = document.createElement("a");
     link.setAttribute("href", connect);
-    link.textContent = `Connect an agent to ${answer.name}`;
+    link.textContent = strings.connectLink(answer.name);
     Object.assign(link.style, { color: "#f2a46b", fontWeight: "600" });
     box.appendChild(link);
   }
   const close = document.createElement("button");
   close.setAttribute("type", "button");
-  close.setAttribute("aria-label", "Close");
+  close.setAttribute("aria-label", strings.close);
   close.textContent = "×";
   Object.assign(close.style, { position: "absolute", top: "4px", right: "6px", background: "none", border: "0", color: "#ccc", font: "16px system-ui, sans-serif", cursor: "pointer" });
   const remove = () => {
@@ -170,12 +177,13 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
 }
 
 /** What the person is told when an app answered a dock agent's drop and then cannot place it (TIN-756). */
-export const REFUSED_NOTE = "This agent cannot point at that. Drop it on another highlighted item.";
-export const UNKNOWN_AGENT_NOTE = "This app does not know that agent.";
+export const REFUSED_NOTE = DEFAULT_PINNING_STRINGS.refused;
+export const UNKNOWN_AGENT_NOTE = DEFAULT_PINNING_STRINGS.unknownAgent;
 
 /** How a refused drop is told: through the app's `onDockUnsupported` when it has one, else the page note (TIN-756). */
-export function refusalTeller(options: Pick<PinningOptions, "onDockUnsupported" | "direct">): (message: string, drag: AgentDrag, target: FocusTarget) => void {
-  return (message, drag, target) => (options.onDockUnsupported ?? showDockUnsupported)({ drag, target, name: options.direct?.name ?? "This app", connect: null, reason: "refused", message });
+export function refusalTeller(options: Pick<PinningOptions, "onDockUnsupported" | "direct" | "strings">): (message: string, drag: AgentDrag, target: FocusTarget) => void {
+  const words = resolveStrings(DEFAULT_PINNING_STRINGS, options.strings);
+  return (message, drag, target) => (options.onDockUnsupported ?? ((answer) => showDockUnsupported(answer, words)))({ drag, target, name: options.direct?.name ?? words.thisApp, connect: null, reason: "refused", message });
 }
 
 /**
@@ -185,7 +193,7 @@ export function refusalTeller(options: Pick<PinningOptions, "onDockUnsupported" 
  * silent refusal here was a drop with no answer at all.
  */
 export function placeNativeDrop(
-  options: Pick<PinningOptions, "canTarget" | "onPin" | "resolveAgent" | "onUnknownAgent">,
+  options: Pick<PinningOptions, "canTarget" | "onPin" | "resolveAgent" | "onUnknownAgent" | "strings">,
   drag: AgentDrag | null,
   hit: { element: Element; target: FocusTarget } | null,
   tell: (message: string, drag: AgentDrag, target: FocusTarget) => void,
@@ -197,11 +205,11 @@ export function placeNativeDrop(
       options.onUnknownAgent({ ...drag, hub: drag.hub, ticket: drag.ticket }, hit.target, hit.element);
       return "unknown_agent";
     }
-    tell(UNKNOWN_AGENT_NOTE, drag, hit.target);
+    tell(resolveStrings(DEFAULT_PINNING_STRINGS, options.strings).unknownAgent, drag, hit.target);
     return "refused";
   }
   if (options.canTarget && !options.canTarget(grantId, hit.target)) {
-    tell(REFUSED_NOTE, drag, hit.target);
+    tell(resolveStrings(DEFAULT_PINNING_STRINGS, options.strings).refused, drag, hit.target);
     return "refused";
   }
   options.onPin(grantId, hit.target, hit.element);
@@ -333,7 +341,7 @@ body.apc-armed [data-focus] { outline: 2px dashed var(--apc-accent, #b85209); ou
 `;
 
 /** The note shown while an agent is armed: what to do, and a way out. Fixed above the agent bar (--apc-bar-height). */
-function armedNote(name: string, onCancel: () => void): { box: HTMLElement; say: (text: string) => void } {
+function armedNote(name: string, onCancel: () => void, words: PinningStrings): { box: HTMLElement; say: (text: string) => void } {
   const box = document.createElement("div");
   box.setAttribute("role", "status");
   box.setAttribute("data-apc-tap-pin", "");
@@ -343,11 +351,11 @@ function armedNote(name: string, onCancel: () => void): { box: HTMLElement; say:
   const say = (t: string) => {
     text.textContent = t;
   };
-  say(`Tap what to point ${name} at.`);
+  say(words.tapPrompt(name));
   const cancel = document.createElement("button");
   cancel.setAttribute("type", "button");
   cancel.setAttribute("data-apc-tap-cancel", "");
-  cancel.textContent = "Cancel";
+  cancel.textContent = words.cancel;
   Object.assign(cancel.style, { minHeight: "44px", minWidth: "64px", padding: "0 14px", borderRadius: "10px", border: "1px solid #666", background: "transparent", color: "#fff", font: "600 14px system-ui, sans-serif", cursor: "pointer" });
   cancel.addEventListener("click", onCancel);
   box.append(text, cancel);
@@ -371,6 +379,7 @@ function armedNote(name: string, onCancel: () => void): { box: HTMLElement; say:
  */
 export function enablePinning(options: PinningOptions): () => void {
   const root = options.root ?? document;
+  const words = resolveStrings(DEFAULT_PINNING_STRINGS, options.strings);
   const markSelector = options.markSelector ?? "[data-apc-mark]";
   let drag: { grantId: string; mark: Element; ghost: HTMLElement; current: { element: Element; target: FocusTarget } | null; x: number; y: number; moved: number; touch: boolean } | null = null;
   // Tap to pin: the agent armed by a tap on its mark, and the note that says so.
@@ -404,8 +413,8 @@ export function enablePinning(options: PinningOptions): () => void {
           document.head.append(style);
         }
         const mark = [...document.querySelectorAll(markSelector)].find((m) => m.getAttribute("data-grant") === armed && !m.closest("apc-pin"));
-        const name = mark?.getAttribute("aria-label") || mark?.getAttribute("title") || "your agent";
-        note = armedNote(name, () => tapPin.cancel());
+        const name = mark?.getAttribute("aria-label") || mark?.getAttribute("title") || words.yourAgent;
+        note = armedNote(name, () => tapPin.cancel(), words);
         document.body.append(note.box);
         document.body.classList.add("apc-armed", "apc-dragging");
         document.documentElement.setAttribute("data-apc-armed", armed);
@@ -433,7 +442,7 @@ export function enablePinning(options: PinningOptions): () => void {
       restore.push([el, null]);
       el.setAttribute("tabindex", "0");
     }
-    note?.say("Pointing your agent: Tab to an outlined item, then press Enter or Space to pin it. Escape cancels.");
+    note?.say(words.keyboardArmed);
     (targets[0] as HTMLElement | undefined)?.focus();
   };
 
@@ -516,7 +525,7 @@ export function enablePinning(options: PinningOptions): () => void {
     // The tap that pinned, or was refused, must not run the target's own action.
     swallowClickUntil = Date.now() + 500;
     swallowOn = hit?.element ?? null;
-    if (result === "refused") note?.say("This agent cannot point at that. Tap another outlined target, or Cancel.");
+    if (result === "refused") note?.say(words.refusedTap);
   };
   // Only the click that follows a pinning (or refused) tap is swallowed; every other click goes through.
   const onClickCapture = (event: Event) => {
@@ -617,10 +626,10 @@ export function enablePinning(options: PinningOptions): () => void {
     // A dock agent on an app that does not offer Dock, or whose profiles could not be read: answered,
     // never sent to pairing (an app that cannot check its own file pairs nothing on a guess).
     if (drag?.hub && drag.ticket && (dockless() || unread())) {
-      const name = options.direct?.name ?? "This app";
+      const name = options.direct?.name ?? words.thisApp;
       const reason = dockless() ? "direct_only" : "unchecked";
-      const answer: DockUnsupported = { drag, target: hit?.target ?? null, name, connect: options.direct?.connect ?? null, reason, message: reason === "direct_only" ? directOnlyNote(name) : couldNotCheckNote(name) };
-      (options.onDockUnsupported ?? showDockUnsupported)(answer);
+      const answer: DockUnsupported = { drag, target: hit?.target ?? null, name, connect: options.direct?.connect ?? null, reason, message: reason === "direct_only" ? words.directOnlyNote(name) : words.couldNotCheckNote(name) };
+      (options.onDockUnsupported ?? ((a) => showDockUnsupported(a, words)))(answer);
       return;
     }
     // A drop held while the profiles loaded, on an app that turns out to offer Dock but takes no native drops.
@@ -643,7 +652,7 @@ export function enablePinning(options: PinningOptions): () => void {
       // The click the browser makes from this key (Space: on keyup) must not run the target's own action either.
       swallowClickUntil = Date.now() + 500;
       swallowOn = hit.element;
-      if (tapPin.tap(hit) === "refused") note?.say("This agent cannot point at that. Tab to another outlined item, or press Escape.");
+      if (tapPin.tap(hit) === "refused") note?.say(words.refusedKeys);
     }
   };
 

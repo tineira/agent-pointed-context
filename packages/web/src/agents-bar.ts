@@ -31,6 +31,7 @@
  */
 import { APC_MOBILE_MEDIA, type ApcProfile } from "@tineira/apc-protocol";
 import { APC_ARMED_EVENT } from "./pinning.ts";
+import { DEFAULT_BAR_STRINGS, resolveStrings, type BarStrings } from "./strings.ts";
 
 export type AgentState = "off" | "idle" | "waiting" | "busy" | "seen";
 
@@ -63,22 +64,22 @@ export const REVOKE_CONFIRM_MS = 4000;
  * target once), unread until both are read, and "here" only when both targets are on screen (so the
  * dot still opens the one that is not). No pin at all is null.
  */
-export function mergePins<P extends { label: string; seen: boolean; here: boolean }>(pins: ReadonlyArray<P | null | undefined>): P | null {
+export function mergePins<P extends { label: string; seen: boolean; here: boolean }>(pins: ReadonlyArray<P | null | undefined>, strings: Pick<BarStrings, "joinPins"> = DEFAULT_BAR_STRINGS): P | null {
   const some = pins.filter((p): p is P => !!p);
   if (some.length < 2) return some[0] ?? null;
-  return { ...some[0]!, label: [...new Set(some.map((p) => p.label))].join(" and "), seen: some.every((p) => p.seen), here: some.every((p) => p.here) };
+  return { ...some[0]!, label: strings.joinPins([...new Set(some.map((p) => p.label))]), seen: some.every((p) => p.seen), here: some.every((p) => p.here) };
 }
 
 /** The hint that offers the dock to a Direct user, and where it leads. */
-export const DOCK_HINT = { text: "Use this agent across apps with the dock", url: "https://apc.tineira.com/dock" } as const;
+export const DOCK_HINT = { text: DEFAULT_BAR_STRINGS.dockHint, url: "https://apc.tineira.com/dock" } as const;
 const COLLAPSED_KEY = "apc-agents.collapsed";
 const HINT_KEY = "apc-agents.dock-hint";
 
 /** The words for the path an agent came by, for its tag. Null when the app does not say. */
-export function pathLabel(paths: readonly ApcProfile[] | undefined): { text: string; title: string } | null {
+export function pathLabel(paths: readonly ApcProfile[] | undefined, strings: BarStrings = DEFAULT_BAR_STRINGS): { text: string; title: string } | null {
   if (!paths?.length) return null;
-  if (paths.includes("direct") && paths.includes("dock")) return { text: "direct + dock", title: "The same agent, connected directly and through a dock. Each way keeps its own access; Revoke cuts both." };
-  return paths[0] === "direct" ? { text: "direct", title: "Connected directly, on this app's own MCP URL" } : { text: "via dock", title: "Came through an agent dock" };
+  if (paths.includes("direct") && paths.includes("dock")) return { text: strings.pathBoth, title: strings.pathBothTitle };
+  return paths[0] === "direct" ? { text: strings.pathDirect, title: strings.pathDirectTitle } : { text: strings.pathDock, title: strings.pathDockTitle };
 }
 
 /** Whether this window is a phone or any touch viewport (APC 0.6): a coarse pointer or a narrow width. False where there is no window. */
@@ -95,11 +96,9 @@ export function barCanCollapse(agents: readonly BarAgent[], mobile = false): boo
 }
 
 /** Who is reading, for the collapsed indicator: the agents that connected. */
-export function readingSummary(agents: readonly BarAgent[]): string {
+export function readingSummary(agents: readonly BarAgent[], strings: BarStrings = DEFAULT_BAR_STRINGS): string {
   const names = agents.filter((a) => a.state !== "off").map((a) => a.name);
-  if (!names.length) return "No agent is reading";
-  if (names.length === 1) return `${names[0]} is reading`;
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)} are reading`;
+  return names.length ? strings.reading(names) : strings.nobodyReading;
 }
 
 /** The dock hint shows while an agent that came only directly is connected, unless the app turned it off or the person dismissed it. */
@@ -188,14 +187,13 @@ html.apc-bar-fixed body { padding-bottom: var(--apc-bar-height, 0px); }
 const BOT = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 12h2v5H2v-5Zm18 0h2v5h-2v-5Z"/></svg>';
 
 /** The words a mark, its dot and its revoke button say, for tooltips and screen readers. Pure, so it is tested. */
-export function agentLabels(a: BarAgent): { mark: string; dot: string | null; revoke: string; revokeArmed: string } {
-  const mark = `${a.name}${a.state === "off" ? " (not connected yet)" : ""}. Drag onto anything to point this agent.`;
+export function agentLabels(a: BarAgent, strings: BarStrings = DEFAULT_BAR_STRINGS): { mark: string; dot: string | null; revoke: string; revokeArmed: string } {
+  const mark = strings.markTitle(a.name, a.state !== "off");
   const both = !!a.paths?.includes("direct") && !!a.paths.includes("dock");
-  const revoke = `Revoke ${a.name}: it can no longer read this app${both ? ", directly or through the dock" : ""}, at once. To let it back, connect or drop it here again.`;
-  const revokeArmed = `Click again to revoke ${a.name}.`;
+  const revoke = strings.revokeTitle(a.name, both);
+  const revokeArmed = strings.revokeConfirmTitle(a.name);
   if (!a.pin) return { mark, dot: null, revoke, revokeArmed };
-  const read = a.pin.seen ? "your agent read it" : "waiting for your agent's next call";
-  return { mark, dot: `Pinned to ${a.pin.label}: ${read}${a.pin.here ? "" : ". Click to open it."}`, revoke, revokeArmed };
+  return { mark, dot: strings.pinTitle(a.pin.label, a.pin.seen, a.pin.here), revoke, revokeArmed };
 }
 
 /** The room each fixed bar takes at the bottom of the page: the page keeps the largest, as --apc-bar-height and padding on <body>. */
@@ -225,7 +223,12 @@ export function defineAgentBar(tag = "apc-agents"): void {
     private armed = new Map<string, ReturnType<typeof setTimeout>>();
     /** The app draws an agent's icon into this element itself (for example with its own logos). Called on every update. */
     renderIcon: ((agent: BarAgent, into: HTMLElement) => void) | null = null;
-    private hint: { text: string; url: string } | null = { ...DOCK_HINT };
+    /** undefined: the default hint, in the bar's strings; null: off. */
+    private hint: { text: string; url: string } | null | undefined = undefined;
+    private words: BarStrings = DEFAULT_BAR_STRINGS;
+    private given: Partial<BarStrings> | null = null;
+    /** Bumped when the strings change, so every entry is drawn again. */
+    private stringsVersion = 0;
     /** The collapsed indicator's icons, kept per agent like the marks' (an app's renderIcon may keep state in them). */
     private miniIcons = new Map<string, HTMLElement>();
 
@@ -238,10 +241,22 @@ export function defineAgentBar(tag = "apc-agents"): void {
     }
     /** The hint that offers the dock to a Direct user; null turns it off. */
     get dockHint(): { text: string; url: string } | null {
-      return this.getAttribute("dock-hint") === "off" ? null : this.hint;
+      if (this.getAttribute("dock-hint") === "off" || this.hint === null) return null;
+      return this.hint ?? { text: this.words.dockHint, url: DOCK_HINT.url };
     }
     set dockHint(next: { text: string; url: string } | null) {
       this.hint = next;
+      this.render();
+    }
+    /** Every string the bar shows (TIN-668): the keys you set, over the English defaults. */
+    get strings(): Partial<BarStrings> | null {
+      return this.given;
+    }
+    set strings(next: Partial<BarStrings> | null) {
+      this.given = next;
+      this.words = resolveStrings(DEFAULT_BAR_STRINGS, next);
+      this.stringsVersion++;
+      if (this.getAttribute("data-apc-label") === "default") this.setAttribute("aria-label", this.words.toolbar);
       this.render();
     }
 
@@ -294,7 +309,10 @@ export function defineAgentBar(tag = "apc-agents"): void {
         document.head.append(style);
       }
       if (!this.hasAttribute("role")) this.setAttribute("role", "toolbar");
-      if (!this.hasAttribute("aria-label")) this.setAttribute("aria-label", "Agents");
+      if (!this.hasAttribute("aria-label")) {
+        this.setAttribute("aria-label", this.words.toolbar);
+        this.setAttribute("data-apc-label", "default");
+      }
       this.render();
     }
 
@@ -357,8 +375,8 @@ export function defineAgentBar(tag = "apc-agents"): void {
         fold.type = "button";
         fold.className = "apc-agents__collapse apc-agents__extra";
         fold.textContent = "‹";
-        fold.title = "Collapse to who is reading. Your agents came through your dock: drag them from there.";
-        fold.setAttribute("aria-label", "Collapse the agent bar");
+        fold.title = this.words.collapseTitle;
+        fold.setAttribute("aria-label", this.words.collapseAria);
         fold.addEventListener("click", () => {
           store(COLLAPSED_KEY, "1");
           this.render();
@@ -375,9 +393,9 @@ export function defineAgentBar(tag = "apc-agents"): void {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "apc-agents__mini apc-agents__extra";
-      const summary = readingSummary(this.list);
-      button.title = `${summary}. Show the agents.`;
-      button.setAttribute("aria-label", `${summary}. Show the agents.`);
+      const summary = readingSummary(this.list, this.words);
+      button.title = this.words.showAgents(summary);
+      button.setAttribute("aria-label", this.words.showAgents(summary));
       for (const a of reading.slice(0, 4)) {
         let icon = this.miniIcons.get(a.id);
         if (!icon) {
@@ -394,7 +412,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
         } else icon.innerHTML = BOT;
         button.append(icon);
       }
-      button.append(document.createTextNode(reading.length ? `${reading.length} reading` : "no agent reading"));
+      button.append(document.createTextNode(reading.length ? this.words.readingCount(reading.length) : this.words.nobodyReadingShort));
       button.addEventListener("click", () => {
         store(COLLAPSED_KEY, null);
         this.render();
@@ -418,16 +436,16 @@ export function defineAgentBar(tag = "apc-agents"): void {
       const close = document.createElement("button");
       close.type = "button";
       close.textContent = "×";
-      close.setAttribute("aria-label", "Dismiss this hint");
+      close.setAttribute("aria-label", this.words.dockHintDismiss);
       close.addEventListener("click", dismiss);
       box.append(link, close);
       return box;
     }
 
     private fill(node: { root: HTMLElement; icon: HTMLElement; key: string }, a: BarAgent): void {
-      const labels = agentLabels(a);
+      const labels = agentLabels(a, this.words);
       const armed = this.armed.has(a.id);
-      const key = JSON.stringify([a.name, a.state, a.pin, a.warning, a.restricted, typeof a.icon === "string" ? a.icon.length : null, armed, a.paths ?? null]);
+      const key = JSON.stringify([a.name, a.state, a.pin, a.warning, a.restricted, typeof a.icon === "string" ? a.icon.length : null, armed, a.paths ?? null, this.stringsVersion]);
       if (this.renderIcon) this.renderIcon(a, node.icon);
       else if (node.key === "" || JSON.stringify(a.icon ?? null) !== node.icon.dataset.src) {
         node.icon.dataset.src = JSON.stringify(a.icon ?? null);
@@ -470,19 +488,19 @@ export function defineAgentBar(tag = "apc-agents"): void {
         dot.type = "button";
         dot.className = `apc-agents__dot${a.pin.seen ? " apc-agents__dot--seen" : ""}${a.pin.here ? "" : " apc-agents__dot--away"}`;
         dot.title = labels.dot;
-        dot.setAttribute("aria-label", `${a.name} pinned to ${a.pin.label}${a.pin.seen ? ", read" : ", not read yet"}`);
+        dot.setAttribute("aria-label", this.words.pinAria(a.name, a.pin.label, a.pin.seen));
         dot.addEventListener("click", () => !a.pin?.here && this.emit("apc-open", a.id));
         const unpin = document.createElement("button");
         unpin.type = "button";
         unpin.className = "apc-agents__unpin";
         unpin.textContent = "×";
-        unpin.setAttribute("aria-label", `Remove ${a.name}'s pin`);
+        unpin.setAttribute("aria-label", this.words.unpinAria(a.name));
         unpin.addEventListener("click", (e) => e.isTrusted && this.emit("apc-unpin", a.id));
         pin.append(dot, unpin);
         parts.push(pin);
       }
       // Which path it came by; a linked agent can be shown as two again.
-      const path = pathLabel(a.paths);
+      const path = pathLabel(a.paths, this.words);
       if (path) {
         const tag = document.createElement("span");
         tag.className = "apc-agents__path";
@@ -493,9 +511,9 @@ export function defineAgentBar(tag = "apc-agents"): void {
           const unlink = document.createElement("button");
           unlink.type = "button";
           unlink.className = "apc-agents__unlink";
-          unlink.textContent = "unlink";
-          unlink.title = `Show ${a.name}'s two connections as two agents again. Nothing else changes.`;
-          unlink.setAttribute("aria-label", `Unlink ${a.name}`);
+          unlink.textContent = this.words.unlink;
+          unlink.title = this.words.unlinkTitle(a.name);
+          unlink.setAttribute("aria-label", this.words.unlinkAria(a.name));
           unlink.addEventListener("click", (e) => e.isTrusted && this.emit("apc-unlink", a.id));
           parts.push(unlink);
         }
@@ -504,9 +522,9 @@ export function defineAgentBar(tag = "apc-agents"): void {
       const revoke = document.createElement("button");
       revoke.type = "button";
       revoke.className = `apc-agents__revoke${armed ? " apc-agents__revoke--armed" : ""}`;
-      revoke.textContent = armed ? "Revoke?" : "⊘";
+      revoke.textContent = armed ? this.words.revokeConfirm : "⊘";
       revoke.title = armed ? labels.revokeArmed : labels.revoke;
-      revoke.setAttribute("aria-label", armed ? labels.revokeArmed : `Revoke ${a.name}`);
+      revoke.setAttribute("aria-label", armed ? labels.revokeArmed : this.words.revokeAria(a.name));
       revoke.addEventListener("click", (e) => e.isTrusted && this.revokeClicked(a.id));
       revoke.addEventListener("keydown", (e) => e.key === "Escape" && this.disarm(a.id));
       parts.push(revoke);
@@ -522,4 +540,6 @@ export interface ApcAgentsElement extends HTMLElement {
   agents: BarAgent[];
   renderIcon: ((agent: BarAgent, into: HTMLElement) => void) | null;
   dockHint: { text: string; url: string } | null;
+  /** The bar's strings (TIN-668): set the keys you translate; the rest stay English. */
+  strings: Partial<BarStrings> | null;
 }

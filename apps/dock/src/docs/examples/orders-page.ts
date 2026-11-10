@@ -15,6 +15,8 @@ import {
   type AgentDrag,
   type ApcAgentsElement,
   type ApcDirectAgentsElement,
+  type PinningStrings,
+  formatPageTime,
 } from "@tineira/apc-web";
 import type { AgentRow, Order } from "./orders-app.ts";
 // #endregion
@@ -104,6 +106,39 @@ async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, t
   }
   await refresh();
 }
+// #endregion
+
+// #region localize
+/**
+ * Another language: every string the package draws is a key you can pass, tooltips and `aria-label`s included.
+ * A key you leave out stays English. A name, a count or a label is a function, so the word order and the
+ * plural forms are yours. Here, Spanish; the pin badge `<apc-pin>` takes `strings` the same way.
+ */
+bar.strings = {
+  toolbar: "Agentes",
+  markTitle: (name, connected) => `${name}${connected ? "" : " (aún sin conectar)"}. Arrástralo sobre cualquier cosa para apuntarlo.`,
+  revokeConfirm: "¿Revocar?",
+  revokeAria: (name) => `Revocar a ${name}`,
+  readingCount: (count) => (count === 1 ? "1 leyendo" : `${count} leyendo`),
+  nobodyReadingShort: "ningún agente leyendo",
+  reading: (names) => `Leyendo: ${names.join(", ")}`,
+  dockHint: "Usa este agente en todas tus apps con el dock",
+  dockHintDismiss: "Cerrar este aviso",
+};
+// An app that offers Direct only (no dock) turns the hint off: bar.dockHint = null, or dock-hint="off" on the element.
+direct.strings = {
+  connectAgent: "Conectar un agente",
+  addAnother: "Agregar otro agente",
+  prompt: (url, appName) => `Conecta este servidor MCP remoto, llamado "${appName}". URL: ${url}. Usa Streamable HTTP y no necesita OAuth ni clave: el acceso está en la URL.`,
+};
+/** What `enablePinning` says (the tap-to-pin note, refused drops); pass it as `strings` there. `directOnlyNote` replaces the protocol's English note. */
+export const pinningStrings: Partial<PinningStrings> = {
+  tapPrompt: (name) => `Toca lo que quieres que ${name} mire.`,
+  cancel: "Cancelar",
+  directOnlyNote: (appName) => `${appName} conecta agentes directamente, no con un dock.`,
+};
+/** A time in your own labels (a pin's "read at…") follows the page's language (`<html lang>`), not the machine's. */
+export const readAt = (when: Date): string => formatPageTime(when, { timeStyle: "short" });
 // #endregion
 
 void refresh();

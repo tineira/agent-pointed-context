@@ -265,9 +265,10 @@ test("/build/both: the profiles, apc_link, the bar and the dock hint, in code th
   for (const line of snippet("PROFILES_SNIPPET")) assert.ok(signals.includes(line.replace(/^"vars": \{ /, "").replace(/ \}$/, "")), `not in Signals: ${line}`);
   // The bar's words and switches are the package's own.
   const bar = read("packages/web/src/agents-bar.ts");
-  assert.ok(bar.includes('text: "Use this agent across apps with the dock"') && page.includes('"Use this agent across apps with the dock"'));
+  const words = read("packages/web/src/strings.ts");
+  assert.ok(words.includes('dockHint: "Use this agent across apps with the dock"') && page.includes('"Use this agent across apps with the dock"'));
   assert.ok(bar.includes('"dock-hint") === "off"') && page.includes('dock-hint="off"'));
-  assert.ok(bar.includes('text: "direct + dock"') && page.includes("direct + dock"));
+  assert.ok(words.includes('pathBoth: "direct + dock"') && page.includes("direct + dock"));
   assert.ok(read("apps/dock/src/docs/examples/orders-page.ts").includes('"apc-unlink"') && page.includes("apc-unlink"));
   const server = read("packages/server/src/direct.ts");
   assert.match(server, /export function parseProfiles\(/);

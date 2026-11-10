@@ -9,6 +9,8 @@
  * listen for `apc-add` (make an agent) and `apc-rename` (detail { id, name }).
  */
 
+import { DEFAULT_DIRECT_STRINGS, resolveStrings, type DirectStrings } from "./strings.ts";
+
 export interface DirectAgent {
   /** The app's id for the agent's grant. */
   id: string;
@@ -30,15 +32,13 @@ export type DirectAgentsEvent = "apc-add" | "apc-rename";
  * asked in the chat, so it asks for that first, under a name the person will recognise, and for the
  * steps only if the agent cannot.
  */
-export function connectPrompt(url: string, appName: string): string {
-  return `Please connect this remote MCP server, named "${appName}". URL: ${url}. It uses Streamable HTTP and needs no OAuth or API key: the access is in the URL. If you can add it yourself, do it now and tell me when it's connected. If you can't, tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`;
+export function connectPrompt(url: string, appName: string, strings: Pick<DirectStrings, "prompt"> = DEFAULT_DIRECT_STRINGS): string {
+  return strings.prompt(url, appName);
 }
 
 /** The words of one agent's line. Pure, so it is tested. */
-export function directAgentStatus(a: DirectAgent): string {
-  if (!a.connected) return "not connected yet";
-  const as = a.client ? `connected as ${a.client}` : "connected";
-  return a.linked ? `${as}, also through your dock` : as;
+export function directAgentStatus(a: DirectAgent, strings: Pick<DirectStrings, "status"> = DEFAULT_DIRECT_STRINGS): string {
+  return strings.status(a);
 }
 
 const STYLE_ID = "apc-direct-style";
@@ -62,7 +62,7 @@ apc-direct-agents { display: flex; flex-direction: column; gap: 10px; color: var
 .apc-direct__add:hover, .apc-direct__rename button:hover { border-color: var(--apc-accent, #b85209); }
 `;
 
-function copyField(text: string, label: string): HTMLElement {
+function copyField(text: string, label: string, copied: string): HTMLElement {
   const box = document.createElement("div");
   box.className = "apc-direct__copy";
   const code = document.createElement("code");
@@ -73,7 +73,7 @@ function copyField(text: string, label: string): HTMLElement {
   button.addEventListener("click", () => {
     void navigator.clipboard?.writeText(text).then(
       () => {
-        button.textContent = "Copied";
+        button.textContent = copied;
         setTimeout(() => (button.textContent = label), 1500);
       },
       () => undefined,
@@ -89,7 +89,9 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
 
   class ApcDirectAgents extends HTMLElement {
     private list: DirectAgent[] = [];
-    private name = "this app";
+    private name: string | null = null;
+    private words: DirectStrings = DEFAULT_DIRECT_STRINGS;
+    private given: Partial<DirectStrings> | null = null;
     /** Agents whose connection is unfolded; an agent not connected yet is unfolded until it connects. */
     private open = new Set<string>();
     private shut = new Set<string>();
@@ -104,10 +106,19 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
       this.render();
     }
     get appName(): string {
-      return this.name;
+      return this.name ?? this.words.thisApp;
     }
     set appName(next: string) {
       this.name = next;
+      this.render();
+    }
+    /** Every string the list shows (TIN-668): the keys you set, over the English defaults. */
+    get strings(): Partial<DirectStrings> | null {
+      return this.given;
+    }
+    set strings(next: Partial<DirectStrings> | null) {
+      this.given = next;
+      this.words = resolveStrings(DEFAULT_DIRECT_STRINGS, next);
       this.render();
     }
 
@@ -131,6 +142,7 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
 
     private render(): void {
       if (!this.isConnected) return;
+      const w = this.words;
       const rows = this.list.map((a) => {
         const row = document.createElement("div");
         row.className = "apc-direct__agent";
@@ -144,14 +156,14 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
           input.value = this.draft;
           input.addEventListener("input", () => (this.draft = input.value));
           input.maxLength = 40;
-          input.setAttribute("aria-label", "Agent name");
-          input.placeholder = "Empty: back to its own name";
+          input.setAttribute("aria-label", w.nameLabel);
+          input.placeholder = w.namePlaceholder;
           const save = document.createElement("button");
           save.type = "submit";
-          save.textContent = "Save";
+          save.textContent = w.save;
           const cancel = document.createElement("button");
           cancel.type = "button";
-          cancel.textContent = "Cancel";
+          cancel.textContent = w.cancel;
           cancel.addEventListener("click", () => {
             this.editing = null;
             this.render();
@@ -175,11 +187,11 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
           name.textContent = a.name;
           const status = document.createElement("span");
           status.className = "apc-direct__status";
-          status.textContent = directAgentStatus(a);
+          status.textContent = directAgentStatus(a, w);
           const rename = document.createElement("button");
           rename.type = "button";
           rename.className = "apc-direct__link";
-          rename.textContent = "Rename";
+          rename.textContent = w.rename;
           rename.addEventListener("click", () => {
             this.editing = a.id;
             this.draft = a.name;
@@ -189,7 +201,7 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
           toggle.type = "button";
           toggle.className = "apc-direct__link";
           const open = this.isOpen(a);
-          toggle.textContent = open ? "Hide connection" : "Show connection";
+          toggle.textContent = open ? w.hideConnection : w.showConnection;
           toggle.setAttribute("aria-expanded", String(open));
           toggle.addEventListener("click", () => {
             if (open) {
@@ -209,11 +221,11 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
           body.className = "apc-direct__body";
           const urlHint = document.createElement("p");
           urlHint.className = "apc-direct__hint";
-          urlHint.textContent = "Add this URL to your agent as a remote MCP server (Streamable HTTP). No login: the secret in the URL is its access, so give each agent its own.";
+          urlHint.textContent = w.urlHint;
           const askHint = document.createElement("p");
           askHint.className = "apc-direct__hint";
-          askHint.textContent = "Don't know how? Paste this to your agent:";
-          body.append(urlHint, copyField(a.url, "Copy"), askHint, copyField(connectPrompt(a.url, this.name), "Copy prompt"));
+          askHint.textContent = w.askHint;
+          body.append(urlHint, copyField(a.url, w.copy, w.copied), askHint, copyField(connectPrompt(a.url, this.appName, w), w.copyPrompt, w.copied));
           row.append(body);
         }
         return row;
@@ -221,7 +233,7 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
       const add = document.createElement("button");
       add.type = "button";
       add.className = "apc-direct__add";
-      add.textContent = this.list.length ? "Add another agent" : "Connect an agent";
+      add.textContent = this.list.length ? w.addAnother : w.connectAgent;
       add.addEventListener("click", () => this.emit("apc-add"));
       this.replaceChildren(...rows, add);
     }
@@ -234,4 +246,6 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
 export interface ApcDirectAgentsElement extends HTMLElement {
   agents: DirectAgent[];
   appName: string;
+  /** The list's strings (TIN-668): set the keys you translate; the rest stay English. */
+  strings: Partial<DirectStrings> | null;
 }

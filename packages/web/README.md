@@ -27,4 +27,6 @@ const stop = enablePinning({ onPin: (grantId, target) => savePin(grantId, target
 
 `onPin` gets the agent's grant and a `FocusTarget` (`{ kind, id, part, params }`); your server keeps it as that grant's pin and gives it to the agent ([`@tineira/apc-server`](https://www.npmjs.com/package/@tineira/apc-server)).
 
+Every string it draws can be passed by your app (`strings` on each component; see "Localize the page" in the docs), with the English as default.
+
 Source, the worked examples (Pulse and Signals) and the changelog: https://github.com/tineira/agent-pointed-context. MIT.
