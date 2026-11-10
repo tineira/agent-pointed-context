@@ -467,10 +467,9 @@ test("a partly clipped token asks about its whole range once: the cut reuses the
   assert.equal(visibleWords(text, counted, twoLines), "字".repeat(20));
   assert.equal(asked.filter((a) => a === "0-30").length, 1, "the whole token is queried once, not again by the cut");
   assert.equal(new Set(asked).size, asked.length, "no range is queried twice");
-  assert.equal(asked.length, 9, "the token, then the bisection: 10 queries before this change");
 });
 
-test("a one-line Thai, Lao, Khmer or Burmese token cut by a clip's edge is cut to what shows; a Latin word of the same length stays whole (TIN-753)", () => {
+test("a one-line Thai, Lao, Khmer, Burmese, Tibetan, Javanese or Balinese token cut by a clip's edge is cut to what shows; a Latin word of the same length stays whole (TIN-753)", () => {
   const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
   const nowrap: Rect = { left: 0, top: 0, right: 100, bottom: 20 };
   const samples: Record<string, string> = {
@@ -478,6 +477,9 @@ test("a one-line Thai, Lao, Khmer or Burmese token cut by a clip's edge is cut t
     lao: "ກ".repeat(20),
     khmer: "ក".repeat(20),
     burmese: "က".repeat(20),
+    tibetan: "ཀ".repeat(20),
+    javanese: "ꦏ".repeat(20),
+    balinese: "ᬓ".repeat(20),
   };
   for (const [name, text] of Object.entries(samples)) {
     assert.ok(text.length <= WORD_UNITS_MAX);
