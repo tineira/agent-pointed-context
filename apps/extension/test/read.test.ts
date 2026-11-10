@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, isTitleControl, NO_ALT, ownsHeadings, selectTitle, titleOf, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -229,6 +229,87 @@ test("a paragraph is under the heading before it, never one inside a section, it
   const q = el("div", [el("div", ["Email"], { role: "heading" }), el("div", ["Your answer"])], { role: "listitem" });
   assert.equal(title(q), "Email");
   assert.equal(headingOf(el("p", ["alone"]), outline), null);
+});
+
+/** The outline with title controls (TIN-766): a select or a combobox shows its chosen value as its own words. */
+const titled = {
+  ...outline,
+  title: (n: Node) => isTitleControl(n.tag, n.role, null, false) && textOf(n).length > 0,
+  blank: (n: Node) => n.tag !== "select" && textOf(n).length === 0,
+  named: (n: Node) => (n.tag === "section" || n.role === "region" ? (n as Node & { name?: string }).name ?? null : null),
+};
+const words = (n: Node) => {
+  const f = titleOf(n, titled);
+  return !f ? null : "el" in f ? textOf(f.el) : f.label;
+};
+/** A dashboard panel as a BI tool draws one: a header holding a title (a heading or a dropdown) above a table. */
+const panel = (title: Node, row: string) => {
+  const cell = el("td", [row]);
+  const body = el("tr", [el("td", ["SMU"]), cell]);
+  const table = el("table", [el("tbody", [body])]);
+  const box = el("div", [el("div", [title]), table]);
+  return { box, body, cell, table };
+};
+
+test("a block is under its own box's title, also when that title is a dropdown, never the panel before it (titleOf, TIN-766)", () => {
+  const first = panel(el("h3", ["Venta Perdida por tipo"]), "$1.000");
+  const second = panel(el("select", ["(I) Retailer"]), "$1.526.243");
+  const third = panel(el("div", ["(L) Local"], { role: "combobox" }), "$7");
+  el("body", [first.box, second.box, third.box]);
+  // The row of the table under the dropdown reads under the dropdown's chosen value, not the h3 before it.
+  assert.equal(words(second.body), "(I) Retailer");
+  assert.equal(words(second.cell), "(I) Retailer");
+  assert.equal(words(second.table), "(I) Retailer");
+  // A table under an h3 keeps it; a combobox button titles its panel; panels never swap titles.
+  assert.equal(words(first.body), "Venta Perdida por tipo");
+  assert.equal(words(third.body), "(L) Local");
+  assert.equal(words(second.box), "(I) Retailer");
+});
+
+test("a dropdown past the box's first thing, or after words, is a filter of the body, not its title (TIN-766)", () => {
+  const h = el("h3", ["Sales"]);
+  const filter = el("select", ["Last 7 days"]);
+  const table = el("table", [el("tr", [el("td", ["x"])])]);
+  el("body", [el("div", [h, filter, table])]);
+  // The h3 comes first in the box: the dropdown after it is not what the table is titled by.
+  assert.equal(words(table), "Sales");
+  // Words before the dropdown are a label of something else: the box has no control title.
+  const lead = el("div", [el("p", ["Pick one"]), el("select", ["Option A"]), el("table", [el("tr", [el("td", ["y"])])])]);
+  el("body", [el("h2", ["Report"]), lead]);
+  assert.equal(words(lead.kids[2]!), "Report");
+  // A dropdown deeper than a wrapper is not at the top.
+  const deep = el("div", [el("div", [el("div", [el("select", ["Deep"])])]), el("table", [el("tr", [el("td", ["z"])])])]);
+  el("body", [el("h2", ["Report"]), deep]);
+  assert.equal(words(deep.kids[1]!), "Report");
+});
+
+test("a block with no title of its own falls back to the page's order; a labelled box is named by its markup (TIN-766)", () => {
+  const bare = el("div", [el("table", [el("tr", [el("td", ["a"])])])]);
+  el("body", [el("h2", ["Before"]), bare]);
+  assert.equal(words(bare.kids[0]!), "Before");
+  const region = Object.assign(el("section", [el("table", [el("tr", [el("td", ["b"])])])]), { name: "Churn by plan" });
+  el("body", [el("h2", ["Before"]), region]);
+  assert.equal(words(region.kids[0]!), "Churn by plan");
+  // A real heading nearer than the box's name wins; a box with no name and no title lets the order decide.
+  const near = Object.assign(el("section", [el("h4", ["Nearer"]), el("p", ["text"])]), { name: "Panel" });
+  el("body", [near]);
+  assert.equal(words(near.kids[1]!), "Nearer");
+});
+
+test("a title control is a select with one choice, a combobox, or a listbox button; never a typed field or a list of options (isTitleControl, selectTitle)", () => {
+  assert.equal(isTitleControl("SELECT", null, null, false), true);
+  assert.equal(isTitleControl("select", null, null, true), false);
+  assert.equal(isTitleControl("div", "combobox", null, false), true);
+  assert.equal(isTitleControl("input", "combobox", null, false), false);
+  assert.equal(isTitleControl("textarea", null, null, false), false);
+  assert.equal(isTitleControl("button", null, "listbox", false), true);
+  assert.equal(isTitleControl("button", null, "menu", false), false);
+  assert.equal(isTitleControl("div", "listbox", null, false), false);
+  // A select gives its chosen option and never the others.
+  const options = [{ text: "(L) Local", selected: false }, { text: " (I)  Retailer ", selected: true }, { text: "(E) Producto Externo", selected: false }];
+  assert.equal(selectTitle(options), "(I) Retailer");
+  assert.equal(selectTitle(options.map((o) => ({ ...o, selected: false }))), null);
+  assert.equal(selectTitle(options.map((o) => ({ ...o, selected: true }))), null);
 });
 
 // TIN-622: a token with no space that spans lines is kept only where it shows.
