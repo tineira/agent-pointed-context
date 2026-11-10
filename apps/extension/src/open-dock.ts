@@ -4,7 +4,7 @@
  * Chrome opens Document Picture-in-Picture only from a click in the dock's own page, so Float opens the
  * dock with ?float=1, where a prompt takes that one click.
  */
-import { HUB_ORIGINS } from "./drop.ts";
+import { HUB_ORIGINS, hubAllowed } from "./drop.ts";
 
 /** The dock this browser sends readings to (the newest pairing), or the published one. */
 async function dockOrigin(): Promise<string> {
@@ -13,8 +13,9 @@ async function dockOrigin(): Promise<string> {
   return paired.at(-1) ?? HUB_ORIGINS[0]!;
 }
 
-export async function openDock(float: boolean): Promise<void> {
-  const origin = await dockOrigin();
+/** `hub`, when given and a dock this extension knows, is the dock to open (the popup's waiting drop names its own); otherwise the newest paired one. */
+export async function openDock(float: boolean, hub?: string): Promise<void> {
+  const origin = hub && hubAllowed(hub, __APC_DEV__) ? hub : await dockOrigin();
   const url = `${origin}/dock${float ? "?float=1" : ""}`;
   // By the address's start, not a match pattern, which takes no port (a local dock has one). The
   // extension sees the dock's tab addresses: it holds the dock's host permission.

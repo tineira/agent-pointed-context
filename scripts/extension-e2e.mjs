@@ -1247,6 +1247,8 @@ try {
       assert.ok(x >= 0 && y >= 0 && x < v.clientWidth && y < v.clientHeight, `${selector} is in view to click (${Math.round(x)}, ${Math.round(y)} in ${v.clientWidth}×${v.clientHeight})`);
       for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 }, sid);
     };
+    /** The popup has drawn its first view (its own page, with no render yet, has nothing under #here). */
+    const popupReady = (sid) => until("the popup drawn", async () => (await cdp("Runtime.evaluate", { expression: "document.getElementById('here')?.childElementCount > 0 && document.querySelector('#pill span')?.textContent.length > 0", returnByValue: true }, sid)).result.value);
     const popupClick = async (selector) => {
       const { targetId: popupId } = await cdp("Target.createTarget", { url: `chrome-extension://${extensionId}/popup.html` });
       const { sessionId: popupSession } = await cdp("Target.attachToTarget", { targetId: popupId, flatten: true });
@@ -1351,16 +1353,127 @@ try {
     const { targetId: listId } = await cdp("Target.createTarget", { url: `chrome-extension://${extensionId}/popup.html` });
     const { sessionId: listSession } = await cdp("Target.attachToTarget", { targetId: listId, flatten: true });
     const popupList = async () => (await cdp("Runtime.evaluate", { expression: "document.getElementById('readings').innerText", returnByValue: true }, listSession)).result.value;
-    await until("the readings in the popup", async () => /127\.0\.0\.1.*·.*·.*KB|127\.0\.0\.1.* B ·/.test((await popupList()) ?? ""));
-    assert.match(await popupList(), /gone/, "a replaced reading says it is gone");
+    // The list lives in the Activity view (TIN-786): select it first, as a person does, then read it.
+    await popupReady(listSession);
+    await clickIn(listSession, "[data-view=activity]");
+    await until("the readings in the popup", async () => /127\.0\.0\.1[^\n]*\n[^\n]*·/.test((await popupList()) ?? ""));
+    // Only a reading the hub still has says "at your dock": the replaced one does not, and nothing says "gone".
+    assert.equal(((await popupList()) ?? "").split("at your dock").length - 1, 1, "one reading is still at the dock");
+    assert.doesNotMatch((await popupList()) ?? "", /gone|expired/);
     await clickIn(listSession, "#clear-readings");
     await until("the list cleared at the dock", async () => (await api(`${base}/state`)).agents[0].readings.length === 0);
-    await until("the list cleared in the popup", async () => /Each page you send/.test(await popupList())).catch(async (e) => {
+    await until("the list cleared in the popup", async () => /Nothing sent yet/.test(await popupList())).catch(async (e) => {
       throw new Error(`${e.message} (the popup shows: ${JSON.stringify(await popupList())})`);
     });
     assert.equal((await tool("page__get_reading")).isError, true);
     await cdp("Target.closeTarget", { targetId: listId });
     console.log("9. a table cell and a formula read whole; the popup and the dock list readings, and Clear empties both");
+
+    // 9b. The popup's views, its writes and its layout (TIN-786). Each popup is its own tab, 340 px wide and 600 tall.
+    {
+      const openPopup = async (query = "") => {
+        const { targetId } = await cdp("Target.createTarget", { url: `chrome-extension://${extensionId}/popup.html${query}` });
+        const { sessionId } = await cdp("Target.attachToTarget", { targetId, flatten: true });
+        await cdp("Emulation.setDeviceMetricsOverride", { width: 340, height: 600, deviceScaleFactor: 1, mobile: false }, sessionId);
+        await popupReady(sessionId);
+        return { targetId, sessionId };
+      };
+      const evalIn = async (sid, expression) => (await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sid)).result.value;
+      const seed = await openPopup();
+      const kept = await evalIn(seed.sessionId, "chrome.storage.local.get(['sites', 'mode', 'last', 'readers', 'readerNames', 'sensitive']).then(JSON.stringify)");
+      const put = (items) => evalIn(seed.sessionId, `chrome.storage.local.set(${JSON.stringify(items)})`);
+      const restore = async () => {
+        const all = JSON.parse(kept);
+        await evalIn(seed.sessionId, `chrome.storage.local.remove(['sites', 'mode', 'last', 'readers', 'readerNames', 'sensitive'])`);
+        await put(all);
+      };
+      try {
+        // The views: This page first, Activity and Settings hidden until selected; every id the script uses is in the DOM.
+        const views = JSON.parse(await evalIn(seed.sessionId, "JSON.stringify(['page', 'activity', 'settings'].map((v) => document.getElementById('view-' + v).hidden))"));
+        assert.deepEqual(views, [false, true, true], "the popup opens on This page");
+        for (const id of ["open-dock", "float", "never-ask", "clear-readings", "readings"]) assert.equal(await evalIn(seed.sessionId, `document.querySelectorAll('#${id}').length`), 1, `#${id} is in the popup once`);
+        assert.equal(await evalIn(seed.sessionId, "document.querySelectorAll('input[name=sensitive]').length"), 3);
+        await clickIn(seed.sessionId, "[data-view=settings]");
+        assert.equal(await evalIn(seed.sessionId, "document.getElementById('view-settings').hidden"), false);
+        assert.equal(await evalIn(seed.sessionId, "document.getElementById('view-page').hidden"), true);
+
+        // Settings writes: Never ask writes only the mode; a row's select writes only its site; its x removes only its key.
+        await put({ sites: { "https://row-a.example": "always", "https://row-b.example": "sensitive" }, mode: "ask" });
+        await until("two rows under Your sites", async () => /Your sites · 2/.test(await evalIn(seed.sessionId, "document.getElementById('sites-summary').textContent")));
+        await evalIn(seed.sessionId, "document.getElementById('never-ask').click()");
+        await until("Never ask on", async () => (await evalIn(seed.sessionId, "chrome.storage.local.get('mode').then((s) => s.mode)")) === "never_ask");
+        await evalIn(seed.sessionId, "document.getElementById('never-ask').click()");
+        await until("Never ask off", async () => (await evalIn(seed.sessionId, "chrome.storage.local.get('mode').then((s) => s.mode)")) === "ask");
+        await evalIn(seed.sessionId, "(() => { const s = document.querySelector('select[aria-label=\"Choice for row-a.example\"]'); s.value = 'never'; s.dispatchEvent(new Event('change')); })()");
+        await until("row-a set to Never send", async () => (await evalIn(seed.sessionId, "chrome.storage.local.get('sites').then((s) => JSON.stringify(s.sites))")) === JSON.stringify({ "https://row-a.example": "never", "https://row-b.example": "sensitive" }));
+        await evalIn(seed.sessionId, "document.querySelector('button[aria-label$=\": row-a.example\"]').click()");
+        await until("x removed only row-a", async () => (await evalIn(seed.sessionId, "chrome.storage.local.get('sites').then((s) => JSON.stringify(s.sites))")) === JSON.stringify({ "https://row-b.example": "sensitive" }));
+
+        if (PROD) {
+          // The published build has no layout override: a popup asked for another tab's address still shows its own tab.
+          const p = await openPopup("?tab=https://news.example.com/");
+          assert.doesNotMatch(await evalIn(p.sessionId, "document.getElementById('here').innerText"), /news\.example\.com/, "the published popup has no ?tab= override");
+          await cdp("Target.closeTarget", { targetId: p.targetId });
+        } else {
+          // Layout: the first view fits in 600 px with no scroll, in every state this run can draw. A site's state follows this
+          // run's grants (the plain run has no grant for any page: Not allowed; --consent has: the choices), so each state is
+          // drawn for a site name of its own. Not reachable here and bounded by structure: none (every state below is drawn).
+          const waitingAt = new Date().toISOString();
+          const longReason = { at: waitingAt, hub: DOCK, site: "a-very-long-hostname.subdomain.example.com", status: "unknown_dock" };
+          const lasts = {
+            none: null,
+            sent: { at: waitingAt, hub: DOCK, site: "en.wikipedia.org", status: "sent", agent: "Claude" },
+            sentLeftOut: { at: waitingAt, hub: DOCK, site: "en.wikipedia.org", status: "sent", agent: "A long agent name that goes on and on", leftOut: 2 },
+            waiting: { at: waitingAt, hub: DOCK, site: "en.wikipedia.org", status: "asking" },
+            failed: longReason,
+          };
+          const tabs = {
+            noPage: "",
+            dockPage: `?tab=${encodeURIComponent(`${DOCK}/dock`)}`,
+            site: `?tab=${encodeURIComponent("https://news.example.com/")}`,
+            siteFrame: `?tab=${encodeURIComponent("https://news.example.com/")}&outside=${encodeURIComponent("a-long-frame-host.tableau.example.com")}`,
+            domain: `?tab=${encodeURIComponent("https://www.sii.gob.cl/")}`,
+          };
+          const stores = {
+            "no choice": { sites: {}, mode: "ask" },
+            always: { sites: { "https://news.example.com": "always" }, mode: "ask" },
+            never: { sites: { "https://news.example.com": "never" }, mode: "ask" },
+            sensitive: { sites: { "https://news.example.com": "sensitive" }, mode: "ask" },
+            "never ask": { sites: {}, mode: "never_ask" },
+          };
+          const measured = [];
+          const fit = async (label, query) => {
+            const p = await openPopup(query);
+            const m = JSON.parse(await evalIn(p.sessionId, "JSON.stringify({ doc: document.documentElement.scrollHeight, view: document.getElementById('view-page').scrollHeight - document.getElementById('view-page').clientHeight, kind: document.getElementById('here').innerText.split('\\n')[0] })"));
+            assert.ok(m.doc <= 600, `${label}: the popup is ${m.doc} px tall (600 at most)`);
+            assert.ok(m.view <= 0, `${label}: This page scrolls by ${m.view} px`);
+            measured.push(m.doc);
+            await cdp("Target.closeTarget", { targetId: p.targetId });
+          };
+          for (const [lastName, last] of Object.entries(lasts)) {
+            await restore();
+            await evalIn(seed.sessionId, "chrome.storage.local.remove('last')");
+            if (last) await put({ last });
+            for (const [tabName, query] of Object.entries(tabs)) {
+              for (const [storeName, store] of Object.entries(stores)) {
+                if (tabName === "noPage" || tabName === "dockPage") { if (storeName !== "no choice") continue; }
+                await put(store);
+                await fit(`${tabName} / ${storeName} / last ${lastName}`, query);
+              }
+            }
+          }
+          // Not paired: three steps, nothing else.
+          await restore();
+          await evalIn(seed.sessionId, "chrome.storage.local.remove(['readers', 'last'])");
+          await fit("not paired", "");
+          await fit("not paired, on a site", tabs.site);
+          console.log(`9b. the popup's views and writes work; the first view fits 600 px in ${measured.length} states (tallest ${Math.max(...measured)} px)`);
+        }
+      } finally {
+        await restore();
+        await cdp("Target.closeTarget", { targetId: seed.targetId });
+      }
+    }
 
     // 6. Unpair in the dock: the next drop asks again.
     const reader = (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader");
