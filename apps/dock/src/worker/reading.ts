@@ -293,6 +293,10 @@ function rutCheck(body: string): string {
 const TEXT_RUT = /(?<![\dA-Za-z])(\d{1,2})[.\s]?(\d{3})[.\s]?(\d{3})\s*-\s*([\dkK])(?![\dA-Za-z])/g;
 /** Between two groups of a number's digits: separators, or a few other characters (letters a page may put between them). */
 const joinsGroups = (gap: string) => /^[\s,./-]*$/.test(gap) || gap.length <= 6 || (gap.length <= 16 && !/\s/.test(gap));
+/** The fewest digits in each group of a written card number but its last (4111 1111 1111 1111, 3782 822463 10005, 4111 1111 1111 1111 110). */
+const CARD_GROUP_MIN = 4;
+/** What marks a figure, not a card: a percent or per-mille sign, or a currency sign (any script's, after secretForm). */
+const FIGURE_MARK = /[%‰‱\p{Sc}]/u;
 
 /**
  * Visible text as the checks read it, character by character: secretForm's folding for each character of
@@ -320,29 +324,72 @@ function folded(text: string): { norm: string; from: number[]; to: number[] } {
 /**
  * Where visible text holds a sensitive number (TIN-617, TIN-619), as [start, end) of the text, each
  * found by what the number is, not by how many digits there are:
- * - a payment card: 13 to 19 digits, in groups joined by spaces, commas, dots, slashes, dashes or up to 6
- *   other characters (16 with no space between, as letters a page put inside a number), starting as the
- *   card networks' numbers do and passing the Luhn check;
+ * - a payment card, by the grammar below;
  * - an IBAN with valid check digits, written in groups or with letters between its digits;
  * - a RUN or RUT with its dash and a valid check character.
- * A list of years, dates, scores and phone numbers pass none of these.
+ * A list of years, dates, scores, phone numbers, percentages and amounts pass none of these.
+ *
+ * A card number as it is written (TIN-619, TIN-762). One rule for every way of writing it, not a list of
+ * separators patched one at a time:
+ * - its digits come in groups: one unbroken run, one written digit by digit ("4 1 1 1 …", "4  1  1  1 …",
+ *   "4 - 1 - 1 …": single digits with only spaces or dashes between them, glued into one group), or groups
+ *   of at least CARD_GROUP_MIN digits (4-4-4-4, 4-6-5, 4-6-4, 4-4-5, 6-13), of which only the last may be
+ *   shorter (4-4-4-4-3);
+ * - between two groups, only what joinsGroups lets through (spaces, dashes, dots, commas, slashes, or the
+ *   few letters a page may put inside a number, kept so a page cannot hide a card from the check: words and
+ *   units such as "then", "USD" or "kg" join), and never a FIGURE_MARK: a percent, per-mille or currency
+ *   sign between two groups ends the candidate;
+ * - 13 to 19 digits in all, starting as the card networks' numbers do and passing the Luhn check.
+ * A figure's digits come in groups of 1 to 3 (a decimal part, thousands, a percentage, a day or a month),
+ * where no card starts and after which none goes on, and often next to a percent or currency sign: so a
+ * run of percentages ("98,51% 96,23% 90,42%") or of amounts ("$293.460.353 $332.718.794") is never a card
+ * candidate, whatever separates its figures.
+ *
+ * What is left out is the union of every span that is a card under the grammar: from every group (and,
+ * in a group written digit by digit, from every digit), every length of 13 to 19 digits the grammar allows
+ * that passes the checks, overlapping spans merged. No first match ends the search, so a card's tail is
+ * never left out of its span: not the last group of a 19-digit card whose first 16 digits also pass Luhn,
+ * nor the end of a card whose first digits a figure before it took ("3000 4111 1111 1111 1111"). Such a
+ * figure, when the two pass Luhn together, is left out with the card: the safe side.
  */
 function sensitiveSpans(text: string): Array<[number, number]> {
   const { norm, from, to } = folded(text);
   const spans: Array<[number, number]> = [];
   const add = (start: number, end: number) => spans.push([from[start]!, to[end - 1]!]);
-  // Cards: runs of digit groups, and in each the groups that make a valid card number.
-  const groups = [...norm.matchAll(/\d+/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, digits: m[0] }));
+  // Digit groups, each with where its digits are in norm. Single digits with only spaces or dashes between
+  // them are glued into one group (a number written digit by digit, each digit in a box of its own).
+  const groups: Array<{ at: number[]; digits: string; byDigit: boolean }> = [];
+  for (const m of norm.matchAll(/\d+/g)) {
+    const last = groups.at(-1);
+    if (m[0].length === 1 && last?.byDigit && /^[\s-]+$/.test(norm.slice(last.at.at(-1)! + 1, m.index))) {
+      last.digits += m[0];
+      last.at.push(m.index);
+    } else groups.push({ at: Array.from(m[0], (_, i) => m.index + i), digits: m[0], byDigit: m[0].length === 1 });
+  }
+  const isCard = (digits: string) => digits.length >= 13 && digits.length <= 19 && CARD_START.test(digits) && luhnValid(digits);
+  // Cards: from each start, every group after it while the grammar holds, and every length that is a card.
   for (let a = 0; a < groups.length; a++) {
-    let digits = "";
-    for (let b = a; b < groups.length; b++) {
-      if (b > a && !joinsGroups(norm.slice(groups[b - 1]!.end, groups[b]!.start))) break;
-      digits += groups[b]!.digits;
-      if (digits.length > 19) break;
-      if (digits.length >= 13 && CARD_START.test(digits) && luhnValid(digits)) {
-        add(groups[a]!.start, groups[b]!.end);
-        a = b;
-        break;
+    const first = groups[a]!;
+    if (!first.byDigit && first.digits.length < CARD_GROUP_MIN) continue;
+    // A group written digit by digit can hold a card from any of its digits; any other group only from its first.
+    for (let s = 0; s < (first.byDigit ? first.digits.length : 1); s++) {
+      let digits = "";
+      for (let b = a; b < groups.length; b++) {
+        const group = groups[b]!;
+        if (b > a) {
+          const gap = norm.slice(groups[b - 1]!.at.at(-1)! + 1, group.at[0]);
+          if (!joinsGroups(gap) || FIGURE_MARK.test(gap)) break;
+        }
+        const offset = b === a ? s : 0;
+        // A card ends at a group's end, or at any digit of a group written digit by digit.
+        for (let e = group.byDigit ? offset + 1 : group.digits.length; e <= group.digits.length; e++) {
+          const candidate = digits + group.digits.slice(offset, e);
+          if (candidate.length > 19) break;
+          if (isCard(candidate)) add(first.at[s]!, group.at[e - 1]! + 1);
+        }
+        digits += group.digits.slice(offset);
+        // Past 19 digits nothing more is a card; a part shorter than CARD_GROUP_MIN can only be a card's last.
+        if (digits.length >= 19 || group.digits.length - offset < CARD_GROUP_MIN) break;
       }
     }
   }
