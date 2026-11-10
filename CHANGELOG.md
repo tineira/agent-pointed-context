@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Pulse says when a view filter was removed for the grant, and how many seats a churned customer had (2026-11-10, TIN-787)
+
+- **Pulse's `get_current_view` view now carries `trimmed: { hidden_params: ["region"] }` when the person's region filter is outside the agent's access and was removed from it (a view from which nothing was removed is unchanged, with no `trimmed` key), and a churned customer in `customer_bridge` carries `seats_prev`, the seats it had the month before, so a pin on `step:churned` answers "how many seats did we lose" in one `get_figure` call.** The flag names the param, never its value, as a figure's `trimmed` counts the hidden regions without naming them; `seats_prev` exists only for customers in the grant's regions, and `seats` stays 0 for them. (`apps/demo/src/worker/domain.ts`, `apps/demo/src/model/figures.ts`, `apps/demo/src/worker/pulse-tools.ts`, `apps/demo/test/domain.test.ts`)
+
 ### The popup's "Your sites" no longer lists the extension's own patterns (2026-11-10, TIN-786)
 
 - **On a fresh install the browser extension's popup listed five rows under "Your sites" that the person never chose (apc.tineira.com and four of its dock paths), each with a Revoke button that Chrome always refused; they are no longer shown.** They are the manifest's required host permission and its content script's match patterns, so the popup now leaves out every pattern the manifest declares and lists only the sites the person allowed. (`apps/extension/src/drop.ts`, `apps/extension/src/popup.ts`, `apps/extension/test/drop.test.ts`)
