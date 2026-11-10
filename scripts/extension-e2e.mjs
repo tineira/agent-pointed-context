@@ -1115,14 +1115,14 @@ try {
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });
-    const { sessionId: otherSession } = await cdp("Target.attachToTarget", { targetId: rest.targetId, flatten: true });
+    const { sessionId: otherSession } = await cdp("Target.attachToTarget", { targetId: other.targetId, flatten: true });
     await sleep(2000);
     const at = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector("#a").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, otherSession)).result.value;
     const data = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
     for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data }, otherSession);
     await sleep(2000);
     assert.match((await tool("page__get_reading")).structuredContent.page_text, /SPRING/);
-    await cdp("Target.closeTarget", { targetId: rest.targetId });
+    await cdp("Target.closeTarget", { targetId: other.targetId });
     console.log("7. on a site the person did not grant, a drop sends nothing");
 
     // 8. Open dock and Float from the extension's popup (TIN-473). The browser gets this dock's cookie, so
