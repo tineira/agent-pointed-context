@@ -292,6 +292,32 @@ test("a run of percentages or amounts is not a card number, whatever separates i
   assert.deepEqual(redactNumbers("1 2 3 4 5 6 7 8 9 10 11 12 13 14"), { text: "1 2 3 4 5 6 7 8 9 10 11 12 13 14", count: 0 });
 });
 
+test("what is left out is the union of every span that is a card, so no card's tail is left in the text (TIN-762, Grok's and Gemini's review)", () => {
+  for (const [why, text, out] of [
+    // A 19-digit card (4-4-4-4-3) whose first 16 digits also pass Luhn: the first match no longer ends the search.
+    ["19 digits, UnionPay", "6222 0200 0000 0007 005", NUMBER_LEFT_OUT],
+    ["19 digits, Visa", "Card 4000 0000 0000 0002 002 on file", `Card ${NUMBER_LEFT_OUT} on file`],
+    // A figure of 4 or more digits before a card, whose digits pass with the card's first ones: the card's own span covers its tail,
+    // and the figure is left out with it (the safe side).
+    ["a 4-digit figure before a card", "3000 4111 1111 1111 1111", NUMBER_LEFT_OUT],
+    ["a 5-digit figure before a card", "30140 4111 1111 1111 1111", NUMBER_LEFT_OUT],
+    ["a figure before an Amex", "3009 3782 822463 10005", NUMBER_LEFT_OUT],
+    ["a figure and a word before a card", "4008 ref 4111 1111 1111 1111", NUMBER_LEFT_OUT],
+    ["an amount before a card", "Paid $4008 via 4111 1111 1111 1111", `Paid $${NUMBER_LEFT_OUT}`],
+    // Digit by digit with wider gaps (what the extension reads from a box or a table cell per digit), and windows inside a longer run.
+    ["two spaces", "Card 4  1  1  1  1  1  1  1  1  1  1  1  1  1  1  1 end", `Card ${NUMBER_LEFT_OUT} end`],
+    ["block boxes", " 4  1  1  1  1  1  1  1  1  1  1  1  1  1  1  1 ", ` ${NUMBER_LEFT_OUT} `],
+    ["spaced dashes", "Card 4 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 - 1 end", `Card ${NUMBER_LEFT_OUT} end`],
+    ["a digit after", "Card 4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 9 end", `Card ${NUMBER_LEFT_OUT} 9 end`],
+    ["a digit before", "Card 1 4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 end", `Card 1 ${NUMBER_LEFT_OUT} end`],
+    ["20 digits", "Card 4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 9 9 9 9 end", `Card ${NUMBER_LEFT_OUT} 9 9 9 9 end`],
+  ] as const) assert.deepEqual(redactNumbers(text), { text: out, count: 1 }, why);
+  // Words and units join groups as letters a page puts inside a number do ("4111 then 1111"); only a sign breaks a run.
+  assert.equal(redactNumbers("41250 USD 38900 USD 52306 USD").count, 1);
+  // Page numbering, percentages and amounts still go whole.
+  for (const text of ["1 2 3 4 5 6 7 8 9 10 11 12 13 14", "Page 1 - 2 - 3 - 4 - 5 - 6 - 7 - 8 - 9 - 10", "98,51% 96,23% 90,42% 87,67% 94,81%", "$293.460.353 $332.718.794"]) assert.deepEqual(redactNumbers(text), { text, count: 0 }, text);
+});
+
 test("the hub leaves sensitive numbers out of the outlined text and the selection's block, unless the person chose to send them (TIN-617, TIN-619)", () => {
   const card = "Pay 4111aaaaaaaa1111aaaaaaaa1111aaaaaaaa1111 today";
   const page = { ...raw, element: { tag: "p", text: card, heading: "Billing" }, selection: "today", selection_context: { heading: "Other", text: "Wire to DE89 3704 0044 0532 0130 00." } };
