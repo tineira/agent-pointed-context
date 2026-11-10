@@ -1169,9 +1169,28 @@ try {
     // Outside charts: a paragraph clipped by a rect clip path that shows all of it is read whole (fix round 2).
     await expectAt(rest.sid, "#clippedpara", /Under the heading: Clipped paragraph\nPointed at \(p\): A paragraph clipped by a rect that shows all of it\.$/m);
     await cdp("Target.closeTarget", { targetId: rest.targetId });
+
+    // Dashboard panels (TIN-766): a block is under its own box's title, also when that title is a dropdown.
+    const panels = await openCorpus("dashboard-panels");
+    // The Datamind case: the SMU row of the table under the select reads under the select's chosen option, not the heading of the table before it.
+    const smu = await expectAt(panels.sid, "#smu", /Under the heading: \(I\) Retailer\nTable row: SMU\nPointed at \(td\): \$1\.526\.243$/m);
+    assert.doesNotMatch(smu.text, /Venta Perdida|\(L\) Local|Producto Externo/, "not the neighbour's title, and the select's other options never appear");
+    await expectAt(panels.sid, "#cenco", /Under the heading: \(I\) Retailer\n/);
+    // A panel under an h2 keeps it, and the two siblings never swap titles.
+    await expectAt(panels.sid, "#type-a", /Under the heading: Venta Perdida por tipo\n/);
+    // A combobox button titles its panel by what it shows.
+    await expectAt(panels.sid, "#norte", /Under the heading: Por región\n/);
+    // No title of its own: the heading before it. A filter after the heading is not the title. A select that holds a secret is never a title.
+    await expectAt(panels.sid, "#enero", /Under the heading: Resumen mensual\n/);
+    await expectAt(panels.sid, "#stock", /Under the heading: Stock\n/);
+    const saldo = await expectAt(panels.sid, "#saldo", /Under the heading: Stock\n/);
+    assert.doesNotMatch(saldo.text, /4111/, "a secret control is never a title");
+    // A box named by its aria-labelledby.
+    await expectAt(panels.sid, "#basic", /Under the heading: Churn por plan\n/);
+    await cdp("Target.closeTarget", { targetId: panels.targetId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
-    console.log("12. the corpus: a chart's mark is outlined, pinned and read from what the page writes for it (never a value off an axis); a shape that names itself is a mark; canvas, unnamed shapes, a table and a form read as before");
+    console.log("12. the corpus: a chart's mark is outlined, pinned and read from what the page writes for it (never a value off an axis); a shape that names itself is a mark; canvas, unnamed shapes, a table and a form read as before; a dashboard panel is under its own title, a dropdown's chosen option included");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });

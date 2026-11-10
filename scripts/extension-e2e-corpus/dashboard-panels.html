@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Panels</title>
+<style>
+  body { font: 14px system-ui; margin: 20px }
+  .panel { border: 1px solid #ccc; padding: 10px; margin: 0 0 16px; width: 520px }
+  .bar { display: flex; gap: 8px; align-items: center }
+  table { border-collapse: collapse; width: 100% }
+  td { padding: 4px 8px; border: 1px solid #ddd }
+  button.combo { font: inherit; padding: 4px 10px }
+</style>
+<h1>Ventas</h1>
+<!-- A panel titled by a heading, the one before the select-titled panel (the neighbour a lookup by page order would reach). -->
+<div class="panel" id="p-type">
+  <div class="bar"><h2>Venta Perdida por tipo</h2></div>
+  <table><tr><td>Tipo A</td><td id="type-a">$900.000</td></tr><tr><td>Tipo B</td><td>$100.000</td></tr></table>
+</div>
+<!-- A panel titled by a select: its chosen option is the title, its other options never are. -->
+<div class="panel" id="p-retailer">
+  <div class="bar">
+    <select id="retailer" aria-label="Dimension">
+      <option>(L) Local</option>
+      <option selected>(I) Retailer</option>
+      <option>(E) Producto Externo</option>
+    </select>
+  </div>
+  <table>
+    <tr><td>SMU</td><td id="smu">$1.526.243</td><td>284</td><td>27</td><td>7</td><td>59.33%</td></tr>
+    <tr><td>Cencosud</td><td id="cenco">$734.100</td><td>120</td><td>11</td><td>3</td><td>41.20%</td></tr>
+  </table>
+</div>
+<!-- A panel titled by a combobox button: its shown value; its list is not drawn. -->
+<div class="panel" id="p-combo">
+  <div class="bar"><button class="combo" id="combo" role="combobox" aria-haspopup="listbox" aria-expanded="false">Por región</button></div>
+  <table><tr><td>Norte</td><td id="norte">$55.000</td></tr><tr><td>Sur</td><td>$66.000</td></tr></table>
+</div>
+<!-- A panel with no title of its own: the heading before it, as before. -->
+<h2>Resumen mensual</h2>
+<div class="panel" id="p-bare">
+  <table><tr><td>Enero</td><td id="enero">$12.000</td></tr><tr><td>Febrero</td><td>$13.000</td></tr></table>
+</div>
+<!-- A filter after the panel's heading is not its title. -->
+<div class="panel" id="p-filter">
+  <h2>Stock</h2>
+  <select id="range" aria-label="Range"><option selected>Last 7 days</option><option>Last 30 days</option></select>
+  <table><tr><td>Bodega</td><td id="stock">42</td></tr></table>
+</div>
+<!-- A dropdown that holds a secret by its label is never a title: the panel falls back to the heading before it. -->
+<div class="panel" id="p-secret">
+  <div class="bar"><select id="acct" aria-label="Account number"><option selected>4111 1111 1111 1111</option></select></div>
+  <table><tr><td>Saldo</td><td id="saldo">$5</td></tr></table>
+</div>
+<!-- A panel named by its own markup. -->
+<section class="panel" id="p-named" aria-labelledby="named-title">
+  <span id="named-title">Churn por plan</span>
+  <table><tr><td>Basic</td><td id="basic">4.1%</td></tr></table>
+</section>

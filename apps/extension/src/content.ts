@@ -1216,6 +1216,8 @@ const UNTITLED_ROLES = new Set(["presentation", "none", "generic", "row", "cell"
 /** What a box names itself by: the words aria-labelledby points at that the person sees, else its aria-label (on a box that is a region, table, group, dialog...). */
 function namedBy(el: Element): string | null {
   if (el === document.documentElement || el === document.body) return null;
+  // A shape's or a group's name in a drawing (a chart's series) names that shape, not the box around the drawing.
+  if (el instanceof SVGElement) return null;
   const by = el.getAttribute("aria-labelledby");
   if (by) {
     const root = el.getRootNode() as Document | ShadowRoot;
