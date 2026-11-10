@@ -218,7 +218,9 @@ const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
 // ---- the browser, with the extension loaded over CDP ----
 const profile = mkdtempSync(join(tmpdir(), "apc-e2e-"));
-const browser = spawn(EXE, ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
+// Without occlusion tracking: on a PC someone is working on, the test's window sits behind theirs, Chrome on Windows then
+// calls its pages hidden, and step 8's Float (a picture-in-picture window) never opens.
+const browser = spawn(EXE, ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--disable-features=CalculateNativeWinOcclusion", "about:blank"], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
 const out = browser.stdio[3];
 // Once the browser closed at the end, a late write gets EPIPE: nothing to do then.
 out.on("error", () => {});
