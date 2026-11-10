@@ -308,3 +308,35 @@ test("BiDi runs on one line are one line; a long or CJK token cut by a clip's ed
   assert.equal(visibleWords(hash, oneLine, nowrap), hash.slice(0, 10), "a 200-character hash on one line");
   assert.equal(visibleWords("x".repeat(WORD_UNITS_MAX), oneLine, nowrap), "x".repeat(WORD_UNITS_MAX), "an ordinary word cut stays whole");
 });
+
+test("a partly clipped token asks about its whole range once: the cut reuses the token's own rects (TIN-753)", () => {
+  const text = "字".repeat(30);
+  const asked: string[] = [];
+  const counted = (s: number, e: number) => (asked.push(`${s}-${e}`), layout(10)(s, e));
+  assert.equal(visibleWords(text, counted, twoLines), "字".repeat(20));
+  assert.equal(asked.filter((a) => a === "0-30").length, 1, "the whole token is queried once, not again by the cut");
+  assert.equal(new Set(asked).size, asked.length, "no range is queried twice");
+  assert.equal(asked.length, 9, "the token, then the bisection: 10 queries before this change");
+});
+
+test("a one-line Thai, Lao, Khmer or Burmese token cut by a clip's edge is cut to what shows; a Latin word of the same length stays whole (TIN-753)", () => {
+  const oneLine = (s: number, e: number): Rect[] => [{ left: s * 10, top: 0, right: e * 10, bottom: 20 }];
+  const nowrap: Rect = { left: 0, top: 0, right: 100, bottom: 20 };
+  const samples: Record<string, string> = {
+    thai: "ก".repeat(20),
+    lao: "ກ".repeat(20),
+    khmer: "ក".repeat(20),
+    burmese: "က".repeat(20),
+  };
+  for (const [name, text] of Object.entries(samples)) {
+    assert.ok(text.length <= WORD_UNITS_MAX);
+    assert.equal(visibleWords(text, oneLine, nowrap), text.slice(0, 10), `${name} on one line, clipped at the right`);
+  }
+  assert.equal(visibleWords("x".repeat(20), oneLine, nowrap), "x".repeat(20), "a Latin word of the same length stays whole");
+  // A Thai base letter and its combining vowel mark are one grapheme: no slice ever starts or ends between them.
+  const thai = "กิ".repeat(10);
+  const edges: number[] = [];
+  const noted = (s: number, e: number) => (edges.push(s, e), oneLine(s, e));
+  assert.equal(visibleWords(thai, noted, { ...nowrap, right: 50 }), "กิ".repeat(3));
+  assert.ok(edges.every((i) => i % 2 === 0), `a slice split a grapheme: ${edges.join(",")}`);
+});

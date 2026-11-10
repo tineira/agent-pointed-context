@@ -184,9 +184,10 @@ export const showsIn = (box: Rect, clip: Rect): boolean => {
 
 /** A partly clipped token longer than this many UTF-16 units is dropped, not cut: the cut needs its grapheme boundaries in memory. */
 export const TOKEN_CUT_MAX = 200000;
-/** A token on one line, partly cut, stays whole when it is no longer than this and has no CJK in it: an ordinary word. */
+/** A token on one line, partly cut, stays whole when it is no longer than this and has no character of a script written without spaces between words in it: an ordinary word. */
 export const WORD_UNITS_MAX = 32;
-const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+/** The scripts written without spaces between words: a run of them on one line is a phrase, not a word, so it is cut to what shows. */
+const NO_SPACE_SCRIPTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
 
 /** Where each grapheme of a text starts, and its end last: a surrogate pair or a combining mark is never split. */
@@ -223,12 +224,13 @@ function linesOf(rects: Rect[]): number {
  * one of its rects lies within the clip; skipped when none shows (before any per-part work); otherwise cut
  * to the parts that show. The cut bisects the token down to its graphemes (a surrogate pair or a combining
  * mark is never split), so it asks about few parts however long the token is, a slice with no rect showing
- * is dropped whole and one wholly within is kept whole, and the kept parts are joined with no space: CJK has
- * none to put back. Graphemes, not `Intl.Segmenter` words: a CJK dictionary word can itself straddle a
+ * is dropped whole and one wholly within is kept whole, and the kept parts are joined with no space: scripts
+ * written without spaces (CJK, Thai, Lao, Khmer, Burmese) have none to put back. Graphemes, not `Intl.Segmenter` words: a CJK dictionary word can itself straddle a
  * line break, and a grapheme never does.
  *
  * One exception, to keep an ordinary word readable (TIN-622): a token on a single line, partly cut by
- * the clip's edge, stays whole when it is at most WORD_UNITS_MAX units long and has no CJK in it. A token
+ * the clip's edge, stays whole when it is at most WORD_UNITS_MAX units long and has no character of a script written without spaces (Han, Kana,
+ * Hangul, Thai, Lao, Khmer, Myanmar) in it. A token
  * over TOKEN_CUT_MAX units that is partly cut is dropped.
  */
 export function visibleWords(data: string, rectsOf: (start: number, end: number) => Rect[], clip: Rect): string {
@@ -245,18 +247,19 @@ export function visibleWords(data: string, rectsOf: (start: number, end: number)
     let kept = "";
     if (!rects.some((r) => showsIn(r, clip))) kept = "";
     else if (rects.every((r) => within(r, clip))) kept = token;
-    else if (linesOf(rects) === 1 && token.length <= WORD_UNITS_MAX && !CJK.test(token)) kept = token;
+    else if (linesOf(rects) === 1 && token.length <= WORD_UNITS_MAX && !NO_SPACE_SCRIPTS.test(token)) kept = token;
     else if (token.length <= TOKEN_CUT_MAX) {
       const at = boundaries(token);
-      const cut = (lo: number, hi: number): string => {
+      // The root slice is the whole token, whose rects are already in hand.
+      const cut = (lo: number, hi: number, known?: Rect[]): string => {
         const part = token.slice(at[lo], at[hi]);
-        const found = rectsOf(m.index + at[lo]!, m.index + at[hi]!).filter(solid);
+        const found = known ?? rectsOf(m.index + at[lo]!, m.index + at[hi]!).filter(solid);
         if (!found.some((r) => showsIn(r, clip))) return "";
         if (hi - lo === 1 || found.every((r) => within(r, clip))) return part;
         const mid = (lo + hi) >> 1;
         return cut(lo, mid) + cut(mid, hi);
       };
-      kept = cut(0, at.length - 1);
+      kept = cut(0, at.length - 1, rects);
     }
     if (kept) out += (out ? pending : "") + kept;
     pending = "";

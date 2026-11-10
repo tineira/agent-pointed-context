@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Thai, Lao, Khmer and Burmese text cut by a one-line box is cut to what shows, like CJK (2026-11-09, TIN-753)
+
+- **When the browser extension reads a word of Thai, Lao, Khmer or Burmese (up to 32 units, on one line) that the edge of a scroll box cuts, it now gives only the characters that show, instead of the whole word with the part the person cannot see.** These scripts have no spaces between words, so they are treated like Han, Kana and Hangul; a Latin word of the same length still stays whole, and a combining mark is never split from its letter. (`apps/extension/src/read.ts`, `apps/extension/test/read.test.ts`, `DESIGN.md`)
+
 ### A run of percentages or amounts is not a card number (2026-11-09, TIN-762)
 
 - **The hub's check for card numbers in visible text no longer takes a run of figures for one: when sensitive numbers are left out (Ask per drop and Always leave out), a whole-chart reading of "98,51% 96,23% 90,42% 87,67% 94,81%" (spaced or not) or "$293.460.353 $332.718.794" goes whole, instead of "98,[sensitive number left out],81%".** A card is now one grammar of how it is written: an unbroken run, digit by digit (single digits with only spaces or dashes between them), or groups of at least 4 digits of which only the last may be shorter, joined as before (a word or a unit such as "USD" or "kg" still joins, as letters do) but never across a percent, per-mille or currency sign, 13 to 19 digits, a card network's start and the Luhn check; what is left out is the union of every span that is a card, so a 19-digit card whose first 16 digits pass Luhn, or a card after a 4-digit figure, no longer keeps its last digits in the text, and every card form the earlier reviews found is still left out. (`apps/dock/src/worker/reading.ts`, `apps/dock/test/reading.test.ts`, `DESIGN.md`)
