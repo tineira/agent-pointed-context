@@ -189,7 +189,7 @@ function seg(options: Option[], onPick: (v: Choice) => void, label: string): HTM
 const hostOf = (origin: string) => new URL(origin).host;
 
 function lastBlock(snap: Snapshot): HTMLElement | null {
-  const v = lastView(snap.last, Date.now());
+  const v = lastView(snap.last, Date.now(), { readers: snap.readers, names: snap.names });
   if (!v) return null;
   const box = el("div", { className: `last ${v.kind === "waiting" ? "wait" : v.kind === "failed" ? "bad" : ""}`.trim() });
   if (v.kind === "waiting") {
@@ -311,7 +311,7 @@ function rowItem(row: Row): HTMLLIElement {
       sites[w.origin] = w.value;
     }).then(() => render());
   });
-  const x = el("button", { type: "button", className: "x", textContent: "×", title: row.tip });
+  const x = el("button", { type: "button", className: "x", textContent: "×", title: row.tip, disabled: !row.removable });
   x.setAttribute("aria-label", `${row.tip === "Remove" ? "Remove" : "Back to Ask first"}: ${row.label}`);
   x.addEventListener("click", () => {
     const { deleteKey, revoke } = rowRemove(row);
@@ -341,6 +341,7 @@ function drawSettings(snap: Snapshot): void {
     else void chrome.permissions.remove({ origins: ANY_PAGE }).catch(() => false).then(() => render());
   };
   const rows = rowsOf(snap.sites, snap.own, snap.anyPage);
+  $("sites-fold").hidden = rows.length === 0;
   $("sites-summary").textContent = `Your sites · ${rows.length}`;
   $("sites").replaceChildren(...rows.map(rowItem));
 
@@ -359,6 +360,7 @@ function drawSettings(snap: Snapshot): void {
   }
 
   const keys = Object.keys(snap.readers);
+  $("agents-block").hidden = keys.length === 0;
   $("agents").replaceChildren(
     ...keys.map((key) => {
       const a = agentRow(key, snap.names);
@@ -459,7 +461,7 @@ async function render(): Promise<void> {
     open.title = "Alt+Shift+A";
     const float = btn("Float", () => void openDock(true).then(() => close()));
     float.id = "float";
-    float.title = "Alt+Shift+F: your dock opens ready to float your agents with one click";
+    float.title = "Alt+Shift+F";
     foot.append(open, float);
   }
   $("foot").hidden = !paired || current === "settings";

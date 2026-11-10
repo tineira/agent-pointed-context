@@ -106,10 +106,18 @@ export interface Plan {
 
 export type SiteClick = "ask" | "always" | "never" | "tick-on" | "tick-off";
 
+/**
+ * What giving up a stored value (Never send, Sensitive site, or a plain Ask first) produces, said once: no stored value, and,
+ * when the site has its own grant and Ask first is offered, that grant removed, so the site asks through the grant for any
+ * page instead of being sent by its own. When Ask first is not offered (a site granted by itself while Every site is off) the
+ * grant stays and the site reads Always send, which is what a grant by itself means and what the control then shows.
+ */
+function release(s: SiteState): Plan {
+  return { write: null, revoke: hasOwnGrant(s) && askOffered(s) ? exactPattern(s.origin) : null };
+}
+
 /** What a click on the site's control writes, or null when the click is not offered. Nothing else is ever written. */
 export function siteClick(s: SiteState, click: SiteClick): Plan | null {
-  const exact = exactPattern(s.origin);
-  const revokeOwn = hasOwnGrant(s) && askOffered(s) ? exact : null;
   if (isSensitive(s.host)) {
     if (click === "never") return { write: "never", revoke: null };
     if (click === "ask") return { write: null, revoke: null };
@@ -121,12 +129,11 @@ export function siteClick(s: SiteState, click: SiteClick): Plan | null {
     case "always":
       return s.stored === "sensitive" ? null : { write: "always", revoke: null };
     case "ask":
-      if (!askOffered(s)) return null;
-      return s.stored === "sensitive" ? { write: undefined, revoke: null } : { write: null, revoke: revokeOwn };
+      return askOffered(s) ? release(s) : null;
     case "tick-on":
       return s.stored === "never" ? null : { write: "sensitive", revoke: null };
     case "tick-off":
-      return s.stored === "sensitive" ? { write: null, revoke: null } : null;
+      return s.stored === "sensitive" ? release(s) : null;
   }
 }
 
@@ -146,6 +153,8 @@ export interface Row {
   revoke: string | null;
   /** The x's tooltip: "Back to Ask first" only when the site is left asking. */
   tip: string;
+  /** False when removing the row would leave a site that asks or is blocked sent by another grant (a wildcard one). */
+  removable: boolean;
 }
 
 const originOfPattern = (p: string): string | null => {
@@ -173,13 +182,14 @@ export function rowsOf(sites: Readonly<Record<string, unknown>>, own: readonly s
     const host = hostOf(origin);
     const revoke = own.includes(exactPattern(origin)) ? exactPattern(origin) : null;
     const domain = isSensitive(host);
-    rows.push({ label: host, origin, value: v === "never" ? "never" : domain ? "sensitive" : v, alwaysDisabled: domain, stored: true, revoke, tip: tip(revoke) });
+    const stillGranted = grantedAlone(origin, own.filter((p) => p !== revoke));
+    rows.push({ label: host, origin, value: v === "never" ? "never" : domain ? "sensitive" : v, alwaysDisabled: domain, stored: true, revoke, tip: tip(revoke), removable: !(stillGranted && v !== "always" && !domain) });
   }
   for (const p of own) {
     const origin = originOfPattern(p);
     if (origin && origin in sites && ["always", "never", "sensitive"].includes(sites[origin] as string)) continue;
     const domain = !!origin && isSensitive(hostOf(origin));
-    rows.push({ label: p.replace(/\/\*$/, "").replace(/^https?:\/\//, ""), origin, value: domain ? "sensitive" : "always", alwaysDisabled: domain, stored: false, revoke: p, tip: tip(p) });
+    rows.push({ label: p.replace(/\/\*$/, "").replace(/^https?:\/\//, ""), origin, value: domain ? "sensitive" : "always", alwaysDisabled: domain, stored: false, revoke: p, tip: tip(p), removable: true });
   }
   return rows;
 }
@@ -217,6 +227,13 @@ export type LastView =
   | { kind: "waiting"; text: string; hub: string | null }
   | { kind: "failed"; lead: string; at: string; reason: string };
 
+/** The name kept for the one reader on this hub, when a `last` of today's shape names no agent. */
+function nameOnHub(hub: unknown, known: { readers: Readonly<Record<string, unknown>>; names: Readonly<Record<string, unknown>> } | undefined): string | null {
+  if (!known || typeof hub !== "string") return null;
+  const keys = Object.keys(known.readers).filter((k) => k.split(" ")[0] === hub);
+  return keys.length === 1 ? agentName(known.names[keys[0]!]) : null;
+}
+
 /** "Not sent", with its punctuation, at the start of a status line (Part 2 words every failure that way). */
 const reasonOf = (text: string): string => text.replace(/^Not sent\W*/, "").trim() || text;
 
@@ -224,7 +241,7 @@ const reasonOf = (text: string): string => text.replace(/^Not sent\W*/, "").trim
  * The popup's Last drop from the stored `last` (`{at, hub, site, status}`; Part 2 adds `agent` and `leftOut`, an older one has
  * neither), or null when nothing is to be drawn. A missing agent is "your agent"; a missing `leftOut` is absent, never zero.
  */
-export function lastView(last: unknown, now: number): LastView | null {
+export function lastView(last: unknown, now: number, known?: { readers: Readonly<Record<string, unknown>>; names: Readonly<Record<string, unknown>> }): LastView | null {
   if (!last || typeof last !== "object") return null;
   const l = last as { at?: unknown; hub?: unknown; site?: unknown; status?: unknown; agent?: unknown; leftOut?: unknown };
   if (typeof l.at !== "string" || typeof l.status !== "string" || !(l.status in STATUS_KIND)) return null;
@@ -235,7 +252,7 @@ export function lastView(last: unknown, now: number): LastView | null {
     case "sent": {
       const n = typeof l.leftOut === "number" && Number.isInteger(l.leftOut) && l.leftOut >= 1 ? l.leftOut : 0;
       const out = n ? ` · ${n === 1 ? "1 number" : `${n} numbers`} left out` : "";
-      return { kind: "sent", lead: `✓ Sent to ${agentName(l.agent) ?? "your agent"}`, at: l.at, detail: `${site}${out}` };
+      return { kind: "sent", lead: `✓ Sent to ${agentName(l.agent) ?? nameOnHub(l.hub, known) ?? "your agent"}`, at: l.at, detail: `${site}${out}` };
     }
     case "waiting":
       return { kind: "waiting", text: "Allow this browser in your dock", hub: typeof l.hub === "string" ? l.hub : null };

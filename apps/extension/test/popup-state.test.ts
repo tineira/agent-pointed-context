@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SITE_LABELS, STATUS_TEXT, type Mode, type SiteChoice } from "../src/drop.ts";
+import { ANY_PAGE, decide, grantedAlone, isSensitive, SITE_LABELS, STATUS_TEXT, type Mode, type SiteChoice } from "../src/drop.ts";
 import { agentName, agentRow, domainKind, lastView, pillOf, rowRemove, rowsOf, rowWrite, siteClick, siteView, STATUS_KIND, type SiteClick, type SiteState } from "../src/popup-state.ts";
 
 const ORIGIN = "https://example.com";
@@ -57,7 +57,7 @@ test("what each click writes, for every stored state and Every site (TIN-786)", 
     { name: "ON, none", s: state({ anyPage: true }), clicks: { ask: { write: null, revoke: null }, always: { write: "always", revoke: null }, never: { write: "never", revoke: null }, "tick-on": { write: "sensitive", revoke: null }, "tick-off": none } },
     { name: "ON, always", s: state({ anyPage: true, stored: "always" }), clicks: { ask: { write: null, revoke: null }, always: { write: "always", revoke: null }, never: { write: "never", revoke: null }, "tick-on": { write: "sensitive", revoke: null } } },
     { name: "ON, never", s: state({ anyPage: true, stored: "never" }), clicks: { ask: { write: null, revoke: null }, always: { write: "always", revoke: null }, "tick-on": none, "tick-off": none } },
-    { name: "ON, sensitive", s: state({ anyPage: true, stored: "sensitive" }), clicks: { ask: { write: undefined, revoke: null }, always: none, never: { write: "never", revoke: null }, "tick-off": { write: null, revoke: null }, "tick-on": { write: "sensitive", revoke: null } } },
+    { name: "ON, sensitive", s: state({ anyPage: true, stored: "sensitive" }), clicks: { ask: { write: null, revoke: null }, always: none, never: { write: "never", revoke: null }, "tick-off": { write: null, revoke: null }, "tick-on": { write: "sensitive", revoke: null } } },
     { name: "ON, granted by itself: Ask first deletes the key and removes the site's own grant", s: state({ anyPage: true, granted: true }), clicks: { ask: { write: null, revoke: `${ORIGIN}/*` }, always: { write: "always", revoke: null } } },
     { name: "ON, granted, always", s: state({ anyPage: true, granted: true, stored: "always" }), clicks: { ask: { write: null, revoke: `${ORIGIN}/*` } } },
     { name: "OFF, granted: Ask first is not offered, nothing is removed", s: state({ granted: true }), clicks: { ask: none, always: { write: "always", revoke: null }, never: { write: "never", revoke: null }, "tick-on": { write: "sensitive", revoke: null } } },
@@ -74,6 +74,60 @@ test("what each click writes, for every stored state and Every site (TIN-786)", 
   // A pattern the manifest requires cannot go: Ask first is not offered there either.
   assert.equal(siteClick(state({ anyPage: true, granted: true, required: [`${ORIGIN}/*`] }), "ask"), null);
 });
+
+test("leaving a stored value never makes a site send unless the click says Always send (TIN-786)", () => {
+  const hosts = [{ origin: ORIGIN, host: "example.com" }, { origin: "https://www.sii.gob.cl", host: "www.sii.gob.cl" }];
+  const stores: Array<SiteChoice | undefined> = [undefined, "always", "never", "sensitive"];
+  const grants = (origin: string): Record<string, string[]> => ({ none: [], exact: [`${origin}/*`], wildcard: [`*://*.${origin.split('//')[1]!.split('.').slice(1).join('.')}/*`], required: [`${origin}/*`] });
+  let clicks = 0;
+  for (const { origin, host } of hosts) {
+    for (const stored of stores) {
+      for (const [grantName, own] of Object.entries(grants(origin))) {
+        for (const anyPage of [true, false]) {
+          for (const mode of ["ask", "never_ask"] as Mode[]) {
+            const s: SiteState = { origin, host, stored, mode, anyPage, own, required: grantName === "required" ? own : [] };
+            const v = siteView(s);
+            if (v.kind === "allow") continue;
+            for (const click of ["ask", "always", "never", "tick-on", "tick-off"] as SiteClick[]) {
+              const plan = siteClick(s, click);
+              if (!plan) continue;
+              clicks++;
+              const label = `${host} stored=${stored} grant=${grantName} every=${anyPage} mode=${mode} click=${click}`;
+              const before = decide(mode, stored, isSensitive(host), grantedAlone(origin, own));
+              const after2 = plan.write === undefined ? stored : (plan.write ?? undefined);
+              const own2 = own.filter((p) => p !== plan.revoke);
+              const after = decide(mode, after2, isSensitive(host), grantedAlone(origin, own2));
+              // What is written is exactly what the click names.
+              if (click === "never") assert.equal(plan.write, "never", label);
+              if (click === "always") assert.equal(plan.write, "always", label);
+              if (click === "tick-on") assert.equal(plan.write, "sensitive", label);
+              assert.equal(plan.revoke === null || own.includes(plan.revoke), true, `${label}: removes only a grant that exists`);
+              assert.equal(plan.revoke === null || (plan.revoke === exactOf(origin) && !(s.required ?? []).includes(plan.revoke)), true, `${label}: removes only the site's own exact, removable pattern`);
+              // A click that is not Always send never turns an asking site into a sending one (Never ask aside)...
+              const tickOffNotOffered = click === "tick-off" && !askOfferedFor(s);
+              if (click !== "always" && mode === "ask" && (before === "ask" || before === "ask_sensitive") && !tickOffNotOffered) assert.notEqual(after, "send", `${label}: ${before} -> ${after}`);
+              // ...Never send blocks, and no click leaves the site not allowed.
+              if (click === "never") assert.equal(after, "blocked", label);
+              assert.ok(anyPage || grantedAlone(origin, own2), `${label}: still allowed`);
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.ok(clicks > 200, `${clicks} clicks checked`);
+  // The named case: unticking Sensitive on a site with its own grant while Every site is on asks, through the grant for any page.
+  const s = state({ anyPage: true, granted: true, stored: "sensitive" });
+  assert.deepEqual(siteClick(s, "tick-off"), { write: null, revoke: `${ORIGIN}/*` });
+  assert.deepEqual(siteClick(s, "ask"), { write: null, revoke: `${ORIGIN}/*` });
+  // With Every site off the tick is the only way to ask, and unticking returns the site to Always send, which is on screen.
+  const off = state({ granted: true, stored: "sensitive" });
+  assert.deepEqual(siteClick(off, "tick-off"), { write: null, revoke: null });
+  assert.equal(siteClick(off, "ask"), null);
+});
+
+const exactOf = (origin: string) => `${origin}/*`;
+const askOfferedFor = (s: SiteState) => siteView(s).kind === "control" && (siteView(s) as { options: Array<{ value: string }> }).options.some((o) => o.value === "ask");
 
 test("the popup's words are one set (TIN-786)", () => {
   assert.deepEqual(Object.values(SITE_LABELS), ["Ask first", "Always send", "Never send", "Ask every time", "Sensitive site: ask every time"]);
@@ -101,6 +155,11 @@ test("Your sites: which rows, what the select writes, what x does for each kind 
   assert.equal(rowsOf(sites, own, true).find((r) => r.label === "a.com")!.tip, "Back to Ask first");
   // The extension's own patterns are never in `own` (grantedByPerson), so they never get a row.
   assert.equal(rowsOf({}, [], false).length, 0);
+  // x is not offered where deleting the key would leave an asking or blocked site sent by a wildcard grant.
+  const wild = rowsOf({ "https://www.w.com": "sensitive", "https://www.v.com": "always" }, ["*://*.w.com/*", "*://*.v.com/*"], true);
+  assert.equal(wild.find((r) => r.label === "www.w.com")!.removable, false);
+  assert.equal(wild.find((r) => r.label === "www.v.com")!.removable, true);
+  assert.ok(rows.every((r) => r.removable));
   // x never names the any-page grant: no row can carry it.
   assert.ok(rows.every((r) => r.revoke !== "https://*/*" && r.revoke !== "http://*/*"));
 });
@@ -117,6 +176,12 @@ test("Last drop reads every status and both shapes of `last` (TIN-786)", () => {
   assert.deepEqual(lastView({ at, site: "a.com", status: "sent", agent: "Claude", leftOut: 1 }, now), { kind: "sent", lead: "✓ Sent to Claude", at, detail: "a.com · 1 number left out" });
   assert.equal((lastView({ at, site: "a.com", status: "sent", leftOut: 2 }, now) as { detail: string }).detail, "a.com · 2 numbers left out");
   for (const bad of [0, -1, 1.5, "3", null, undefined]) assert.equal((lastView({ at, site: "a.com", status: "sent", leftOut: bad }, now) as { detail: string }).detail, "a.com", `leftOut ${String(bad)} is absent`);
+  // Today's shape names no agent: the one reader on that hub, when its name is known, does; two readers, or none known, do not.
+  const known = { readers: { "https://apc.tineira.com ag_1": "t" }, names: { "https://apc.tineira.com ag_1": "Claude" } };
+  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent" }, now, known) as { lead: string }).lead, "✓ Sent to Claude");
+  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent", agent: "Grok" }, now, known) as { lead: string }).lead, "✓ Sent to Grok", "last.agent wins");
+  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent" }, now, { readers: { ...known.readers, "https://apc.tineira.com ag_2": "t" }, names: known.names }) as { lead: string }).lead, "✓ Sent to your agent");
+  assert.equal((lastView({ at, hub: "https://other", site: "a.com", status: "sent" }, now, known) as { lead: string }).lead, "✓ Sent to your agent");
   // Waiting, and a wait nobody is on any more.
   assert.deepEqual(lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "asking" }, now), { kind: "waiting", text: "Allow this browser in your dock", hub: "https://apc.tineira.com" });
   assert.equal(lastView({ at: "2026-11-10T11:55:00Z", site: "a.com", status: "asking" }, now)?.kind, "failed");
