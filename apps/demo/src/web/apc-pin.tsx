@@ -3,10 +3,11 @@
  * AgentIcon is portalled into the badge's icon host. Where the badge goes (className, style) stays
  * Pulse's: pin-badges.tsx floats it over its target.
  */
-import { definePinBadge, type ApcPinElement } from "@tineira/apc-web";
+import { definePinBadge, type ApcPinElement, type PinStrings } from "@tineira/apc-web";
 import { createElement, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { AgentIcon } from "./agent-icon.tsx";
+import { forwardStrings, usePulseStrings } from "./apc-strings.ts";
 import type { AgentMotion } from "./agent-brands.ts";
 
 definePinBadge();
@@ -22,7 +23,11 @@ export function ApcPin(props: {
   onUnpin: (grantId: string) => void;
   className?: string;
   style?: CSSProperties;
+  /** The badge's words, for another language; left out, from `PulseStringsContext`, else English. */
+  strings?: Partial<PinStrings>;
 }) {
+  const fromContext = usePulseStrings()?.pin;
+  const strings = props.strings ?? fromContext;
   const ref = useRef<ApcPinElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -43,6 +48,10 @@ export function ApcPin(props: {
     el.addEventListener("apc-unpin", unpin);
     return () => el.removeEventListener("apc-unpin", unpin);
   }, []);
+
+  useLayoutEffect(() => {
+    if (ref.current) forwardStrings(ref.current, strings);
+  }, [strings]);
 
   useLayoutEffect(() => {
     if (ref.current) ref.current.agent = { id: props.id, name: props.name, seen: props.seen };

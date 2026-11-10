@@ -137,6 +137,21 @@ With both profiles, the same agent connected both ways is offered `apc_link` and
 
 Run the conformance suite against your app before you ship: see [Conformance](/docs/conformance), whose adapter for Orders is the third file of this guide.
 
+## Localize the page
+
+`@tineira/apc-web` draws words: the agent bar, the pin badge, the Direct agent list and the notes `enablePinning` shows. An app in another language passes every one of them, without forking the package. Each component takes one `strings` object (`<apc-agents>`, `<apc-pin>` and `<apc-direct-agents>` as a property; `enablePinning({ strings })`), typed by `BarStrings`, `PinStrings`, `DirectStrings` and `PinningStrings`. The keys you leave out keep their English default, exactly what the package always showed, so an app that passes nothing changes nothing.
+
+<!-- include orders-page.ts#localize -->
+
+- **Tooltips and `aria-label`s are strings too**, not only the visible text: the mark's title, the pin dot, ×, ⊘ and its "Revoke?" confirmation, Unlink, the collapse and dismiss buttons.
+- **Names, counts and labels are functions**, so no sentence is built from English fragments: `reading(names)` and `readingCount(count)` (plurals are yours), `joinPins(labels)` for a linked agent's two pins ("A and B"), `status(agent)` and `prompt(url, appName)` for the Direct list.
+- **The dock hint** can be translated (`dockHint`, or `bar.dockHint = { text, url }`) or turned off (`bar.dockHint = null`, or `dock-hint="off"`). An app that offers Direct only turns it off.
+- **A dock agent dropped on a Direct-only app** is answered with the protocol's `directOnlyNote(name)`. Pass `directOnlyNote` and `couldNotCheckNote` in `PinningStrings` for your own words, or handle `onDockUnsupported` yourself.
+- **Dates and times** you show (a pin's "read at …") follow the page: `formatPageTime(date)` uses `<html lang>`, or `locale` when you name one, and never the operating system's. `pageLocale()` gives the tag. The bar itself shows no date.
+- **Left as they are:** the symbols (×, ⊘, ‹, !, ✓), and what you pass in (agent names, pin labels, warnings, URLs).
+
+Localizing changes no protocol text, the tools or conformance: [Conformance](/docs/conformance) passes in any language.
+
 ## Checklist
 
 - `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`.
