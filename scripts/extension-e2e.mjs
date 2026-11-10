@@ -1110,14 +1110,14 @@ try {
     await expectAt(libs.sid, "#uv1", new RegExp(`Pointed at \\(path, chart bar\\): Page B ${NONE}$`, "m"));
     // Hidden labels (rule C): text the person cannot see, far off screen or in a control is never read: the series is the
     // visible "Sales" without its hidden span; A, B and C have no value written; D's ordinary label is its value.
-    const SECRETS = /998877665544|424242|112233445566|4321|5566|777|4040|Internal|4455/;
+    const SECRETS = /998877665544|424242|112233445566|4321|5566|777|4040|6060|7070|Internal|4455/;
     for (const [id, end] of [["#hA", `A ${NONE}`], ["#hB", `B ${NONE}`], ["#hC", `C ${NONE}`], ["#hD", "D · 140"]]) {
       const hiddenDrop = await expectAt(libs.sid, id, new RegExp(`Under the heading: Hidden labels\\nPointed at \\(rect, chart bar\\): Sales · ${end}$`, "m"));
       assert.doesNotMatch(hiddenDrop.text, SECRETS, `${id}: nothing hidden, off screen or in a control`);
     }
     // The chart's background: the whole chart, still without what is hidden.
     const hiddenBox = await boxIn(libs.sid, "#hidden svg");
-    assert.doesNotMatch((await dropOnChart(libs.sid, hiddenBox.left + 460, hiddenBox.top + 150)).text, /998877665544|424242|112233445566|777|4040|4455/);
+    assert.doesNotMatch((await dropOnChart(libs.sid, hiddenBox.left + 460, hiddenBox.top + 150)).text, /998877665544|424242|112233445566|777|4040|6060|7070|4455/);
     await cdp("Target.closeTarget", { targetId: libs.targetId });
 
     // A canvas chart, a pie and a map with and without names, a big table and a form (charts-other.html).

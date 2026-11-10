@@ -201,13 +201,15 @@ function labelBox(box: Rect, labels: readonly ChartLabel[]): boolean {
  *   that crosses it by a pixel, is none; a bar drawn a little past it keeps its centre inside);
  * - it is not across most of the plot (coversPlot);
  * - it is not the box of a label (labelBox);
- * - it wholly holds no other bar (a background, a plot area, a rect around a column); points drawn on a column do
- *   not count.
+ * - it wholly holds no other bar (a background, a plot area, a rect around a column), and no shapes of two
+ *   categories or more (a rect behind a line's points); a column holding points of its own category stays a mark.
  */
 export function isMark(box: Rect, chart: Pick<Chart, "labels" | "shapes">, axes: Axes): boolean {
   const centre = axes.vertical ? cy(box) : cx(box);
   const between = centre >= axes.ticks[0] && centre <= axes.ticks[1];
-  const holds = chart.shapes.some((s) => s.kind === "bar" && !sameBox(s.box, box) && within(s.box, box));
+  const held = chart.shapes.filter((s) => !sameBox(s.box, box) && within(s.box, box));
+  const categories = new Set(held.map((s) => categoryLabel(s.box, axes)).filter(Boolean));
+  const holds = held.some((s) => s.kind === "bar") || categories.size >= 2;
   return inPlot(box, axes) && between && !coversPlot(box, axes) && !labelBox(box, chart.labels) && !holds;
 }
 
@@ -293,23 +295,24 @@ const inside = (x: number, y: number, b: Rect) => x > b.left && x < b.right && y
  * 1. A number may be a value only when it is no axis tick, its centre is not above the top tick (on a horizontal
  *    chart, not above the plot: the title's region), and it is not a tooltip's: no word that is not a number (axis
  *    labels aside) lies within one line of it, and it does not overlap a shape that holds such words.
- * 2. A mark is in reach of a number when the number's box overlaps the mark's span across the values (a point's left
- *    to right, give or take its own width) and, along the values, the number is on it or within LABEL_REACH of it.
+ * 2. A mark is in reach of a number when the number's box overlaps the mark's span across the values (a point's give
+ *    or take its own size across) and, along the values, the number is on it or within LABEL_REACH of it. Across and
+ *    along follow the chart: on a horizontal chart, across is up and down for a point as for a bar.
  * 3. A number whose centre lies on a bar is that bar's when it lies on exactly one bar and no point is in reach.
  * 4. A number on no bar is the one mark's that claims it, when exactly one does: the marks in reach, and every bar
  *    whose span across holds the number's centre at any distance (a stack's other segments).
- * 5. A mark that owns several numbers keeps the one nearest one of its ends; a tie gives none.
+ * 5. A mark that owns two numbers or more reads no value.
  * Anything else is nobody's value: no value beats a wrong value.
  */
 
 /** Whether a mark is in reach of a number (rule 2). */
 function inReach(l: ChartLabel, m: ChartShape, vertical: boolean): boolean {
   const b = m.box;
-  const across = m.kind === "point" || vertical ? [[l.box.left, l.box.right], [b.left, b.right]] : [[l.box.top, l.box.bottom], [b.top, b.bottom]];
-  // A point is small: one that comes within its own width of the number, across, is in reach too.
-  const slack = m.kind === "point" ? b.right - b.left : 0;
+  const across = vertical ? [[l.box.left, l.box.right], [b.left, b.right]] : [[l.box.top, l.box.bottom], [b.top, b.bottom]];
+  // A point is small: one that comes within its own size of the number, across, is in reach too.
+  const slack = m.kind === "point" ? (vertical ? b.right - b.left : b.bottom - b.top) : 0;
   if (Math.min(across[0]![1]!, across[1]![1]!) + slack <= Math.max(across[0]![0]!, across[1]![0]!)) return false;
-  const [from, to, start, end] = m.kind === "point" || vertical ? [l.box.top, l.box.bottom, b.top, b.bottom] : [l.box.left, l.box.right, b.left, b.right];
+  const [from, to, start, end] = vertical ? [l.box.top, l.box.bottom, b.top, b.bottom] : [l.box.left, l.box.right, b.left, b.right];
   return Math.max(0, start - to, from - end) <= LABEL_REACH;
 }
 
@@ -326,16 +329,6 @@ export function ownerOf(l: ChartLabel, marks: readonly ChartShape[], axes: Axes)
   if (claims.size !== 1) return null;
   const [owner] = claims;
   return reach.includes(owner!) ? owner! : null;
-}
-
-/** Of the numbers a mark owns, the one nearest one of its ends (along the values), or null on a tie (rule 5). */
-function nearestEnd(owned: readonly ChartLabel[], mark: ChartShape, vertical: boolean): ChartLabel | null {
-  const along = vertical ? cy : cx;
-  const ends = vertical ? [mark.box.top, mark.box.bottom] : [mark.box.left, mark.box.right];
-  const gap = (l: ChartLabel) => Math.min(...ends.map((e) => Math.abs(along(l.box) - e)));
-  const sorted = [...owned].sort((a, b) => gap(a) - gap(b));
-  if (!sorted.length || (sorted.length > 1 && gap(sorted[0]!) === gap(sorted[1]!))) return null;
-  return sorted[0]!;
 }
 
 /** The numbers that may be values at all (rule 1). */
@@ -372,8 +365,8 @@ function titleOf(chart: Chart, axes: Axes): string | null {
  *
  * - category: the category label in line with the mark, when no other mark of its series is nearer to that label;
  * - series: the name its group declares; with one series, the chart's single title;
- * - value: its own accessible text, else the data label it owns (ownerOf, nearestEnd); else none, and the text
- *   says no value is written.
+ * - value: its own accessible text, else the one data label it owns (ownerOf); else none, and the text says no
+ *   value is written.
  */
 export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: string | null): MarkReading | null {
   if (!isMark(mark.box, chart, axes)) return null;
@@ -395,8 +388,7 @@ export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: s
     // The mark among the chart's marks, so that ownerOf can tell it from the others.
     const marks = [...chart.shapes.filter((s) => !sameBox(s.box, mark.box) && isMark(s.box, chart, axes)), mark];
     const owned = valueLabels(chart, axes).filter((l) => ownerOf(l, marks, axes) === mark);
-    const kept = nearestEnd(owned, mark, axes.vertical);
-    if (kept) value = fold(kept.text);
+    if (owned.length === 1) value = fold(owned[0]!.text);
   }
 
   if (!category && !value) return null;

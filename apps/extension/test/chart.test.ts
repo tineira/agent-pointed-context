@@ -363,8 +363,8 @@ test("Grok fix1 #2: a second number the column could own does not erase its own"
   const precio = [right("0", 60, 250), right("160M", 60, 150), right("320M", 60, 50), label("Jul", 110, 268), label("Ago", 186, 268), label("300M", 186, 52.5, 24), label("3.75k", 186, 200.5, 30)];
   assert.equal(readAt(precio, [[jul, ago], [shifted]], 0, 1)!.text, "Ago · 300M");
   assert.equal(readAt(precio, [[jul, ago], [shifted]], 1, 0)!.text, `Ago ${NO_VALUE}`);
-  // Two numbers above one bar: the one nearest its end.
-  assert.equal(readAt(small([label("42", 120, 88, 16), label("7", 120, 70, 12)]), [[barShape(box(100, 100, 140, 250)), feb]], 0, 0)!.text, "Jan · 42");
+  // Two numbers above one bar: a mark that owns two numbers reads no value (round 3).
+  assert.equal(readAt(small([label("42", 120, 88, 16), label("7", 120, 70, 12)]), [[barShape(box(100, 100, 140, 250)), feb]], 0, 0)!.text, `Jan ${NO_VALUE}`);
 });
 
 test("Grok fix1 #3, Gemini fix1 P2: a column holding points is a mark; a rect around a bar or a 1 px strip is not", () => {
@@ -452,6 +452,52 @@ test("Gemini P1 variant: a price label on a column, its point off the label's ce
   assert.equal(readAt(small([label("4.2k", 130, 86, 28)]), [[wide], [edge]], 0, 0)!.text, `Jan ${NO_VALUE}`);
 });
 
+// ---- round 3 (Grok's fix check on round 2): removed capability, each with Grok's input ----
+
+test("Grok fix2 A: a mark that owns two numbers reads no value, never the other one", () => {
+  const col = barShape(box(100, 100, 140, 250));
+  const pt = point(box(112, 150, 120, 158));
+  const near = small([label("300M", 120, 84, 32), label("3.75k", 120, 108, 36)]);
+  assert.equal(readAt(near, [[col, feb], [pt]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  assert.equal(readAt(near, [[col, feb], [pt]], 1, 0)!.text, `Jan ${NO_VALUE}`);
+  const far = small([label("300M", 120, 70, 32), label("3.75k", 120, 112, 36)]);
+  assert.equal(readAt(far, [[col, feb], [point(box(112, 160, 120, 168))]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  // A "9" on a wide bar beside its axis, "42" above it.
+  const wide = barShape(box(50, 80, 160, 250));
+  const leaked = [right("0", 40, 250), right("100", 40, 150), right("200", 40, 50), label("9", 90, 240, 12), label("Jan", 100, 280), label("Feb", 220, 280), label("42", 100, 68, 16)];
+  assert.doesNotMatch(readAt(leaked, [[wide, feb]], 0, 0)?.text ?? "", /· 9$/);
+});
+
+test("Grok fix2 B: a rect that holds shapes of two categories is no mark, and takes no point's label", () => {
+  const p0 = point(box(116, 140, 124, 148));
+  const p1 = point(box(216, 160, 224, 168));
+  const back = barShape(box(80, 60, 260, 240));
+  const lineL = small([label("42", 120, 128, 16), label("7", 220, 148, 12)]);
+  const chart = chartOf(lineL, [[p0, p1], [back]]);
+  assert.equal(isMark(back.box, chart, chartAxes(chart)!), false);
+  assert.equal(readAt(lineL, [[p0, p1], [back]], 0, 0)!.text, "Jan · 42");
+  // A rect behind February and March of the twelve-month line.
+  const band2 = barShape(box(100, 40, 180, 270));
+  assert.equal(readAt(ventaLabels([label("610", 120, lineY(610) - 10, 24)]), [markers(), [band2]], 0, 1)!.text, "SMU · F · 610");
+  assert.equal(readAt(ventaLabels([label("880M", 440, lineY(880) - 2, 40)]), [markers(), [band2]], 0, 9)!.text, "SMU · O · 880M");
+  // A column holding two points of its own category stays a mark (Grok fix1 #3).
+  const column = barShape(box(100, 80, 140, 250));
+  assert.equal(readAt(small([label("42", 120, 68, 16)]), [[column, feb], [point(box(116, 120, 124, 128)), point(box(116, 160, 124, 168))]], 0, 0)!.text, "Jan · 42");
+});
+
+test("Grok fix2 C: on a horizontal chart a point's reach runs across the rows, not the columns", () => {
+  const hTicks = [0, 50, 100].map((v, i) => label(String(v), 40 + i * 80, 200));
+  const hCats = [label("A", 20, 80), label("B", 20, 140)];
+  const hBar = barShape(box(40, 68, 180, 92));
+  const hBar2 = barShape(box(40, 128, 120, 152));
+  const hPoint = point(box(164, 74, 172, 82));
+  const hLabels = [...hTicks, ...hCats, label("42", 180, 52, 16)];
+  assert.equal(readAt(hLabels, [[hBar, hBar2], [hPoint]], 0, 0)!.text, `A ${NO_VALUE}`);
+  assert.equal(readAt(hLabels, [[hBar, hBar2], [hPoint]], 1, 0)!.text, `A ${NO_VALUE}`);
+  // A label at the end of the bar, on its row, still reads (Instock's way).
+  assert.equal(readAt([...hTicks, ...hCats, left("42", 186, 80)], [[hBar, hBar2]], 0, 0)!.text, "A · 42");
+});
+
 test("numbers as charts write them tell an axis's ticks and data labels from other text", () => {
   for (const [t, v] of [["1 000M", 1e9], ["1 000M", 1e9], ["8G", 8e9], ["12MM", 12e6], ["3k", 3000], ["0", 0], ["90%", 90], ["98,51%", 98.51], ["1,5", 1.5], ["0.25", 0.25], ["1.000", 1000], ["1,000", 1000], ["1.000.000", 1e6], ["1.234,5", 1234.5], ["$1,200", 1200], ["US$ 5", 5], ["-5", -5], ["−5", -5], ["4.0k", 4000]] as const) assert.equal(parseNumber(t), v, t);
   for (const t of ["SMU", "Q1", "E", "Total General", "1.2.3", "1 00M", "SMU: 400 M", "Page B", ""]) assert.equal(parseNumber(t), null, t);
@@ -497,7 +543,11 @@ test("the extension's source knows no chart library and estimates no value (TIN-
   assert.match(content, /\.filter\(\(t\): t is Element => !!t && scope\.contains\(t\)\)\.map\(\(t\) => chartText\(t, drawn\)\)/);
   assert.match(content, /if \(!holder\?\.contains\(e\) \|\| inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return null;/);
   // A clip path whose <clipPath> is missing hides; a complex one hides SVG only; HTML text is otherwise read (fix round 2).
-  assert.ok(content.includes('if (clip === "missing" || (clip === "complex" && at instanceof SVGElement)) return "hide";'), "clipCut");
+  // Round 3 (Grok fix2 D): a clip path that is missing or more than one rect hides what it clips, SVG or HTML.
+  assert.ok(content.includes('return clip === "missing" || clip === "complex" ? "hide" : clip;'), "clipCut");
+  // Round 3 (Grok fix2 F): stroke-opacity and fill-opacity count in a text's paint.
+  assert.ok(content.includes("alpha(style.stroke) * Number(style.strokeOpacity) >= OPACITY_MIN"), "stroke-opacity");
+  assert.ok(content.includes("alpha(style.fill) * Number(style.fillOpacity) < OPACITY_MIN"), "fill-opacity");
   assert.match(content, /const cut = clipCut\(e\);\s*if \(cut === "hide"\) return;/);
   // SVG fill: none is no ink, unless a stroke paints the glyphs.
   assert.ok(content.includes('style.fill === "none" ? paintOf(e).stroked'), "fill none");

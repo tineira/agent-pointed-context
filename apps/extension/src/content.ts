@@ -641,7 +641,7 @@ function dataShape(el: Element, share = MARK_SHARE): boolean {
  * path. "missing" when the id names no <clipPath> in the element's document or shadow root: what it clips is not read.
  * A clip path of one rect (as a chart clips its plot) gives that rect: in user space for an SVG element, from the
  * element's border box for HTML (in fractions of it with objectBoundingBox, which SVG elements are not read with).
- * "complex" otherwise: an SVG element under it is not read (its text may be cut anywhere), HTML is read as before.
+ * "complex" otherwise: what it clips is not read, SVG or HTML, since its words may be cut anywhere.
  */
 function urlClip(at: Element): Rect | "missing" | "complex" | null {
   const url = /^url\(["']?#([^"')]+)["']?\)$/.exec(getComputedStyle(at).clipPath);
@@ -668,8 +668,7 @@ function urlClip(at: Element): Rect | "missing" | "complex" | null {
 /** How a `clip-path: url()` cuts what an element shows (urlClip): "hide" when nothing of it is read, a rect, or null. */
 function clipCut(at: Element): Rect | "hide" | null {
   const clip = urlClip(at);
-  if (clip === "missing" || (clip === "complex" && at instanceof SVGElement)) return "hide";
-  return clip === "complex" ? null : clip;
+  return clip === "missing" || clip === "complex" ? "hide" : clip;
 }
 
 /** The most characters of one chart label. */
@@ -702,8 +701,8 @@ function chartText(e: Element, drawn: Rect): string {
 /** How an SVG text is painted: with a stroke at all, and with a stroke only (a fill that is none, transparent or the stroke's own colour). */
 function paintOf(e: Element): { stroked: boolean; strokeOnly: boolean } {
   const style = getComputedStyle(e);
-  const stroked = style.stroke !== "none" && alpha(style.stroke) >= OPACITY_MIN && parseFloat(style.strokeWidth) > 0;
-  return { stroked, strokeOnly: stroked && (style.fill === "none" || alpha(style.fill) < OPACITY_MIN || style.fill === style.stroke) };
+  const stroked = style.stroke !== "none" && alpha(style.stroke) * Number(style.strokeOpacity) >= OPACITY_MIN && parseFloat(style.strokeWidth) > 0;
+  return { stroked, strokeOnly: stroked && (style.fill === "none" || alpha(style.fill) * Number(style.fillOpacity) < OPACITY_MIN || style.fill === style.stroke) };
 }
 
 /**
@@ -957,7 +956,7 @@ function readable(el: Element, max: number, bound: Rect = ANYWHERE): string {
     }
     let inner = style.overflowX !== "visible" || style.overflowY !== "visible" ? intersect(clip, boxOf(e)) : clip;
     // A `clip-path: url()` (a chart's plot) cuts what is drawn in it as an overflow box does (TIN-760). One whose
-    // <clipPath> is missing hides all; one too complex to resolve hides SVG text and leaves HTML as it was (clipCut).
+    // <clipPath> is missing, or is more than one rect, hides all (clipCut): hidden beats leaked.
     const cut = clipCut(e);
     if (cut === "hide") return;
     if (cut) inner = intersect(inner, cut);
