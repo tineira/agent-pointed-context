@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -263,4 +264,15 @@ test("Include them this time sends only the reading kept for that drop, once its
   assert.equal(Object.keys(many).length, HELD_MAX);
   assert.ok(heldForInclude(many, idOf(HELD_MAX + 4), 5100));
   assert.equal(heldForInclude(many, idOf(0), 5100), null);
+});
+
+test("Your sites leaves out the extension's own patterns, and keeps what the person granted (TIN-786)", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  const own = ownPatterns(manifest);
+  // What chrome.permissions.getAll() lists on a fresh install: the manifest's required host permission and its content scripts' matches.
+  const fresh = ["https://apc.tineira.com/*", "https://apc.tineira.com/", "https://apc.tineira.com/?*", "https://apc.tineira.com/dock*", "https://apc.tineira.com/extension*"];
+  assert.deepEqual(grantedByPerson(fresh, own), []);
+  const withSites = [...fresh, "https://news.example.com/*", "http://localhost:8080/*", "https://*/*", "http://*/*"];
+  assert.deepEqual(grantedByPerson(withSites, own), ["https://news.example.com/*", "http://localhost:8080/*"]);
+  assert.deepEqual(grantedByPerson(["https://*/*", "http://*/*"], []), []);
 });

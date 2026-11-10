@@ -6,7 +6,7 @@
  */
 import { agoLabel, sizeLabel, type ReadingRow } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { ANY_PAGE, framesOutside, grantedAlone, devHubHosts, siteGrant, hubAllowed, isDockPage, isSensitive, sensitiveMode, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { ANY_PAGE, framesOutside, grantedAlone, grantedByPerson, devHubHosts, ownPatterns, siteGrant, hubAllowed, isDockPage, isSensitive, sensitiveMode, sitePattern, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 const $ = (id: string) => document.getElementById(id)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}) => Object.assign(document.createElement(tag), props);
@@ -83,6 +83,8 @@ async function render(): Promise<void> {
   const { origins = [] } = await chrome.permissions.getAll();
   const anyPage = ANY_PAGE.every((o) => origins.includes(o));
   const alone = origins.filter((o) => !docks.has(o) && !ANY_PAGE.includes(o));
+  // What the person granted by themself: not the extension's own patterns (its manifest), which Chrome lists but never lets go.
+  const yours = grantedByPerson(alone, ownPatterns(chrome.runtime.getManifest()));
   const stored = await chrome.storage.local.get(["mode", "sites", "last", "readers", "sensitive"]);
   const mode = (stored.mode as Mode | undefined) ?? "ask";
   const sites = (stored.sites ?? {}) as Record<string, SiteChoice>;
@@ -147,7 +149,7 @@ async function render(): Promise<void> {
 
   const rows = [
     ...Object.entries(sites).map(([origin, c]) => item(`${hostOf(origin)} · ${c === "always" ? "always" : c === "sensitive" ? "always ask" : "not here"}`, "Remove", () => void setChoice(origin, null))),
-    ...alone.filter((p) => !(p.replace(/\/\*$/, "") in sites)).map((p) => item(`${p.replace(/\/\*$/, "").replace(/^https?:\/\//, "")} · allowed by itself`, "Revoke", () => void chrome.permissions.remove({ origins: [p] }).then(render))),
+    ...yours.filter((p) => !(p.replace(/\/\*$/, "") in sites)).map((p) => item(`${p.replace(/\/\*$/, "").replace(/^https?:\/\//, "")} · allowed by itself`, "Revoke", () => void chrome.permissions.remove({ origins: [p] }).then(render))),
   ];
   $("sites").replaceChildren(...(rows.length ? rows : [el("li", { className: "muted", textContent: "None yet: your choices on the first drop show here." })]));
 

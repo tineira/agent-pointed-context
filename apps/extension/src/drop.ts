@@ -367,6 +367,19 @@ export function sitePattern(url: string | undefined): { origin: string; pattern:
   }
 }
 
+/**
+ * The patterns the extension itself requires: the manifest's host permissions and its content scripts' matches.
+ * Chrome lists them among the granted origins and refuses to remove them, so they are never the person's grant.
+ */
+export function ownPatterns(manifest: { host_permissions?: readonly string[]; content_scripts?: ReadonlyArray<{ matches?: readonly string[] }> }): string[] {
+  return [...(manifest.host_permissions ?? []), ...(manifest.content_scripts ?? []).flatMap((c) => c.matches ?? [])];
+}
+
+/** The granted origins the person granted by themself (the popup's "Your sites"): not the extension's own patterns, nor the grant for any page. */
+export function grantedByPerson(granted: readonly string[], own: readonly string[]): string[] {
+  return granted.filter((o) => !own.includes(o) && !ANY_PAGE.includes(o));
+}
+
 /** Every page: the one browser grant the welcome page asks for (TIN-465, DESIGN.md 13.3). */
 export const ANY_PAGE = ["https://*/*", "http://*/*"];
 
