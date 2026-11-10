@@ -470,6 +470,21 @@ const PASSES_THROUGH = "It passes through the APC hub of your dock, on Cloudflar
 export const FORM_NOTE = "Everything you can see inside the outline goes along, including what you typed there. Sensitive numbers (card, account, id) go only as your setting in the APC extension says; passwords and codes never.";
 
 /**
+ * "What's sent?" (TIN-786): the three lines the welcome page and the consent card share, so both say
+ * the same words. Held back follows the numbers setting; passwords and codes are held back whatever it says.
+ */
+export const WHATS_SENT = {
+  label: "What's sent?",
+  labels: { goes: "Goes", heldBack: "Held back", where: "Where" },
+  goes: "What's inside the outline, typed text included.",
+  heldBack: (mode: SensitiveMode): string =>
+    mode === "send" ? "Passwords and codes, always. Card, account and id numbers go too."
+    : mode === "never" ? "Passwords and codes, always. Card, account and id numbers too."
+    : "Passwords and codes, always. Card, account and id numbers, unless you include them.",
+  where: "Your dock's hub on Cloudflare (10 minutes at most), then your agent's provider.",
+};
+
+/**
  * What the person chose for sensitive numbers, once for every site (TIN-619): "ask" leaves them out and
  * offers "Include them this time" after the drop (the default); "send" sends what is in the outline;
  * "never" always leaves them out. Passwords and one-time codes never go, whatever this says.

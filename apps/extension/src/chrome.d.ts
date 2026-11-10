@@ -25,6 +25,7 @@ declare namespace chrome {
     const id: string;
   }
   namespace storage {
+    const onChanged: { addListener(callback: (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void): void };
     const local: {
       get(keys?: string | string[] | null): Promise<Record<string, unknown>>;
       set(items: Record<string, unknown>): Promise<void>;

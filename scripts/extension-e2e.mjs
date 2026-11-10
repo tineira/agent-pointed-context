@@ -273,7 +273,13 @@ try {
 
   if (CONSENT) {
     // C0. Installing opens the welcome page, which asks for the one grant.
-    assert.ok((await cdp("Target.getTargets")).targetInfos.some((t) => t.url === `chrome-extension://${extensionId}/welcome.html`), "the welcome page is open");
+    const welcome = (await cdp("Target.getTargets")).targetInfos.find((t) => t.url === `chrome-extension://${extensionId}/welcome.html`);
+    assert.ok(welcome, "the welcome page is open");
+    // The page is the grant, Open dock and What's sent?, with no setting on it (TIN-786).
+    const { sessionId: welcomeSession } = await cdp("Target.attachToTarget", { targetId: welcome.targetId, flatten: true });
+    const shape = await cdp("Runtime.evaluate", { expression: `JSON.stringify({ grant: !!document.getElementById("grant"), dock: !!document.getElementById("open-dock"), mode: document.querySelectorAll('input[name="mode"]').length, sensitive: document.querySelectorAll('input[name="sensitive"]').length })`, returnByValue: true }, welcomeSession);
+    assert.deepEqual(JSON.parse(shape.result.value), { grant: true, dock: true, mode: 0, sensitive: 0 }, "the welcome page has the grant and Open dock, and no setting");
+    await cdp("Target.detachFromTarget", { sessionId: welcomeSession }).catch(() => {});
     console.log("C0. installing opens the welcome page");
 
     // A page on a site of its own, and what the agent reads.
