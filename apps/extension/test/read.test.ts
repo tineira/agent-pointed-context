@@ -231,13 +231,19 @@ test("a paragraph is under the heading before it, never one inside a section, it
   assert.equal(headingOf(el("p", ["alone"]), outline), null);
 });
 
+/** Whether a node is inside sectioning content, where a header or footer is its box's own. */
+const scoped = (n: Node): boolean => {
+  for (let p = n.parent; p; p = p.parent) if (["article", "section", "aside", "nav"].includes(p.tag) || p.role === "region" || p.role === "dialog") return true;
+  return false;
+};
+
 /** The outline with title controls (TIN-766): a select or a combobox shows its chosen value as its own words. */
 const titled = {
   ...outline,
   title: (n: Node) => isTitleControl(n.tag, n.role, null, false) && textOf(n).length > 0,
   blank: (n: Node) => n.tag !== "select" && textOf(n).length === 0,
   named: (n: Node) => (namesBox(n.tag, n.role, false) ? (n as Node & { name?: string }).name ?? null : null),
-  page: (n: Node) => pageLevel(n.tag, n.role),
+  page: (n: Node) => pageLevel(n.tag, n.role, scoped(n)),
 };
 const words = (n: Node) => {
   const f = titleOf(n, titled);
@@ -359,6 +365,21 @@ test("an icon with no name before the title control does not stop the search for
   const cell2 = el("td", ["$2"]);
   el("body", [el("h2", ["Before"]), el("div", [el("div", [el("span", ["Filters"]), el("select", ["(I) Retailer"])]), el("table", [el("tr", [cell2])])])]);
   assert.equal(words(cell2), "Before");
+});
+
+test("a header or footer inside a card or section is that box's own, not the page's (pageLevel, TIN-766)", () => {
+  assert.equal(pageLevel("header", null, false), true);
+  assert.equal(pageLevel("header", null, true), false);
+  assert.equal(pageLevel("div", "banner", true), false);
+  assert.equal(pageLevel("footer", null, true), false);
+  assert.equal(pageLevel("main", null, true), true);
+  // A card whose toolbar is a header: the dropdown in it titles the card; the page's own header select still titles nothing.
+  const cell = el("td", ["12"]);
+  el("body", [el("h2", ["Before"]), el("article", [el("header", [el("select", ["Active Projects"])]), el("table", [el("tr", [cell])])])]);
+  assert.equal(words(cell), "Active Projects");
+  const other = el("td", ["9"]);
+  el("body", [el("header", [el("select", ["Acme Corp"])]), el("div", [el("table", [el("tr", [other])])])]);
+  assert.equal(words(other), null);
 });
 
 // TIN-622: a token with no space that spans lines is kept only where it shows.

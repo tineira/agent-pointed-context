@@ -1199,6 +1199,8 @@ try {
     assert.doesNotMatch(inp.text.split("\n").slice(0, 3).join(" "), /▼/);
     // An icon with no name before the dropdown does not stop it.
     await expectAt(panels.sid, "#icon", /Under the heading: \(E\) Producto Externo\n/);
+    // A header inside a card is the card's own: its dropdown titles it, while the page's header select titled nothing above.
+    await expectAt(panels.sid, "#proj", /Under the heading: Active Projects\n/);
     // An aria-hidden box names nothing by its aria-label.
     const oculto = await expectAt(panels.sid, "#oculto", /Under the heading: Stock\n/);
     assert.doesNotMatch(oculto.text, /Borrador/);

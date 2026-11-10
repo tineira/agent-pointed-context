@@ -1254,7 +1254,7 @@ const outline = {
   },
   blank: showsNothing,
   named: namedBy,
-  page: (e: Element) => pageLevel(e.tagName, e.getAttribute("role")) || !parentOf(e),
+  page: (e: Element) => pageLevel(e.tagName, e.getAttribute("role"), !!e.closest("article,section,aside,nav,[role=region],[role=dialog]")) || !parentOf(e),
 };
 
 /** The heading an element is under (titleOf), as the person sees it (readable, or a title control's chosen value), never innerText. */

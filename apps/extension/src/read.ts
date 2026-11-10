@@ -470,10 +470,14 @@ export function namesBox(tag: string, role: string | null, svg: boolean): boolea
 /**
  * Whether a box is the page as a whole or one of its bars: `html`, `body`, `main`, `header`, `footer`, `nav`,
  * or the roles of them. A control at the top of one of these (a tenant, a language, a site menu) belongs to the
- * page, never to a panel in it, so none of them has a title control (topTitle).
+ * page, never to a panel in it, so none of them has a title control (topTitle). A `header` or `footer` (or
+ * banner, contentinfo) inside sectioning content (an `article`, `section`, `aside`, `nav`, region or dialog) is
+ * that box's own header, as HTML scopes them: `scoped`, and then not the page's.
  */
-export const pageLevel = (tag: string, role: string | null): boolean =>
-  ["html", "body", "main", "header", "footer", "nav"].includes(tag.toLowerCase()) || (!!role && ["main", "banner", "contentinfo", "navigation"].includes(role));
+export const pageLevel = (tag: string, role: string | null, scoped = false): boolean =>
+  ["html", "body", "main", "nav"].includes(tag.toLowerCase()) ||
+  (!!role && ["main", "navigation"].includes(role)) ||
+  (!scoped && (["header", "footer"].includes(tag.toLowerCase()) || (!!role && ["banner", "contentinfo"].includes(role))));
 
 /**
  * Whether a control is the kind a panel is titled by: a dropdown that picks the view or dimension it shows
@@ -515,7 +519,8 @@ function headingIn<E>(e: E, t: Outline<E>, last: boolean, top: E | null): E | nu
  * body, not its title.
  */
 function topTitle<E>(box: E, t: Outline<E>, depth = 0): E | null {
-  if (!t.title || t.page?.(box)) return null;
+  // Page level is asked of the box itself only: a wrapper inside a box already accepted is never the page.
+  if (!t.title || (depth === 0 && t.page?.(box))) return null;
   for (const c of t.children(box)) {
     if (t.blank?.(c)) continue;
     if (t.title(c)) return c;
