@@ -1,113 +1,97 @@
 /**
- * A drop on a chart's mark (TIN-760, DESIGN.md 13.2): a point of a line chart or a bar, drawn in SVG. The
- * content script finds the chart's labels (with their boxes) and the mark; this file decides whether the
- * drawing is a chart at all (chartAxes: a value axis, and a category axis or data labels) and says what the
- * person sees at the mark: its series, its category and its value. Typed by what it touches rather than by
- * the DOM, so the tests run it on plain objects, as read.ts does.
+ * A drop on a chart's mark (TIN-760, TIN-765, DESIGN.md 13.2): a point of a line chart, a bar, or a shape that names
+ * itself (a pie's slice, a map's region), drawn in SVG. The content script finds the drawing's labels and shapes (with
+ * their boxes); this file decides whether the drawing is a chart (chartAxes: a value axis, and a category axis or
+ * data labels), which shapes are its marks (in the plot the axes bound), and says what the person sees at a mark: its
+ * series, its category and its value. Typed by what it touches rather than by the DOM, so the tests run it on plain
+ * objects, as read.ts does.
  *
- * A value is exact only when it is visible text that belongs to the mark: its own accessible text, or a data
- * label on it or at its end. Otherwise it is read from the mark's place against the value axis and marked
- * approximate, and only where that can be trusted (three ticks or more on a straight line, or two with a
- * zero, which a log axis cannot show). A tooltip is never used: an HTML5 drag does not move the chart's
- * hover, so a tooltip on screen is about another point. A part that cannot be told is left out.
+ * It reads only what the page declares, never what has to be guessed. A value is text written on the page for that
+ * mark: its own accessible text (aria-label, <title>, <desc>), or a data label drawn at it that no other mark is
+ * nearer to. Nothing is read from where a mark is drawn against an axis, and nothing from a tooltip (an HTML5 drag
+ * does not move the chart's hover, so a tooltip on screen is about another point). With no value written, the
+ * reading says so. Nothing here knows a chart library: no class name is read.
  */
-import type { Rect } from "./read.ts";
+import { within, type Rect } from "./read.ts";
 
-/**
- * What a label of the chart is, from the chart's own markup (classes, for Highcharts and d3 alike): an axis
- * label, a data label, a legend item, the chart's title, its tooltip, something else it draws (a subtitle,
- * an axis title, credits), or null when the markup does not say.
- */
-export type LabelRole = "axis" | "data" | "legend" | "title" | "tooltip" | "other" | null;
-
+/** A label the drawing shows: an SVG <text>, or HTML text laid over the drawing. */
 export interface ChartLabel {
   text: string;
   box: Rect;
-  role: LabelRole;
-  /** The series it belongs to (Highcharts `highcharts-series-N`), when the markup says. */
-  series: number | null;
 }
 
-export interface ChartMark {
+/** A shape a chart may draw its data with: filled, seen, not hidden from assistive technology, not a control. */
+export interface ChartShape {
   box: Rect;
-  /** A bar (or column, or stack segment) grows from a baseline; a point sits at its value. Told by the series' shape, never by proportions. */
+  /** A bar (or column, or stack segment) grows from a baseline; a point sits at its value. */
   kind: "point" | "bar";
-  series: number | null;
+}
+
+export interface ChartMark extends ChartShape {
   /** Its own accessible text: aria-label, <title> or <desc>. */
   accessible: string | null;
-  /** The other marks of its series (their boxes): bars that share an edge with it show where the baseline is. */
+  /** Its series' name, when the page declares it on the group the series is drawn in (aria-label, aria-labelledby). */
+  series: string | null;
+  /** The other shapes of the group it is drawn in (its series), their boxes. */
   siblings: readonly Rect[];
 }
 
 export interface Chart {
   labels: readonly ChartLabel[];
-  /** How many series the chart draws (one: the title names the series). */
+  /** Every shape of the drawing that could be a mark; those in the plot are its marks. */
+  shapes: readonly ChartShape[];
+  /** How many groups the chart's marks (isMark) are drawn in: with one, the chart's single title names its series. */
   series: number;
-  /** Whether the markup says the bars run across (Highcharts' bar series), when it says. */
-  horizontal: boolean | null;
 }
 
-/** A drawing confirmed as a chart: its value axis (with its numbers), its category axis, its data labels. */
+/** A drawing confirmed as a chart: its value axis, its category axis, its data labels, and the plot they bound. */
 export interface Axes {
   /** Values go up (a column of numbers); otherwise across (a row). */
   vertical: boolean;
   valueAxis: ChartLabel[];
-  numbers: ChartNumber[];
   categoryAxis: ChartLabel[] | null;
+  /** The numbers drawn in the chart that are no axis's: each may be the value of the one mark that owns it (ownerOf). */
   dataLabels: ChartLabel[];
-  decimal: "," | "." | null;
+  /** Where marks are: between the value axis's ends and along the categories, on the plot's side of the category labels. */
+  plot: Rect;
+  /** The value axis's end ticks (their centres, along the values): a mark's box crosses this range. */
+  ticks: [number, number];
 }
 
 export interface MarkReading {
-  kind: "point" | "bar";
+  /** "mark": a shape outside any axes that names itself (a pie's slice, a map's region). */
+  kind: "point" | "bar" | "mark";
   series: string | null;
   category: string | null;
   value: string | null;
-  /** The value was read from the mark's place on the value axis, not from text the chart draws. */
-  approximate: boolean;
   /** What the reading says it pointed at: the parts that are known, joined by " · ". */
   text: string;
 }
 
-/** Said after an approximate value. */
-export const APPROXIMATE = "(approximate, read from the chart's position)";
+/** Said after a mark whose value the page does not write. */
+export const NO_VALUE = "(no value written on the chart)";
 
 // ---- numbers as charts draw them ----
 
 /** A number's scale by its suffix: "1 000M", "8G", "3k". "MM" is the Spanish millions. "B" is billions. */
 const SCALE: Record<string, number> = { "": 1, k: 1e3, K: 1e3, M: 1e6, MM: 1e6, G: 1e9, B: 1e9, T: 1e12, "%": 1 };
 
-export interface ChartNumber {
-  /** The number, its scale applied (930M is 930000000; 87,67% is 87.67). */
-  value: number;
-  /** Its suffix: "", "k", "M", "%"... */
-  unit: string;
-  /** What comes before it: "$", "US$", "€", or "". */
-  prefix: string;
-  /** The decimal separator it shows, when it shows one. */
-  decimal: "," | "." | null;
-  /** The thousands separator it shows, when it shows one: " ", ".", ",", "'". */
-  group: string | null;
-}
-
-const NUMBER = /^((?:[A-Z]{0,3}[$€£¥₹])?)\s*([+\-−]?)\s*(\d(?:[\d\s  .,']*\d)?)\s*(MM|[kKMGBT%])?$/;
+const NUMBER = /^((?:[A-Z]{0,3}[$€£¥₹])?)\s*([+\-−]?)\s*(\d(?:[\d\s  .,']*\d)?)\s*(MM|[kKMGBT%])?$/;
 
 /**
- * A label's number, or null when it is not one. With a decimal separator given (the chart's, decimalOf),
- * only that one is the decimal. Without one: when both "." and "," show, the last is the decimal; one that
- * shows more than once groups thousands; one that shows once is a decimal unless exactly three digits follow
- * it ("1.000" and "1,000" are a thousand, "98,51" and "1,5" decimals). Whatever groups thousands (a space,
- * also no-break and thin, ".", "," or "'") must group them: one to three digits, then groups of exactly
- * three, one separator throughout ("1 000M", "1.000.000"); "1.2.3", or "98,51" where "," groups, is no number.
+ * A label's number, or null when it is not one: only what tells an axis tick or a data label from other text, never
+ * a value to show (the reading shows the label's own text). When both "." and "," show, the last is the decimal; one
+ * that shows more than once groups thousands; one that shows once is a decimal unless exactly three digits follow it.
+ * Whatever groups thousands (a space, also no-break and thin, ".", "," or "'") must group them: one to three digits,
+ * then groups of exactly three ("1 000M", "1.000.000"); "1.2.3" is no number.
  */
-export function parseNumber(text: string, decimal?: "," | "." | null): ChartNumber | null {
+export function parseNumber(text: string): number | null {
   const m = NUMBER.exec(text.trim());
   if (!m) return null;
-  const [, prefix = "", sign = "", raw = "", unit = ""] = m;
+  const [, , sign = "", raw = "", unit = ""] = m;
   const count = (c: string) => raw.split(c).length - 1;
   let dec: "," | "." | null = null;
-  if (decimal) dec = count(decimal) ? decimal : null;
-  else if (count(".") && count(",")) dec = raw.lastIndexOf(".") > raw.lastIndexOf(",") ? "." : ",";
+  if (count(".") && count(",")) dec = raw.lastIndexOf(".") > raw.lastIndexOf(",") ? "." : ",";
   else if (count(".") || count(",")) {
     const c = count(".") ? "." : ",";
     dec = count(c) > 1 || /^\d{3}$/.test(raw.slice(raw.indexOf(c) + 1)) ? null : c;
@@ -116,61 +100,20 @@ export function parseNumber(text: string, decimal?: "," | "." | null): ChartNumb
   const int = dec ? raw.slice(0, raw.indexOf(dec)) : raw;
   const frac = dec ? raw.slice(raw.indexOf(dec) + 1) : "";
   if (dec && !/^\d+$/.test(frac)) return null;
-  const seps = new Set(int.replace(/\d/g, "").replace(/[\s  ]/g, " "));
+  const seps = new Set(int.replace(/\d/g, "").replace(/[\s  ]/g, " "));
   if (seps.size > 1) return null;
   const group = seps.size ? [...seps][0]! : null;
-  if (group && !int.replace(/[\s  ]/g, " ").split(group).every((g, i) => (i === 0 ? /^\d{1,3}$/ : /^\d{3}$/).test(g))) return null;
+  if (group && !int.replace(/[\s  ]/g, " ").split(group).every((g, i) => (i === 0 ? /^\d{1,3}$/ : /^\d{3}$/).test(g))) return null;
   const n = Number(`${int.replace(/\D/g, "")}${frac ? `.${frac}` : ""}`);
   if (!Number.isFinite(n)) return null;
-  return { value: (sign === "-" || sign === "−" ? -n : n) * SCALE[unit]!, unit, prefix, decimal: dec, group };
-}
-
-/**
- * The decimal separator a chart's numbers show, or null when none tells: a separator followed by other than
- * three digits ("98,51%", "1,5", "0.25"). Given only labels that are numbers themselves (ticks and data
- * labels), never a title or a legend ("Crecimiento 1.5%").
- */
-export function decimalOf(texts: readonly string[]): "," | "." | null {
-  for (const t of texts) {
-    if (!parseNumber(t)) continue;
-    const m = /\d([.,])(\d+)(?!\d)/.exec(t);
-    if (m && m[2]!.length !== 3 && !/\d[.,]\d+[.,]\d/.test(t)) return m[1] as "," | ".";
-  }
-  return null;
-}
-
-/**
- * A value in the way the value axis writes its numbers: the unit its ticks other than zero share (a zero
- * tick is often a bare "0" on a percentage axis), its prefix, its largest scale the value reaches ("930M",
- * not "0.93G" on an axis of M and G), its separators, rounded to a hundredth of the axis's step.
- */
-export function formatLike(value: number, axis: readonly ChartNumber[]): string {
-  const ticks = axis.filter((n) => n.value !== 0).length ? axis.filter((n) => n.value !== 0) : axis;
-  const percent = ticks.some((n) => n.unit === "%");
-  const units = [...new Set(ticks.map((n) => n.unit))].sort((a, b) => SCALE[a]! - SCALE[b]!);
-  let unit = percent ? "%" : (units[0] ?? "");
-  if (!percent) for (const u of units) if (Math.abs(value) >= SCALE[u]!) unit = u;
-  const scale = SCALE[unit]!;
-  const sorted = [...new Set(axis.map((n) => n.value))].sort((a, b) => a - b);
-  const steps = sorted.slice(1).map((v, i) => v - sorted[i]!).filter((d) => d > 0);
-  const step = steps.length ? Math.min(...steps) : Math.abs(value) || 1;
-  const exp = Math.floor(Math.log10(step / scale / 100));
-  const resolution = 10 ** exp;
-  const n = Math.round(value / scale / resolution) * resolution;
-  const decimals = Math.max(0, -exp);
-  const decimal = axis.find((a) => a.decimal)?.decimal ?? (axis.some((a) => a.group === ".") ? "," : ".");
-  const group = axis.find((a) => a.group)?.group ?? null;
-  let [int = "0", frac = ""] = Math.abs(n).toFixed(decimals).split(".");
-  frac = frac.replace(/0+$/, "");
-  if (group && int.length > 3) int = int.replace(/\B(?=(\d{3})+(?!\d))/g, group);
-  const prefix = ticks.find((a) => a.prefix)?.prefix ?? "";
-  return `${n < 0 ? "-" : ""}${prefix}${int}${frac ? decimal + frac : ""}${unit}`;
+  return (sign === "-" || sign === "−" ? -n : n) * SCALE[unit]!;
 }
 
 // ---- the chart's axes ----
 
 const cx = (r: Rect) => (r.left + r.right) / 2;
 const cy = (r: Rect) => (r.top + r.bottom) / 2;
+const fold = (s: string) => s.replace(/\s+/g, " ").trim();
 /** How far two labels' edges or centres may be apart and still be aligned. */
 const ALIGN = 3;
 
@@ -194,209 +137,301 @@ function lines(labels: readonly ChartLabel[], keys: ReadonlyArray<(r: Rect) => n
 const columns = (labels: readonly ChartLabel[]) => lines(labels, [(r) => r.left, (r) => r.right, cx]);
 const rows = (labels: readonly ChartLabel[]) => lines(labels, [(r) => r.top, (r) => r.bottom, cy]);
 
-/** A line of labels that are all numbers, two of them different at least: a value axis. */
-function numeric(line: readonly ChartLabel[], decimal: "," | "." | null): boolean {
-  const values = line.map((l) => parseNumber(l.text, decimal));
-  return values.every((v) => v !== null) && new Set(values.map((v) => v!.value)).size > 1;
+/** A line of numbers, two of them different at least: a value axis. */
+function numeric(line: readonly ChartLabel[]): boolean {
+  return new Set(line.map((l) => parseNumber(l.text))).size > 1;
 }
 
-/** The longest line. */
+/** The longest line; of two as long, the one with fewer numbers (a category axis names things). */
 function longest(found: readonly ChartLabel[][]): ChartLabel[] | null {
+  const numbers = (line: readonly ChartLabel[]) => line.filter((l) => parseNumber(l.text) !== null).length;
   let pick: ChartLabel[] | null = null;
-  for (const line of found) if (!pick || line.length > pick.length) pick = line;
+  for (const line of found) if (!pick || line.length > pick.length || (line.length === pick.length && numbers(line) < numbers(pick))) pick = line;
   return pick;
 }
 
+/** The smallest gap between sorted positions, or null with fewer than two that differ. */
+function minGap(positions: readonly number[]): number | null {
+  const sorted = [...positions].sort((a, b) => a - b);
+  const gaps = sorted.slice(1).map((p, i) => p - sorted[i]!).filter((g) => g > 0);
+  return gaps.length ? Math.min(...gaps) : null;
+}
+
 /**
- * Whether a drawing is a chart, and its axes: a value axis (two numbers or more in one aligned line), and a
- * category axis (two labels or more in a line the other way) or data labels. Null otherwise: then no shape
- * in it is a mark, and a drop there reads as any other drop does. The decimal separator is told from the
- * labels that are numbers themselves among ticks and data labels.
+ * The plot: along the values, between the value axis's end ticks (a little past them, for a value just over the last
+ * tick), and never past the category labels, which sit outside it (a legend lies beyond them); across, from half a
+ * category before the first to half a category after the last.
  */
-export function chartAxes(chart: Chart): Axes | null {
-  const labels = chart.labels.filter((l) => fold(l.text) && l.role !== "tooltip" && l.role !== "other");
-  const hinted = labels.some((l) => l.role === "axis");
-  const decimal = decimalOf(labels.filter((l) => l.role === "axis" || l.role === "data" || l.role === null).map((l) => l.text));
-  const axisLabels = labels.filter((l) => (hinted ? l.role === "axis" : l.role === null));
+function plotOf(vertical: boolean, valueAxis: readonly ChartLabel[], categoryAxis: readonly ChartLabel[] | null): Rect {
+  const along = vertical ? cy : cx;
+  const across = vertical ? cx : cy;
+  const ticks = valueAxis.map((l) => along(l.box));
+  const lo = Math.min(...ticks);
+  const hi = Math.max(...ticks);
+  const pad = Math.max(6, (hi - lo) * 0.08);
+  let [vLo, vHi] = [lo - pad, hi + pad];
+  let [aLo, aHi] = [-Infinity, Infinity];
+  if (categoryAxis) {
+    const near = categoryAxis.map((l) => (vertical ? [l.box.top, l.box.bottom] : [l.box.left, l.box.right]) as [number, number]);
+    const from = Math.min(...near.map((n) => n[0]));
+    const to = Math.max(...near.map((n) => n[1]));
+    if (from >= (lo + hi) / 2) vHi = Math.min(vHi, from);
+    else if (to <= (lo + hi) / 2) vLo = Math.max(vLo, to);
+    const centres = categoryAxis.map((l) => across(l.box));
+    const half = (minGap(centres) ?? 0) / 2;
+    [aLo, aHi] = [Math.min(...centres) - half, Math.max(...centres) + half];
+  }
+  return vertical ? { left: aLo, right: aHi, top: vLo, bottom: vHi } : { left: vLo, right: vHi, top: aLo, bottom: aHi };
+}
+
+/** Whether a shape's centre is in the plot. */
+export function inPlot(box: Rect, axes: Axes): boolean {
+  const [x, y] = [cx(box), cy(box)];
+  return x >= axes.plot.left && x <= axes.plot.right && y >= axes.plot.top && y <= axes.plot.bottom;
+}
+
+/** Whether a shape is the box of a label (a tooltip's, a legend's, a button's): it wholly holds words that are not a number. */
+function labelBox(box: Rect, labels: readonly ChartLabel[]): boolean {
+  return labels.some((l) => within(l.box, box) && parseNumber(l.text) === null && !!fold(l.text));
+}
+
+/**
+ * Whether a shape of a confirmed chart is one of its marks (TIN-765, rule B). It is one when all hold:
+ * - its centre is in the plot, and along the values between the end ticks (a shape only past the last tick, or one
+ *   that crosses it by a pixel, is none; a bar drawn a little past it keeps its centre inside);
+ * - it is not across most of the plot (coversPlot);
+ * - it is not the box of a label (labelBox);
+ * - it wholly holds no other bar (a background, a plot area, a rect around a column), and no shapes of two
+ *   categories or more (a rect behind a line's points); a column holding points of its own category stays a mark.
+ */
+export function isMark(box: Rect, chart: Pick<Chart, "labels" | "shapes">, axes: Axes): boolean {
+  const centre = axes.vertical ? cy(box) : cx(box);
+  const between = centre >= axes.ticks[0] && centre <= axes.ticks[1];
+  const held = chart.shapes.filter((s) => !sameBox(s.box, box) && within(s.box, box));
+  const categories = new Set(held.map((s) => categoryLabel(s.box, axes)).filter(Boolean));
+  const holds = held.some((s) => s.kind === "bar") || categories.size >= 2;
+  return inPlot(box, axes) && between && !coversPlot(box, axes) && !labelBox(box, chart.labels) && !holds;
+}
+
+/** The category label in line with a box (within half the space between two labels), or null. */
+function categoryLabel(box: Rect, axes: Axes): ChartLabel | null {
+  const cats = axes.categoryAxis;
+  if (!cats) return null;
+  const along = axes.vertical ? cx : cy;
+  const size = axes.vertical ? box.right - box.left : box.bottom - box.top;
+  const gap = minGap(cats.map((l) => along(l.box)));
+  const reach = gap === null ? size / 2 + 2 : gap / 2;
+  let nearest: ChartLabel | null = null;
+  for (const l of cats) if (!nearest || Math.abs(along(l.box) - along(box)) < Math.abs(along(nearest.box) - along(box))) nearest = l;
+  return nearest && Math.abs(along(nearest.box) - along(box)) <= reach ? nearest : null;
+}
+
+/**
+ * Whether a drawing is a chart, and its axes: a value axis (two numbers or more in one aligned line), and a category
+ * axis (two labels or more in a line the other way) or data labels. Null otherwise: then no shape in it is a mark of
+ * a chart. Every line of numbers along the values that lies beside the plot (two of its numbers or more beside every
+ * shape) is an axis (a chart may draw one on each side), never data labels; a number in a longer line the other way is that
+ * line's. When both ways would do, the one with more category labels that shapes line up with wins (one per category,
+ * where the other way piles them on a few), then the longer value axis.
+ */
+export function chartAxes(chart: Pick<Chart, "labels" | "shapes">): Axes | null {
+  const labels = chart.labels.filter((l) => fold(l.text));
+  // A number belongs to the longest line of numbers it is in: the ticks of two axes, one on each side, make rows of
+  // two numbers each, which are no axis.
+  const numbers = labels.filter((l) => parseNumber(l.text) !== null);
+  // An axis lies beside the plot: a line of numbers is an axis when two of its numbers or more, of different values,
+  // have their centres beside every shape (a column's left of or right of each shape's span, a row's above or below).
+  // Numbers one above the other over a bar or a stack are data labels; a tick a bar is drawn under leaves its axis an
+  // axis, and stays a tick.
+  const besideAll = (l: ChartLabel, up: boolean) => chart.shapes.every((s) => (up ? cx(l.box) <= s.box.left || cx(l.box) >= s.box.right : cy(l.box) <= s.box.top || cy(l.box) >= s.box.bottom));
+  const beside = (up: boolean) => (line: readonly ChartLabel[]) => numeric(line.filter((l) => besideAll(l, up)));
+  const numberLines = { up: columns(numbers).filter(beside(true)), across: rows(numbers).filter(beside(false)) };
+  const longestOf = new Map<ChartLabel, number>();
+  for (const line of [...numberLines.up, ...numberLines.across]) for (const l of line) longestOf.set(l, Math.max(longestOf.get(l) ?? 0, line.length));
   const option = (vertical: boolean): Axes | null => {
-    const valueAxis = longest((vertical ? columns : rows)(axisLabels).filter((l) => numeric(l, decimal)));
+    const valueLines = numberLines[vertical ? "up" : "across"].filter((line) => line.every((l) => longestOf.get(l) === line.length));
+    const valueAxis = longest(valueLines);
     if (!valueAxis) return null;
-    const rest = axisLabels.filter((l) => !valueAxis.includes(l));
+    const ticks = new Set(valueLines.flat());
+    const rest = labels.filter((l) => !ticks.has(l));
     const categoryAxis = longest((vertical ? rows : columns)(rest));
-    const taken = new Set([...valueAxis, ...(categoryAxis ?? [])]);
-    const dataLabels = labels.filter((l) => (l.role === "data" || (!hinted && l.role === null && !taken.has(l))) && parseNumber(l.text, decimal));
+    const taken = new Set([...ticks, ...(categoryAxis ?? [])]);
+    const dataLabels = rest.filter((l) => !taken.has(l) && parseNumber(l.text) !== null);
     if (!categoryAxis && !dataLabels.length) return null;
-    return { vertical, valueAxis, numbers: valueAxis.map((l) => parseNumber(l.text, decimal)!), categoryAxis, dataLabels, decimal };
+    const ends = valueAxis.map((l) => (vertical ? cy : cx)(l.box));
+    return { vertical, valueAxis, categoryAxis, dataLabels, plot: plotOf(vertical, valueAxis, categoryAxis), ticks: [Math.min(...ends), Math.max(...ends)] };
   };
-  const up = option(true);
-  const across = option(false);
-  if (chart.horizontal === true) return across ?? up;
-  if (chart.horizontal === false) return up ?? across;
-  return up ?? across;
+  const options = [option(true), option(false)].filter((a): a is Axes => a !== null);
+  // How many category labels have a shape in line with them: in the wrong way, many shapes fall by one label.
+  const lined = (a: Axes) => new Set(chart.shapes.filter((s) => inPlot(s.box, a)).map((s) => categoryLabel(s.box, a)).filter(Boolean)).size;
+  options.sort((a, b) => lined(b) - lined(a) || b.valueAxis.length - a.valueAxis.length);
+  return options[0] ?? null;
 }
 
 /**
- * A value read from a place along the axis against the axis's numbers, by the straight line through them.
- * Null when that cannot be trusted: fewer than three ticks, unless there are two and one is zero (a log
- * axis cannot show zero), or ticks that do not lie on one line (a log axis, labels out of place).
- */
-export function interpolate(points: ReadonlyArray<{ pos: number; value: number }>, pos: number): number | null {
-  if (points.length < 2 || (points.length === 2 && !points.some((p) => p.value === 0))) return null;
-  const n = points.length;
-  const mp = points.reduce((s, p) => s + p.pos, 0) / n;
-  const mv = points.reduce((s, p) => s + p.value, 0) / n;
-  const spp = points.reduce((s, p) => s + (p.pos - mp) ** 2, 0);
-  if (!spp) return null;
-  const slope = points.reduce((s, p) => s + (p.pos - mp) * (p.value - mv), 0) / spp;
-  if (!slope) return null;
-  const range = Math.max(...points.map((p) => p.value)) - Math.min(...points.map((p) => p.value));
-  if (points.some((p) => Math.abs(mv + slope * (p.pos - mp) - p.value) > range * 0.02)) return null;
-  return mv + slope * (pos - mp);
-}
-
-const fold = (s: string) => s.replace(/\s+/g, " ").trim();
-
-/**
- * Where a bar's baseline is along the value axis: the edge it shares with other bars of its series (they
- * grow from the same line), else the axis's zero when the axis shows one. Null when neither tells.
- */
-export function baselineOf(mark: ChartMark, axes: Axes, points: ReadonlyArray<{ pos: number; value: number }>): number | null {
-  const ends: Array<(r: Rect) => number> = axes.vertical ? [(r) => r.top, (r) => r.bottom] : [(r) => r.left, (r) => r.right];
-  const shared = ends.map((end) => mark.siblings.filter((s) => Math.abs(end(s) - end(mark.box)) <= 1).length);
-  if (shared[0] !== shared[1]) return ends[shared[0]! > shared[1]! ? 0 : 1]!(mark.box);
-  return points.find((p) => p.value === 0)?.pos ?? null;
-}
-
-/**
- * Whether a shape covers most of the plot the way no single data mark does: across most of the category
- * axis (a plot band, an area's fill, a background). Only with three categories or more, which a mark spans one of.
+ * Whether a shape covers most of the plot the way no single data mark does: across most of the category axis (a plot
+ * band, an area's fill, a background). Only with three categories or more, which a mark spans one of.
  */
 export function coversPlot(box: Rect, axes: Axes): boolean {
   const cats = axes.categoryAxis;
   if (!cats || cats.length < 3) return false;
-  const along = axes.vertical ? (r: Rect) => [r.left, r.right] : (r: Rect) => [r.top, r.bottom];
   const centres = cats.map((l) => (axes.vertical ? cx(l.box) : cy(l.box)));
   const span = Math.max(...centres) - Math.min(...centres);
-  const [a, b] = along(box);
-  return b! - a! >= span * 0.6;
+  const [a, b] = axes.vertical ? [box.left, box.right] : [box.top, box.bottom];
+  return b - a >= span * 0.6;
+}
+
+/** How far a data label may be from its mark, along the values. */
+const LABEL_REACH = 24;
+
+const sameBox = (a: Rect, b: Rect) => a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+const overlap = (a: Rect, b: Rect) => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
+/** Whether a point lies strictly inside a box. */
+const inside = (x: number, y: number, b: Rect) => x > b.left && x < b.right && y > b.top && y < b.bottom;
+
+/*
+ * Who owns a number (TIN-765, rule A, fix round 2). One structural rule, no tolerances that interact:
+ *
+ * 1. A number may be a value only when it is no axis tick, its centre is not above the top tick (on a horizontal
+ *    chart, not above the plot: the title's region), and it is not a tooltip's: no word that is not a number (axis
+ *    labels aside) lies within one line of it, and it does not overlap a shape that holds such words.
+ * 2. A mark is in reach of a number when the number's box overlaps the mark's span across the values (a point's give
+ *    or take its own size across) and, along the values, the number is on it or within LABEL_REACH of it. Across and
+ *    along follow the chart: on a horizontal chart, across is up and down for a point as for a bar.
+ * 3. A number whose centre lies on a bar is that bar's when it lies on exactly one bar and no point is in reach.
+ * 4. A number on no bar is the one mark's that claims it, when exactly one does: the marks in reach, and every bar
+ *    whose span across holds the number's centre at any distance (a stack's other segments).
+ * 5. A mark that owns two numbers or more reads no value.
+ * Anything else is nobody's value: no value beats a wrong value.
+ */
+
+/** Whether a mark is in reach of a number (rule 2). */
+function inReach(l: ChartLabel, m: ChartShape, vertical: boolean): boolean {
+  const b = m.box;
+  const across = vertical ? [[l.box.left, l.box.right], [b.left, b.right]] : [[l.box.top, l.box.bottom], [b.top, b.bottom]];
+  // A point is small: one that comes within its own size of the number, across, is in reach too.
+  const slack = m.kind === "point" ? (vertical ? b.right - b.left : b.bottom - b.top) : 0;
+  if (Math.min(across[0]![1]!, across[1]![1]!) + slack <= Math.max(across[0]![0]!, across[1]![0]!)) return false;
+  const [from, to, start, end] = vertical ? [l.box.top, l.box.bottom, b.top, b.bottom] : [l.box.left, l.box.right, b.left, b.right];
+  return Math.max(0, start - to, from - end) <= LABEL_REACH;
+}
+
+/** The mark a number is the value of, or null (rules 2 to 4). */
+export function ownerOf(l: ChartLabel, marks: readonly ChartShape[], axes: Axes): ChartShape | null {
+  const [x, y] = [cx(l.box), cy(l.box)];
+  const bars = marks.filter((m) => m.kind === "bar");
+  const reach = marks.filter((m) => inReach(l, m, axes.vertical));
+  const on = bars.filter((m) => inside(x, y, m.box));
+  if (on.length) return on.length === 1 && !reach.some((m) => m.kind === "point") ? on[0]! : null;
+  const at = axes.vertical ? x : y;
+  const holders = bars.filter((m) => (axes.vertical ? at > m.box.left && at < m.box.right : at > m.box.top && at < m.box.bottom));
+  const claims = new Set([...reach, ...holders]);
+  if (claims.size !== 1) return null;
+  const [owner] = claims;
+  return reach.includes(owner!) ? owner! : null;
+}
+
+/** The numbers that may be values at all (rule 1). */
+function valueLabels(chart: Chart, axes: Axes): ChartLabel[] {
+  const axisLabels = new Set([...axes.valueAxis, ...(axes.categoryAxis ?? [])]);
+  const words = chart.labels.filter((l) => !axisLabels.has(l) && fold(l.text) && parseNumber(l.text) === null);
+  const boxes = chart.shapes.filter((s) => labelBox(s.box, chart.labels));
+  const nearWord = (l: ChartLabel) => {
+    const h = l.box.bottom - l.box.top;
+    const grown = { left: l.box.left - h, right: l.box.right + h, top: l.box.top - h, bottom: l.box.bottom + h };
+    return words.some((w) => overlap(w.box, grown));
+  };
+  const titleRegion = (l: ChartLabel) => (axes.vertical ? cy(l.box) < axes.ticks[0] : cy(l.box) < axes.plot.top);
+  return axes.dataLabels.filter((l) => !titleRegion(l) && !nearWord(l) && !boxes.some((s) => overlap(l.box, s.box)));
 }
 
 /**
- * What the person sees at a mark of a confirmed chart, or null when it is not a mark (it covers most of
- * the plot) or the chart tells neither its category nor its value (the drop then reads as any other).
- * `omit` is a text the reading already gives (its heading), left out of the parts.
+ * The single label above everything the chart draws (its axes and its marks) that is not a number: the chart's title.
+ * Null when there is none, or more than one (a title and a subtitle, a legend on top).
+ */
+function titleOf(chart: Chart, axes: Axes): string | null {
+  const axisLabels = [...axes.valueAxis, ...(axes.categoryAxis ?? [])];
+  const used = new Set([...axisLabels, ...axes.dataLabels]);
+  const marks = chart.shapes.filter((s) => isMark(s.box, chart, axes));
+  const top = Math.min(...axisLabels.map((l) => l.box.top), ...marks.map((s) => s.box.top));
+  const above = chart.labels.filter((l) => fold(l.text) && !used.has(l) && l.box.bottom <= top && parseNumber(l.text) === null);
+  return above.length === 1 ? fold(above[0]!.text) : null;
+}
+
+/**
+ * What the person sees at a mark of a confirmed chart, or null when it is not a mark (isMark) or the chart tells neither
+ * its category nor its value (the drop then reads as any other). `omit` is a text the reading already gives (its
+ * heading), left out of the parts.
+ *
+ * - category: the category label in line with the mark, when no other mark of its series is nearer to that label;
+ * - series: the name its group declares; with one series, the chart's single title;
+ * - value: its own accessible text, else the one data label it owns (ownerOf); else none, and the text says no
+ *   value is written.
  */
 export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: string | null): MarkReading | null {
-  if (coversPlot(mark.box, axes)) return null;
-  const { vertical, valueAxis, categoryAxis, decimal } = axes;
-  const labels = chart.labels.filter((l) => fold(l.text));
-  const along = vertical ? cx : cy;
+  if (!isMark(mark.box, chart, axes)) return null;
+  const along = axes.vertical ? cx : cy;
 
-  // The category: the axis label in line with the mark, within half the space between two labels.
   let category: string | null = null;
-  if (categoryAxis) {
-    const centres = categoryAxis.map((l) => along(l.box)).sort((a, b) => a - b);
-    const gaps = centres.slice(1).map((c, i) => c - centres[i]!).filter((g) => g > 0);
-    const size = vertical ? mark.box.right - mark.box.left : mark.box.bottom - mark.box.top;
-    const reach = gaps.length ? Math.min(...gaps) / 2 : size / 2 + 2;
-    let nearest: ChartLabel | null = null;
-    for (const l of categoryAxis) if (!nearest || Math.abs(along(l.box) - along(mark.box)) < Math.abs(along(nearest.box) - along(mark.box))) nearest = l;
-    if (nearest && Math.abs(along(nearest.box) - along(mark.box)) <= reach) category = fold(nearest.text);
+  const cat = categoryLabel(mark.box, axes);
+  if (cat) {
+    const mine = Math.abs(along(cat.box) - along(mark.box));
+    if (!mark.siblings.some((s) => Math.abs(along(cat.box) - along(s)) < mine)) category = fold(cat.text);
   }
 
-  // The series: its legend item; with one series, the chart's title.
-  let series: string | null = null;
-  if (mark.series !== null) series = fold(labels.find((l) => l.role === "legend" && l.series === mark.series)?.text ?? "") || null;
-  if (!series && chart.series <= 1) {
-    const titles = labels.filter((l) => l.role === "title");
-    if (titles.length) series = fold(titles[0]!.text) || null;
-    else if (!labels.some((l) => l.role === "axis")) {
-      // Markup that does not say: a single label above the axes and the mark, not a number.
-      const axisLabels = [...valueAxis, ...(categoryAxis ?? [])];
-      const top = Math.min(...axisLabels.map((l) => l.box.top), mark.box.top);
-      const above = labels.filter((l) => l.role === null && !axisLabels.includes(l) && l.box.bottom <= top && !parseNumber(l.text, decimal));
-      if (above.length === 1) series = fold(above[0]!.text);
-    }
-  }
+  let series = fold(mark.series ?? "") || null;
+  if (!series && chart.series <= 1) series = titleOf(chart, axes);
 
-  const points = valueAxis.map((l, i) => ({ pos: vertical ? cy(l.box) : cx(l.box), value: axes.numbers[i]!.value }));
-  const baseline = mark.kind === "bar" ? baselineOf(mark, axes, points) : null;
-  // A bar's value is at its end away from the baseline.
-  const ends = vertical ? [mark.box.top, mark.box.bottom] : [mark.box.left, mark.box.right];
-  const end = baseline === null ? null : Math.abs(ends[0]! - baseline) >= Math.abs(ends[1]! - baseline) ? ends[0]! : ends[1]!;
-
-  // The value: exact only from visible text that belongs to the mark.
-  let value: string | null = null;
-  let approximate = false;
   const accessible = fold(mark.accessible ?? "");
-  if (accessible) value = accessible;
+  let value: string | null = accessible || null;
   if (!value) {
-    const owned = (l: ChartLabel) => l.series === null || mark.series === null || l.series === mark.series;
-    let found: { label: ChartLabel; gap: number } | null = null;
-    for (const l of axes.dataLabels.filter(owned)) {
-      let gap: number;
-      if (mark.kind === "bar") {
-        // In line with the bar, and on it or just past its end (either end when the baseline is unknown).
-        const across = vertical ? cx(l.box) : cy(l.box);
-        const [lo, hi] = vertical ? [mark.box.left, mark.box.right] : [mark.box.top, mark.box.bottom];
-        if (across < lo - 2 || across > hi + 2) continue;
-        const [from, to] = vertical ? [l.box.top, l.box.bottom] : [l.box.left, l.box.right];
-        const inside = Math.max(0, Math.min(to, ends[1]!) - Math.max(from, ends[0]!)) > 0;
-        const past = (e: number) => (e === ends[0] ? Math.max(0, e - to) : Math.max(0, from - e));
-        const beyond = end === null ? Math.min(past(ends[0]!), past(ends[1]!)) : past(end);
-        // Past the baseline's side is another bar's label, or none.
-        const wrongSide = end !== null && !inside && (end === ends[0] ? from >= ends[1]! : to <= ends[0]!);
-        if (wrongSide) continue;
-        gap = inside ? 0 : beyond;
-      } else {
-        // A point's label sits above or below it, centred on it.
-        if (cx(l.box) < mark.box.left - 4 || cx(l.box) > mark.box.right + 4) continue;
-        gap = Math.max(0, l.box.top - mark.box.bottom, mark.box.top - l.box.bottom);
-      }
-      if (gap <= 24 && (!found || gap < found.gap)) found = { label: l, gap };
-    }
-    if (found) value = fold(found.label.text);
-  }
-  if (!value) {
-    const pos = mark.kind === "bar" ? end : vertical ? cy(mark.box) : cx(mark.box);
-    const read = pos === null ? null : interpolate(points, pos);
-    if (read !== null) {
-      value = `≈ ${formatLike(read, axes.numbers)} ${APPROXIMATE}`;
-      approximate = true;
-    }
+    // The mark among the chart's marks, so that ownerOf can tell it from the others.
+    const marks = [...chart.shapes.filter((s) => !sameBox(s.box, mark.box) && isMark(s.box, chart, axes)), mark];
+    const owned = valueLabels(chart, axes).filter((l) => ownerOf(l, marks, axes) === mark);
+    if (owned.length === 1) value = fold(owned[0]!.text);
   }
 
   if (!category && !value) return null;
   const said = (part: string | null) => !!part && ((omit && fold(omit) === part) || (accessible && part !== accessible && accessible.includes(part)));
   if (said(series)) series = null;
   if (said(category)) category = null;
-  const text = [series, category, value].filter(Boolean).join(" · ");
-  return { kind: mark.kind, series, category, value, approximate, text };
+  const parts = [series, category, value].filter(Boolean).join(" · ");
+  const text = value ? parts : parts ? `${parts} ${NO_VALUE}` : NO_VALUE;
+  return { kind: mark.kind, series, category, value, text };
+}
+
+/**
+ * What the person sees at a shape of a drawing that is no chart (no axes) but names its shapes: a pie's slice or a
+ * map's region with its own accessible text, in a drawing where two shapes or more name themselves differently. Only
+ * that text, nothing around it. Null otherwise (an icon's single <title> is no mark).
+ */
+export function describeNamed(accessible: string | null, named: readonly string[]): MarkReading | null {
+  const own = fold(accessible ?? "");
+  if (!own || new Set(named.map(fold).filter(Boolean)).size < 2) return null;
+  return { kind: "mark", series: null, category: null, value: own, text: own };
 }
 
 // ---- labels drawn twice ----
 
-/** What isOutlineCopy needs of an SVG text element. */
+/** What isOutlineCopy needs of an SVG text, a tspan or a run of text in one. */
 export interface SvgText {
-  tagName: string;
-  getAttribute(name: string): string | null;
-  textContent: string | null;
-  /** Whether it is drawn with a stroke only (a halo around the letters): a stroke, and a fill that is none, transparent or the stroke's own colour. */
+  text: string;
+  box: Rect;
+  /** Drawn with a stroke only (a halo around the letters): a stroke, and a fill that is none, transparent or the stroke's own colour. */
   strokeOnly: boolean;
-  /** Whether it is drawn with a stroke at all. */
+  /** Drawn with a stroke at all. */
   stroked: boolean;
 }
 
 /**
- * Whether an SVG text element is the outline copy of a label drawn twice: a halo drawn under the label so
- * it reads on any background. Highcharts marks it `highcharts-text-outline`; otherwise a text or tspan drawn
- * with a stroke only, beside an unstroked twin with the same words at the same place. A real label (filled)
- * is never one.
+ * Whether an SVG text is the outline copy of a label drawn twice: a halo drawn under the label so it reads on any
+ * background. It is drawn with a stroke only, and an unstroked twin with the same words is drawn at the same place
+ * (their centres within a pixel). A label drawn with a fill (bold-looking text with a stroke too) is never one.
  */
-export function isOutlineCopy(el: SvgText, siblings: readonly SvgText[]): boolean {
-  if (/(^|\s)highcharts-text-outline(\s|$)/.test(el.getAttribute("class") ?? "")) return true;
-  const tag = el.tagName.toLowerCase();
-  if ((tag !== "text" && tag !== "tspan") || !el.strokeOnly || !el.textContent?.trim()) return false;
-  const at = (e: SvgText) => `${e.getAttribute("x")} ${e.getAttribute("y")} ${e.getAttribute("dx")} ${e.getAttribute("dy")} ${e.getAttribute("transform")}`;
-  return siblings.some((s) => s !== el && s.tagName.toLowerCase() === tag && !s.stroked && s.textContent === el.textContent && at(s) === at(el));
+export function isOutlineCopy(el: SvgText, twins: readonly SvgText[]): boolean {
+  const words = fold(el.text);
+  if (!el.strokeOnly || !words) return false;
+  // Centres, not edges: a stroke widens a halo's box by half its width on each side (1.5 px for a 3 px halo). Rule D.
+  const near = (a: Rect, b: Rect) => Math.abs(cx(a) - cx(b)) <= 1 && Math.abs(cy(a) - cy(b)) <= 1;
+  return twins.some((t) => t !== el && !t.stroked && fold(t.text) === words && near(t.box, el.box));
 }

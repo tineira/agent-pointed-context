@@ -206,60 +206,21 @@ const FIGURES = `<!doctype html><title>Figures</title><h1>Figures</h1><h2>Countr
 <p id="contents"><span style="display:contents">Revenue fell</span> as <img src="${PIXEL}" alt="the second chart" width="20" height="20"> shows.</p>
 <p id="twice">Area is <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(1px,1px,1px,1px)"><math alttext="x^{2}"><mi>x</mi></math></span><img src="${PIXEL}" alt="x^{2}" width="20" height="20"> here.</p>
 ${CARDS}`;
-// Charts drawn in SVG (TIN-760), as Datamind's Highcharts draws them: "Venta neta", a line chart with a marker per month
-// (path.highcharts-point under a tracker line), the title "SMU" and only "0" and "1 000M" on its value axis; "Instock
-// promedio", horizontal bars with a data label at each end drawn twice (a text-outline copy under it); and a plain SVG
-// bar chart with no classes at all, one bar with a <title> of its own. The line chart also has a plot band (shading, not
-// data), a tooltip left on screen from an earlier hover (February's), an HTML data label over October's point (useHTML),
-// and a data label for July's point that the plot's clip path hides.
-const MONTHS = ["E", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
-const VENTA = [520, 610, 480, 700, 650, 590, 980, 760, 930, 880, 640, 710];
-const lineY = (m) => 260 - m * 0.2;
-const linePath = VENTA.map((m, i) => `${i ? "L" : "M"} ${80 + i * 40} ${lineY(m)}`).join(" ");
-const text = (x, y, words, anchor = "middle", extra = "") => `<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="middle" style="font:11px sans-serif"${extra}>${words}</text>`;
-const STORES = [["CENCOSUD", 98.51], ["WALMART", 96.23], ["TOTTUS", 90.42], ["SMU", 87.67], ["Total General", 94.81]];
-const barY = (i) => 40 + i * 44;
-const barEnd = (v) => 110 + v * 4;
-const pct = (v) => `${v.toFixed(2).replace(".", ",")}%`;
-const CHARTS = `<!doctype html><title>Ventas</title><body style="margin:20px;font:14px sans-serif"><h1>Tendencia de ventas</h1>
-<h2>Venta neta</h2>
-<div class="highcharts-container" id="line" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
-<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
-<rect class="highcharts-plot-background" x="60" y="40" width="520" height="220" fill="#ffffff"/>
-<defs><clipPath id="plotclip"><rect x="60" y="56" width="520" height="204"/></clipPath></defs>
-<g class="highcharts-plot-bands-0"><rect class="highcharts-plot-band" id="band" x="60" y="200" width="520" height="40" fill="rgba(68,170,213,0.2)"/></g>
-<g class="highcharts-grid highcharts-yaxis-grid"><path d="M 60 60 L 580 60" stroke="#e6e6e6" fill="none"/><path d="M 60 260 L 580 260" stroke="#e6e6e6" fill="none"/></g>
-<g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-line-series"><path class="highcharts-graph" d="${linePath}" fill="none" stroke="#2f7ed8" stroke-width="2"/></g>
-<g class="highcharts-markers highcharts-series-0 highcharts-tracker">${VENTA.map((m, i) => `<path class="highcharts-point" id="m${i}" fill="#2f7ed8" d="M ${80 + i * 40 - 4} ${lineY(m) - 4} h 8 v 8 h -8 Z"/>`).join("")}</g>
-<path class="highcharts-tracker-line" d="${linePath}" fill="none" stroke="rgba(192,192,192,0.0001)" stroke-width="22"/></g>
-${text(300, 20, "SMU", "middle", ' class="highcharts-title"')}
-<g class="highcharts-axis-labels highcharts-xaxis-labels">${MONTHS.map((m, i) => text(80 + i * 40, 276, m)).join("")}</g>
-<g class="highcharts-axis-labels highcharts-yaxis-labels">${text(50, 260, "0", "end")}${text(50, 60, "1 000M", "end")}</g>
-<g class="highcharts-data-labels highcharts-series-0" clip-path="url(#plotclip)">${text(320, 48, "999M")}</g>
-<g class="highcharts-label highcharts-tooltip" transform="translate(500,190)"><path fill="#ffffff" stroke="#333333" d="M 0 0 h 80 v 34 h -80 Z"/>${text(6, 10, "F", "start")}${text(6, 24, "SMU: 400 M", "start")}</g>
-</svg><div class="highcharts-data-labels highcharts-series-0" style="position:absolute;left:0;top:0"><div class="highcharts-label highcharts-data-label" id="octlabel" style="position:absolute;left:420px;top:${lineY(880) - 8}px;width:40px;text-align:center;font:11px sans-serif;background:rgba(255,255,255,0.6)"><span>880M</span></div></div></div>
-<h2>Instock promedio</h2>
-<div class="highcharts-container" id="bars" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
-<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
-<g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-bar-series highcharts-tracker">${STORES.map(([, v], i) => `<path class="highcharts-point" id="bar${i}" fill="#2f7ed8" d="M 110 ${barY(i) - 12} H ${barEnd(v)} V ${barY(i) + 12} H 110 Z"/>`).join("")}</g></g>
-<g class="highcharts-data-labels highcharts-series-0">${STORES.map(([, v], i) => `<g class="highcharts-label highcharts-data-label"><text x="${barEnd(v) + 5}" y="${barY(i)}" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">${pct(v)}</tspan><tspan x="${barEnd(v) + 5}">${pct(v)}</tspan></text></g>`).join("")}</g>
-<g class="highcharts-axis-labels highcharts-xaxis-labels">${STORES.map(([name], i) => text(100, barY(i), name, "end")).join("")}</g>
-<g class="highcharts-axis-labels highcharts-yaxis-labels">${Array.from({ length: 11 }, (_, i) => text(110 + i * 40, 280, `${i * 10}%`)).join("")}</g>
-</svg></div>
-<h2>Revenue by quarter</h2>
-<figure id="plain" style="margin:0;width:400px"><svg width="400" height="260">
-${text(200, 12, "Revenue")}
-<g>${text(40, 230, "0", "end")}${text(40, 130, "50", "end")}${text(40, 30, "100", "end")}</g>
-<g>${text(100, 248, "Q1")}${text(200, 248, "Q2")}${text(300, 248, "Q3")}</g>
-<g fill="#c0602a"><rect id="q1" x="80" y="130" width="40" height="100"/><rect id="q2" x="180" y="80" width="40" height="150"/><rect id="q3" x="280" y="50" width="40" height="180"><title>Q3: 90</title></rect></g>
-</svg></figure></body>`;
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/charts") ? CHARTS : req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
+// The corpus (TIN-765): static pages in scripts/extension-e2e-corpus, served by name (step 12).
+const CORPUS = resolve("scripts/extension-e2e-corpus");
+const corpus = (url) => {
+  const name = /^\/corpus\/([a-z-]+)$/.exec(url.split("?")[0])?.[1];
+  return name ? readFileSync(join(CORPUS, `${name}.html`), "utf8") : null;
+};
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/corpus/") ? corpus(req.url) : req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
 // ---- the browser, with the extension loaded over CDP ----
 const profile = mkdtempSync(join(tmpdir(), "apc-e2e-"));
-const browser = spawn(EXE, ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "about:blank"], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
+// Without occlusion tracking: on a PC someone is working on, the test's window sits behind theirs, Chrome on Windows then
+// calls its pages hidden, and step 8's Float (a picture-in-picture window) never opens.
+const browser = spawn(EXE, ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check", "--disable-features=CalculateNativeWinOcclusion", "about:blank"], { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
 const out = browser.stdio[3];
 // Once the browser closed at the end, a late write gets EPIPE: nothing to do then.
 out.on("error", () => {});
@@ -1014,43 +975,59 @@ try {
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("11. a Google-Forms-like card: a drop on its title, its margin or its answer outlines the card and sends that answer only");
 
-    // 12. Charts (TIN-760): a drop on a line chart's point outlines that point (a box drawn over it: CSS draws no outline on
-    // SVG shapes), pins there and reads its series, category and value; on a bar, its category and exact data label; on
-    // the background, the whole chart, each label once.
-    const { targetId: chartsId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/charts") });
-    const { sessionId: charts } = await cdp("Target.attachToTarget", { targetId: chartsId, flatten: true });
-    await sleep(2500);
-    const inCharts = async (expr) => (await cdp("Runtime.evaluate", { expression: expr, returnByValue: true }, charts)).result.value;
-    const boxOf = (selector) => inCharts(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    // 12. Charts and the corpus (TIN-760, TIN-765): the pages of scripts/extension-e2e-corpus, written by hand with the DOM
+    // shapes of Highcharts, ECharts, D3 and Recharts (class names included), a canvas chart, a pie and a map whose shapes
+    // name themselves and the same without names, a big table and a form. A drop on a chart's mark outlines that mark (a
+    // box drawn over it: CSS draws no outline on SVG shapes), pins there and reads what the page writes for it: its
+    // category, its series where the page declares it, and its value only when it is written (its own accessible text or a
+    // data label at it), else "(no value written on the chart)". Nothing is read off an axis. A drop elsewhere reads the
+    // whole container, each label once.
+    const NONE = "\\(no value written on the chart\\)";
+    const openCorpus = async (name) => {
+      const { targetId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", `/corpus/${name}`) });
+      const { sessionId } = await cdp("Target.attachToTarget", { targetId, flatten: true });
+      await sleep(2500);
+      return { targetId, sid: sessionId };
+    };
+    const boxIn = async (sid, selector) => (await cdp("Runtime.evaluate", { expression: `(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, sid)).result.value;
     /** Drag over (x, y), return what the outline is then, drop, and return the new reading. */
-    const dropOnChart = async (x, y) => {
+    const dropOnChart = async (sid, x, y) => {
       const before = (await latestReading())?.reading?.taken_at;
       const dragged = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
-      for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x, y, data: dragged }, charts);
+      for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x, y, data: dragged }, sid);
       // The box is in a closed shadow root: DevTools sees through it.
-      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, charts);
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
       let boxNode = null;
       const walk = (n) => {
         if ((n.attributes ?? []).includes("data-apc-outline-box")) boxNode = n.nodeId;
         for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
       };
       walk(root);
-      const q = boxNode ? (await cdp("DOM.getBoxModel", { nodeId: boxNode }, charts)).model.border : null;
-      const outlined = { box: q ? { left: q[0], top: q[1], right: q[4], bottom: q[5] } : null, outlined: await inCharts(`[...document.querySelectorAll("div,figure,svg")].filter((e) => e.style.outline.includes("solid")).map((e) => e.id || e.tagName)`) };
-      await cdp("Input.dispatchDragEvent", { type: "drop", x, y, data: dragged }, charts);
-      return { outlined, text: await nextReading(`the chart at ${Math.round(x)},${Math.round(y)}`, before) };
+      const q = boxNode ? (await cdp("DOM.getBoxModel", { nodeId: boxNode }, sid)).model.border : null;
+      const outlinedEls = (await cdp("Runtime.evaluate", { expression: `[...document.querySelectorAll("div,figure,svg,canvas,td,p,form")].filter((e) => e.style.outline.includes("solid")).map((e) => e.id || e.tagName)`, returnByValue: true }, sid)).result.value;
+      await cdp("Input.dispatchDragEvent", { type: "drop", x, y, data: dragged }, sid);
+      return { outlined: { box: q ? { left: q[0], top: q[1], right: q[4], bottom: q[5] } : null, outlined: outlinedEls }, text: await nextReading(`the corpus at ${Math.round(x)},${Math.round(y)}`, before) };
     };
     const around = (outer, inner) => outer && outer.left <= inner.left && outer.top <= inner.top && outer.right >= inner.right && outer.bottom >= inner.bottom && outer.right - outer.left < inner.right - inner.left + 12;
-    // The September point of SMU, under the tracker line laid over the series.
-    const sep = await boxOf("#m8");
-    const point = await dropOnChart(sep.x, sep.y);
-    assert.ok(around(point.outlined.box, sep), `the outline is a box around the point: ${JSON.stringify(point.outlined)}`);
+    /** Drop on an element's centre (or `at` from its top left) and check the reading's last lines; returns the drop. */
+    const expectAt = async (sid, selector, pattern, at = null) => {
+      const b = await boxIn(sid, selector);
+      const drop = await dropOnChart(sid, at ? b.left + at.x : b.x, at ? b.top + at.y : b.y);
+      assert.match(drop.text, pattern, `${selector}: ${drop.text}`);
+      assert.doesNotMatch(drop.text, /≈|approximate/, `${selector}: no value read off an axis`);
+      return { ...drop, box: b };
+    };
+
+    // Highcharts-like (charts-highcharts.html).
+    const hc = await openCorpus("charts-highcharts");
+    // The September point of SMU, under the tracker line laid over the series: no data label, so no value.
+    const point = await expectAt(hc.sid, "#m8", new RegExp(`Under the heading: Venta neta\\nPointed at \\(path, chart point\\): SMU · S ${NONE}$`, "m"));
+    assert.ok(around(point.outlined.box, point.box), `the outline is a box around the point: ${JSON.stringify(point.outlined)}`);
     assert.deepEqual(point.outlined.outlined, [], "nothing else is outlined");
-    assert.match(point.text, /Under the heading: Venta neta\nPointed at \(path, chart point\): SMU · S · ≈ 9[2-4]0M \(approximate, read from the chart's position\)$/m);
-    assert.doesNotMatch(point.text, /Instock|CENCOSUD|Revenue/, "nothing outside the chart");
+    assert.doesNotMatch(point.text, /Instock|CENCOSUD|Precios|400 M/, "nothing outside the mark, and not February's tooltip");
     // The pin, in the point's left margin, at its top.
     const pinOnPoint = await until("the pin at the point", async () => {
-      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, charts);
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, hc.sid);
       let badge = null;
       const walk = (n) => {
         if ((n.attributes ?? []).includes("data-apc-pin-state")) badge = n.nodeId;
@@ -1058,56 +1035,115 @@ try {
       };
       walk(root);
       if (!badge) return null;
-      const q = (await cdp("DOM.getBoxModel", { nodeId: badge }, charts)).model.border;
+      const q = (await cdp("DOM.getBoxModel", { nodeId: badge }, hc.sid)).model.border;
       return { left: q[0], top: q[1], right: q[4] };
     });
-    const sepNow = await boxOf("#m8");
+    const sepNow = await boxIn(hc.sid, "#m8");
     assert.ok(pinOnPoint.right <= sepNow.left && sepNow.left - pinOnPoint.right < 12 && Math.abs(pinOnPoint.top - sepNow.top) < 3, `the pin sits at the point: ${JSON.stringify({ pinOnPoint, sepNow })}`);
-    // February's tooltip is still on screen: September's value is not taken from it (above: approximate, ≈ 930M).
-    assert.doesNotMatch(point.text, /400 M/);
-    // July's data label is hidden by the plot's clip path: July is read off the axis, not from "999M".
-    const jul = await boxOf("#m6");
-    assert.match((await dropOnChart(jul.x, jul.y)).text, /Pointed at \(path, chart point\): SMU · J · ≈ (9[6-9]0M|1 000M) \(approximate/m);
-    // October's HTML data label lies over its point (useHTML): a drop on it finds the point, and the label is its value.
-    const oct = await boxOf("#octlabel");
-    const october = await dropOnChart(oct.x, oct.y);
-    assert.match(october.text, /Pointed at \(path, chart point\): SMU · O · 880M$/m);
-    assert.ok(around(october.outlined.box, await boxOf("#m9")), `the outline is a box around October's point: ${JSON.stringify(october.outlined)}`);
-    // The line chart's background, and its plot band (shading, not data): the whole chart, as before.
-    const line = await boxOf("#line svg");
+    // July's data label is hidden by the plot's clip path: July has no value written.
+    assert.doesNotMatch((await expectAt(hc.sid, "#m6", new RegExp(`Pointed at \\(path, chart point\\): SMU · J ${NONE}$`, "m"))).text, /999M/);
+    // October's HTML data label lies over its point: a drop on it finds the point, and the label is its value.
+    const october = await expectAt(hc.sid, "#octlabel", /Pointed at \(path, chart point\): SMU · O · 880M$/m);
+    assert.ok(around(october.outlined.box, await boxIn(hc.sid, "#m9")), `the outline is a box around October's point: ${JSON.stringify(october.outlined)}`);
+    // The line chart's background, and its plot band (shading, not data): the whole chart.
+    const line = await boxIn(hc.sid, "#line svg");
     for (const at of [{ x: line.left + 40, y: line.top + 180 }, { x: line.left + 300, y: line.top + 220 }]) {
-      const background = await dropOnChart(at.x, at.y);
+      const background = await dropOnChart(hc.sid, at.x, at.y);
       assert.equal(background.outlined.box, null, "no box over a mark");
       assert.deepEqual(background.outlined.outlined, ["line"], "the chart is outlined");
       assert.match(background.text, /Under the heading: Venta neta\nPointed at \(div\): SMU E F M A M J J A S O N D 0 1 000M/m);
       assert.doesNotMatch(background.text, /999M/, "a label the plot's clip path hides is not read");
     }
-    // The SMU bar: its category and its exact label.
-    const smu = await boxOf("#bar3");
-    const smuBar = await dropOnChart(smu.x, smu.y);
-    assert.ok(around(smuBar.outlined.box, smu), `the outline is a box around the bar: ${JSON.stringify(smuBar.outlined)}`);
-    assert.match(smuBar.text, /Under the heading: Instock promedio\nPointed at \(path, chart bar\): SMU · 87,67%$/m);
-    // Another bar, near its end: its own row and label.
-    const cencosud = await boxOf("#bar0");
-    assert.match((await dropOnChart(cencosud.right - 10, cencosud.y)).text, /Pointed at \(path, chart bar\): CENCOSUD · 98,51%$/m);
-    // The bar chart's background: the chart, each value once.
-    // Under Ask per drop the hub takes a run of these percentages for a card number (their digits pass the Luhn check)
-    // and leaves part of it out; with Send, the text is checked as the extension read it.
-    await setSensitive("send");
-    const bars = await boxOf("#bars svg");
-    const barsBackground = await dropOnChart(bars.right - 20, bars.top + 12);
-    await setSensitive("ask");
+    // Instock: a bar with a data label reads its category and that exact label.
+    const walmart = await expectAt(hc.sid, "#bar1", /Under the heading: Instock promedio\nPointed at \(path, chart bar\): WALMART · 96,23%$/m);
+    assert.ok(around(walmart.outlined.box, walmart.box), `the outline is a box around the bar: ${JSON.stringify(walmart.outlined)}`);
+    await expectAt(hc.sid, "#bar3", /Pointed at \(path, chart bar\): SMU · 87,67%$/m);
+    const cencosud = await boxIn(hc.sid, "#bar0");
+    assert.match((await dropOnChart(hc.sid, cencosud.right - 10, cencosud.y)).text, /Pointed at \(path, chart bar\): CENCOSUD · 98,51%$/m);
+    // The bar chart's background: the chart, each value once (its outline copies skipped).
+    const bars = await boxIn(hc.sid, "#bars svg");
+    const barsBackground = await dropOnChart(hc.sid, bars.right - 20, bars.top + 12);
     assert.match(barsBackground.text, /Pointed at \(div\): 98,51% 96,23% 90,42% 87,67% 94,81% CENCOSUD WALMART TOTTUS SMU Total General 0% 10% 20%/);
     assert.doesNotMatch(barsBackground.text, /98,51%\s*98,51%/, "each label once");
-    // A plain SVG chart: the axes found by their place, the title above them names the series; a bar's own <title> is exact.
-    const q2 = await boxOf("#q2");
-    assert.match((await dropOnChart(q2.x, q2.y)).text, /Under the heading: Revenue by quarter\nPointed at \(rect, chart bar\): Revenue · Q2 · ≈ 7[4-6](\.\d)? \(approximate, read from the chart's position\)$/m);
-    const q3 = await boxOf("#q3");
-    assert.match((await dropOnChart(q3.x, q3.y)).text, /Pointed at \(rect, chart bar\): Revenue · Q3: 90$/m);
-    await cdp("Target.closeTarget", { targetId: chartsId });
+    // Under the default Ask per drop (the hub fixed TIN-762): the percentages arrive whole, none taken for a card number.
+    assert.doesNotMatch(barsBackground.text, /sensitive number left out/);
+    // Precios, two value axes: a column of sales and a point of the price line read their month and no value, never a
+    // value off either axis.
+    const ago = await expectAt(hc.sid, "#col1", new RegExp(`Under the heading: Precios\\nPointed at \\(path, chart bar\\): Ago ${NONE}$`, "m"), { x: 15, y: 120 });
+    assert.doesNotMatch(ago.text, /4[.,]1\dk|240M|Venta ·|Precio ·/);
+    assert.ok(around(ago.outlined.box, ago.box), `the outline is a box around the column: ${JSON.stringify(ago.outlined)}`);
+    await expectAt(hc.sid, "#price2", new RegExp(`Pointed at \\(path, chart point\\): Sep ${NONE}$`, "m"));
+    // Its legend's symbol, under the months, is no mark: the whole chart.
+    const legend = await expectAt(hc.sid, "#legendsales", /Under the heading: Precios\nPointed at \(div\): /m);
+    assert.equal(legend.outlined.box, null, "no box over the legend");
+    // Precios con etiquetas: each column's sales label is its value; a price's label, drawn above its point and on the
+    // column behind it, could be either's, so it is nobody's (rule A).
+    const labelled = await expectAt(hc.sid, "#lcol1", /Under the heading: Precios con etiquetas\nPointed at \(path, chart bar\): Ago · 300M$/m, { x: 15, y: 30 });
+    assert.doesNotMatch(labelled.text, /3[.,]75k/);
+    await expectAt(hc.sid, "#lprice1", new RegExp(`Under the heading: Precios con etiquetas\\nPointed at \\(path, chart point\\): Ago ${NONE}$`, "m"));
+    // A stack: each segment's value is the label inside it; the stack's total above is no segment's (rule A).
+    const storeQ1 = await expectAt(hc.sid, "#store0", /Under the heading: Ventas por canal\nPointed at \(rect, chart bar\): Q1 · 70$/m);
+    const onlineQ1 = await expectAt(hc.sid, "#online0", /Pointed at \(rect, chart bar\): Q1 · 80$/m, { x: 30, y: 60 });
+    for (const t of [storeQ1.text, onlineQ1.text]) assert.doesNotMatch(t.split("\n").pop(), /150/, "the total is no segment's value");
+    // The small segments keep the labels written on them too (fix round 2): Q3's stores (50 px), Q2's online (60 px).
+    await expectAt(hc.sid, "#store2", /Pointed at \(rect, chart bar\): Q3 · 50$/m);
+    await expectAt(hc.sid, "#online1", /Pointed at \(rect, chart bar\): Q2 · 60$/m);
+    // Stale tooltips that write their number apart from their words (an SVG one, its number hanging out of its box under
+    // March's point; an HTML one with no shape over April's): never a value. January's own label is.
+    await expectAt(hc.sid, "#v0", /Under the heading: Visitas por mes\nPointed at \(path, chart point\): Visitas · Ene · 300$/m);
+    await expectAt(hc.sid, "#v2", new RegExp(`Pointed at \\(path, chart point\\): Visitas · Mar ${NONE}$`, "m"));
+    await expectAt(hc.sid, "#v3", new RegExp(`Pointed at \\(path, chart point\\): Visitas · Abr ${NONE}$`, "m"));
+    // A year as the title, drawn in the plot's margin over a column at the top tick: no value of that column's.
+    await expectAt(hc.sid, "#yQ2", new RegExp(`Under the heading: Ventas del año\\nPointed at \\(rect, chart bar\\): Q2 ${NONE}$`, "m"));
+    await expectAt(hc.sid, "#yQ1", /Pointed at \(rect, chart bar\): Q1 · 120$/m);
+    await cdp("Target.closeTarget", { targetId: hc.targetId });
+
+    // ECharts-like, D3 and Recharts-like (charts-libraries.html).
+    const libs = await openCorpus("charts-libraries");
+    // ECharts' SVG: the title "Visits" names its one series, the data label above the bar is its value.
+    await expectAt(libs.sid, "#ewed", /Under the heading: Site traffic\nPointed at \(path, chart bar\): Visits · Wed · 150$/m);
+    // D3: no data labels, so no value; a bar with a <title> of its own reads it.
+    await expectAt(libs.sid, "#dB", new RegExp(`Under the heading: Letter frequency\\nPointed at \\(rect, chart bar\\): B ${NONE}$`, "m"));
+    await expectAt(libs.sid, "#dC", /Pointed at \(rect, chart bar\): C: 2\.78%$/m);
+    // Recharts: pv's label is pv's bar's value; uv's bar beside it has none written.
+    await expectAt(libs.sid, "#pv1", /Under the heading: Page views\nPointed at \(path, chart bar\): Page B · 1398$/m);
+    await expectAt(libs.sid, "#uv1", new RegExp(`Pointed at \\(path, chart bar\\): Page B ${NONE}$`, "m"));
+    // Hidden labels (rule C): text the person cannot see, far off screen or in a control is never read: the series is the
+    // visible "Sales" without its hidden span; A, B and C have no value written; D's ordinary label is its value.
+    const SECRETS = /998877665544|424242|112233445566|4321|5566|777|4040|6060|7070|Internal|4455/;
+    for (const [id, end] of [["#hA", `A ${NONE}`], ["#hB", `B ${NONE}`], ["#hC", `C ${NONE}`], ["#hD", "D · 140"]]) {
+      const hiddenDrop = await expectAt(libs.sid, id, new RegExp(`Under the heading: Hidden labels\\nPointed at \\(rect, chart bar\\): Sales · ${end}$`, "m"));
+      assert.doesNotMatch(hiddenDrop.text, SECRETS, `${id}: nothing hidden, off screen or in a control`);
+    }
+    // The chart's background: the whole chart, still without what is hidden.
+    const hiddenBox = await boxIn(libs.sid, "#hidden svg");
+    assert.doesNotMatch((await dropOnChart(libs.sid, hiddenBox.left + 460, hiddenBox.top + 150)).text, /998877665544|424242|112233445566|777|4040|6060|7070|4455/);
+    await cdp("Target.closeTarget", { targetId: libs.targetId });
+
+    // A canvas chart, a pie and a map with and without names, a big table and a form (charts-other.html).
+    const rest = await openCorpus("charts-other");
+    // A canvas has no marks: its container.
+    const canvas = await expectAt(rest.sid, "#cv", /Under the heading: Monthly churn\nPointed at \(figure\): Churn by month, 2026$/m);
+    assert.deepEqual(canvas.outlined.outlined, ["canvaschart"]);
+    // A slice and a region that name themselves are marks, read from that name only.
+    const slice = await expectAt(rest.sid, "#pie-cencosud", /Under the heading: Market share\nPointed at \(path, chart mark\): CENCOSUD: 38%$/m);
+    assert.ok(around(slice.outlined.box, slice.box), `the outline is a box around the slice: ${JSON.stringify(slice.outlined)}`);
+    await expectAt(rest.sid, "#map-1", /Under the heading: Customers by region\nPointed at \(path, chart mark\): Santiago: 7\.1M$/m);
+    // Without names: no marks, the whole figure.
+    const unnamedPie = await expectAt(rest.sid, "#pie2-cencosud", /Under the heading: Market share, unnamed slices\nPointed at \(figure\): Share of sales by store, without names$/m);
+    assert.deepEqual([unnamedPie.outlined.box, unnamedPie.outlined.outlined], [null, ["pie2"]]);
+    await expectAt(rest.sid, "#map2-1", /Under the heading: Customers by region, unnamed regions\nPointed at \(figure\): Customers in each region, without names$/m);
+    // A big table: the cell, its column and its row, as before.
+    await expectAt(rest.sid, "#stores tbody tr:nth-child(25) td:nth-child(3)", /Under the heading: Stores\nTable column: Sales\nTable row: Store 25\nPointed at \(td\): 2,125$/m);
+    // A form: the field and what was typed in it.
+    const goal = await expectAt(rest.sid, "#goalstore", /\n- Store: SMU \(pointed at\)/);
+    assert.doesNotMatch(goal.text, /chart (point|bar|mark)|Target %/);
+    // Outside charts: a paragraph clipped by a rect clip path that shows all of it is read whole (fix round 2).
+    await expectAt(rest.sid, "#clippedpara", /Under the heading: Clipped paragraph\nPointed at \(p\): A paragraph clipped by a rect that shows all of it\.$/m);
+    await cdp("Target.closeTarget", { targetId: rest.targetId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
-    console.log("12. a chart's point or bar is outlined, pinned and read as series, category and value; its background reads the whole chart, each label once");
+    console.log("12. the corpus: a chart's mark is outlined, pinned and read from what the page writes for it (never a value off an axis); a shape that names itself is a mark; canvas, unnamed shapes, a table and a form read as before");
 
     // 7 (before 6, which unpairs). A site the person did not grant has no listener: the same page on localhost sends nothing.
     const other = await cdp("Target.createTarget", { url: pageUrl.replace("127.0.0.1", "localhost") });
