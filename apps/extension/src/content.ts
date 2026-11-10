@@ -14,7 +14,7 @@ import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../package
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { chartAxes, describeMark, describeNamed, isMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type MarkReading, type SvgText } from "./chart.ts";
-import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
+import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, classify, formState, intersect, isHeading, isItem, isTitleControl, namesBox, OPACITY_MIN, ownsHeadings, pageLevel, selectTitle, showsIn, tableContext, titleOf, visibleWords, visuallyHidden, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,[role=heading],a,button,label,legend,summary";
@@ -1190,6 +1190,56 @@ function textWithout(el: Element): string {
   return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
+/** The words of a control that titles a box, as the person sees them: a select's chosen option, or a combobox's own shown text; null when it shows none or they are a secret. */
+function titleWords(el: Element): string | null {
+  const popup = el.getAttribute("aria-haspopup");
+  const select = el instanceof HTMLSelectElement ? el : null;
+  // Editable: its words may be what the person typed (a search box drawn as a combobox, an input inside it).
+  const editable = el.hasAttribute("aria-autocomplete") || (el as HTMLElement).isContentEditable || !!el.querySelector("input,textarea,[contenteditable]:not([contenteditable=false])");
+  if (!isTitleControl(el.tagName, el.getAttribute("role"), popup, !!select?.multiple, editable)) return null;
+  // What a person sees of it: a control hidden, clipped away or transparent shows nothing.
+  if (!rendered(el) || visuallyHidden(seenOf(el), true)) return null;
+  let words: string | null;
+  if (select) words = selectTitle([...select.options].map((o) => ({ text: o.label || o.text, selected: o.selected })));
+  // A widget that draws its list inside itself shows every option: its shown value cannot be told from them.
+  else if (el.querySelector('select,option,[role=listbox],[role=option],[role=menu],ul,ol')) words = null;
+  else words = readable(el, 200).replace(/\s+/g, " ").trim() || null;
+  if (!words) return null;
+  const labels = "labels" in el ? [...((el as HTMLInputElement).labels ?? [])] : [];
+  const word = (name: string) => el.getAttribute(name);
+  // A value is a title by the same classification as a form's: a control that holds a secret never is one.
+  if (classify({ kind: "select", type: "select", label: labelOf(el, labels), group: null, name: word("name"), id: el.id || null, autocomplete: word("autocomplete"), placeholder: null, value: words })) return null;
+  return words.slice(0, 200);
+}
+
+/** What a box names itself by: the words aria-labelledby points at that the person sees, else its aria-label (on a box that is a region, table, group, dialog...). */
+function namedBy(el: Element): string | null {
+  // Who may name a box (namesBox) comes before either attribute is read; so does being shown: a box the person does not see names nothing.
+  if (!namesBox(el.tagName, el.getAttribute("role"), el instanceof SVGElement)) return null;
+  if (!rendered(el) || el.closest('[aria-hidden="true"]')) return null;
+  const by = el.getAttribute("aria-labelledby");
+  if (by) {
+    const root = el.getRootNode() as Document | ShadowRoot;
+    const seen = by
+      .split(/\s+/)
+      .map((id) => root.getElementById?.(id) ?? document.getElementById(id))
+      .filter((n): n is HTMLElement => !!n)
+      .map((n) => readable(n, 200).replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join(" ");
+    if (seen) return seen.slice(0, 200);
+  }
+  return el.getAttribute("aria-label")?.replace(/\s+/g, " ").trim().slice(0, 200) || null;
+}
+
+/**
+ * Whether an element shows nothing that stops the search for a box's title control: no words, no control, no
+ * drawing or picture that names itself. A decorative icon (an svg or img with no alt, aria-label, title or
+ * words) is nothing; a picture that says what it is, a canvas, a video or a frame is something.
+ */
+const BLANK_KEEPS = 'select,input,textarea,button,canvas,video,iframe,[role=combobox],[role=button],img[alt]:not([alt=""]),[aria-label],[title],svg:has(title)';
+const showsNothing = (e: Element): boolean => !rendered(e) || (!e.matches(BLANK_KEEPS) && !e.querySelector(BLANK_KEEPS) && seenLength(e) === 0);
+
 /** headingOf on the page: headings the person sees, across open shadow roots. */
 const outline = {
   up: parentOf,
@@ -1197,12 +1247,23 @@ const outline = {
   children: (e: Element) => [...(e.shadowRoot?.children ?? []), ...e.children],
   heading: (e: Element) => isHeading(e.tagName, e.getAttribute("role")) && seenLength(e) > 0,
   owns: (e: Element) => ownsHeadings(e.tagName, e.getAttribute("role")),
+  // A box's title control (TIN-766): the first thing it shows, with no words before it in the same element.
+  title: (e: Element) => {
+    for (let p = e.previousSibling; p; p = p.previousSibling) if (p.nodeType === Node.TEXT_NODE && p.textContent?.trim()) return false;
+    return titleWords(e) !== null;
+  },
+  blank: showsNothing,
+  named: namedBy,
+  page: (e: Element) => pageLevel(e.tagName, e.getAttribute("role"), !!e.closest("article,section,aside,nav,[role=region],[role=dialog]")) || !parentOf(e),
 };
 
-/** The heading an element is under (headingOf), as the person sees it (readable), never innerText. */
+/** The heading an element is under (titleOf), as the person sees it (readable, or a title control's chosen value), never innerText. */
 function headingFor(el: Element): string | null {
-  const found = headingOf<Element>(el, outline);
-  return found ? readable(found, 200).replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
+  const found = titleOf<Element>(el, outline);
+  if (!found) return null;
+  if ("label" in found) return found.label;
+  const words = titleWords(found.el) ?? readable(found.el, 200);
+  return words.replace(/\s+/g, " ").trim().slice(0, 200) || null;
 }
 
 /**

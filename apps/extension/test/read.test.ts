@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, NO_ALT, ownsHeadings, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, isTitleControl, namesBox, NO_ALT, ownsHeadings, pageLevel, selectTitle, titleOf, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -229,6 +229,157 @@ test("a paragraph is under the heading before it, never one inside a section, it
   const q = el("div", [el("div", ["Email"], { role: "heading" }), el("div", ["Your answer"])], { role: "listitem" });
   assert.equal(title(q), "Email");
   assert.equal(headingOf(el("p", ["alone"]), outline), null);
+});
+
+/** Whether a node is inside sectioning content, where a header or footer is its box's own. */
+const scoped = (n: Node): boolean => {
+  for (let p = n.parent; p; p = p.parent) if (["article", "section", "aside", "nav"].includes(p.tag) || p.role === "region" || p.role === "dialog") return true;
+  return false;
+};
+
+/** The outline with title controls (TIN-766): a select or a combobox shows its chosen value as its own words. */
+const titled = {
+  ...outline,
+  title: (n: Node) => isTitleControl(n.tag, n.role, null, false) && textOf(n).length > 0,
+  blank: (n: Node) => n.tag !== "select" && textOf(n).length === 0,
+  named: (n: Node) => (namesBox(n.tag, n.role, false) ? (n as Node & { name?: string }).name ?? null : null),
+  page: (n: Node) => pageLevel(n.tag, n.role, scoped(n)),
+};
+const words = (n: Node) => {
+  const f = titleOf(n, titled);
+  return !f ? null : "el" in f ? textOf(f.el) : f.label;
+};
+/** A dashboard panel as a BI tool draws one: a header holding a title (a heading or a dropdown) above a table. */
+const panel = (title: Node, row: string) => {
+  const cell = el("td", [row]);
+  const body = el("tr", [el("td", ["SMU"]), cell]);
+  const table = el("table", [el("tbody", [body])]);
+  const box = el("div", [el("div", [title]), table]);
+  return { box, body, cell, table };
+};
+
+test("a block is under its own box's title, also when that title is a dropdown, never the panel before it (titleOf, TIN-766)", () => {
+  const first = panel(el("h3", ["Venta Perdida por tipo"]), "$1.000");
+  const second = panel(el("select", ["(I) Retailer"]), "$1.526.243");
+  const third = panel(el("div", ["(L) Local"], { role: "combobox" }), "$7");
+  el("body", [first.box, second.box, third.box]);
+  // The row of the table under the dropdown reads under the dropdown's chosen value, not the h3 before it.
+  assert.equal(words(second.body), "(I) Retailer");
+  assert.equal(words(second.cell), "(I) Retailer");
+  assert.equal(words(second.table), "(I) Retailer");
+  // A table under an h3 keeps it; a combobox button titles its panel; panels never swap titles.
+  assert.equal(words(first.body), "Venta Perdida por tipo");
+  assert.equal(words(third.body), "(L) Local");
+  assert.equal(words(second.box), "(I) Retailer");
+});
+
+test("a dropdown past the box's first thing, or after words, is a filter of the body, not its title (TIN-766)", () => {
+  const h = el("h3", ["Sales"]);
+  const filter = el("select", ["Last 7 days"]);
+  const table = el("table", [el("tr", [el("td", ["x"])])]);
+  el("body", [el("div", [h, filter, table])]);
+  // The h3 comes first in the box: the dropdown after it is not what the table is titled by.
+  assert.equal(words(table), "Sales");
+  // Words before the dropdown are a label of something else: the box has no control title.
+  const lead = el("div", [el("p", ["Pick one"]), el("select", ["Option A"]), el("table", [el("tr", [el("td", ["y"])])])]);
+  el("body", [el("h2", ["Report"]), lead]);
+  assert.equal(words(lead.kids[2]!), "Report");
+  // A dropdown deeper than a wrapper is not at the top.
+  const deep = el("div", [el("div", [el("div", [el("select", ["Deep"])])]), el("table", [el("tr", [el("td", ["z"])])])]);
+  el("body", [el("h2", ["Report"]), deep]);
+  assert.equal(words(deep.kids[1]!), "Report");
+});
+
+test("a block with no title of its own falls back to the page's order; a labelled box is named by its markup (TIN-766)", () => {
+  const bare = el("div", [el("table", [el("tr", [el("td", ["a"])])])]);
+  el("body", [el("h2", ["Before"]), bare]);
+  assert.equal(words(bare.kids[0]!), "Before");
+  const region = Object.assign(el("section", [el("table", [el("tr", [el("td", ["b"])])])]), { name: "Churn by plan" });
+  el("body", [el("h2", ["Before"]), region]);
+  assert.equal(words(region.kids[0]!), "Churn by plan");
+  // A real heading nearer than the box's name wins; a box with no name and no title lets the order decide.
+  const near = Object.assign(el("section", [el("h4", ["Nearer"]), el("p", ["text"])]), { name: "Panel" });
+  el("body", [near]);
+  assert.equal(words(near.kids[1]!), "Nearer");
+});
+
+test("a title control is a select with one choice, a combobox, or a listbox button; never a typed field or a list of options (isTitleControl, selectTitle)", () => {
+  assert.equal(isTitleControl("SELECT", null, null, false), true);
+  assert.equal(isTitleControl("select", null, null, true), false);
+  assert.equal(isTitleControl("div", "combobox", null, false), true);
+  assert.equal(isTitleControl("input", "combobox", null, false), false);
+  assert.equal(isTitleControl("textarea", null, null, false), false);
+  assert.equal(isTitleControl("button", null, "listbox", false), true);
+  assert.equal(isTitleControl("button", null, "menu", false), false);
+  assert.equal(isTitleControl("div", "listbox", null, false), false);
+  // A select gives its chosen option and never the others.
+  const options = [{ text: "(L) Local", selected: false }, { text: " (I)  Retailer ", selected: true }, { text: "(E) Producto Externo", selected: false }];
+  assert.equal(selectTitle(options), "(I) Retailer");
+  assert.equal(selectTitle(options.map((o) => ({ ...o, selected: false }))), null);
+  assert.equal(selectTitle(options.map((o) => ({ ...o, selected: true }))), null);
+});
+
+test("a row, cell, list item, main, header or footer names no box, by aria-labelledby or aria-label alike (namesBox, TIN-766)", () => {
+  assert.equal(namesBox("section", null, false), true);
+  assert.equal(namesBox("div", "region", false), true);
+  for (const [tag, role] of [["tr", "row"], ["td", "cell"], ["li", "listitem"], ["main", null], ["header", null], ["footer", null], ["div", "generic"], ["body", null], ["html", null]] as const) assert.equal(namesBox(tag, role, false), false, `${tag} ${role}`);
+  // By tag alone, with no role written: a row, cell and list item are what they are.
+  for (const tag of ["tr", "td", "th", "li"]) assert.equal(namesBox(tag, null, false), false, tag);
+  assert.equal(namesBox("g", null, true), false, "a drawing's group");
+  // A named row keeps the panel's heading; a named main does not title a panel inside it.
+  const named = (n: Node, name: string) => Object.assign(n, { name });
+  const row = named(el("tr", [el("th", ["Payment to Vendor A"]), el("td", ["$500"])], { role: "row" }), "Payment to Vendor A");
+  el("body", [el("div", [el("h3", ["Transactions"]), el("table", [row])])]);
+  assert.equal(words(row.kids[1]!), "Transactions");
+  const target = el("td", ["$42"]);
+  const main = named(el("main", [el("div", [el("h3", ["Regional Sales"]), el("table", [el("tr", [el("td", ["x"])])])]), el("div", [el("table", [el("tr", [target])])])]), "Analytics Portal");
+  el("body", [el("h1", ["Analytics Portal"]), main]);
+  assert.equal(words(target), "Regional Sales");
+});
+
+test("no control titles the page as a whole: a tenant select in a header never titles a panel (pageLevel, TIN-766)", () => {
+  assert.equal(pageLevel("BODY", null), true);
+  assert.equal(pageLevel("div", "navigation"), true);
+  assert.equal(pageLevel("div", null), false);
+  const cell = el("td", ["100"]);
+  el("body", [el("header", [el("select", ["Acme Corp"])]), el("main", [el("div", [el("table", [el("tr", [cell])])])])]);
+  assert.equal(words(cell), null);
+  // Nor the first thing in main or in a nav.
+  const cell2 = el("td", ["7"]);
+  el("body", [el("main", [el("div", [el("select", ["Language"])]), el("div", [el("table", [el("tr", [cell2])])])])]);
+  assert.equal(words(cell2), null);
+});
+
+test("a combobox that holds what the person typed is never a title (isTitleControl)", () => {
+  assert.equal(isTitleControl("div", "combobox", null, false, false), true);
+  assert.equal(isTitleControl("div", "combobox", null, false, true), false, "aria-autocomplete, an input inside it, contenteditable");
+  assert.equal(isTitleControl("button", null, "listbox", false, true), false);
+});
+
+test("an icon with no name before the title control does not stop the search for it (titleOf, TIN-766)", () => {
+  const select = el("select", ["(I) Retailer"]);
+  const cell = el("td", ["$100"]);
+  el("body", [el("h2", ["Before"]), el("div", [el("div", [el("svg", [], { inline: true }), select]), el("table", [el("tr", [cell])])])]);
+  assert.equal(words(cell), "(I) Retailer");
+  // A picture or words before it do stop it: the control is then not the first thing the box shows.
+  const cell2 = el("td", ["$2"]);
+  el("body", [el("h2", ["Before"]), el("div", [el("div", [el("span", ["Filters"]), el("select", ["(I) Retailer"])]), el("table", [el("tr", [cell2])])])]);
+  assert.equal(words(cell2), "Before");
+});
+
+test("a header or footer inside a card or section is that box's own, not the page's (pageLevel, TIN-766)", () => {
+  assert.equal(pageLevel("header", null, false), true);
+  assert.equal(pageLevel("header", null, true), false);
+  assert.equal(pageLevel("div", "banner", true), false);
+  assert.equal(pageLevel("footer", null, true), false);
+  assert.equal(pageLevel("main", null, true), true);
+  // A card whose toolbar is a header: the dropdown in it titles the card; the page's own header select still titles nothing.
+  const cell = el("td", ["12"]);
+  el("body", [el("h2", ["Before"]), el("article", [el("header", [el("select", ["Active Projects"])]), el("table", [el("tr", [cell])])])]);
+  assert.equal(words(cell), "Active Projects");
+  const other = el("td", ["9"]);
+  el("body", [el("header", [el("select", ["Acme Corp"])]), el("div", [el("table", [el("tr", [other])])])]);
+  assert.equal(words(other), null);
 });
 
 // TIN-622: a token with no space that spans lines is kept only where it shows.

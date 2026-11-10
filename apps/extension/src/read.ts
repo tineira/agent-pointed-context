@@ -443,45 +443,138 @@ export interface Outline<E> {
   heading: (e: E) => boolean;
   /** ownsHeadings. */
   owns: (e: E) => boolean;
+  /** A control that can title the box it tops (isTitleControl), that the person sees, with a value to show that is not a secret. */
+  title?: (e: E) => boolean;
+  /** An element that shows nothing: no words, no control, no image. */
+  blank?: (e: E) => boolean;
+  /** The words a box is named by, from its own markup: aria-labelledby (the element's words the person sees) or aria-label. */
+  named?: (e: E) => string | null;
+  /** A box of the page as a whole (pageLevel), which no control titles. */
+  page?: (e: E) => boolean;
 }
 
-/** The first (or last) heading in an element, in the page's order, past the ones inside an element that owns its headings. */
-function headingIn<E>(e: E, t: Outline<E>, last: boolean): E | null {
+/** Roles that name no box (namesBox). */
+const UNTITLED_ROLES = new Set(["presentation", "none", "generic", "row", "cell", "gridcell", "columnheader", "rowheader", "listitem", "option", "treeitem", "main", "banner", "contentinfo"]);
+
+/**
+ * Whether a box may name itself by its own markup (aria-labelledby and aria-label alike, TIN-766): not the
+ * page's root or body, not `main`, `header` or `footer`, not a row, cell, list item or option, not a
+ * drawing's shape or group (a chart's series), and not a generic or presentational role. Their names say what
+ * the thing is for a reader, not what the panel around the block is about.
+ */
+export function namesBox(tag: string, role: string | null, svg: boolean): boolean {
+  const t = tag.toLowerCase();
+  return !svg && !["html", "body", "main", "header", "footer", "tr", "td", "th", "li", "option"].includes(t) && !(role && UNTITLED_ROLES.has(role));
+}
+
+/**
+ * Whether a box is the page as a whole or one of its bars: `html`, `body`, `main`, `header`, `footer`, `nav`,
+ * or the roles of them. A control at the top of one of these (a tenant, a language, a site menu) belongs to the
+ * page, never to a panel in it, so none of them has a title control (topTitle). A `header` or `footer` (or
+ * banner, contentinfo) inside sectioning content (an `article`, `section`, `aside`, `nav`, region or dialog) is
+ * that box's own header, as HTML scopes them: `scoped`, and then not the page's.
+ */
+export const pageLevel = (tag: string, role: string | null, scoped = false): boolean =>
+  ["html", "body", "main", "nav"].includes(tag.toLowerCase()) ||
+  (!!role && ["main", "navigation"].includes(role)) ||
+  (!scoped && (["header", "footer"].includes(tag.toLowerCase()) || (!!role && ["banner", "contentinfo"].includes(role))));
+
+/**
+ * Whether a control is the kind a panel is titled by: a dropdown that picks the view or dimension it shows
+ * (TIN-766). A select that shows one choice, a `role=combobox` that is not a typed field, or a button that
+ * opens a listbox. Never a typed field (its words are the person's), nor a list that shows all its options.
+ */
+export function isTitleControl(tag: string, role: string | null, popup: string | null, multiple: boolean, editable = false): boolean {
+  const t = tag.toLowerCase();
+  if (t === "select") return !multiple;
+  if (t === "input" || t === "textarea") return false;
+  // Anything that holds what the person typed (aria-autocomplete, an input inside, contenteditable) is never a heading.
+  if (editable) return false;
+  if (role === "combobox") return true;
+  return (t === "button" || role === "button") && popup === "listbox";
+}
+
+/** What a select shows as its choice: the one chosen option's own text, never the others; null when none or several are chosen or it has no words. */
+export function selectTitle(options: readonly { text: string; selected: boolean }[]): string | null {
+  const chosen = options.filter((o) => o.selected);
+  return chosen.length === 1 ? chosen[0]!.text.replace(/\s+/g, " ").trim() || null : null;
+}
+
+/** The first (or last) heading in an element, in the page's order, past the ones inside an element that owns its headings; `top` counts as one. */
+function headingIn<E>(e: E, t: Outline<E>, last: boolean, top: E | null): E | null {
   const kids = last ? [...t.children(e)].reverse() : t.children(e);
   for (const c of kids) {
-    if (t.heading(c)) return c;
+    if (t.heading(c) || c === top) return c;
     if (t.owns(c)) continue;
-    const h = headingIn(c, t, last);
+    const h = headingIn(c, t, last, top);
     if (h) return h;
   }
   return null;
 }
 
 /**
- * The heading an element is under (TIN-697): the heading it is in or is; else its own first heading, as a
- * card's title, past the headings of the items inside it; else, going up, the nearest heading before it
- * among what surrounds it, never one inside an item, section, aside or nav it is not in (ownsHeadings);
- * leaving an item or section it is in with none found, that one's own first heading, as a photo above a
- * card's title is under that title. In a grid of cards, a card is under its own title or the grid's
- * heading, never under the card before it.
+ * The control that titles a box (TIN-766): the first thing the box shows, directly or inside one wrapper
+ * (a toolbar, a header row), when that is a title control (Outline.title). A heading, an item or section,
+ * or any other first thing means the box has no such control, and a control further in is a filter of its
+ * body, not its title.
  */
-export function headingOf<E>(el: E, t: Outline<E>): E | null {
-  for (let at: E | null = el; at; at = t.up(at)) if (t.heading(at)) return at;
-  const own = headingIn(el, t, false);
-  if (own) return own;
+function topTitle<E>(box: E, t: Outline<E>, depth = 0): E | null {
+  // Page level is asked of the box itself only: a wrapper inside a box already accepted is never the page.
+  if (!t.title || (depth === 0 && t.page?.(box))) return null;
+  for (const c of t.children(box)) {
+    if (t.blank?.(c)) continue;
+    if (t.title(c)) return c;
+    if (depth > 0 || t.heading(c) || t.owns(c)) return null;
+    return topTitle(c, t, depth + 1);
+  }
+  return null;
+}
+
+/** What titles a block: an element of the page, or words from a box's own markup. */
+export type Title<E> = { el: E } | { label: string };
+
+/**
+ * The title an element is under (TIN-697, TIN-766): the heading it is in or is; else its own first
+ * heading, as a card's title, past the headings of the items inside it; else, going up, in each box it is
+ * in, the nearest heading before it among what surrounds it, never one inside an item, section, aside or
+ * nav it is not in (ownsHeadings); leaving an item or section it is in with none found, that one's own
+ * first heading, as a photo above a card's title is under that title. In a grid of cards, a card is under
+ * its own title or the grid's heading, never under the card before it.
+ *
+ * A box is titled by what it declares before the page's order is used (TIN-766): a heading, the control
+ * that tops it (topTitle: a dropdown that picks what the box shows counts as its heading), or its own
+ * markup (aria-labelledby, aria-label; Outline.named). Each is looked for in the box before the box
+ * before it, so a block is never put under the title of the panel next to its own, whose title it can
+ * not see: a box that has a title of its own keeps the block in it.
+ */
+export function titleOf<E>(el: E, t: Outline<E>): Title<E> | null {
+  for (let at: E | null = el; at; at = t.up(at)) if (t.heading(at)) return { el: at };
+  const own = headingIn(el, t, false, topTitle(el, t));
+  if (own) return { el: own };
+  const self = t.named?.(el);
+  if (self) return { label: self };
   for (let child = el, at = t.up(el); at; child = at, at = t.up(at)) {
+    const top = topTitle(at, t);
     const kids = t.children(at);
     for (let i = kids.indexOf(child) - 1; i >= 0; i--) {
       const s = kids[i]!;
-      if (t.heading(s)) return s;
+      if (t.heading(s) || s === top) return { el: s };
       if (t.owns(s)) continue;
-      const h = headingIn(s, t, true);
-      if (h) return h;
+      const h = headingIn(s, t, true, top);
+      if (h) return { el: h };
     }
     if (t.owns(at)) {
-      const h = headingIn(at, t, false);
-      if (h) return h;
+      const h = headingIn(at, t, false, top);
+      if (h) return { el: h };
     }
+    const label = t.named?.(at);
+    if (label) return { label };
   }
   return null;
+}
+
+/** The heading element an element is under (titleOf), when it is an element of the page. */
+export function headingOf<E>(el: E, t: Outline<E>): E | null {
+  const found = titleOf(el, t);
+  return found && "el" in found ? found.el : null;
 }
