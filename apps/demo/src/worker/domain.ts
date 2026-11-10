@@ -73,14 +73,25 @@ export function sanitizeView(raw: unknown, data: Dataset, now = new Date()): Sto
 
 export const VIEW_STALE_S = 30 * 60;
 
+/**
+ * Pulse's view payload: the protocol's, plus `trimmed` when a filter of the person's screen was removed for
+ * this grant. Like a figure's trimmed it names what was cut (the params), never the value, so the agent can tell
+ * its answer covers a different scope than the screen without learning the region it may not see.
+ */
+export type PulseViewPayload = ViewPayload & { trimmed?: { hidden_params: string[] } };
+
 /** The view as one grant may see it. A by-id screen outside the grant is null, the same as no view. */
-export function trimView(view: StoredView | null, grant: Grant, data: Dataset, origin: string, now = Date.now()): ViewPayload | null {
+export function trimView(view: StoredView | null, grant: Grant, data: Dataset, origin: string, now = Date.now()): PulseViewPayload | null {
   if (!view) return null;
   const scope = scopeOf(grant);
   const selectionVisible = view.selection ? customerVisible(data, grant, view.selection.id) : false;
   if (view.screen === "customer" && !selectionVisible) return null;
   const params: FocusParams = { ...view.params };
-  if (typeof params.region === "string" && !scope.regions.includes(params.region as Region)) delete params.region;
+  const hiddenParams: string[] = [];
+  if (typeof params.region === "string" && !scope.regions.includes(params.region as Region)) {
+    delete params.region;
+    hiddenParams.push("region");
+  }
   const selection = view.selection && selectionVisible ? view.selection : null;
   const query = new URLSearchParams(params as Record<string, string>).toString();
   const path = view.screen === "customer" && selection ? `/customers/${selection.id}` : `/${view.screen}`;
@@ -94,6 +105,7 @@ export function trimView(view: StoredView | null, grant: Grant, data: Dataset, o
     age_seconds: age,
     stale: age > VIEW_STALE_S,
     next: selection ? "get_customer" : null,
+    ...(hiddenParams.length ? { trimmed: { hidden_params: hiddenParams } } : {}),
   };
 }
 
