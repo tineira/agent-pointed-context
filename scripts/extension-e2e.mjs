@@ -982,9 +982,6 @@ try {
     // category, its series where the page declares it, and its value only when it is written (its own accessible text or a
     // data label at it), else "(no value written on the chart)". Nothing is read off an axis. A drop elsewhere reads the
     // whole container, each label once.
-    // Under Ask per drop the hub takes a run of percentages for a card number and leaves part of it out (TIN-762); with
-    // Send, each reading is checked as the extension read it.
-    await setSensitive("send");
     const NONE = "\\(no value written on the chart\\)";
     const openCorpus = async (name) => {
       const { targetId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", `/corpus/${name}`) });
@@ -1068,6 +1065,8 @@ try {
     const barsBackground = await dropOnChart(hc.sid, bars.right - 20, bars.top + 12);
     assert.match(barsBackground.text, /Pointed at \(div\): 98,51% 96,23% 90,42% 87,67% 94,81% CENCOSUD WALMART TOTTUS SMU Total General 0% 10% 20%/);
     assert.doesNotMatch(barsBackground.text, /98,51%\s*98,51%/, "each label once");
+    // Under the default Ask per drop (the hub fixed TIN-762): the percentages arrive whole, none taken for a card number.
+    assert.doesNotMatch(barsBackground.text, /sensitive number left out/);
     // Precios, two value axes: a column of sales and a point of the price line read their month and no value, never a
     // value off either axis.
     const ago = await expectAt(hc.sid, "#col1", new RegExp(`Under the heading: Precios\\nPointed at \\(path, chart bar\\): Ago ${NONE}$`, "m"), { x: 15, y: 120 });
@@ -1129,7 +1128,6 @@ try {
     const goal = await expectAt(rest.sid, "#goalstore", /\n- Store: SMU \(pointed at\)/);
     assert.doesNotMatch(goal.text, /chart (point|bar|mark)|Target %/);
     await cdp("Target.closeTarget", { targetId: rest.targetId });
-    await setSensitive("ask");
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));
     console.log("12. the corpus: a chart's mark is outlined, pinned and read from what the page writes for it (never a value off an axis); a shape that names itself is a mark; canvas, unnamed shapes, a table and a form read as before");
