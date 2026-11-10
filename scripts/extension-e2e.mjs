@@ -41,6 +41,31 @@ function grantedCopy(dist) {
   return dir;
 }
 const T = "application/x-apc-agent";
+/**
+ * The shape of the extension's note of a kind (data-apc-note) in a page, or null: how many lines its words take, its
+ * box, and its line height (TIN-786: notes once collapsed to one word per line, and the e2e did not see it).
+ */
+const noteShape = async (cdp, sid, kind) => {
+  const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+  let nodeId = null;
+  const walk = (n) => {
+    const at = (n.attributes ?? []).indexOf("data-apc-note");
+    if (at >= 0 && n.attributes[at + 1] === kind) nodeId = n.nodeId;
+    for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+  };
+  walk(root);
+  if (!nodeId) return null;
+  const { object } = await cdp("DOM.resolveNode", { nodeId }, sid);
+  const fn = `function () {
+    const range = document.createRange();
+    range.selectNodeContents(this);
+    const lines = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size;
+    const box = this.getBoundingClientRect();
+    const style = getComputedStyle(this);
+    return { lines, width: box.width, height: box.height - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom), lineHeight: parseFloat(style.lineHeight) };
+  }`;
+  return (await cdp("Runtime.callFunctionOn", { objectId: object.objectId, functionDeclaration: fn, returnByValue: true }, sid)).result.value;
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (what, fn, ms = 20_000) => {
   const end = Date.now() + ms;
@@ -589,9 +614,25 @@ try {
     // C4. Not here: nothing now, nothing later.
     const other = await open("other.localhost");
     await other.drop("#b");
+    await until("the card on other.localhost", async () => (await other.buttons()).has("never"), 10_000);
+    // The service worker held still: the answer cannot come while Esc is pressed (Grok's review on #155).
+    const swC4 = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
+    const { sessionId: swC4Session } = await cdp("Target.attachToTarget", { targetId: swC4.targetId, flatten: true });
+    await cdp("Debugger.enable", {}, swC4Session);
+    await cdp("Debugger.pause", {}, swC4Session);
+    await other.run(`window.__esc = 0; addEventListener("keydown", (e) => { if (e.key === "Escape") window.__esc++; }, true)`);
     await other.click("never");
+    for (const type of ["keyDown", "keyUp"]) await cdp("Input.dispatchKeyEvent", { type, key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, other.sid);
+    await sleep(1500);
+    assert.ok((await other.run("window.__esc")) >= 1, "the page got the Esc");
+    assert.ok((await other.buttons()).has("never"), "after Never, Esc does not close the card before the answer");
+    await cdp("Debugger.resume", {}, swC4Session);
+    await cdp("Debugger.disable", {}, swC4Session);
+    await until("the card closes on the answer", async () => (await other.buttons()).size === 0, 10_000);
+    assert.deepEqual(await attrsIn(other.sid, "data-apc-note"), [], "Never stored: the card closes and nothing more shows");
     await other.drop("#b");
     assert.equal((await other.buttons()).size, 0, "no card on a Not here site");
+    assert.ok((await attrsIn(other.sid, "data-apc-note")).includes("blocked"), "a later drop there says one line");
     assert.match((await latest()).page_text, /EU-West rose/);
     console.log("C4. Not here sends nothing, now or on the next drop");
 
@@ -753,6 +794,9 @@ try {
       return /SPRING/.test(r?.page_text ?? "") ? r : null;
     });
     assert.equal((await api(`${base}/state`)).agents[0].pairings.filter((p) => p.kind === "reader").length, 1);
+    const sentNote = await until("the Sent note", () => noteShape(cdp, sessionId, "sent"), 5000);
+    assert.equal(sentNote.lines, 1, `"Sent to …" is one line: ${JSON.stringify(sentNote)}`);
+    assert.ok(sentNote.height < 2 * sentNote.lineHeight, `and one line high: ${JSON.stringify(sentNote)}`);
     console.log("2. second drop: sent straight away, through page__get_reading");
 
     // 2b. An agent waiting (wait_for_focus) with only the browser paired is woken by the next drop.
@@ -1024,6 +1068,8 @@ try {
     await drag("#a", JSON.stringify({ v: 1, agent: agent.id, hub: "https://evil.example", ticket: "x".repeat(32) }));
     await sleep(1000);
     assert.match((await tool("page__get_reading")).structuredContent.page_text, /SPRING/);
+    const failed = await until("the failure note", () => noteShape(cdp, sessionId, "unknown_dock"), 5000);
+    assert.ok(failed.width >= 160 && failed.lines <= 2, `a failure is two lines at most, not a column: ${JSON.stringify(failed)}`);
     console.log("4. a drag naming an unknown dock sends nothing");
 
     // 5. Only an extension's origin can ask for a reader or send a reading.
@@ -1358,6 +1404,11 @@ try {
     });
     const sepNow = await boxIn(hc.sid, "#m8");
     assert.ok(pinOnPoint.right <= sepNow.left && sepNow.left - pinOnPoint.right < 12 && Math.abs(pinOnPoint.top - sepNow.top) < 3, `the pin sits at the point: ${JSON.stringify({ pinOnPoint, sepNow })}`);
+    // The chart draws itself again with new nodes, as these libraries do (Grok's review on #155): the next drag outlines the
+    // new point, not a larger block from what the last drop found about the old drawing. This site sends without a card.
+    await cdp("Runtime.evaluate", { expression: `(() => { let svg = document.querySelector("#m8").ownerSVGElement; while (svg.ownerSVGElement) svg = svg.ownerSVGElement; svg.replaceChildren(...[...svg.childNodes].map((n) => n.cloneNode(true))); })()` }, hc.sid);
+    const again = await expectAt(hc.sid, "#m8", new RegExp(`Pointed at \\(path, chart point\\): SMU · S ${NONE}$`, "m"));
+    assert.ok(around(again.outlined.box, again.box), `after the chart drew itself again, the outline is the new point: ${JSON.stringify(again.outlined)}`);
     // July's data label is hidden by the plot's clip path: July has no value written.
     assert.doesNotMatch((await expectAt(hc.sid, "#m6", new RegExp(`Pointed at \\(path, chart point\\): SMU · J ${NONE}$`, "m"))).text, /999M/);
     // October's HTML data label lies over its point: a drop on it finds the point, and the label is its value.

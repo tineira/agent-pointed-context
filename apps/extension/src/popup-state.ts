@@ -3,7 +3,7 @@
  * here, so the tests run them. popup.ts reads storage and Chrome, asks these what to draw, and carries out the
  * plan a click returns. Nothing here changes what a stored value means: `decide` in drop.ts is the one reader of them.
  */
-import { agentName, grantedAlone, isSensitive, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { agentName, grantedAlone, isolate, isSensitive, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 /** The agent's name as the popup draws it: the same cleaner the page's notes and `last` use (drop.ts). */
 export { agentName };
@@ -240,7 +240,9 @@ export function lastView(last: unknown, now: number, known?: { readers: Readonly
     case "sent": {
       const n = typeof l.leftOut === "number" && Number.isInteger(l.leftOut) && l.leftOut >= 1 ? l.leftOut : 0;
       const out = n ? ` · ${n === 1 ? "1 number" : `${n} numbers`} left out` : "";
-      return { kind: "sent", lead: `✓ Sent to ${agentName(l.agent) ?? nameOnHub(l.hub, known) ?? "your agent"}`, at: l.at, detail: `${site}${out}` };
+      // The name between bidi isolates, as the page draws it, so it cannot reorder "Sent to" (TIN-786).
+      const name = agentName(l.agent) ?? nameOnHub(l.hub, known);
+      return { kind: "sent", lead: `✓ Sent to ${name ? isolate(name) : "your agent"}`, at: l.at, detail: `${site}${out}` };
     }
     case "waiting":
       return { kind: "waiting", text: "Allow this browser in your dock", hub: typeof l.hub === "string" ? l.hub : null };

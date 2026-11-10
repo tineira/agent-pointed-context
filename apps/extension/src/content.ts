@@ -92,6 +92,8 @@ function listen(): void {
   let question: Question | null = null;
   // A pin dragged to another paragraph closes the question as Not now before its own outline lights.
   closeQuestion = () => question?.end("drag");
+  // A drop whose last word was drawn (the waiting card's lost-wait line) can produce no outcome any more.
+  dropDone = (id) => pending.delete(id);
   /** A trusted drag of an agent starts: the open question closes as Not now, before the outline moves. */
   const newDrag = () => question?.end("drag");
   /** Whether a drop's outline is held for its question: then only that question's end clears it. */
@@ -129,7 +131,11 @@ function listen(): void {
         removeCard = null;
         if (question === q) question = null;
         if (node && outlining.lit() === node) light(null);
-        if (how === "dismiss" || how === "changed" || (how === "drag" && was === "open")) forgetHeld(id);
+        if (how === "dismiss" || how === "changed" || (how === "drag" && was === "open")) {
+          // Nothing was sent, and nothing more will come for this drop: its hold and its place go (TIN-786).
+          forgetHeld(id);
+          pending.delete(id);
+        }
         if (how === "changed") say("outline_changed", below(x + scrollX, y + scrollY));
       },
     };
@@ -175,9 +181,10 @@ function listen(): void {
     // OUTLINE_IDLE_MS, the outline goes, and what was found about the page's charts with it.
     clearTimeout(idleTimer);
     idleTimer = window.setTimeout(() => {
+      // What was found about the page's charts goes in any case: a drop's held outline stays, a stale chart does not.
+      forgetScopes();
       if (holding()) return;
       light(null);
-      forgetScopes();
     }, OUTLINE_IDLE_MS);
     keepLast();
   };
@@ -243,8 +250,10 @@ function listen(): void {
     // The page took away what was outlined: what is under the pointer now is not what the person saw outlined, so nothing goes.
     if (outlined && !outlined.isConnected) return say("outline_changed", below(e.pageX, e.pageY));
     // The control the drop points at, found once: the consent card's check reads the outline again with it (TIN-786).
+    document.documentElement.getBoundingClientRect();
     const pointed = pointedAt(e.clientX, e.clientY);
     const reading = readAt(e.clientX, e.clientY, outlined, pointed);
+    forgetScopes();
     const id = crypto.randomUUID();
     const target: Target = { anchor: outlined, x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
     pending.set(id, target);
@@ -382,9 +391,9 @@ function listen(): void {
     hintTimer = window.setTimeout(() => void frameHint(frame, at), 400);
   });
   window.addEventListener("dragend", () => {
+    forgetScopes();
     if (holding()) return;
     light(null);
-    forgetScopes();
   });
   // The service worker's later word, once the person answered in the dock.
   chrome.runtime.onMessage.addListener((m) => {
@@ -440,6 +449,8 @@ interface Question {
 
 /** Closes the open question as Not now: set by listen(), for a pin's drag. */
 let closeQuestion: (() => void) | null = null;
+/** Forgets a drop's place once it can produce no outcome: set by listen(). */
+let dropDone: ((id: string) => void) | null = null;
 
 /** The drop's reading the worker keeps for Include goes: its card closed, or its question did, with nothing sent. */
 function forgetHeld(id: string): void {
@@ -470,7 +481,7 @@ function sent(r: Reply, target: Target, id: string | null): void {
         .then((again) => sent(again ?? { status: "error" }, target, null), () => sent({ status: "error" }, target, null)),
     );
   }
-  sentWord(name, beside, id);
+  sentWord(name, beside, id, at);
 }
 
 /** The page's element at a point, under the extension's own pins and cards, which can sit right where the person drops. */
@@ -1451,7 +1462,7 @@ const PANEL_CSS = `
 .card, .note { box-sizing: border-box; z-index: 2147483647; background: #1f1f1f; color: #fff; font: 13px/1.45 system-ui, sans-serif; text-align: left; }
 .card { position: absolute; width: 320px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 12px 30px 12px 14px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
 .card.question { position: fixed; }
-.note { position: absolute; pointer-events: none; max-width: min(300px, calc(100vw - 16px)); padding: 8px 12px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+.note { position: absolute; pointer-events: none; width: max-content; max-width: min(320px, calc(100vw - 16px)); padding: 8px 12px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 .failed { border-left: 4px solid #e5484d; padding-left: 10px; }
 p { margin: 0; }
 p + p { margin-top: 2px; }
@@ -1460,6 +1471,8 @@ p + p { margin-top: 2px; }
 .b { font: inherit; padding: 5px 10px; border-radius: 7px; cursor: pointer; border: 1px solid #555; background: transparent; color: #fff; }
 .b.primary { border-color: #d4733a; background: #d4733a; }
 .b:disabled { opacity: .5; cursor: default; }
+.link { margin-left: auto; padding: 5px 0; background: none; border: 0; color: #ccc; font: inherit; text-decoration: underline; cursor: pointer; }
+.link:disabled { opacity: .5; cursor: default; }
 .x { position: absolute; top: 6px; right: 8px; padding: 2px 4px; background: none; border: 0; color: #ccc; font: 16px/1 system-ui, sans-serif; cursor: pointer; }
 .more { display: inline-block; margin-top: 8px; padding: 0; background: none; border: 0; color: #f2a46b; font: inherit; cursor: pointer; text-decoration: underline; }
 dl { margin: 6px 0 0; }
@@ -1520,7 +1533,7 @@ function button(label: string, primary = false): HTMLButtonElement {
 
 /** The × in a card's corner. */
 function closeButton(label: string): HTMLButtonElement {
-  const x = Object.assign(document.createElement("button"), { type: "button", textContent: "×", className: "x", title: label });
+  const x = Object.assign(document.createElement("button"), { type: "button", textContent: "×", className: "x" });
   x.setAttribute("aria-label", label);
   return x;
 }
@@ -1558,6 +1571,7 @@ function placeQuestion(box: HTMLElement, q: Question): void {
   let top: number;
   if (q.node) {
     const r = q.node.getBoundingClientRect();
+    box.style.visibility = r.bottom < 0 || r.top > height || r.right < 0 || r.left > width ? "hidden" : "";
     if (height - r.bottom >= h + 2 * m) top = Math.max(m, r.bottom + m);
     else if (r.top >= h + 2 * m) top = Math.min(r.top - h - m, height - h - m);
     else top = height - h - m;
@@ -1617,6 +1631,8 @@ function ask(q: Question, status: "consent" | "consent_sensitive" | "consent_upd
   };
   for (const [consent, label] of choices) {
     const b = button(label, consent === "once");
+    // Never lasts: a quiet link at the end of the row, never one of the ways to send.
+    if (consent === "never") b.className = "link";
     b.dataset.apcConsent = consent ?? "dismiss";
     b.addEventListener("click", answer(consent));
     buttons.push(b);
@@ -1649,13 +1665,16 @@ function ask(q: Question, status: "consent" | "consent_sensitive" | "consent_upd
     place();
   });
   box.append(row, more, facts, x);
+  // After Never, only the service worker's answer ends the card (or a new drag, whose answer then still decides what shows).
   const onKey = (e: KeyboardEvent) => {
-    if (e.isTrusted && e.key === "Escape") q.end("dismiss");
+    if (e.isTrusted && e.key === "Escape" && !disarmed) q.end("dismiss");
   };
-  const timer = window.setTimeout(() => q.end("dismiss"), 45_000);
+  const timer = window.setTimeout(() => {
+    if (!disarmed) q.end("dismiss");
+  }, 45_000);
   // Every second, the cheap part: the outlined element is still there and still shows.
   const tick = window.setInterval(() => {
-    if (q.node && !shows(q.node)) q.end("changed");
+    if (!disarmed && q.node && !shows(q.node)) q.end("changed");
   }, 1000);
   const observer = q.node ? new ResizeObserver(place) : null;
   if (q.node) observer!.observe(q.node);
@@ -1686,7 +1705,7 @@ function notice(words: NoteText, kind: string, ms: number, at: Point, id: string
   });
 }
 
-function note(kind: string, failed: boolean, ms: number, at: Point, id: string | null, fill: (box: HTMLDivElement) => void): () => void {
+function note(kind: string, failed: boolean, ms: number, at: Point, id: string | null, fill: (box: HTMLDivElement) => void, badge: Point | null = null): () => void {
   const { host, box } = panel(failed ? "note failed" : "note");
   box.dataset.apcNote = kind;
   box.setAttribute("role", "status");
@@ -1703,7 +1722,7 @@ function note(kind: string, failed: boolean, ms: number, at: Point, id: string |
   };
   put("note", me);
   document.documentElement.append(host);
-  placeAt(box, at);
+  placeAt(box, badge ? besidePin(box, badge) : at);
   timer = window.setTimeout(() => me.close(), ms);
   return () => me.close();
 }
@@ -1715,8 +1734,16 @@ function say(status: DropStatus, at: Point): void {
 }
 
 /** "Sent to *agent*", beside the pin (or at the drop point), for 3.5 s. */
-function sentWord(name: string | null, at: Point, id: string | null): void {
-  note("sent", false, 3500, at, id, (box) => box.append(sentLine(name)));
+function sentWord(name: string | null, at: Point, id: string | null, badge: Point | null = null): void {
+  note("sent", false, 3500, at, id, (box) => box.append(sentLine(name)), badge);
+}
+
+/** Beside a pin's badge: to its right, or just above it, right-aligned with it, when the page has no room on the right. */
+function besidePin(box: HTMLElement, badge: Point): Point {
+  const w = box.offsetWidth;
+  const h = box.offsetHeight;
+  const right = scrollX + (document.documentElement.clientWidth || innerWidth) - 8;
+  return badge.x + 34 + w <= right ? { x: badge.x + 34, y: badge.y + Math.round((28 - h) / 2) } : { x: badge.x + 28 - w, y: badge.y - h - 6 };
 }
 
 /**
@@ -1831,6 +1858,7 @@ function waitingCard(id: string, hub: string, at: Point): void {
       const mine = shown.card === me;
       me.close();
       if (mine) notice({ lead: null, text: WAIT_LOST_TEXT, failed: true }, "wait_lost", 8000, at, id);
+      dropDone?.(id);
     }, WAIT_LOST_MS),
   );
 }
@@ -2001,6 +2029,7 @@ function pin(target: Target, mark: PinMark): Point | null {
     const anchor = outlined;
     if (!anchor || anchor === target.anchor) return false;
     const reading = readAt(x, y, anchor);
+    forgetScopes();
     const id = crypto.randomUUID();
     const moved: Target = { anchor, x: x + scrollX, y: y + scrollY, hub: target.hub, agent: target.agent };
     void chrome.runtime

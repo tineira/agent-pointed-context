@@ -613,6 +613,23 @@ export const WAIT_LOST_TEXT = "Your dock's answer didn't arrive.";
 /** How long the waiting card waits for the service worker's word before it says so (ASK_MS is 60 s, plus the last poll). */
 export const WAIT_LOST_MS = 75_000;
 
+/** Where a first drop's wait for the dock's Allow is: still asking the dock, or past it, its reading perhaps on its way. */
+export type WaitPhase = "polling" | "sending";
+
+/**
+ * Whether a wait the page heard nothing about may make the popup's last drop say the dock did not answer (TIN-786).
+ * Only while it is still asking the dock, by what was stored (`stored`) and by what this service worker knows now
+ * (`live`: set the moment the dock said yes, before anything else is awaited), and only over its own asking note:
+ * a `last` written after it (another drop, sent or not) is never replaced.
+ */
+export function mayWriteTimeout(stored: WaitPhase | undefined, live: WaitPhase | undefined, askedAt: string | undefined, last: { at?: unknown } | undefined): boolean {
+  if (stored !== "polling" || live === "sending") return false;
+  // A wait from before this was kept (no asking time) is not known to be the latest: nothing is written.
+  if (typeof askedAt !== "string") return false;
+  if (typeof last?.at !== "string") return true;
+  return Date.parse(last.at) <= Date.parse(askedAt);
+}
+
 /**
  * The storage keys that say the person has seen what readings carry now (TIN-571; version 2 since
  * TIN-619, "the outline is what goes"): a new version asks once more on sites that send without asking.

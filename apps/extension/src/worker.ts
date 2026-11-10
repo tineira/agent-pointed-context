@@ -8,7 +8,7 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { agentName, AGENT_FALLBACK, askingSite, browserLabel, HELD_MS, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { agentName, AGENT_FALLBACK, askingSite, mayWriteTimeout, type WaitPhase, browserLabel, HELD_MS, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
 /** How long the extension waits for the person's answer in the dock. */
@@ -53,10 +53,14 @@ async function forget(id: string): Promise<void> {
  * unless the reading may already have gone.
  */
 interface Waiting {
-  state: "polling" | "sending";
+  state: WaitPhase;
   hub: string;
   url: string;
+  /** When its "asking" note was written: a later `last` is never replaced by its "timeout". */
+  askedAt?: string;
 }
+/** The same phase, in memory: set to "sending" the moment the dock says yes, before anything else is awaited. */
+const phases = new Map<string, WaitPhase>();
 async function waitingDrops(): Promise<Record<string, Waiting>> {
   return ((await chrome.storage.session.get("waiting")).waiting ?? {}) as Record<string, Waiting>;
 }
@@ -69,9 +73,13 @@ async function setWaiting(id: string, entry: Waiting | null): Promise<void> {
 
 /** The page's waiting card got no word in time: if the dock was still being asked, the popup says it did not answer. */
 async function waitLost(id: string): Promise<void> {
+  const lastNow = async () => (await chrome.storage.local.get("last")).last as { at?: unknown } | undefined;
   const entry = (await waitingDrops())[id];
-  if (entry?.state !== "polling") return;
+  if (!entry || !mayWriteTimeout(entry.state, phases.get(id), entry.askedAt, await lastNow())) return;
   await setWaiting(id, null);
+  // Asked again after the awaits, just before the write: the dock's yes, or another drop's note, may have come meanwhile.
+  const last = await lastNow();
+  if (!mayWriteTimeout("polling", phases.get(id), entry.askedAt, last)) return;
   await note(entry.hub, entry.url, "timeout");
 }
 
@@ -355,9 +363,13 @@ async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sen
   const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
   if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error"), ...(id ? { id } : {}) };
   // Kept before the page hears "asking", so a waiting card on screen always has its entry (TIN-786).
-  if (id) await setWaiting(id, { state: "polling", hub, url: reading.url });
+  const askedAt = new Date().toISOString();
+  if (id) {
+    phases.set(id, "polling");
+    await setWaiting(id, { state: "polling", hub, url: reading.url, askedAt });
+  }
   void waitForAnswer(hub, agent, asked.claim, reading, from, { ...sensitive, ...(id ? { id } : {}), ...(holdUntil ? { holdUntil } : {}) });
-  return { status: await note(hub, reading.url, "asking"), ...(id ? { id } : {}) };
+  return { status: await note(hub, reading.url, "asking", {}, askedAt), ...(id ? { id } : {}) };
 }
 
 /**
@@ -471,6 +483,8 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     const answer = await post(`${hub}/apc/reader/status`, { claim });
     if (answer?.status === "pending") continue;
     if (answer?.status === "paired" && typeof answer.token === "string") {
+      // Before anything else is awaited: from here a lost wait may no longer say the dock did not answer.
+      if (about.id) phases.set(about.id, "sending");
       tokens[readerKey(hub, agent)] = answer.token;
       await chrome.storage.local.set({ readers: tokens });
       // From here the reading may go: a waiting card that hears nothing no longer makes the popup say "timeout".
@@ -485,7 +499,10 @@ async function waitForAnswer(hub: string, agent: string, claim: string, reading:
     break;
   }
   await note(hub, reading.url, status, status === "sent" ? sentExtra(name, about) : {});
-  if (about.id) await setWaiting(about.id, null);
+  if (about.id) {
+    await setWaiting(about.id, null);
+    phases.delete(about.id);
+  }
   // To the frame the drop came from (TIN-752): another frame of the tab would show the note too.
   const ok = status === "sent";
   await chrome.tabs
@@ -532,7 +549,7 @@ async function post(url: string, body: unknown): Promise<Record<string, unknown>
  * The last drop's outcome, for the popup: the site and what happened, never the text; when sent, the agent's
  * name and how many numbers this reading left out (TIN-786). Replaced whole each time.
  */
-async function note(hub: string, url: string, status: DropStatus, extra: LastExtra = {}): Promise<DropStatus> {
-  await chrome.storage.local.set({ last: { at: new Date().toISOString(), hub, site: new URL(url).host, status, ...extra } });
+async function note(hub: string, url: string, status: DropStatus, extra: LastExtra = {}, at = new Date().toISOString()): Promise<DropStatus> {
+  await chrome.storage.local.set({ last: { at, hub, site: new URL(url).host, status, ...extra } });
   return status;
 }

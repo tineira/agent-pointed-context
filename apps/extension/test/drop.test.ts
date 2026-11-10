@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, WHATS_SENT, agentName, AGENT_FALLBACK, CARD_LABELS, SITE_LABELS, CONSENT_QUESTION, consentReason, includeLabel, isolate, NOTE_TEXT, SENT_TO, WAIT_LOST_TEXT, WAITING_TEXT, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, WHATS_SENT, mayWriteTimeout, agentName, AGENT_FALLBACK, CARD_LABELS, SITE_LABELS, CONSENT_QUESTION, consentReason, includeLabel, isolate, NOTE_TEXT, SENT_TO, WAIT_LOST_TEXT, WAITING_TEXT, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -326,4 +326,20 @@ test("one vocabulary: the card's buttons beside the popup's words, and the notes
   assert.equal(STATUS_TEXT.asking, WAITING_TEXT);
   assert.equal(WAIT_LOST_TEXT, "Your dock's answer didn't arrive.");
   assert.doesNotMatch(WAIT_LOST_TEXT, /sent/i, "it claims neither that the reading went nor that it did not");
+});
+test("a lost wait says the dock did not answer only while it still asked the dock, and never over a later drop (TIN-786)", () => {
+  const asked = "2026-11-10T10:00:00.000Z";
+  const own = { at: asked };
+  // Still asking the dock, and the last drop is this wait's own asking note: the popup may say it did not answer.
+  assert.equal(mayWriteTimeout("polling", "polling", asked, own), true);
+  assert.equal(mayWriteTimeout("polling", undefined, asked, own), true, "a service worker that restarted knows only what was stored");
+  // The last status poll came back "paired" while the page's 75 s ran out: the phase turned to sending first, nothing is written.
+  assert.equal(mayWriteTimeout("polling", "sending", asked, own), false);
+  assert.equal(mayWriteTimeout("sending", undefined, asked, own), false);
+  assert.equal(mayWriteTimeout(undefined, undefined, asked, own), false, "a wait that ended has no entry");
+  // Two first drops: the second's reading went and its note is newer; the first's lost wait never replaces it.
+  assert.equal(mayWriteTimeout("polling", "polling", asked, { at: "2026-11-10T10:00:20.000Z" }), false);
+  // Nothing written yet, or a wait kept before its asking time was recorded.
+  assert.equal(mayWriteTimeout("polling", "polling", asked, undefined), true);
+  assert.equal(mayWriteTimeout("polling", "polling", undefined, own), false);
 });

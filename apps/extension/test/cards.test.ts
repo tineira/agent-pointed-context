@@ -47,9 +47,11 @@ test("a question starts at the drop; an agent's drag or a pin's closes it before
   assert.match(source, /if \(!down\.isTrusted \|\| down\.button !== 0\) return;\s*\/\/[^\n]*\n\s*closeQuestion\?\.\(\);\s*down\.preventDefault\(\);/, "a pin's drag, before its outline");
   // Until the question ends, nothing else takes the drop's outline away.
   assert.match(source, /if \(!e\.relatedTarget && !holding\(\)\) light\(null\);/);
-  assert.match(source, /window\.addEventListener\("dragend", \(\) => \{\s*if \(holding\(\)\) return;/);
+  // The ring stays for the question; what was found about the charts does not (the e2e's step 12 drags a re-rendered chart).
+  assert.match(source, /window\.addEventListener\("dragend", \(\) => \{\s*forgetScopes\(\);\s*if \(holding\(\)\) return;/);
   // Only a card answer forgets the held reading when a drag closed the question first (nothing was sent then).
-  assert.match(source, /if \(how === "dismiss" \|\| how === "changed" \|\| \(how === "drag" && was === "open"\)\) forgetHeld\(id\);/);
+  // ... and with it the drop's place, since nothing more can come for it (Gemini's review on #155).
+  assert.match(source, /if \(how === "dismiss" \|\| how === "changed" \|\| \(how === "drag" && was === "open"\)\) \{\s*\/\/[^\n]*\n\s*forgetHeld\(id\);\s*pending\.delete\(id\);/);
 });
 
 test("Include clears only its own timer before it sends, and the Sent word comes only from a sent answer (TIN-786)", () => {

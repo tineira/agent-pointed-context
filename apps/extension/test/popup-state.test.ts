@@ -173,13 +173,13 @@ test("Last drop reads every status and both shapes of `last` (TIN-786)", () => {
   // Old shape: no agent, no leftOut.
   assert.deepEqual(lastView({ at, hub: "https://apc.tineira.com", site: "en.wikipedia.org", status: "sent" }, now), { kind: "sent", lead: "✓ Sent to your agent", at, detail: "en.wikipedia.org" });
   // New shape.
-  assert.deepEqual(lastView({ at, site: "a.com", status: "sent", agent: "Claude", leftOut: 1 }, now), { kind: "sent", lead: "✓ Sent to Claude", at, detail: "a.com · 1 number left out" });
+  assert.deepEqual(lastView({ at, site: "a.com", status: "sent", agent: "Claude", leftOut: 1 }, now), { kind: "sent", lead: "✓ Sent to \u2068Claude\u2069", at, detail: "a.com · 1 number left out" });
   assert.equal((lastView({ at, site: "a.com", status: "sent", leftOut: 2 }, now) as { detail: string }).detail, "a.com · 2 numbers left out");
   for (const bad of [0, -1, 1.5, "3", null, undefined]) assert.equal((lastView({ at, site: "a.com", status: "sent", leftOut: bad }, now) as { detail: string }).detail, "a.com", `leftOut ${String(bad)} is absent`);
   // Today's shape names no agent: the one reader on that hub, when its name is known, does; two readers, or none known, do not.
   const known = { readers: { "https://apc.tineira.com ag_1": "t" }, names: { "https://apc.tineira.com ag_1": "Claude" } };
-  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent" }, now, known) as { lead: string }).lead, "✓ Sent to Claude");
-  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent", agent: "Grok" }, now, known) as { lead: string }).lead, "✓ Sent to Grok", "last.agent wins");
+  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent" }, now, known) as { lead: string }).lead, "✓ Sent to \u2068Claude\u2069");
+  assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent", agent: "Grok" }, now, known) as { lead: string }).lead, "✓ Sent to \u2068Grok\u2069", "last.agent wins");
   assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent" }, now, { readers: { ...known.readers, "https://apc.tineira.com ag_2": "t" }, names: known.names }) as { lead: string }).lead, "✓ Sent to your agent");
   assert.equal((lastView({ at, hub: "https://other", site: "a.com", status: "sent" }, now, known) as { lead: string }).lead, "✓ Sent to your agent");
   // Waiting, and a wait nobody is on any more.
