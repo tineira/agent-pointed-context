@@ -365,7 +365,7 @@ test("the extension's source knows no chart library and estimates no value (TIN-
   assert.match(content, /: scope && !shape\s*\?/);
   // Rule C: every text a chart reading uses goes through chartText (readable's walk, cut to the drawing, no control),
   // aria-labelledby targets too; markAt passes only through what the drawing's holder lays over it.
-  assert.match(content, /function chartText\(e: Element, drawn: Rect\): string \{\s*if \(inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return "";\s*return readable\(e, LABEL_MAX, drawn\)/);
+  assert.match(content, /function chartText\(e: Element, drawn: Rect\): string \{\s*if \(inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return "";[\s\S]{0,900}?svgClip\(at\);\s*if \(!cut\) return "";[\s\S]{0,200}?return readable\(e, LABEL_MAX, bound\)/);
   assert.match(content, /\.filter\(\(t\): t is Element => !!t && scope\.contains\(t\)\)\.map\(\(t\) => chartText\(t, drawn\)\)/);
   assert.match(content, /if \(!holder\?\.contains\(e\) \|\| inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return null;/);
   assert.ok(content.includes("if (/^url\\(/.test(style.clipPath) && !svgCut) return;"), "an unresolvable SVG clip path hides");

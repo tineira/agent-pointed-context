@@ -666,7 +666,20 @@ const LABEL_MAX = 200;
  */
 function chartText(e: Element, drawn: Rect): string {
   if (inControl(e, document.documentElement) || !within(boxOf(e), drawn)) return "";
-  return readable(e, LABEL_MAX, drawn).replace(/\s+/g, " ").trim().slice(0, LABEL_MAX);
+  // What clips the elements around it, which readable's walk (starting at the text) does not see: a clip path that
+  // hides, `clip`, and an SVG clip path (a plot's cuts; one that does not resolve hides all).
+  let bound = drawn;
+  for (let at = parentOf(e); at && at !== document.documentElement; at = parentOf(at)) {
+    const style = getComputedStyle(at);
+    if (clipPathHides(style.clipPath)) return "";
+    if ((style.position === "absolute" || style.position === "fixed") && style.clip !== "auto" && style.clip !== "") return "";
+    if (/^url\(/.test(style.clipPath)) {
+      const cut = svgClip(at);
+      if (!cut) return "";
+      bound = intersect(bound, cut);
+    }
+  }
+  return readable(e, LABEL_MAX, bound).replace(/\s+/g, " ").trim().slice(0, LABEL_MAX);
 }
 
 /** How an SVG text is painted: with a stroke at all, and with a stroke only (a fill that is none, transparent or the stroke's own colour). */
