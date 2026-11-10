@@ -307,8 +307,8 @@ function couldOwn(l: ChartLabel, m: ChartShape, vertical: boolean): boolean {
  * one mark could own it (couldOwn), and no other mark of any series is a rival:
  * - a rival lies within LABEL_REACH of the number, with its centre (across the values) as near to the number's centre
  *   as the owner's is: a point drawn in front of a column, under the number, makes the number nobody's;
- * - with the number outside every mark, a rival is any mark whose span holds the number's centre: a stack's total,
- *   above its top segment, is no segment's value.
+ * - with the number outside every mark, a rival is any other bar whose span holds the number's centre: a stack's
+ *   total, above its top segment, is no segment's value.
  * Whatever is ambiguous is nobody's value: no value beats a wrong value.
  */
 export function ownerOf(l: ChartLabel, marks: readonly ChartShape[], axes: Axes): ChartShape | null {
@@ -323,7 +323,7 @@ export function ownerOf(l: ChartLabel, marks: readonly ChartShape[], axes: Axes)
     if (m === owner) continue;
     if (distance(l.box, m.box) <= LABEL_REACH && Math.abs(across(m.box) - at) <= mine) return null;
     const [lo, hi] = axes.vertical ? [m.box.left, m.box.right] : [m.box.top, m.box.bottom];
-    if (outside && at > lo && at < hi) return null;
+    if (outside && m.kind === "bar" && at > lo && at < hi) return null;
   }
   return owner;
 }

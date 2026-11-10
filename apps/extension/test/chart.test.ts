@@ -266,6 +266,17 @@ test("a number between a column and a point of another series is nobody's value 
   assert.equal(readAt(gemini, [[sales, feb], [pricePoint]], 1, 0)!.text, `Jan ${NO_VALUE}`);
 });
 
+test("on the combo with labels on both series, a column's own label is its value; a price label on the column is nobody's (rule A)", () => {
+  // "Precios con etiquetas": Ago's column (x 171-201, top 62.5) with "300M" above it, its price point inside the column
+  // (y 208.5-216.5) with "3.75k" just above the point, on the column.
+  const column = barShape(box(171, 62.5, 201, 250));
+  const pricePoint = point(box(182, 208.5, 190, 216.5));
+  const labels = [right("0", 60, 250), right("160M", 60, 150), right("320M", 60, 50), label("Jul", 110, 268), label("Ago", 186, 268), label("300M", 186, 52.5, 24), label("3.75k", 186, 200.5, 30)];
+  const jul = barShape(box(95, 75, 125, 250));
+  assert.equal(readAt(labels, [[jul, column], [pricePoint]], 0, 1)!.text, "Ago · 300M");
+  assert.equal(readAt(labels, [[jul, column], [pricePoint]], 1, 0)!.text, `Ago ${NO_VALUE}`);
+});
+
 test("a label in the gutter of grouped bars is nobody's; one centred on a bar is that bar's (rule A; Grok #1 P1)", () => {
   const a = barShape(box(100, 100, 118, 250));
   const b = barShape(box(122, 150, 140, 250));
