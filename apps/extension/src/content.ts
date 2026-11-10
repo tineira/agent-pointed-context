@@ -13,7 +13,7 @@
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, appTakes, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
-import { chartAxes, describeMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type LabelRole, type MarkReading, type SvgText } from "./chart.ts";
+import { chartAxes, describeMark, describeNamed, isMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type MarkReading, type SvgText } from "./chart.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, formState, headingOf, intersect, isHeading, isItem, OPACITY_MIN, ownsHeadings, showsIn, tableContext, visibleWords, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
@@ -560,24 +560,22 @@ function blockOf(under: Element | null): Element | null {
   return blockAbove(at, climb);
 }
 
-// ---- chart marks (TIN-760) ----
+// ---- chart marks (TIN-760, TIN-765) ----
+// What the page declares, never what has to be guessed, and nothing per chart library: no class name is read. A
+// shape is told by its paint, its size, its place among the drawing's labels, and its ARIA (aria-hidden, a
+// control's role, its own name).
 
 /** The shapes a chart draws its data with. */
 const SHAPES = "path,circle,rect,ellipse,polygon";
-/** Words in a class that name something a chart draws other than its data: a shape in one (or in a group named so) is never a mark. */
-const NOT_DATA = new Set(["legend", "axis", "xaxis", "yaxis", "grid", "gridline", "tooltip", "title", "subtitle", "credits", "navigator", "scrollbar", "background", "crosshair", "tick", "ticks", "label", "labels", "annotation", "annotations", "border", "button", "domain"]);
-/** Plot bands and plot lines (Highcharts `highcharts-plot-band`, `highcharts-plot-lines-0`): shading and guides, not data. */
-const PLOT_GUIDE = /plot-?bands?\b|plot-?lines?\b/i;
-/** Words in a shape's own class that make it no mark: a tracker or hover halo laid over the data, an area's fill, a line's graph. */
-const NOT_DATA_OWN = new Set(["tracker", "halo", "area", "graph", "band"]);
-/** An element's class, in words ("highcharts-data-label" is highcharts, data, label). */
-const classWords = (e: Element) => (e.getAttribute("class") ?? "").toLowerCase().split(/[\s_-]+/).filter(Boolean);
+/** Roles of controls: a shape in one (a legend's toggle, an export button, a scrollbar's handle) is never a mark. */
+const CONTROL_ROLES = new Set(["button", "link", "checkbox", "switch", "radio", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "tab", "slider", "scrollbar", "spinbutton", "combobox", "textbox", "searchbox"]);
+/** HTML controls: text over a drawing inside one is no label of the drawing. */
+const HTML_CONTROLS = "a[href],button,input,select,textarea,label,summary,[contenteditable=''],[contenteditable='true']";
 /** The most labels and shapes looked at in one chart. */
 const CHART_SCANNED = 600;
-/** Highcharts series drawn as bars, columns or their kin: their shapes grow from a baseline. */
-const BAR_SERIES = /(?:^|\s)highcharts-(?:bar|column|columnrange|columnpyramid|waterfall|histogram|xrange|variwide|bullet)-series(?:\s|$)/;
-/** Any Highcharts series group, or its markers' group: shapes in other series are points. */
-const ANY_SERIES = /(?:^|\s)highcharts-(?:markers|[a-z]+-series)(?:\s|$)/;
+/** How much of its drawing a mark of a chart may cover; one that names itself (a pie's largest slice) may cover more. */
+const MARK_SHARE = 0.25;
+const NAMED_SHARE = 0.9;
 
 /** The drawing an element is in: its outermost <svg>. */
 function drawingOf(el: Element): SVGSVGElement | null {
@@ -589,34 +587,58 @@ function drawingOf(el: Element): SVGSVGElement | null {
 /** A box's area. */
 const area = (r: Rect) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
 
-/**
- * What was found about each drawing during one drag (its labels, whether it is a chart) and about each mark
- * the pointer went over: dragover comes many times a second, and these walks are not cheap. Forgotten on
- * the drop, at the drag's end and when no dragover came for OUTLINE_IDLE_MS (forgetScopes).
- */
-const charts = new Map<SVGSVGElement, { chart: Chart; axes: Axes | null; marks: Map<Element, MarkReading | null> }>();
+/** An element's first role, lower case, or null. */
+const roleWord = (e: Element) => e.getAttribute("role")?.trim().toLowerCase().split(/\s+/)[0] || null;
 
-/**
- * Whether a shape could be a data mark by its own looks and markup: a filled shape the person sees, at most
- * a quarter of its drawing, not in anything named as an axis, grid, legend, label, title, tooltip,
- * background, plot band or plot line, and not itself a tracker, hover halo, area fill or line graph.
- * Whether it is one also takes a confirmed chart around it (readMark).
- */
-function dataShape(el: Element): boolean {
-  if (!(el instanceof SVGGraphicsElement) || !el.matches(SHAPES) || el.closest("defs,clipPath,mask,marker,pattern,symbol")) return false;
-  if (classWords(el).some((w) => NOT_DATA_OWN.has(w))) return false;
-  const svg = drawingOf(el);
-  if (!svg) return false;
-  for (let at: Element | null = el; at && at !== svg; at = at.parentElement) if (classWords(at).some((w) => NOT_DATA.has(w)) || PLOT_GUIDE.test(at.getAttribute("class") ?? "")) return false;
-  const style = getComputedStyle(el);
-  if (style.fill === "none" || alpha(style.fill) < OPACITY_MIN || Number(style.fillOpacity) < OPACITY_MIN || effectiveOpacity(el) < OPACITY_MIN || !rendered(el)) return false;
-  const box = area(boxOf(el));
-  return box > 0 && box <= area(boxOf(svg)) / 4;
+/** Whether an element, or anything it is in below `top`, is a control: its role, or an HTML control. */
+function inControl(el: Element, top: Element): boolean {
+  for (let at: Element | null = el; at && at !== top; at = at.parentElement) if (CONTROL_ROLES.has(roleWord(at) ?? "") || at.matches(HTML_CONTROLS)) return true;
+  return false;
+}
+
+/** Whether a shape, or anything it is in below `top`, is hidden from assistive technology (aria-hidden) or is a control. */
+function hiddenOrControl(el: Element, top: Element): boolean {
+  for (let at: Element | null = el; at && at !== top; at = at.parentElement) if (at.getAttribute("aria-hidden") === "true") return true;
+  return inControl(el, top);
+}
+
+interface ChartInfo {
+  chart: Chart;
+  axes: Axes | null;
+  /** The drawing's shapes that could be marks (dataShape), and their boxes and kinds in the same order. */
+  shapes: Element[];
+  /** The group each shape is drawn in: the nearest group around it that holds another shape too (its series). */
+  groups: Map<Element, Element>;
+  /** The accessible texts of the shapes that name themselves (describeNamed). */
+  named: string[];
+  marks: Map<Element, MarkReading | null>;
 }
 
 /**
- * Where an SVG clip path (`clip-path: url(#id)` holding one rect, as Highcharts clips its plot) lets an
- * element show, in the viewport, or null when there is none or it is not that simple.
+ * What was found about each drawing during one drag (its labels, its shapes, whether it is a chart) and about each mark
+ * the pointer went over: dragover comes many times a second, and these walks are not cheap. Forgotten on the drop, at
+ * the drag's end and when no dragover came for OUTLINE_IDLE_MS (forgetScopes).
+ */
+const charts = new Map<SVGSVGElement, ChartInfo>();
+
+/**
+ * Whether a shape could be a mark by its own looks and markup: a filled shape the person sees (a stroke-only line, a
+ * fill that is none or nearly transparent, as a tracker's, is not), not hidden from assistive technology and not in a
+ * control, at most `share` of its drawing (no background or plot area). Whether it is one takes more (readMark).
+ */
+function dataShape(el: Element, share = MARK_SHARE): boolean {
+  if (!(el instanceof SVGGraphicsElement) || !el.matches(SHAPES) || el.closest("defs,clipPath,mask,marker,pattern,symbol")) return false;
+  const svg = drawingOf(el);
+  if (!svg || hiddenOrControl(el, svg)) return false;
+  const style = getComputedStyle(el);
+  if (style.fill === "none" || alpha(style.fill) < OPACITY_MIN || Number(style.fillOpacity) < OPACITY_MIN || effectiveOpacity(el) < OPACITY_MIN || !rendered(el)) return false;
+  const box = area(boxOf(el));
+  return box > 0 && box <= area(boxOf(svg)) * share;
+}
+
+/**
+ * Where an SVG clip path (`clip-path: url(#id)` holding one rect, as a chart clips its plot) lets an element show, in
+ * the viewport, or null when there is none or it is not that simple.
  */
 function svgClip(at: Element): Rect | null {
   const url = /^url\(["']?#([^"')]+)["']?\)$/.exec(getComputedStyle(at).clipPath);
@@ -652,46 +674,36 @@ function labelSeen(e: Element): boolean {
   return ink >= OPACITY_MIN && showsIn(boxOf(e), clip);
 }
 
-/** The series an element of a chart belongs to, when the markup says (Highcharts' `highcharts-series-N`). */
-function seriesOf(el: Element, top: Element): number | null {
-  for (let at: Element | null = el; at && at !== top; at = at.parentElement) {
-    const m = /(?:^|\s)highcharts-series-(\d+)(?:\s|$)/.exec(at.getAttribute("class") ?? "");
-    if (m) return Number(m[1]);
-  }
-  return null;
-}
-
-/** What a label of a chart is (LabelRole), by the classes on it and around it in the chart. */
-function roleOf(el: Element, top: Element): LabelRole {
-  for (let at: Element | null = el; at && at !== top; at = at.parentElement) {
-    const cls = (at.getAttribute("class") ?? "").toLowerCase();
-    const words = classWords(at);
-    if (words.includes("tooltip")) return "tooltip";
-    if (words.includes("legend")) return "legend";
-    if (/data-?labels?\b|datalabel/.test(cls)) return "data";
-    if ((words.includes("axis") && words.includes("title")) || words.some((w) => w === "subtitle" || w === "credits" || w === "caption")) return "other";
-    if (words.includes("title")) return "title";
-    if (words.some((w) => w === "axis" || w === "xaxis" || w === "yaxis" || w === "tick")) return "axis";
-  }
-  return null;
-}
-
-/** An SVG text element as isOutlineCopy takes it. */
-const svgTextOf = (e: Element): SvgText => {
+/** How an SVG text is painted: with a stroke at all, and with a stroke only (a fill that is none, transparent or the stroke's own colour). */
+function paintOf(e: Element): { stroked: boolean; strokeOnly: boolean } {
   const style = getComputedStyle(e);
   const stroked = style.stroke !== "none" && alpha(style.stroke) >= OPACITY_MIN && parseFloat(style.strokeWidth) > 0;
-  const strokeOnly = stroked && (style.fill === "none" || alpha(style.fill) < OPACITY_MIN || style.fill === style.stroke);
-  return { tagName: e.tagName, getAttribute: (n) => e.getAttribute(n), textContent: e.textContent, stroked, strokeOnly };
-};
+  return { stroked, strokeOnly: stroked && (style.fill === "none" || alpha(style.fill) < OPACITY_MIN || style.fill === style.stroke) };
+}
 
-/** Whether an SVG text or tspan is the outline copy of a label drawn twice (isOutlineCopy). */
+/**
+ * Whether an SVG text or tspan is the outline copy of a label drawn twice (isOutlineCopy): drawn with a stroke only,
+ * with an unstroked twin with the same words at the same place, a text or tspan beside it or the text written
+ * straight after it in the same <text>.
+ */
 function outlineCopy(e: Element): boolean {
   if (!(e instanceof SVGTextElement || e instanceof SVGTSpanElement)) return false;
-  const own = svgTextOf(e);
-  if (isOutlineCopy(own, [])) return true;
-  if (!own.strokeOnly) return false;
-  const siblings = [...(e.parentElement?.children ?? [])].filter((s) => s !== e && s.tagName === e.tagName);
-  return isOutlineCopy(own, [own, ...siblings.map(svgTextOf)]);
+  const paint = paintOf(e);
+  if (!paint.strokeOnly) return false;
+  const parent = e.parentElement;
+  const twins: SvgText[] = [];
+  for (const s of [...(parent?.children ?? [])].slice(0, CHART_SCANNED)) {
+    if (s !== e && (s instanceof SVGTextElement || s instanceof SVGTSpanElement)) twins.push({ text: s.textContent ?? "", box: boxOf(s), ...paintOf(s) });
+  }
+  if (e instanceof SVGTSpanElement && parent) {
+    const range = document.createRange();
+    for (const node of parent.childNodes) {
+      if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) continue;
+      range.selectNodeContents(node);
+      twins.push({ text: node.textContent, box: range.getBoundingClientRect(), ...paintOf(parent) });
+    }
+  }
+  return isOutlineCopy({ text: e.textContent ?? "", box: boxOf(e), ...paint }, twins);
 }
 
 /** An SVG label's words, its outline copies left out; a tspan that starts a new line starts a new word. */
@@ -709,116 +721,143 @@ function labelText(t: Element): string {
   return parts.join("").replace(/\s+/g, " ").trim();
 }
 
-/** Highcharts' HTML label groups (useHTML), in its container beside the drawing: the only HTML a chart's reading takes. */
-const HTML_LABELS = ".highcharts-data-labels, .highcharts-data-label, .highcharts-axis-labels, .highcharts-legend";
-
-/**
- * What a drawing draws, as chartAxes and describeMark take it, and whether it is a chart: every label the
- * person sees in it (labelSeen), and for Highcharts the HTML labels in its own label groups, with its box,
- * role and series; how many series; whether its bars run across. Once per drawing and drag (charts).
- */
-function chartInfo(svg: SVGSVGElement) {
-  const known = charts.get(svg);
-  if (known) return known;
-  const container = svg.parentElement?.classList.contains("highcharts-container") ? svg.parentElement : null;
-  const top = container ?? svg;
-  const labels: ChartLabel[] = [];
-  for (const t of [...svg.querySelectorAll("text")].slice(0, CHART_SCANNED)) {
-    if (outlineCopy(t) || !labelSeen(t)) continue;
-    const text = labelText(t);
-    if (text) labels.push({ text, box: boxOf(t), role: roleOf(t, top), series: seriesOf(t, top) });
-  }
-  if (container) {
-    const leaves = [...container.querySelectorAll(HTML_LABELS)].flatMap((g) => [g, ...g.querySelectorAll("*")]).filter((e) => !svg.contains(e) && !e.children.length);
-    for (const e of [...new Set(leaves)].slice(0, CHART_SCANNED)) {
-      if (!labelSeen(e)) continue;
-      const text = (e.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (text) labels.push({ text, box: boxOf(e), role: roleOf(e, top), series: seriesOf(e, top) });
-    }
-  }
-  // How many series: Highcharts' series groups, or else the groups the marks are drawn in.
-  const groups = new Set<number | Element>();
-  const highcharts = svg.querySelectorAll(".highcharts-series-group .highcharts-series");
-  if (highcharts.length) {
-    for (const g of highcharts) if (rendered(g)) groups.add(seriesOf(g, svg) ?? g);
-  } else {
-    for (const s of [...svg.querySelectorAll(SHAPES)].slice(0, CHART_SCANNED)) if (s.parentElement && dataShape(s)) groups.add(s.parentElement);
-  }
-  const horizontal = svg.querySelector(".highcharts-bar-series, .highcharts-xrange-series") ? true : svg.querySelector(".highcharts-column-series, .highcharts-line-series, .highcharts-spline-series, .highcharts-area-series") ? false : null;
-  const chart: Chart = { labels, series: groups.size, horizontal };
-  const info = { chart, axes: chartAxes(chart), marks: new Map<Element, MarkReading | null>() };
-  charts.set(svg, info);
-  return info;
-}
-
-/** The other shapes drawn beside a mark (its parent's, of its tag): bars of one series share their baseline. */
-function siblingsOf(mark: Element): Rect[] {
-  return [...(mark.parentElement?.children ?? [])].filter((s) => s !== mark && s.tagName === mark.tagName).slice(0, CHART_SCANNED).map(boxOf);
+/** The element a drawing's HTML labels may be in: the drawing's own parent, unless that is the page. */
+function holderOf(svg: SVGSVGElement): Element | null {
+  const parent = svg.parentElement;
+  return parent && !isPage(parent) ? parent : null;
 }
 
 /**
- * Whether a mark grows from a baseline (a bar, a column, a stack segment) or sits at its value (a point), by
- * its series' shape, never by its proportions: Highcharts says by its series' class; otherwise a rect is a
- * bar, a circle or ellipse a point, and a path or polygon a bar when it shares an edge with a shape beside it.
+ * The text a page declares as a name: aria-label, else the text of what aria-labelledby names, when that is inside
+ * `scope` (the drawing and what is laid over it: nothing else on the page is read) and the person sees it.
  */
-function markKind(mark: Element, svg: Element, siblings: readonly Rect[]): "bar" | "point" {
-  for (let at = mark.parentElement; at && at !== svg; at = at.parentElement) {
-    const cls = at.getAttribute("class") ?? "";
-    if (BAR_SERIES.test(cls)) return "bar";
-    if (ANY_SERIES.test(cls)) return "point";
-  }
-  if (mark.tagName === "rect") return "bar";
-  if (mark.tagName === "circle" || mark.tagName === "ellipse") return "point";
-  const b = boxOf(mark);
-  const near = (p: number, q: number) => Math.abs(p - q) <= 1;
-  return siblings.some((s) => near(s.top, b.top) || near(s.bottom, b.bottom) || near(s.left, b.left) || near(s.right, b.right)) ? "bar" : "point";
-}
-
-/** A mark's own accessible text: aria-label, or its <title> or <desc>. */
-function accessibleOf(mark: Element): string | null {
-  const label = mark.getAttribute("aria-label")?.trim();
+function declaredName(el: Element, scope: Element): string | null {
+  const label = el.getAttribute("aria-label")?.trim();
   if (label) return label;
+  const ids = el.getAttribute("aria-labelledby")?.trim().split(/\s+/) ?? [];
+  const root = el.getRootNode() as Document | ShadowRoot;
+  const texts = ids.map((id): Element | null => root.getElementById?.(id) ?? null).filter((t): t is Element => !!t && scope.contains(t) && labelSeen(t)).map((t) => (t instanceof SVGTextElement ? labelText(t) : (t.textContent ?? "").replace(/\s+/g, " ").trim()));
+  return texts.join(" ").trim() || null;
+}
+
+/** A shape's own accessible text: its declared name, or its <title> or <desc>. */
+function accessibleOf(mark: Element, scope: Element): string | null {
+  const name = declaredName(mark, scope);
+  if (name) return name;
   for (const child of mark.children) if (child.tagName === "title" || child.tagName === "desc") return child.textContent?.trim() || null;
   return null;
 }
 
 /**
- * What the person sees at a mark (describeMark), or null when it is no mark: not a data shape, not in a
- * confirmed chart (chartAxes), or one the chart tells neither the category nor the value of.
+ * Whether a mark grows from a baseline (a bar, a column, a stack segment) or sits at its value (a point): a rect is a
+ * bar, a circle or ellipse a point, and a path or polygon a bar when it has an edge on a line (along the same axis)
+ * that half the shapes of its group or more have an edge on too, as bars share their baseline.
+ */
+function kindOf(shape: Element, box: Rect, siblings: readonly Rect[]): "point" | "bar" {
+  if (shape.tagName === "rect") return "bar";
+  if (shape.tagName === "circle" || shape.tagName === "ellipse") return "point";
+  if (!siblings.length) return "point";
+  const on = (p: number, a: number, b: number) => Math.abs(p - a) <= 1 || Math.abs(p - b) <= 1;
+  const sharing = Math.max(
+    ...[box.top, box.bottom].map((p) => siblings.filter((s) => on(p, s.top, s.bottom)).length),
+    ...[box.left, box.right].map((p) => siblings.filter((s) => on(p, s.left, s.right)).length),
+  );
+  return sharing >= Math.ceil(siblings.length / 2) ? "bar" : "point";
+}
+
+/**
+ * What a drawing draws, as chartAxes and describeMark take it, and whether it is a chart: every label the person sees
+ * in it (labelSeen) and every HTML text laid over it (in its parent, inside its box, no control), its shapes that
+ * could be marks and the groups they are drawn in. Once per drawing and drag (charts).
+ */
+function chartInfo(svg: SVGSVGElement): ChartInfo {
+  const known = charts.get(svg);
+  if (known) return known;
+  const labels: ChartLabel[] = [];
+  for (const t of [...svg.querySelectorAll("text")].slice(0, CHART_SCANNED)) {
+    if (outlineCopy(t) || !labelSeen(t)) continue;
+    const text = labelText(t);
+    if (text) labels.push({ text, box: boxOf(t) });
+  }
+  const holder = holderOf(svg);
+  if (holder) {
+    const drawn = boxOf(svg);
+    const leaves = [...holder.querySelectorAll("*")].slice(0, ELEMENTS_SCANNED).filter((e) => !(e instanceof SVGElement) && !e.children.length && e.textContent?.trim());
+    for (const e of leaves.slice(0, CHART_SCANNED)) {
+      const box = boxOf(e);
+      if (!within(box, drawn) || inControl(e, holder) || !labelSeen(e)) continue;
+      labels.push({ text: (e.textContent ?? "").replace(/\s+/g, " ").trim(), box });
+    }
+  }
+  const all = [...svg.querySelectorAll(SHAPES)].slice(0, CHART_SCANNED);
+  const shapes = all.filter((s) => dataShape(s));
+  // A shape's group: the nearest group around it that holds another of the shapes too (its series), else the drawing.
+  const counts = new Map<Element, number>();
+  for (const s of shapes) for (let at: Element | null = s.parentElement; at && at !== svg; at = at.parentElement) counts.set(at, (counts.get(at) ?? 0) + 1);
+  const groups = new Map<Element, Element>();
+  for (const s of shapes) {
+    let group: Element = svg;
+    for (let at: Element | null = s.parentElement; at && at !== svg; at = at.parentElement) if (counts.get(at)! >= 2) { group = at; break; }
+    groups.set(s, group);
+  }
+  const boxes = new Map(shapes.map((s) => [s, boxOf(s)]));
+  const members = new Map<Element, Element[]>();
+  for (const s of shapes) members.set(groups.get(s)!, [...(members.get(groups.get(s)!) ?? []), s]);
+  const kinds = shapes.map((s) => ({ box: boxes.get(s)!, kind: kindOf(s, boxes.get(s)!, members.get(groups.get(s)!)!.filter((o) => o !== s).map((o) => boxes.get(o)!)) }));
+  const axes = chartAxes({ labels, shapes: kinds });
+  const series = new Set(shapes.filter((s) => axes && isMark(boxes.get(s)!, labels, axes)).map((s) => groups.get(s))).size;
+  // Only a drawing with no axes can have shapes that name themselves (describeNamed).
+  const named = axes ? [] : all.filter((s) => dataShape(s, NAMED_SHARE)).map((s) => accessibleOf(s, holder ?? svg)).filter((t): t is string => !!t);
+  const info: ChartInfo = { chart: { labels, shapes: kinds, series }, axes, shapes, groups, named, marks: new Map() };
+  charts.set(svg, info);
+  return info;
+}
+
+/**
+ * What the person sees at a mark (describeMark), or null when it is no mark: in a confirmed chart (chartAxes), a shape
+ * that could be a mark, in the plot, whose category or value the chart tells; in a drawing with no axes, a shape that
+ * names itself among others that do (describeNamed), read from that name only.
  */
 function readMark(mark: Element): MarkReading | null {
   const svg = drawingOf(mark);
   if (!svg) return null;
   const info = chartInfo(svg);
-  if (!info.axes) return null;
   if (info.marks.has(mark)) return info.marks.get(mark)!;
+  const scope = holderOf(svg) ?? svg;
   let reading: MarkReading | null = null;
-  if (dataShape(mark)) {
-    const siblings = siblingsOf(mark);
-    reading = describeMark({ box: boxOf(mark), kind: markKind(mark, svg, siblings), series: seriesOf(mark, svg), accessible: accessibleOf(mark), siblings }, info.chart, info.axes, headingFor(mark));
+  const i = info.shapes.indexOf(mark);
+  if (info.axes && i >= 0) {
+    const group = info.groups.get(mark)!;
+    const siblings = info.shapes.filter((s) => s !== mark && info.groups.get(s) === group).map(boxOf);
+    // A series' name is declared on its group, never on the drawing itself (that names the chart).
+    const series = group === svg ? null : declaredName(group, scope);
+    reading = describeMark({ ...info.chart.shapes[i]!, accessible: accessibleOf(mark, scope), series, siblings }, info.chart, info.axes, headingFor(mark));
+  } else if (!info.axes && dataShape(mark, NAMED_SHARE)) {
+    reading = describeNamed(accessibleOf(mark, scope), info.named);
   }
   info.marks.set(mark, reading);
   return reading;
 }
 
 /**
- * The chart mark at a point, or null: going down the elements at the point inside the drawing there, the
- * first that is a mark (readMark). A data label or a tracker over a bar passes through to the bar, and so
- * does an HTML label a chart draws over its drawing (Highcharts' useHTML, in its container); a drop on the
- * background, a gridline, an axis or the title finds none.
+ * The chart mark at a point, or null: going down the elements at the point inside the drawing there, the first that is
+ * a mark (readMark), so a data label or a tracker over a bar passes through to the bar. HTML laid over the drawing is
+ * passed through too, when it is a label (no control, inside the drawing's box) or not seen; anything else on top (a
+ * banner, a dialog, a button) means the drop is on that, not on a mark. A drop on the background, a gridline, an axis
+ * or the title finds none.
  */
 function markAt(x: number, y: number, deep: Element | null): Element | null {
   if (!deep) return null;
-  const list = (deep.getRootNode() as Document | ShadowRoot).elementsFromPoint(x, y);
-  let svg = deep instanceof SVGElement ? drawingOf(deep) : null;
-  if (!svg) {
-    const below = list.find((e) => e instanceof SVGElement);
-    const drawing = below ? drawingOf(below) : null;
-    const container = drawing?.parentElement;
-    if (drawing && container && !isPage(container) && container.contains(deep) && (container.classList.contains("highcharts-container") || roleOf(deep, container) !== null)) svg = drawing;
-  }
+  const list = (deep.getRootNode() as Document | ShadowRoot).elementsFromPoint(x, y).filter((e) => !(e instanceof HTMLElement && ("apcPin" in e.dataset || "apcCard" in e.dataset)));
+  const first = list.findIndex((e) => e instanceof SVGElement);
+  const svg = first < 0 ? null : drawingOf(list[first]!);
   if (!svg) return null;
-  for (const el of list) if (el !== svg && svg.contains(el) && el.matches(SHAPES) && readMark(el)) return el;
+  const drawn = boxOf(svg);
+  for (const e of list.slice(0, first)) {
+    if (!rendered(e) || effectiveOpacity(e) < OPACITY_MIN) continue;
+    if (inControl(e, document.documentElement) || !within(boxOf(e), drawn)) return null;
+  }
+  for (const el of list.slice(first)) if (el !== svg && svg.contains(el) && el.matches(SHAPES) && readMark(el)) return el;
   return null;
 }
 
@@ -935,9 +974,9 @@ function readable(el: Element, max: number): string {
  */
 function readAt(x: number, y: number, scope: Element | null) {
   const selection = String(getSelection() ?? "").slice(0, TEXT_MAX);
-  // A chart's mark (TIN-760): what the person sees at it, as a "chart point" or "chart bar", under the chart's heading.
-  // Should the chart no longer tell anything about it at the drop, no element goes (the dock says the page), and
-  // nothing beyond the mark is read.
+  // A chart's mark (TIN-760, TIN-765): what the page writes for it, as a "chart point", "chart bar" or "chart mark" (a shape that
+  // names itself), under the chart's heading. Should the chart no longer tell anything about it at the drop, no element goes
+  // (the dock says the page), and nothing beyond the mark is read.
   const shape = scope instanceof SVGElement && scope.matches(SHAPES);
   const mark = shape ? readMark(scope) : null;
   const cell = scope?.closest<HTMLTableCellElement>("td,th");

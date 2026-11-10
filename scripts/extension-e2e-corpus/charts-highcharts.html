@@ -1,0 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Ventas</title>
+<!-- Corpus (TIN-765): charts with the DOM shape Highcharts gives them (its class names included, as on Datamind), written
+     by hand. The extension reads none of these classes. -->
+<body style="margin:20px;font:14px sans-serif">
+<h1>Tendencia de ventas</h1>
+
+<h2>Venta neta</h2>
+<!-- A line chart: a marker per month under a tracker line, the title "SMU", only "0" and "1 000M" on its value axis, no
+     data labels but October's (an HTML label laid over its point) and July's (hidden by the plot's clip path); a plot
+     band, and a tooltip left on screen from an earlier hover (February's). -->
+<div class="highcharts-container" id="line" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
+<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
+<rect class="highcharts-plot-background" x="60" y="40" width="520" height="220" fill="#ffffff"/>
+<defs><clipPath id="plotclip"><rect x="60" y="56" width="520" height="204"/></clipPath></defs>
+<g class="highcharts-plot-bands-0"><rect class="highcharts-plot-band" id="band" x="60" y="200" width="520" height="40" fill="rgba(68,170,213,0.2)"/></g>
+<g class="highcharts-grid highcharts-yaxis-grid"><path d="M 60 60 L 580 60" stroke="#e6e6e6" fill="none"/><path d="M 60 260 L 580 260" stroke="#e6e6e6" fill="none"/></g>
+<g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-line-series"><path class="highcharts-graph" d="M 80 156 L 120 138 L 160 164 L 200 120 L 240 130 L 280 142 L 320 64 L 360 108 L 400 74 L 440 84 L 480 132 L 520 118" fill="none" stroke="#2f7ed8" stroke-width="2"/></g>
+<g class="highcharts-markers highcharts-series-0 highcharts-tracker">
+<path class="highcharts-point" id="m0" fill="#2f7ed8" d="M 76 152 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m1" fill="#2f7ed8" d="M 116 134 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m2" fill="#2f7ed8" d="M 156 160 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m3" fill="#2f7ed8" d="M 196 116 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m4" fill="#2f7ed8" d="M 236 126 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m5" fill="#2f7ed8" d="M 276 138 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m6" fill="#2f7ed8" d="M 316 60 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m7" fill="#2f7ed8" d="M 356 104 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m8" fill="#2f7ed8" d="M 396 70 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m9" fill="#2f7ed8" d="M 436 80 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m10" fill="#2f7ed8" d="M 476 128 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="m11" fill="#2f7ed8" d="M 516 114 h 8 v 8 h -8 Z"/>
+</g>
+<path class="highcharts-tracker-line" d="M 80 156 L 120 138 L 160 164 L 200 120 L 240 130 L 280 142 L 320 64 L 360 108 L 400 74 L 440 84 L 480 132 L 520 118" fill="none" stroke="rgba(192,192,192,0.0001)" stroke-width="22"/></g>
+<text x="300" y="20" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" class="highcharts-title">SMU</text>
+<g class="highcharts-axis-labels highcharts-xaxis-labels"><text x="80" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">E</text><text x="120" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">F</text><text x="160" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">M</text><text x="200" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">A</text><text x="240" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">M</text><text x="280" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">J</text><text x="320" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">J</text><text x="360" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">A</text><text x="400" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">S</text><text x="440" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">O</text><text x="480" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">N</text><text x="520" y="276" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">D</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="50" y="260" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">0</text><text x="50" y="60" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">1 000M</text></g>
+<g class="highcharts-data-labels highcharts-series-0" clip-path="url(#plotclip)"><text x="320" y="48" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">999M</text></g>
+<g class="highcharts-label highcharts-tooltip" transform="translate(500,190)"><path fill="#ffffff" stroke="#333333" d="M 0 0 h 80 v 34 h -80 Z"/><text x="6" y="10" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">F</text><text x="6" y="24" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">SMU: 400 M</text></g>
+</svg><div class="highcharts-data-labels highcharts-series-0" style="position:absolute;left:0;top:0"><div class="highcharts-label highcharts-data-label" id="octlabel" style="position:absolute;left:420px;top:76px;width:40px;text-align:center;font:11px sans-serif;background:rgba(255,255,255,0.6)"><span>880M</span></div></div></div>
+
+<h2>Instock promedio</h2>
+<!-- Horizontal bars, a data label at each bar's end drawn twice (a stroke-only outline copy under it). -->
+<div class="highcharts-container" id="bars" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
+<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
+<g class="highcharts-series-group"><g class="highcharts-series highcharts-series-0 highcharts-bar-series highcharts-tracker">
+<path class="highcharts-point" id="bar0" fill="#2f7ed8" d="M 110 28 H 504.04 V 52 H 110 Z"/>
+<path class="highcharts-point" id="bar1" fill="#2f7ed8" d="M 110 72 H 494.92 V 96 H 110 Z"/>
+<path class="highcharts-point" id="bar2" fill="#2f7ed8" d="M 110 116 H 471.68 V 140 H 110 Z"/>
+<path class="highcharts-point" id="bar3" fill="#2f7ed8" d="M 110 160 H 460.68 V 184 H 110 Z"/>
+<path class="highcharts-point" id="bar4" fill="#2f7ed8" d="M 110 204 H 489.24 V 228 H 110 Z"/>
+</g></g>
+<g class="highcharts-data-labels highcharts-series-0">
+<g class="highcharts-label highcharts-data-label"><text x="509.04" y="40" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">98,51%</tspan><tspan x="509.04">98,51%</tspan></text></g>
+<g class="highcharts-label highcharts-data-label"><text x="499.92" y="84" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">96,23%</tspan><tspan x="499.92">96,23%</tspan></text></g>
+<g class="highcharts-label highcharts-data-label"><text x="476.68" y="128" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">90,42%</tspan><tspan x="476.68">90,42%</tspan></text></g>
+<g class="highcharts-label highcharts-data-label"><text x="465.68" y="172" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">87,67%</tspan><tspan x="465.68">87,67%</tspan></text></g>
+<g class="highcharts-label highcharts-data-label"><text x="494.24" y="216" dominant-baseline="middle" style="font:bold 11px sans-serif"><tspan class="highcharts-text-outline" fill="#ffffff" stroke="#ffffff" stroke-width="2">94,81%</tspan><tspan x="494.24">94,81%</tspan></text></g>
+</g>
+<g class="highcharts-axis-labels highcharts-xaxis-labels"><text x="100" y="40" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">CENCOSUD</text><text x="100" y="84" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">WALMART</text><text x="100" y="128" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">TOTTUS</text><text x="100" y="172" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">SMU</text><text x="100" y="216" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">Total General</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="110" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">0%</text><text x="150" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">10%</text><text x="190" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">20%</text><text x="230" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">30%</text><text x="270" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">40%</text><text x="310" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">50%</text><text x="350" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">60%</text><text x="390" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">70%</text><text x="430" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">80%</text><text x="470" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">90%</text><text x="510" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">100%</text></g>
+</svg></div>
+
+<h2>Precios</h2>
+<!-- A combo chart with two value axes: columns of sales on the left axis (0 to 320M) and a line of prices on the right
+     axis (3.6k to 4.4k), a legend under the months, no data labels. -->
+<div class="highcharts-container" id="combo" style="position:relative;width:600px;height:320px"><svg class="highcharts-root" width="600" height="320">
+<rect class="highcharts-background" x="0" y="0" width="600" height="320" fill="#ffffff"/>
+<rect class="highcharts-plot-background" x="70" y="50" width="460" height="200" fill="#ffffff"/>
+<g class="highcharts-grid highcharts-yaxis-grid"><path d="M 70 50 L 530 50" stroke="#e6e6e6" fill="none"/><path d="M 70 100 L 530 100" stroke="#e6e6e6" fill="none"/><path d="M 70 150 L 530 150" stroke="#e6e6e6" fill="none"/><path d="M 70 200 L 530 200" stroke="#e6e6e6" fill="none"/><path d="M 70 250 L 530 250" stroke="#e6e6e6" fill="none"/></g>
+<g class="highcharts-series-group">
+<g class="highcharts-series highcharts-series-0 highcharts-column-series highcharts-tracker">
+<path class="highcharts-point" id="col0" fill="#7cb5ec" d="M 95 250 V 118.75 H 125 V 250 Z"/>
+<path class="highcharts-point" id="col1" fill="#7cb5ec" d="M 171 250 V 100 H 201 V 250 Z"/>
+<path class="highcharts-point" id="col2" fill="#7cb5ec" d="M 247 250 V 137.5 H 277 V 250 Z"/>
+<path class="highcharts-point" id="col3" fill="#7cb5ec" d="M 323 250 V 87.5 H 353 V 250 Z"/>
+<path class="highcharts-point" id="col4" fill="#7cb5ec" d="M 399 250 V 62.5 H 429 V 250 Z"/>
+<path class="highcharts-point" id="col5" fill="#7cb5ec" d="M 475 250 V 106.25 H 505 V 250 Z"/>
+</g>
+<g class="highcharts-series highcharts-series-1 highcharts-line-series"><path class="highcharts-graph" d="M 110 175 L 186 120 L 262 150 L 338 75 L 414 100 L 490 137.5" fill="none" stroke="#434348" stroke-width="2"/></g>
+<g class="highcharts-markers highcharts-series-1 highcharts-tracker">
+<path class="highcharts-point" id="price0" fill="#434348" d="M 106 171 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="price1" fill="#434348" d="M 182 116 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="price2" fill="#434348" d="M 258 146 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="price3" fill="#434348" d="M 334 71 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="price4" fill="#434348" d="M 410 96 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="price5" fill="#434348" d="M 486 133.5 h 8 v 8 h -8 Z"/>
+</g>
+<path class="highcharts-tracker-line" d="M 110 175 L 186 120 L 262 150 L 338 75 L 414 100 L 490 137.5" fill="none" stroke="rgba(192,192,192,0.0001)" stroke-width="22"/></g>
+<text x="300" y="20" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" class="highcharts-title">Ventas y precio</text>
+<g class="highcharts-axis-labels highcharts-xaxis-labels"><text x="110" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Jul</text><text x="186" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Ago</text><text x="262" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Sep</text><text x="338" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Oct</text><text x="414" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Nov</text><text x="490" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Dic</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="60" y="250" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">0</text><text x="60" y="200" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">80M</text><text x="60" y="150" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">160M</text><text x="60" y="100" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">240M</text><text x="60" y="50" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">320M</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="540" y="250" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">3.6k</text><text x="540" y="200" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">3.8k</text><text x="540" y="150" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">4.0k</text><text x="540" y="100" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">4.2k</text><text x="540" y="50" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">4.4k</text></g>
+<g class="highcharts-legend" transform="translate(220,290)"><g class="highcharts-legend-item highcharts-column-series highcharts-series-0"><text x="18" y="6" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">Venta</text><rect class="highcharts-point" id="legendsales" x="0" y="0" width="12" height="12" fill="#7cb5ec"/></g>
+<g class="highcharts-legend-item highcharts-line-series highcharts-series-1" transform="translate(90,0)"><text x="22" y="6" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">Precio</text><path class="highcharts-graph" d="M 0 6 L 16 6" stroke="#434348" stroke-width="2" fill="none"/><path class="highcharts-point" d="M 4 2 h 8 v 8 h -8 Z" fill="#434348"/></g></g>
+</svg></div>
+</body>

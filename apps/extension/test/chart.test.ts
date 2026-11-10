@@ -1,265 +1,287 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { APPROXIMATE, chartAxes, coversPlot, decimalOf, describeMark, formatLike, interpolate, isOutlineCopy, parseNumber, type Chart, type ChartLabel, type ChartMark, type LabelRole, type SvgText } from "../src/chart.ts";
+import { chartAxes, coversPlot, describeMark, describeNamed, isMark, isOutlineCopy, NO_VALUE, parseNumber, type Chart, type ChartLabel, type ChartMark, type ChartShape, type SvgText } from "../src/chart.ts";
+import type { Rect } from "../src/read.ts";
+
+// The corpus of scripts/extension-e2e-corpus (TIN-765), as the content script hands it over: the labels the person sees
+// with their boxes, and the shapes that could be marks. No class name reaches this file.
 
 /** A label `text` centred at (x, y), w wide and 12 tall. */
-const label = (text: string, x: number, y: number, role: LabelRole = "axis", series: number | null = null, w = 8 * text.length): ChartLabel => ({ text, box: { left: x - w / 2, right: x + w / 2, top: y - 6, bottom: y + 6 }, role, series });
+const label = (text: string, x: number, y: number, w = 8 * text.length): ChartLabel => ({ text, box: { left: x - w / 2, right: x + w / 2, top: y - 6, bottom: y + 6 } });
 /** A label right-aligned at x, as a value axis on the left draws them. */
-const right = (text: string, x: number, y: number, role: LabelRole = "axis"): ChartLabel => ({ text, box: { left: x - 8 * text.length, right: x, top: y - 6, bottom: y + 6 }, role, series: null });
-const box = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom });
-/** describeMark on a chart chartAxes confirms. */
-const read = (mark: ChartMark, chart: Chart, omit?: string | null) => {
+const right = (text: string, x: number, y: number): ChartLabel => ({ text, box: { left: x - 8 * text.length, right: x, top: y - 6, bottom: y + 6 } });
+/** A label left-aligned at x. */
+const left = (text: string, x: number, y: number): ChartLabel => ({ text, box: { left: x, right: x + 8 * text.length, top: y - 6, bottom: y + 6 } });
+const box = (l: number, t: number, r: number, b: number): Rect => ({ left: l, top: t, right: r, bottom: b });
+const point = (b: Rect): ChartShape => ({ box: b, kind: "point" });
+const barShape = (b: Rect): ChartShape => ({ box: b, kind: "bar" });
+
+/** A chart of these labels and shapes, its series counted as the content script does: one group per series given. */
+function chartOf(labels: ChartLabel[], series: ChartShape[][]): Chart {
+  const shapes = series.flat();
+  const axes = chartAxes({ labels, shapes });
+  const groups = axes ? series.filter((g) => g.some((s) => isMark(s.box, labels, axes))).length : 0;
+  return { labels, shapes, series: groups };
+}
+/** describeMark on the shape at (series s, index i) of a chart chartAxes confirms. */
+function readAt(labels: ChartLabel[], series: ChartShape[][], s: number, i: number, extra: Partial<ChartMark> = {}, omit?: string | null) {
+  const chart = chartOf(labels, series);
   const axes = chartAxes(chart);
   assert.ok(axes, "a chart");
-  return describeMark(mark, chart, axes, omit);
-};
+  const shape = series[s]![i]!;
+  return describeMark({ ...shape, accessible: null, series: null, siblings: series[s]!.filter((o) => o !== shape).map((o) => o.box), ...extra }, chart, axes, omit);
+}
 
-// "Venta neta", series SMU, as Datamind draws it with Highcharts: the title "SMU" above the plot, a month per
-// category along the bottom (E F M A M J J A S O N D, 40 px apart from x = 80), and the value axis on the
-// left with only "0" (y = 260) and "1 000M" (y = 60).
+// ---- Highcharts-like: "Venta neta" (charts-highcharts.html) ----
+// The title "SMU" above the plot, a month per category along the bottom (E..D, 40 px apart from x = 80), the value axis
+// on the left with only "0" (y = 260) and "1 000M" (y = 60), a marker per month, no data labels.
 const MONTHS = ["E", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
-const monthX = (i: number) => 80 + i * 40;
-const yOf = (value: number) => 260 - (value / 1e9) * 200;
-const ventaNeta = (extra: ChartLabel[] = [], series = 1): Chart => ({
-  labels: [label("SMU", 300, 16, "title"), ...MONTHS.map((m, i) => label(m, monthX(i), 276)), right("0", 50, 260), right("1 000M", 50, 60), ...extra],
-  series,
-  horizontal: false,
-});
-/** A line marker (8 px) centred at month i and the given value. */
-const marker = (i: number, value: number, series: number | null = 0, accessible: string | null = null): ChartMark => ({ box: box(monthX(i) - 4, yOf(value) - 4, monthX(i) + 4, yOf(value) + 4), kind: "point", series, accessible, siblings: [] });
+const VENTA = [520, 610, 480, 700, 650, 590, 980, 760, 930, 880, 640, 710];
+const lineY = (m: number) => 260 - m * 0.2;
+const ventaLabels = (extra: ChartLabel[] = []) => [label("SMU", 300, 20), ...MONTHS.map((m, i) => label(m, 80 + i * 40, 276)), right("0", 50, 260), right("1 000M", 50, 60), ...extra];
+const markers = () => VENTA.map((m, i) => point(box(76 + i * 40, lineY(m) - 4, 84 + i * 40, lineY(m) + 4)));
+// A plot band across the plot, and February's tooltip box left on screen with its words in it.
+const band = barShape(box(60, 200, 580, 240));
+const tooltip = barShape(box(500, 190, 580, 224));
+const tooltipWords = [left("F", 506, 200), left("SMU: 400 M", 506, 214)];
 
-test("a line chart's point reads its series, its category and an approximate value (TIN-760)", () => {
-  const r = read(marker(8, 930e6), ventaNeta(), "Venta neta");
+test("a line chart's point without a data label reads its series and category, and says no value is written (TIN-765)", () => {
+  const r = readAt(ventaLabels(tooltipWords), [markers(), [band, tooltip]], 0, 8, {}, "Venta neta");
   assert.ok(r);
-  assert.equal(r.kind, "point");
-  assert.equal(r.text, `SMU · S · ≈ 930M ${APPROXIMATE}`);
-  assert.deepEqual([r.series, r.category, r.approximate], ["SMU", "S", true]);
-  assert.equal(read(marker(0, 412e6), ventaNeta())!.text, `SMU · E · ≈ 410M ${APPROXIMATE}`);
+  assert.equal(r.text, `SMU · S ${NO_VALUE}`);
+  assert.deepEqual([r.kind, r.series, r.category, r.value], ["point", "SMU", "S", null]);
+  // The series that is the reading's heading already is not said twice.
+  assert.equal(readAt(ventaLabels(), [markers()], 0, 8, {}, "SMU")!.text, `S ${NO_VALUE}`);
+  assert.doesNotMatch(r.text, /≈|approximate|400/);
 });
 
-test("with several series, a point is named by its legend item, never by the chart's title", () => {
-  const legend = [label("SMU", 200, 296, "legend", 0), label("WALMART", 300, 296, "legend", 1)];
-  assert.equal(read(marker(3, 2e8, 1), ventaNeta(legend, 2))!.text, `WALMART · A · ≈ 200M ${APPROXIMATE}`);
-  // A series the legend does not name, in a chart of several: left out, not guessed.
-  assert.equal(read(marker(3, 2e8, 4), ventaNeta(legend, 2))!.text, `A · ≈ 200M ${APPROXIMATE}`);
+test("a value is only text written for the mark: its own accessible text, or a data label at it (TIN-765)", () => {
+  assert.equal(readAt(ventaLabels(), [markers()], 0, 8, { accessible: "S, 931 012 340. SMU." })!.text, "S, 931 012 340. SMU.");
+  assert.equal(readAt(ventaLabels(), [markers()], 0, 8, { accessible: "931 012 340" })!.text, "SMU · S · 931 012 340");
+  // October's HTML label laid over its point.
+  const october = label("880M", 440, lineY(880) - 2, 40);
+  assert.equal(readAt(ventaLabels([october]), [markers()], 0, 9)!.text, "SMU · O · 880M");
+  // A label far above the point is no one's.
+  assert.equal(readAt(ventaLabels([label("880M", 440, lineY(880) - 60, 40)]), [markers()], 0, 9)!.text, `SMU · O ${NO_VALUE}`);
 });
 
-test("a series that is the reading's heading already is not said twice", () => {
-  assert.equal(read(marker(8, 930e6), ventaNeta(), "SMU")!.text, `S · ≈ 930M ${APPROXIMATE}`);
-});
-
-test("a value is exact only from visible text of the mark: its own text, then its data label; otherwise approximate", () => {
-  assert.equal(read(marker(8, 930e6, 0, "S, 931 012 340. SMU."), ventaNeta())!.text, "S, 931 012 340. SMU.");
-  assert.equal(read(marker(8, 930e6, 0, "931 012 340"), ventaNeta())!.text, "SMU · S · 931 012 340");
-  const dataLabel = label("931M", monthX(8), yOf(930e6) - 14, "data", 0);
-  const withLabel = read(marker(8, 930e6), ventaNeta([dataLabel]));
-  assert.equal(withLabel!.text, "SMU · S · 931M");
-  assert.equal(withLabel!.approximate, false);
-  // Another series' label at the same place is not this point's; nor is a label far from it.
-  assert.equal(read(marker(8, 930e6), ventaNeta([{ ...dataLabel, series: 1 }]))!.approximate, true);
-  assert.equal(read(marker(8, 930e6), ventaNeta([label("931M", monthX(8), yOf(930e6) - 60, "data", 0)]))!.approximate, true);
-});
-
-test("a tooltip on screen is never the value: a drag does not move the chart's hover (Grok P2, Gemini P2)", () => {
-  // September dropped on while February's tooltip is still up: "F" / "SMU: 400 M" contains "S".
-  const feb = [label("F", 420, 40, "tooltip"), label("SMU: 400 M", 420, 54, "tooltip")];
-  assert.equal(read(marker(8, 930e6), ventaNeta(feb))!.text, `SMU · S · ≈ 930M ${APPROXIMATE}`);
-  // April with "Agosto" up; March ("M") with "Septiembre" and "930 M" up.
-  assert.equal(read(marker(3, 700e6), ventaNeta([label("Agosto", 420, 40, "tooltip"), label("SMU: 700 M", 420, 54, "tooltip")]))!.text, `SMU · A · ≈ 700M ${APPROXIMATE}`);
-  assert.equal(read(marker(2, 500e6), ventaNeta([label("Septiembre", 420, 40, "tooltip"), label("SMU: 930 M", 420, 54, "tooltip")]))!.text, `SMU · M · ≈ 500M ${APPROXIMATE}`);
-  // A mark with no category does not take it either.
-  const off = { ...marker(8, 930e6), box: box(900, yOf(930e6) - 4, 908, yOf(930e6) + 4) };
-  assert.equal(read(off, ventaNeta(feb))!.text, `SMU · ≈ 930M ${APPROXIMATE}`);
-});
-
-// "Instock promedio": horizontal Highcharts bars, the categories down the left (right-aligned at x = 100, 40 px
-// apart), the value axis along the bottom (0% at x = 110 to 100% at x = 510), and a data label at each bar's end.
-const STORES = [["CENCOSUD", 98.51], ["WALMART", 96.23], ["TOTTUS", 90.42], ["SMU", 87.67], ["Total General", 94.81]] as const;
-const rowY = (i: number) => 40 + i * 40;
-const end = (value: number) => 110 + value * 4;
-const pct = (v: number) => `${v.toFixed(2).replace(".", ",")}%`;
-const ticks = (zero = "0%") => Array.from({ length: 11 }, (_, i) => label(i ? `${i * 10}%` : zero, 110 + i * 40, 250));
-const instock = (dataLabels = true, zero = "0%", values: ReadonlyArray<readonly [string, number]> = STORES): Chart => ({
-  labels: [
-    ...values.map(([name], i) => right(name, 100, rowY(i))),
-    ...ticks(zero),
-    ...(dataLabels ? values.map(([, v], i) => ({ ...label(pct(v), 0, rowY(i), "data", 0), box: box(end(v) + 5, rowY(i) - 6, end(v) + 5 + 8 * pct(v).length, rowY(i) + 6) })) : []),
-  ],
-  series: 1,
-  horizontal: true,
-});
-const barBox = (i: number, v: number) => box(110, rowY(i) - 10, end(v), rowY(i) + 10);
-const bars = (values: ReadonlyArray<readonly [string, number]> = STORES) => values.map(([, v], i) => barBox(i, v));
-const bar = (i: number, values: ReadonlyArray<readonly [string, number]> = STORES): ChartMark => ({ box: barBox(i, values[i]![1]), kind: "bar", series: 0, accessible: null, siblings: bars(values).filter((_, j) => j !== i) });
-
-test("a bar reads its category and its exact data label (TIN-760)", () => {
-  const r = read(bar(3), instock(), "Instock promedio");
-  assert.equal(r!.kind, "bar");
-  assert.equal(r!.text, "SMU · 87,67%");
-  assert.equal(r!.approximate, false);
-  assert.equal(read(bar(4), instock())!.text, "Total General · 94,81%");
-  assert.equal(read(bar(3), instock(false))!.text, `SMU · ≈ 87.7% ${APPROXIMATE}`);
-});
-
-test("a percentage axis whose zero is a bare \"0\" keeps its % (Gemini P2, Grok P2)", () => {
-  assert.equal(read(bar(3), instock(false, "0"))!.text, `SMU · ≈ 87.7% ${APPROXIMATE}`);
-  const axis = (...t: string[]) => t.map((s) => parseNumber(s)!);
-  assert.equal(formatLike(87.67, axis("0", "10%", "20%")), "87.7%");
-  assert.equal(formatLike(87.67, axis("0", "50%", "100%")), "87.7%");
-});
-
-test("a short bar is read at its end and takes the data label just past it (Grok P2)", () => {
-  // 8% on the Instock axis: a bar 32 x 20, its label "8%" 5 px past its end.
-  const small = [["CENCOSUD", 98.51], ["WALMART", 96.23], ["TOTTUS", 90.42], ["SMU", 8], ["Total General", 94.81]] as const;
-  assert.equal(read(bar(3, small), instock(true, "0%", small))!.text, "SMU · 8,00%");
-  assert.equal(read(bar(3, small), instock(false, "0%", small))!.text, `SMU · ≈ 8% ${APPROXIMATE}`);
-});
-
-// A plain SVG chart, no classes: "Revenue" on top, 0 to 100 up the left (0 at y = 230, 100 at y = 30), Q1 to Q3 along the bottom.
-const plain: Chart = {
-  labels: [label("Revenue", 200, 8, null), right("0", 40, 230, null), right("50", 40, 130, null), right("100", 40, 30, null), label("Q1", 100, 246, null), label("Q2", 200, 246, null), label("Q3", 300, 246, null)],
-  series: 1,
-  horizontal: null,
-};
-const column = (x: number, value: number, accessible: string | null = null): ChartMark => {
-  const own = box(x - 20, 230 - value * 2, x + 20, 230);
-  return { box: own, kind: "bar", series: null, accessible, siblings: [box(80, 130, 120, 230), box(180, 80, 220, 230), box(280, 50, 320, 230)].filter((b) => b.left !== own.left) };
-};
-
-test("a chart whose markup says nothing: axes found by their place, the title above them (generic SVG)", () => {
-  assert.equal(read(column(200, 75), plain)!.text, `Revenue · Q2 · ≈ 75 ${APPROXIMATE}`);
-  assert.equal(read(column(200, 75, "Q2: 75.2"), plain)!.text, "Revenue · Q2: 75.2");
-  const twoTitles = { ...plain, labels: [...plain.labels, label("Draft", 320, 8, null)] };
-  assert.equal(read(column(200, 75), twoTitles)!.text, `Q2 · ≈ 75 ${APPROXIMATE}`);
-  // A short column (0 to 15, 40 x 30) is read at its top, not its centre (Grok P2).
-  assert.equal(read(column(200, 15), plain)!.text, `Revenue · Q2 · ≈ 15 ${APPROXIMATE}`);
-});
-
-test("a bar is read at its end away from the baseline, also on a negative axis (Gemini P2)", () => {
-  // Ticks -100 to -60 along the bottom, bars from -100 (their shared left edge) to their value.
-  const negative: Chart = { labels: [...["-100", "-90", "-80", "-70", "-60"].map((t, i) => label(t, 110 + i * 100, 250)), right("A", 100, 40), right("B", 100, 80)], series: 1, horizontal: true };
-  const x = (v: number) => 110 + (v + 100) * 10;
-  const a = box(110, 30, x(-80), 50);
-  const b = box(110, 70, x(-70), 90);
-  assert.equal(read({ box: a, kind: "bar", series: null, accessible: null, siblings: [b] }, negative)!.text, `A · ≈ -80 ${APPROXIMATE}`);
-  // No sibling and no zero on the axis: the baseline cannot be told, so no value.
-  assert.equal(read({ box: a, kind: "bar", series: null, accessible: null, siblings: [] }, negative)!.text, "A");
-});
-
-test("a drawing is a chart only with a value axis and a category axis or data labels (Gemini P2, Grok P2)", () => {
-  // A step indicator "1" "2", a calendar badge "15" over "2024", a pie or an icon with no labels: no chart, so no mark.
-  assert.equal(chartAxes({ labels: [label("1", 100, 20, null), label("2", 200, 20, null)], series: 1, horizontal: null }), null);
-  assert.equal(chartAxes({ labels: [label("15", 100, 20, null), label("2024", 100, 40, null)], series: 1, horizontal: null }), null);
-  assert.equal(chartAxes({ labels: [], series: 1, horizontal: null }), null);
-  assert.equal(chartAxes({ labels: [label("Sales", 100, 20, "title")], series: 1, horizontal: null }), null);
-  // Value axis and category axis, or value axis and data labels: a chart.
-  assert.ok(chartAxes(plain));
-  assert.ok(chartAxes({ labels: [right("0", 40, 230), right("100", 40, 30), label("42", 200, 140, "data")], series: 1, horizontal: null }));
-});
-
-test("geometry is trusted with three ticks on a line, or two with a zero; never a two-tick log axis (Grok P2)", () => {
-  assert.equal(interpolate([{ pos: 0, value: 1 }, { pos: 200, value: 1000 }], 100), null);
-  assert.equal(interpolate([{ pos: 0, value: 1000 }, { pos: 100, value: 100 }, { pos: 200, value: 10 }], 50), null);
-  assert.equal(interpolate([{ pos: 260, value: 0 }, { pos: 60, value: 1e9 }], 74), 930e6);
-  assert.equal(interpolate([{ pos: 0, value: 10 }, { pos: 100, value: 20 }, { pos: 200, value: 30 }], 50), 15);
-  // So on a two-tick axis without zero, a point keeps its category and has no value.
-  const log: Chart = { labels: [...MONTHS.map((m, i) => label(m, monthX(i), 276)), right("1", 50, 260), right("1000", 50, 60)], series: 1, horizontal: false };
-  assert.equal(read(marker(4, 500e6), log)!.text, "M");
-});
-
-test("a plot band, an area's fill or anything across most of the plot is no mark (Gemini P2, Grok P2)", () => {
-  const axes = chartAxes(ventaNeta())!;
-  // A band from (60, 60) to (580, 140); an area's fill box from (80, 180) to (520, 260).
-  assert.equal(coversPlot(box(60, 60, 580, 140), axes), true);
-  assert.equal(describeMark({ box: box(60, 60, 580, 140), kind: "bar", series: null, accessible: null, siblings: [] }, ventaNeta(), axes), null);
-  assert.equal(describeMark({ box: box(80, 180, 520, 260), kind: "point", series: 0, accessible: null, siblings: [] }, ventaNeta(), axes), null);
-  assert.equal(coversPlot(marker(8, 930e6).box, axes), false);
-});
-
-test("numbers as charts write them (TIN-760)", () => {
-  const value = (t: string, d?: "," | ".") => parseNumber(t, d)?.value ?? null;
-  assert.equal(value("1 000M"), 1e9);
-  assert.equal(value("1 000M"), 1e9);
-  assert.equal(value("3 200M"), 3.2e9);
-  assert.equal(value("8G"), 8e9);
-  assert.equal(value("800M"), 8e8);
-  assert.equal(value("12MM"), 12e6);
-  assert.equal(value("3k"), 3000);
-  assert.equal(value("0"), 0);
-  assert.equal(value("90%"), 90);
-  assert.equal(parseNumber("90%")!.unit, "%");
-  assert.equal(value("98,51%"), 98.51);
-  assert.equal(value("1,5"), 1.5);
-  assert.equal(value("0.25"), 0.25);
-  assert.equal(value("1.000"), 1000);
-  assert.equal(value("1,000"), 1000);
-  assert.equal(value("1.000.000"), 1e6);
-  assert.equal(value("1.234,5"), 1234.5);
-  assert.equal(value("1,234.5"), 1234.5);
-  assert.equal(value("$1,200"), 1200);
-  assert.equal(parseNumber("US$ 5")!.prefix, "US$");
-  assert.equal(value("-5"), -5);
-  assert.equal(value("−5"), -5);
-  assert.equal(value("1,000", ","), 1);
-  assert.equal(value("1.000", ","), 1000);
-  // Separators that do not group thousands make no number (Grok P2): "1.2.3", or "98,51%" where "," groups.
-  assert.equal(parseNumber("1.2.3"), null);
-  assert.equal(parseNumber("98,51%", "."), null);
-  assert.equal(parseNumber("1 00M"), null);
-  for (const t of ["SMU", "Q1", "E", "Total General", "1.2.3,4,5", ""]) assert.equal(parseNumber(t), null, t);
-  assert.equal(decimalOf(["0%", "98,51%"]), ",");
-  assert.equal(decimalOf(["1.000", "2.000"]), null);
-  assert.equal(decimalOf(["0", "0.5"]), ".");
-  // Only labels that are numbers tell the separator, never a subtitle (Grok P2).
-  assert.equal(decimalOf(["Crecimiento 1.5%", "0", "1.000", "2.000"]), null);
-});
-
-test("a subtitle with a decimal does not rewrite the axis's thousands (Grok P2)", () => {
-  // "Crecimiento 1.5%" above, ticks "0", "1.000", "2.000" up the left (dot groups thousands), columns Q1..Q3.
-  const chart: Chart = { labels: [label("Crecimiento 1.5%", 200, 8, "other"), right("0", 40, 230), right("1.000", 40, 130), right("2.000", 40, 30), label("Q1", 100, 246), label("Q2", 200, 246), label("Q3", 300, 246)], series: 2, horizontal: false };
+test("a plot band, a tooltip's box and anything outside the plot is no mark; they do not count as series (TIN-765)", () => {
+  const labels = ventaLabels(tooltipWords);
+  const chart = chartOf(labels, [markers(), [band], [tooltip]]);
   const axes = chartAxes(chart)!;
-  assert.deepEqual(axes.numbers.map((n) => n.value), [0, 1000, 2000]);
-  const col: ChartMark = { box: box(180, 80, 220, 230), kind: "bar", series: null, accessible: null, siblings: [box(80, 130, 120, 230)] };
-  assert.equal(describeMark(col, chart, axes)!.text, `Q2 · ≈ 1.500 ${APPROXIMATE}`);
+  assert.equal(chart.series, 1, "only the markers' group");
+  assert.equal(coversPlot(band.box, axes), true);
+  assert.equal(isMark(band.box, labels, axes), false);
+  assert.equal(isMark(tooltip.box, labels, axes), false, "a box with words in it is a label's");
+  assert.equal(describeMark({ ...tooltip, accessible: null, series: null, siblings: [] }, chart, axes), null);
+  // A legend symbol under the month labels.
+  assert.equal(isMark(box(220, 290, 232, 302), labels, axes), false);
 });
 
-test("a value read off the axis is written as the axis writes its numbers", () => {
-  const axis = (...t: string[]) => t.map((s) => parseNumber(s)!);
-  assert.equal(formatLike(930.4e6, axis("0", "1 000M")), "930M");
-  assert.equal(formatLike(1_234e6, axis("0", "1 000M", "2 000M")), "1 230M");
-  assert.equal(formatLike(930e6, axis("0", "800M", "1,6G")), "930M");
-  assert.equal(formatLike(2.4e9, axis("0", "800M", "1,6G", "2,4G")), "2,4G");
-  assert.equal(formatLike(87.67, axis("0%", "10%", "20%")), "87.7%");
-  assert.equal(formatLike(87.67, axis("0,0%", "10,0%", "20,0%")), "87,7%");
-  assert.equal(formatLike(1234, axis("$0", "$1.000", "$2.000")), "$1.230");
-  assert.equal(formatLike(-12, axis("-50", "0", "50")), "-12");
+// ---- Highcharts-like: "Instock promedio" ----
+// Horizontal bars, the stores down the left (right-aligned at x = 100, 44 px apart), the value axis along the bottom
+// (0% at x = 110 to 100% at x = 510), and a data label 5 px past each bar's end.
+const STORES = [["CENCOSUD", 98.51], ["WALMART", 96.23], ["TOTTUS", 90.42], ["SMU", 87.67], ["Total General", 94.81]] as const;
+const rowY = (i: number) => 40 + i * 44;
+const end = (v: number) => 110 + v * 4;
+const pct = (v: number) => `${v.toFixed(2).replace(".", ",")}%`;
+const instockLabels = (dataLabels = true, values: ReadonlyArray<readonly [string, number]> = STORES) => [
+  ...values.map(([name], i) => right(name, 100, rowY(i))),
+  ...Array.from({ length: 11 }, (_, i) => label(`${i * 10}%`, 110 + i * 40, 280)),
+  ...(dataLabels ? values.map(([, v], i) => left(pct(v), end(v) + 5, rowY(i))) : []),
+];
+const instockBars = (values: ReadonlyArray<readonly [string, number]> = STORES) => values.map(([, v], i) => barShape(box(110, rowY(i) - 12, end(v), rowY(i) + 12)));
+
+test("a bar with a data label reads its category and that exact label (Instock: WALMART · 96,23%)", () => {
+  const r = readAt(instockLabels(), [instockBars()], 0, 1, {}, "Instock promedio");
+  assert.equal(r!.text, "WALMART · 96,23%");
+  assert.equal(r!.kind, "bar");
+  assert.equal(readAt(instockLabels(), [instockBars()], 0, 3)!.text, "SMU · 87,67%");
+  assert.equal(readAt(instockLabels(), [instockBars()], 0, 4)!.text, "Total General · 94,81%");
+  // Without data labels, no value.
+  assert.equal(readAt(instockLabels(false), [instockBars()], 0, 3)!.text, `SMU ${NO_VALUE}`);
+  // A short bar takes the label just past its end.
+  const small = [["CENCOSUD", 98.51], ["WALMART", 96.23], ["TOTTUS", 90.42], ["SMU", 8], ["Total General", 94.81]] as const;
+  assert.equal(readAt(instockLabels(true, small), [instockBars(small)], 0, 3)!.text, "SMU · 8,00%");
 });
 
-test("a label drawn twice, its halo under it, is read once; a real label never dropped (TIN-760, Grok P3)", () => {
-  const svgText = (tagName: string, text: string, attrs: Record<string, string> = {}, paint: "fill" | "halo" | "both" = "fill"): SvgText => ({ tagName, textContent: text, getAttribute: (n) => attrs[n] ?? null, stroked: paint !== "fill", strokeOnly: paint === "halo" });
-  assert.equal(isOutlineCopy(svgText("tspan", "98,51%", { class: "highcharts-text-outline" }, "halo"), []), true);
-  const realLabel = svgText("text", "98,51%", { x: "10", y: "20" });
-  const halo = svgText("text", "98,51%", { x: "10", y: "20" }, "halo");
+// ---- Highcharts-like: "Precios", two value axes ----
+// Columns of sales on a left axis (0 to 320M, right-aligned at x = 60) and a line of prices on a right axis (3.6k to
+// 4.4k, left-aligned at x = 540), months along the bottom (76 px apart from x = 110), a legend under them.
+const P_MONTHS = ["Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+const SALES = [210, 240, 180, 260, 300, 230];
+const PRICES = [3.9, 4.12, 4.0, 4.3, 4.2, 4.05];
+const pX = (i: number) => 110 + i * 76;
+const comboLabels = [
+  label("Ventas y precio", 300, 20),
+  ...P_MONTHS.map((m, i) => label(m, pX(i), 268)),
+  ...["0", "80M", "160M", "240M", "320M"].map((t, i) => right(t, 60, 250 - i * 50)),
+  ...["3.6k", "3.8k", "4.0k", "4.2k", "4.4k"].map((t, i) => left(t, 540, 250 - i * 50)),
+  left("Venta", 238, 296),
+  left("Precio", 332, 296),
+];
+const columns = SALES.map((v, i) => barShape(box(pX(i) - 15, 250 - (v / 320) * 200, pX(i) + 15, 250)));
+const prices = PRICES.map((p, i) => point(box(pX(i) - 4, 250 - ((p - 3.6) / 0.8) * 200 - 4, pX(i) + 4, 250 - ((p - 3.6) / 0.8) * 200 + 4)));
+const legendSymbols = [barShape(box(220, 290, 232, 302)), point(box(314, 292, 322, 300))];
+
+test("on a chart with two value axes, a bar or a point reads its category and no value, never one off an axis (Datamind's prices)", () => {
+  const series = [columns, prices, legendSymbols];
+  const ago = readAt(comboLabels, series, 0, 1, {}, "Precios");
+  assert.equal(ago!.text, `Ago ${NO_VALUE}`);
+  assert.equal(ago!.kind, "bar");
+  assert.doesNotMatch(ago!.text, /4[.,]12k|≈/);
+  assert.equal(readAt(comboLabels, series, 1, 2, {}, "Precios")!.text, `Sep ${NO_VALUE}`);
+  // The right axis's numbers are an axis, not data labels; two series: the title names neither.
+  const chart = chartOf(comboLabels, series);
+  const axes = chartAxes(chart)!;
+  assert.equal(axes.vertical, true);
+  assert.deepEqual(axes.dataLabels, []);
+  assert.equal(chart.series, 2);
+  // The legend's symbols, under the months, are no marks.
+  for (const s of legendSymbols) assert.equal(isMark(s.box, comboLabels, axes), false);
+});
+
+// ---- ECharts-like (charts-libraries.html) ----
+// Ticks 0..250 up the left (right-aligned at x = 52, 40 px per 50), days along the bottom, a data label 9 px above each
+// bar, the title "Visits" at the top left.
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const VISITS = [120, 200, 150, 80, 70, 110, 130];
+const eX = (i: number) => 60 + ((i + 0.5) * 500) / 7;
+const eY = (v: number) => 260 - v * 0.8;
+const echartsLabels = [left("Visits", 5, 16), ...[0, 50, 100, 150, 200, 250].map((v) => right(String(v), 52, eY(v))), ...DAYS.map((d, i) => label(d, eX(i), 272)), ...VISITS.map((v, i) => label(String(v), eX(i), eY(v) - 9))];
+const echartsBars = VISITS.map((v, i) => barShape(box(eX(i) - 20, eY(v), eX(i) + 20, 260)));
+
+test("an ECharts-like chart: the title above names its one series, the data label above the bar is its value", () => {
+  assert.equal(readAt(echartsLabels, [echartsBars], 0, 2, {}, "Site traffic")!.text, "Visits · Wed · 150");
+});
+
+// ---- D3 (charts-libraries.html) ----
+// Ticks 0%..12% up the left (right-aligned at x = 31), letters along the bottom, no data labels, C with a <title>.
+const LETTERS = [["A", 8.17], ["B", 1.49], ["C", 2.78], ["D", 4.25], ["E", 11.2], ["F", 2.23]] as const;
+const step = 440 / 6;
+const dY = (v: number) => 20 + 250 - (v / 12) * 250;
+const d3Labels = [...[0, 2, 4, 6, 8, 10, 12].map((v) => right(`${v}%`, 31, dY(v))), ...LETTERS.map(([l], i) => label(l, 40 + step * (i + 0.5), 280)), { text: "Frequency", box: box(46, 20, 58, 80) }];
+const d3Bars = LETTERS.map(([, v], i) => barShape(box(40 + step * i + 4, dY(v), 40 + step * (i + 1) - 4, 270)));
+
+test("a D3 chart with no data labels: the category and no value; a bar's own <title> is its value", () => {
+  assert.equal(readAt(d3Labels, [d3Bars], 0, 1, {}, "Letter frequency")!.text, `B ${NO_VALUE}`);
+  assert.equal(readAt(d3Labels, [d3Bars], 0, 2, { accessible: "C: 2.78%" }, "Letter frequency")!.text, "C: 2.78%");
+});
+
+// ---- Recharts-like (charts-libraries.html) ----
+// Two bar series side by side (pv left, uv right of each page's centre), pv with a label on top of each bar, uv with
+// none; ticks 0..10000 up the left; an HTML legend "pv" "uv" over the drawing's bottom.
+const PAGES = ["Page A", "Page B", "Page C", "Page D", "Page E", "Page F"];
+const PV = [2400, 1398, 9800, 3908, 4800, 3500];
+const UV = [4000, 3000, 2000, 2780, 1890, 2390];
+const rcX = (i: number) => 65 + (430 / 6) * (i + 0.5);
+const rcY = (v: number) => 235 - (v / 10000) * 230;
+const rechartsLabels = [
+  ...[0, 2500, 5000, 7500, 10000].map((v) => right(String(v), 57, rcY(v))),
+  ...PAGES.map((p, i) => label(p, rcX(i), 249)),
+  ...PV.map((v, i) => label(String(v), rcX(i) - 15, rcY(v) - 10)),
+  label("pv", 240, 288),
+  label("uv", 270, 288),
+];
+const pv = PV.map((v, i) => barShape(box(rcX(i) - 28, rcY(v), rcX(i) - 2, 235)));
+const uv = UV.map((v, i) => barShape(box(rcX(i) + 2, rcY(v), rcX(i) + 28, 235)));
+
+test("a Recharts-like chart: a label is the value of the bar it is drawn at, never of the bar beside it", () => {
+  assert.equal(readAt(rechartsLabels, [pv, uv], 0, 1, {}, "Page views")!.text, "Page B · 1398");
+  assert.equal(readAt(rechartsLabels, [pv, uv], 1, 1, {}, "Page views")!.text, `Page B ${NO_VALUE}`);
+  assert.equal(readAt(rechartsLabels, [pv, uv], 1, 2)!.text, `Page C ${NO_VALUE}`);
+});
+
+test("a series is named only as the page declares it: its group's name, or the single title of a chart of one series", () => {
+  assert.equal(readAt(rechartsLabels, [pv, uv], 0, 1, { series: "Page views (pv)" })!.text, "Page views (pv) · Page B · 1398");
+  // A title and a subtitle: neither is taken.
+  const two = [...echartsLabels, left("Last week", 5, 34)];
+  assert.equal(readAt(two, [echartsBars], 0, 2)!.text, "Wed · 150");
+});
+
+test("a data label as near to two marks is neither's; a category label nearer another mark of the series is not this one's", () => {
+  // Two series' points on the same month, a label centred between them.
+  const a = point(box(396, 96, 404, 104));
+  const b = point(box(396, 136, 404, 144));
+  const labels = [...MONTHS.map((m, i) => label(m, 80 + i * 40, 276)), right("0", 50, 260), right("1 000M", 50, 60), label("500M", 400, 120, 32)];
+  assert.equal(readAt(labels, [[a], [b]], 0, 0)!.text, `S ${NO_VALUE}`);
+  // Daily points under monthly labels: only the day at a label takes it.
+  const days = Array.from({ length: 31 }, (_, d) => point(box(80 + d * (40 / 31) * 1 - 2, 158, 80 + d * (40 / 31) + 2, 162)));
+  assert.equal(readAt(labels.slice(0, -1), [days], 0, 0)!.text, `E ${NO_VALUE}`);
+  assert.equal(readAt(labels.slice(0, -1), [days], 0, 10), null, "neither a category nor a value");
+});
+
+test("a drawing is a chart only with a value axis and a category axis or data labels", () => {
+  // A step indicator "1" "2", a calendar badge "15" over "2024", a pie or an icon with no labels: no chart, so no mark.
+  assert.equal(chartAxes({ labels: [label("1", 100, 20), label("2", 200, 20)], shapes: [] }), null);
+  assert.equal(chartAxes({ labels: [label("15", 100, 20), label("2024", 100, 40)], shapes: [] }), null);
+  assert.equal(chartAxes({ labels: [], shapes: [] }), null);
+  assert.equal(chartAxes({ labels: [label("Sales", 100, 20)], shapes: [] }), null);
+  // A value axis and data labels: a chart.
+  assert.ok(chartAxes({ labels: [right("0", 40, 230), right("100", 40, 30), label("42", 200, 140)], shapes: [] }));
+});
+
+test("years along the bottom are the categories, not a value axis: the shapes line up with them", () => {
+  const years = ["2019", "2020", "2021", "2022", "2023"];
+  const labels = [...years.map((y, i) => label(y, 100 + i * 80, 276)), ...["0", "500", "1000", "1500"].map((t, i) => right(t, 50, 260 - i * 60))];
+  const cols = years.map((_, i) => barShape(box(85 + i * 80, 120 + i * 10, 115 + i * 80, 260)));
+  const axes = chartAxes({ labels, shapes: cols })!;
+  assert.equal(axes.vertical, true);
+  assert.equal(readAt(labels, [cols], 0, 2)!.text, `2021 ${NO_VALUE}`);
+});
+
+// ---- shapes that name themselves (charts-other.html) ----
+
+test("a pie's slice or a map's region that names itself is a mark, read from that name only; unnamed ones are not", () => {
+  const pie = ["CENCOSUD: 38%", "WALMART: 27%", "TOTTUS: 20%", "SMU: 15%"];
+  assert.deepEqual(describeNamed("CENCOSUD: 38%", pie), { kind: "mark", series: null, category: null, value: "CENCOSUD: 38%", text: "CENCOSUD: 38%" });
+  assert.equal(describeNamed("Valparaíso: 1.9M", ["Valparaíso: 1.9M", "Santiago: 7.1M"])!.text, "Valparaíso: 1.9M");
+  // Without names, or an icon's single <title>: no mark.
+  assert.equal(describeNamed(null, []), null);
+  assert.equal(describeNamed("Close", ["Close"]), null);
+  assert.equal(describeNamed("Star", ["Star", "Star"]), null);
+});
+
+// ---- numbers and labels ----
+
+test("numbers as charts write them tell an axis's ticks and data labels from other text", () => {
+  for (const [t, v] of [["1 000M", 1e9], ["1 000M", 1e9], ["8G", 8e9], ["12MM", 12e6], ["3k", 3000], ["0", 0], ["90%", 90], ["98,51%", 98.51], ["1,5", 1.5], ["0.25", 0.25], ["1.000", 1000], ["1,000", 1000], ["1.000.000", 1e6], ["1.234,5", 1234.5], ["$1,200", 1200], ["US$ 5", 5], ["-5", -5], ["−5", -5], ["4.0k", 4000]] as const) assert.equal(parseNumber(t), v, t);
+  for (const t of ["SMU", "Q1", "E", "Total General", "1.2.3", "1 00M", "SMU: 400 M", "Page B", ""]) assert.equal(parseNumber(t), null, t);
+});
+
+test("a label drawn twice, its halo under it, is read once; a real label never dropped (by paint and place, not class)", () => {
+  const at = box(10, 14, 50, 26);
+  const t = (text: string, b: Rect, paint: "fill" | "halo" | "both" = "fill"): SvgText => ({ text, box: b, stroked: paint !== "fill", strokeOnly: paint === "halo" });
+  const realLabel = t("98,51%", at);
+  const halo = t("98,51%", at, "halo");
   assert.equal(isOutlineCopy(halo, [halo, realLabel]), true);
   assert.equal(isOutlineCopy(realLabel, [halo, realLabel]), false);
-  // A filled label with a stroke too (bold-looking text) at the same place as another is a label, not a halo.
-  assert.equal(isOutlineCopy(svgText("text", "98,51%", { x: "10", y: "20" }, "both"), [realLabel]), false);
-  assert.equal(isOutlineCopy(halo, [halo, svgText("text", "98,51%", { x: "10", y: "60" })]), false);
+  // A filled label with a stroke too (ECharts' data labels with a border) is a label, not a halo.
+  assert.equal(isOutlineCopy(t("98,51%", at, "both"), [realLabel]), false);
+  // A halo elsewhere, or with no twin, is kept.
+  assert.equal(isOutlineCopy(halo, [halo, t("98,51%", box(10, 54, 50, 66))]), false);
   assert.equal(isOutlineCopy(halo, [halo]), false);
 });
 
-test("the content script keeps chart work per drag, removes an idle outline, and sends no element for an unreadable mark", () => {
-  const source = readFileSync(new URL("../src/content.ts", import.meta.url), "utf8");
-  // One analysis per drawing per drag (Gemini P2, Grok P3), forgotten with the scope.
-  assert.match(source, /const known = charts\.get\(svg\);\s*if \(known\) return known;/);
-  assert.match(source, /function forgetScopes\(\): void \{\s*scopeCache = null;\s*charts\.clear\(\);/);
-  // An aborted drag sends neither drop nor dragend: the outline goes after OUTLINE_IDLE_MS without a dragover (Gemini P2).
-  assert.match(source, /idleTimer = window\.setTimeout\(\(\) => \{\s*light\(null\);\s*forgetScopes\(\);\s*\}, OUTLINE_IDLE_MS\);/);
-  // The box is drawn in a closed shadow root of the extension's host (Grok P3).
-  assert.match(source, /host\.dataset\.apcOutline = "";[\s\S]{0,400}host\.attachShadow\(\{ mode: "closed" \}\)/);
-  // A mark the chart no longer describes at the drop sends element: null, so the dock says the page (Gemini P3).
-  assert.match(source, /: scope && !shape\s*\?/);
-  // No tooltip is read for a value.
-  assert.doesNotMatch(readFileSync(new URL("../src/chart.ts", import.meta.url), "utf8"), /role === "tooltip"\)\.map/);
+test("the extension's source knows no chart library and estimates no value (TIN-765)", () => {
+  const dir = new URL("../src/", import.meta.url);
+  for (const file of readdirSync(dir)) {
+    const source = readFileSync(new URL(file, dir), "utf8");
+    assert.doesNotMatch(source, /highcharts|echarts|recharts|chart\.js/i, file);
+    assert.doesNotMatch(source, /≈|approximate|interpolate/i, file);
+  }
+  const content = readFileSync(new URL("../src/content.ts", import.meta.url), "utf8");
+  // One analysis per drawing per drag, forgotten with the scope.
+  assert.match(content, /const known = charts\.get\(svg\);\s*if \(known\) return known;/);
+  assert.match(content, /function forgetScopes\(\): void \{\s*scopeCache = null;\s*charts\.clear\(\);/);
+  // An aborted drag sends neither drop nor dragend: the outline goes after OUTLINE_IDLE_MS without a dragover.
+  assert.match(content, /idleTimer = window\.setTimeout\(\(\) => \{\s*light\(null\);\s*forgetScopes\(\);\s*\}, OUTLINE_IDLE_MS\);/);
+  // The box is drawn in a closed shadow root of the extension's host.
+  assert.match(content, /host\.dataset\.apcOutline = "";[\s\S]{0,400}host\.attachShadow\(\{ mode: "closed" \}\)/);
+  // A mark the chart no longer describes at the drop sends element: null, so the dock says the page.
+  assert.match(content, /: scope && !shape\s*\?/);
+  // No class name is read for a chart: no classList, no class attribute.
+  const section = content.slice(content.indexOf("// ---- chart marks"), content.indexOf("/** Whether the person can see this element."));
+  assert.doesNotMatch(section, /classList|getAttribute\("class"\)|className/);
 });

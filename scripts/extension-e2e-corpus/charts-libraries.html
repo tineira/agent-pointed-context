@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Traffic</title>
+<!-- Corpus (TIN-765): charts with the DOM shapes ECharts' SVG renderer, a hand-written D3 chart and Recharts give them
+     (class names included), written by hand. The extension reads none of these classes. -->
+<style>.bar { fill: steelblue; } .axis text { font: 10px sans-serif; }</style>
+<body style="margin:20px;font:14px sans-serif">
+<h1>Traffic</h1>
+
+<h2>Site traffic</h2>
+<!-- ECharts' SVG renderer: every element straight in the drawing, labels placed by transform, a data label above each
+     bar, the chart's title "Visits" at its top left, a hidden tooltip beside it. -->
+<div id="echarts" _echarts_instance_="ec_1731100000000" style="user-select:none;-webkit-tap-highlight-color:rgba(0,0,0,0);position:relative;width:600px;height:300px"><div style="position:relative;width:600px;height:300px;padding:0;margin:0;border-width:0"><svg width="600" height="300" xmlns="http://www.w3.org/2000/svg" version="1.1" baseProfile="full" viewBox="0 0 600 300">
+<rect width="600" height="300" x="0" y="0" fill="none"></rect>
+<path d="M60 260.5L560 260.5" fill="none" stroke="#E0E6F1"></path>
+<path d="M60 220.5L560 220.5" fill="none" stroke="#E0E6F1"></path>
+<path d="M60 180.5L560 180.5" fill="none" stroke="#E0E6F1"></path>
+<path d="M60 140.5L560 140.5" fill="none" stroke="#E0E6F1"></path>
+<path d="M60 100.5L560 100.5" fill="none" stroke="#E0E6F1"></path>
+<path d="M60 60.5L560 60.5" fill="none" stroke="#E0E6F1"></path>
+<path d="M60 260.5L560 260.5" fill="none" stroke="#6E7079" stroke-linecap="round"></path>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:sans-serif" transform="translate(52 260)" fill="#6E7079">0</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:sans-serif" transform="translate(52 220)" fill="#6E7079">50</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:sans-serif" transform="translate(52 180)" fill="#6E7079">100</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:sans-serif" transform="translate(52 140)" fill="#6E7079">150</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:sans-serif" transform="translate(52 100)" fill="#6E7079">200</text>
+<text dominant-baseline="central" text-anchor="end" style="font-size:12px;font-family:sans-serif" transform="translate(52 60)" fill="#6E7079">250</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(95.71 272)" fill="#6E7079">Mon</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(167.14 272)" fill="#6E7079">Tue</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(238.57 272)" fill="#6E7079">Wed</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(310 272)" fill="#6E7079">Thu</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(381.43 272)" fill="#6E7079">Fri</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(452.86 272)" fill="#6E7079">Sat</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(524.29 272)" fill="#6E7079">Sun</text>
+<path id="emon" d="M75.71 260L115.71 260L115.71 164L75.71 164Z" fill="#5470c6"></path>
+<path id="etue" d="M147.14 260L187.14 260L187.14 100L147.14 100Z" fill="#5470c6"></path>
+<path id="ewed" d="M218.57 260L258.57 260L258.57 140L218.57 140Z" fill="#5470c6"></path>
+<path id="ethu" d="M290 260L330 260L330 196L290 196Z" fill="#5470c6"></path>
+<path id="efri" d="M361.43 260L401.43 260L401.43 204L361.43 204Z" fill="#5470c6"></path>
+<path id="esat" d="M432.86 260L472.86 260L472.86 172L432.86 172Z" fill="#5470c6"></path>
+<path id="esun" d="M504.29 260L544.29 260L544.29 156L504.29 156Z" fill="#5470c6"></path>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(95.71 155)" fill="#5470c6">120</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(167.14 91)" fill="#5470c6">200</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(238.57 131)" fill="#5470c6">150</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(310 187)" fill="#5470c6">80</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(381.43 195)" fill="#5470c6">70</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(452.86 163)" fill="#5470c6">110</text>
+<text dominant-baseline="central" text-anchor="middle" style="font-size:12px;font-family:sans-serif" transform="translate(524.29 147)" fill="#5470c6">130</text>
+<text dominant-baseline="central" text-anchor="start" style="font-size:18px;font-family:sans-serif;font-weight:bold" transform="translate(5 16)" fill="#464646">Visits</text>
+</svg></div><div style="position:absolute;display:none;border-style:solid;white-space:nowrap;z-index:9999999;background-color:#fff">Wed<br>Visits 150</div></div>
+
+<h2>Letter frequency</h2>
+<!-- A D3 bar chart written by hand: axes from d3-axis (ticks in groups placed by transform), bars painted by a CSS
+     class, one bar with a <title> of its own. -->
+<figure id="d3" style="margin:0;width:500px"><svg width="500" height="300">
+<g transform="translate(40,20)">
+<g class="axis axis--x" transform="translate(0,250)" fill="none" font-size="10" font-family="sans-serif" text-anchor="middle">
+<path class="domain" stroke="currentColor" d="M0.5,6V0.5H440.5V6"></path>
+<g class="tick" opacity="1" transform="translate(37.17,0)"><line stroke="currentColor" y2="6"></line><text fill="currentColor" y="9" dy="0.71em">A</text></g>
+<g class="tick" opacity="1" transform="translate(110.5,0)"><line stroke="currentColor" y2="6"></line><text fill="currentColor" y="9" dy="0.71em">B</text></g>
+<g class="tick" opacity="1" transform="translate(183.83,0)"><line stroke="currentColor" y2="6"></line><text fill="currentColor" y="9" dy="0.71em">C</text></g>
+<g class="tick" opacity="1" transform="translate(257.17,0)"><line stroke="currentColor" y2="6"></line><text fill="currentColor" y="9" dy="0.71em">D</text></g>
+<g class="tick" opacity="1" transform="translate(330.5,0)"><line stroke="currentColor" y2="6"></line><text fill="currentColor" y="9" dy="0.71em">E</text></g>
+<g class="tick" opacity="1" transform="translate(403.83,0)"><line stroke="currentColor" y2="6"></line><text fill="currentColor" y="9" dy="0.71em">F</text></g>
+</g>
+<g class="axis axis--y" fill="none" font-size="10" font-family="sans-serif" text-anchor="end">
+<path class="domain" stroke="currentColor" d="M-6,250.5H0.5V0.5H-6"></path>
+<g class="tick" opacity="1" transform="translate(0,250.5)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">0%</text></g>
+<g class="tick" opacity="1" transform="translate(0,208.83)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">2%</text></g>
+<g class="tick" opacity="1" transform="translate(0,167.17)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">4%</text></g>
+<g class="tick" opacity="1" transform="translate(0,125.5)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">6%</text></g>
+<g class="tick" opacity="1" transform="translate(0,83.83)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">8%</text></g>
+<g class="tick" opacity="1" transform="translate(0,42.17)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">10%</text></g>
+<g class="tick" opacity="1" transform="translate(0,0.5)"><line stroke="currentColor" x2="-6"></line><text fill="currentColor" x="-9" dy="0.32em">12%</text></g>
+<text transform="rotate(-90)" y="6" dy="0.71em" text-anchor="end" fill="#000">Frequency</text>
+</g>
+<rect class="bar" id="dA" x="4" y="79.79" width="65.33" height="170.21"></rect>
+<rect class="bar" id="dB" x="77.33" y="218.96" width="65.33" height="31.04"></rect>
+<rect class="bar" id="dC" x="150.67" y="192.08" width="65.33" height="57.92"><title>C: 2.78%</title></rect>
+<rect class="bar" id="dD" x="224" y="161.46" width="65.33" height="88.54"></rect>
+<rect class="bar" id="dE" x="297.33" y="16.67" width="65.33" height="233.33"></rect>
+<rect class="bar" id="dF" x="370.67" y="203.54" width="65.33" height="46.46"></rect>
+</g></svg></figure>
+
+<h2>Page views</h2>
+<!-- Recharts: two bar series side by side (pv with a label list on top of each bar, uv with none), each bar in a layer
+     of its own, an HTML legend laid over the drawing's bottom, a hidden tooltip. -->
+<div class="recharts-wrapper" id="recharts" style="position:relative;cursor:default;width:500px;height:300px"><svg class="recharts-surface" width="500" height="300" viewBox="0 0 500 300"><title></title><desc></desc>
+<defs><clipPath id="recharts1-clip"><rect x="65" y="5" height="230" width="430"></rect></clipPath></defs>
+<g class="recharts-cartesian-grid"><g class="recharts-cartesian-grid-horizontal"><line stroke="#ccc" stroke-dasharray="3 3" fill="none" x1="65" y1="235" x2="495" y2="235"></line><line stroke="#ccc" stroke-dasharray="3 3" fill="none" x1="65" y1="177.5" x2="495" y2="177.5"></line><line stroke="#ccc" stroke-dasharray="3 3" fill="none" x1="65" y1="120" x2="495" y2="120"></line><line stroke="#ccc" stroke-dasharray="3 3" fill="none" x1="65" y1="62.5" x2="495" y2="62.5"></line><line stroke="#ccc" stroke-dasharray="3 3" fill="none" x1="65" y1="5" x2="495" y2="5"></line></g></g>
+<g class="recharts-layer recharts-cartesian-axis recharts-xAxis xAxis"><line orientation="bottom" width="430" height="30" x="65" y="235" class="recharts-cartesian-axis-line" stroke="#666" fill="none" x1="65" y1="235" x2="495" y2="235"></line><g class="recharts-cartesian-axis-ticks">
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="bottom" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="100.83" y1="241" x2="100.83" y2="235"></line><text orientation="bottom" width="430" height="30" stroke="none" x="100.83" y="243" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="middle" fill="#666" style="font:12px sans-serif"><tspan x="100.83" dy="0.71em">Page A</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="bottom" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="172.5" y1="241" x2="172.5" y2="235"></line><text orientation="bottom" width="430" height="30" stroke="none" x="172.5" y="243" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="middle" fill="#666" style="font:12px sans-serif"><tspan x="172.5" dy="0.71em">Page B</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="bottom" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="244.17" y1="241" x2="244.17" y2="235"></line><text orientation="bottom" width="430" height="30" stroke="none" x="244.17" y="243" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="middle" fill="#666" style="font:12px sans-serif"><tspan x="244.17" dy="0.71em">Page C</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="bottom" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="315.83" y1="241" x2="315.83" y2="235"></line><text orientation="bottom" width="430" height="30" stroke="none" x="315.83" y="243" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="middle" fill="#666" style="font:12px sans-serif"><tspan x="315.83" dy="0.71em">Page D</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="bottom" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="387.5" y1="241" x2="387.5" y2="235"></line><text orientation="bottom" width="430" height="30" stroke="none" x="387.5" y="243" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="middle" fill="#666" style="font:12px sans-serif"><tspan x="387.5" dy="0.71em">Page E</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="bottom" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="459.17" y1="241" x2="459.17" y2="235"></line><text orientation="bottom" width="430" height="30" stroke="none" x="459.17" y="243" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="middle" fill="#666" style="font:12px sans-serif"><tspan x="459.17" dy="0.71em">Page F</tspan></text></g>
+</g></g>
+<g class="recharts-layer recharts-cartesian-axis recharts-yAxis yAxis"><line orientation="left" width="60" height="230" x="5" y="5" class="recharts-cartesian-axis-line" stroke="#666" fill="none" x1="65" y1="5" x2="65" y2="235"></line><g class="recharts-cartesian-axis-ticks">
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="left" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="59" y1="235" x2="65" y2="235"></line><text orientation="left" width="60" height="230" stroke="none" x="57" y="235" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="end" fill="#666" style="font:12px sans-serif"><tspan x="57" dy="0.355em">0</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="left" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="59" y1="177.5" x2="65" y2="177.5"></line><text orientation="left" width="60" height="230" stroke="none" x="57" y="177.5" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="end" fill="#666" style="font:12px sans-serif"><tspan x="57" dy="0.355em">2500</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="left" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="59" y1="120" x2="65" y2="120"></line><text orientation="left" width="60" height="230" stroke="none" x="57" y="120" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="end" fill="#666" style="font:12px sans-serif"><tspan x="57" dy="0.355em">5000</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="left" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="59" y1="62.5" x2="65" y2="62.5"></line><text orientation="left" width="60" height="230" stroke="none" x="57" y="62.5" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="end" fill="#666" style="font:12px sans-serif"><tspan x="57" dy="0.355em">7500</tspan></text></g>
+<g class="recharts-layer recharts-cartesian-axis-tick"><line orientation="left" class="recharts-cartesian-axis-tick-line" stroke="#666" fill="none" x1="59" y1="5" x2="65" y2="5"></line><text orientation="left" width="60" height="230" stroke="none" x="57" y="5" class="recharts-text recharts-cartesian-axis-tick-value" text-anchor="end" fill="#666" style="font:12px sans-serif"><tspan x="57" dy="0.355em">10000</tspan></text></g>
+</g></g>
+<g class="recharts-layer recharts-bar"><g class="recharts-layer recharts-bar-rectangles"><g class="recharts-layer">
+<g class="recharts-layer recharts-bar-rectangle"><path x="72.83" y="179.8" width="26" height="55.2" radius="0" fill="#8884d8" name="Page A" class="recharts-rectangle" id="pv0" d="M 72.83,179.8 h 26 v 55.2 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="144.5" y="202.85" width="26" height="32.15" radius="0" fill="#8884d8" name="Page B" class="recharts-rectangle" id="pv1" d="M 144.5,202.85 h 26 v 32.15 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="216.17" y="9.6" width="26" height="225.4" radius="0" fill="#8884d8" name="Page C" class="recharts-rectangle" id="pv2" d="M 216.17,9.6 h 26 v 225.4 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="287.83" y="145.12" width="26" height="89.88" radius="0" fill="#8884d8" name="Page D" class="recharts-rectangle" id="pv3" d="M 287.83,145.12 h 26 v 89.88 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="359.5" y="124.6" width="26" height="110.4" radius="0" fill="#8884d8" name="Page E" class="recharts-rectangle" id="pv4" d="M 359.5,124.6 h 26 v 110.4 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="431.17" y="154.5" width="26" height="80.5" radius="0" fill="#8884d8" name="Page F" class="recharts-rectangle" id="pv5" d="M 431.17,154.5 h 26 v 80.5 h -26 Z"></path></g>
+</g></g><g class="recharts-layer recharts-label-list">
+<text class="recharts-text recharts-label" x="85.83" y="173.8" text-anchor="middle" fill="#808080" style="font:12px sans-serif"><tspan x="85.83" dy="0em">2400</tspan></text>
+<text class="recharts-text recharts-label" x="157.5" y="196.85" text-anchor="middle" fill="#808080" style="font:12px sans-serif"><tspan x="157.5" dy="0em">1398</tspan></text>
+<text class="recharts-text recharts-label" x="229.17" y="3.6" text-anchor="middle" fill="#808080" style="font:12px sans-serif"><tspan x="229.17" dy="0em">9800</tspan></text>
+<text class="recharts-text recharts-label" x="300.83" y="139.12" text-anchor="middle" fill="#808080" style="font:12px sans-serif"><tspan x="300.83" dy="0em">3908</tspan></text>
+<text class="recharts-text recharts-label" x="372.5" y="118.6" text-anchor="middle" fill="#808080" style="font:12px sans-serif"><tspan x="372.5" dy="0em">4800</tspan></text>
+<text class="recharts-text recharts-label" x="444.17" y="148.5" text-anchor="middle" fill="#808080" style="font:12px sans-serif"><tspan x="444.17" dy="0em">3500</tspan></text>
+</g></g>
+<g class="recharts-layer recharts-bar"><g class="recharts-layer recharts-bar-rectangles"><g class="recharts-layer">
+<g class="recharts-layer recharts-bar-rectangle"><path x="102.83" y="143" width="26" height="92" radius="0" fill="#82ca9d" name="Page A" class="recharts-rectangle" id="uv0" d="M 102.83,143 h 26 v 92 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="174.5" y="166" width="26" height="69" radius="0" fill="#82ca9d" name="Page B" class="recharts-rectangle" id="uv1" d="M 174.5,166 h 26 v 69 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="246.17" y="189" width="26" height="46" radius="0" fill="#82ca9d" name="Page C" class="recharts-rectangle" id="uv2" d="M 246.17,189 h 26 v 46 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="317.83" y="171.06" width="26" height="63.94" radius="0" fill="#82ca9d" name="Page D" class="recharts-rectangle" id="uv3" d="M 317.83,171.06 h 26 v 63.94 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="389.5" y="191.53" width="26" height="43.47" radius="0" fill="#82ca9d" name="Page E" class="recharts-rectangle" id="uv4" d="M 389.5,191.53 h 26 v 43.47 h -26 Z"></path></g>
+<g class="recharts-layer recharts-bar-rectangle"><path x="461.17" y="180.03" width="26" height="54.97" radius="0" fill="#82ca9d" name="Page F" class="recharts-rectangle" id="uv5" d="M 461.17,180.03 h 26 v 54.97 h -26 Z"></path></g>
+</g></g></g>
+</svg>
+<div class="recharts-legend-wrapper" style="position:absolute;width:490px;height:auto;left:5px;bottom:5px"><ul class="recharts-default-legend" style="padding:0;margin:0;text-align:center;font:12px sans-serif"><li class="recharts-legend-item legend-item-0" style="display:inline-block;margin-right:10px"><svg class="recharts-surface" width="14" height="14" viewBox="0 0 32 32" style="display:inline-block;vertical-align:middle;margin-right:4px"><path stroke="none" fill="#8884d8" d="M0,4h32v24h-32z" class="recharts-legend-icon"></path></svg><span class="recharts-legend-item-text" style="color:#8884d8">pv</span></li><li class="recharts-legend-item legend-item-1" style="display:inline-block;margin-right:10px"><svg class="recharts-surface" width="14" height="14" viewBox="0 0 32 32" style="display:inline-block;vertical-align:middle;margin-right:4px"><path stroke="none" fill="#82ca9d" d="M0,4h32v24h-32z" class="recharts-legend-icon"></path></svg><span class="recharts-legend-item-text" style="color:#82ca9d">uv</span></li></ul></div>
+<div tabindex="-1" class="recharts-tooltip-wrapper" style="visibility:hidden;pointer-events:none;position:absolute;top:0;left:0"><div class="recharts-default-tooltip" style="margin:0;padding:10px;background-color:#fff;border:1px solid #ccc"><p class="recharts-tooltip-label">Page C</p><ul class="recharts-tooltip-item-list"><li class="recharts-tooltip-item">pv : 9800</li></ul></div></div>
+</div>
+</body>
