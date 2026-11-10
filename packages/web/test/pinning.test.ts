@@ -94,3 +94,14 @@ test("a native drop the app answered is placed, or the person is told why not (T
   assert.equal(placeNativeDrop(options, null, hit, tell), "none");
   assert.equal(placeNativeDrop(options, { v: 1, agent: "g_1" }, null, tell), "none");
 });
+
+test("a refused native drop goes through the app's onDockUnsupported, with no box of the library's own (TIN-756)", async () => {
+  const { placeNativeDrop, refusalTeller, REFUSED_NOTE } = await import("../src/pinning.ts");
+  const hit = { element: {} as Element, target: { kind: "customer", id: "cus_9", part: null, params: null } };
+  const answers: Array<{ reason: string; message: string; connect: string | null; name: string }> = [];
+  // This test runs without a document: the library's own note would throw if it were used.
+  assert.equal(typeof (globalThis as { document?: unknown }).document, "undefined");
+  const options = { canTarget: () => false, onPin: () => assert.fail("pinned"), onDockUnsupported: (a: { reason: string; message: string; connect: string | null; name: string }) => answers.push(a), direct: { name: "Pulse", connect: null } };
+  assert.equal(placeNativeDrop(options, { v: 1, agent: "g_1" }, hit, refusalTeller(options)), "refused");
+  assert.deepEqual(answers.map((a) => [a.reason, a.message, a.connect, a.name]), [["refused", REFUSED_NOTE, null, "Pulse"]]);
+});

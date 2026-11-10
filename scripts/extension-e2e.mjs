@@ -659,6 +659,7 @@ try {
     const { sessionId: mute } = await cdp("Target.attachToTarget", { targetId: muteId, flatten: true });
     await sleep(2500);
     await dropOn(mute, "#ignored");
+    await until("the not-taken card on a target the app does not answer", async () => (await answers(mute)).length > 0, 8000).catch(() => {});
     assert.deepEqual(await answers(mute), ["not_taken"], "a target the app does not answer is not silent");
     assert.equal((await pinNodes(mute)).states.length, 0);
     await cdp("Target.closeTarget", { targetId: muteId });

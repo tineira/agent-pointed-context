@@ -223,7 +223,8 @@ function Sandbox({ sid }: { sid: string }) {
         profiles: () => loadApcProfiles(),
         direct: { name: "Pulse", connect: `${location.origin}/agents` },
         onDockUnsupported: (answer: DockUnsupported) => {
-          navigate({ screen: "agents" }, readRoute().filters);
+          // A refused drop (TIN-756) is told in place: there is nothing to connect.
+          if (answer.reason !== "refused") navigate({ screen: "agents" }, readRoute().filters);
           setNotice(answer.message);
           setTimeout(() => setNotice(null), 10_000);
         },

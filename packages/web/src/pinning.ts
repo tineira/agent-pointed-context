@@ -111,9 +111,11 @@ export interface DockUnsupported {
   connect: string | null;
   /**
    * `direct_only`: the app's apc.json lists no "dock". `unchecked`: the page could not read its own
-   * apc.json, so it cannot tell, and it pairs nothing it cannot check.
+   * apc.json, so it cannot tell, and it pairs nothing it cannot check. `refused` (TIN-756): the app offers
+   * Dock and answered the drag, then cannot place the drop (its `canTarget` said no, or it does not know the
+   * agent); `connect` is null and the app's handler need not send the person to its connect page.
    */
-  reason: "direct_only" | "unchecked";
+  reason: "direct_only" | "unchecked" | "refused";
   /** `directOnlyNote(name)`, or `couldNotCheckNote(name)`: the app's own words, on its own page. */
   message: string;
 }
@@ -136,10 +138,11 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
   Object.assign(box.style, { position: "fixed", zIndex: "2147483647", right: "16px", bottom: "calc(16px + max(var(--apc-bar-height, 0px), env(safe-area-inset-bottom, 0px)))", maxWidth: "340px", padding: "12px 14px", borderRadius: "10px", background: "#1f1f1f", color: "#fff", font: "13px/1.45 system-ui, sans-serif", boxShadow: "0 4px 16px rgba(0,0,0,.25)" });
   const text = document.createElement("p");
   text.textContent = answer.message;
-  Object.assign(text.style, { margin: "0 0 8px" });
-  box.appendChild(text);
   // Only an http(s) page of this app: the same check apc.json's direct.connect passes (no blob:, javascript: or another site).
   const connect = typeof location === "undefined" ? null : urlOnOrigin(answer.connect, location.origin);
+  // Room under the words only when a link follows them.
+  Object.assign(text.style, { margin: connect ? "0 0 8px" : "0" });
+  box.appendChild(text);
   if (connect) {
     const link = document.createElement("a");
     link.setAttribute("href", connect);
@@ -170,9 +173,9 @@ export function showDockUnsupported(answer: DockUnsupported): HTMLElement {
 export const REFUSED_NOTE = "This agent cannot point at that. Drop it on another highlighted item.";
 export const UNKNOWN_AGENT_NOTE = "This app does not know that agent.";
 
-/** A short note on the page for a refused drop: the Direct-only note's box, with no link. */
-function showRefusal(message: string): void {
-  showDockUnsupported({ drag: { v: 1, agent: "" }, target: null, name: "", connect: null, reason: "direct_only", message });
+/** How a refused drop is told: through the app's `onDockUnsupported` when it has one, else the page note (TIN-756). */
+export function refusalTeller(options: Pick<PinningOptions, "onDockUnsupported" | "direct">): (message: string, drag: AgentDrag, target: FocusTarget) => void {
+  return (message, drag, target) => (options.onDockUnsupported ?? showDockUnsupported)({ drag, target, name: options.direct?.name ?? "This app", connect: null, reason: "refused", message });
 }
 
 /**
@@ -185,7 +188,7 @@ export function placeNativeDrop(
   options: Pick<PinningOptions, "canTarget" | "onPin" | "resolveAgent" | "onUnknownAgent">,
   drag: AgentDrag | null,
   hit: { element: Element; target: FocusTarget } | null,
-  tell: (message: string) => void,
+  tell: (message: string, drag: AgentDrag, target: FocusTarget) => void,
 ): "pinned" | "unknown_agent" | "refused" | "none" {
   if (!drag || !hit) return "none";
   const grantId = options.resolveAgent ? options.resolveAgent(drag.agent) : drag.agent;
@@ -194,11 +197,11 @@ export function placeNativeDrop(
       options.onUnknownAgent({ ...drag, hub: drag.hub, ticket: drag.ticket }, hit.target, hit.element);
       return "unknown_agent";
     }
-    tell(UNKNOWN_AGENT_NOTE);
+    tell(UNKNOWN_AGENT_NOTE, drag, hit.target);
     return "refused";
   }
   if (options.canTarget && !options.canTarget(grantId, hit.target)) {
-    tell(REFUSED_NOTE);
+    tell(REFUSED_NOTE, drag, hit.target);
     return "refused";
   }
   options.onPin(grantId, hit.target, hit.element);
@@ -622,7 +625,8 @@ export function enablePinning(options: PinningOptions): () => void {
     }
     // A drop held while the profiles loaded, on an app that turns out to offer Dock but takes no native drops.
     if (!options.acceptNativeDrops) return;
-    placeNativeDrop(options, drag, hit, showRefusal);
+    // Through the app's own handler when it has one (Pulse and Signals show it in their own banners), else the page note.
+    placeNativeDrop(options, drag, hit, refusalTeller(options));
   };
   const onKey = (event: KeyboardEvent) => {
     swallowClickUntil = 0; // a new key press: nothing from before is swallowed
