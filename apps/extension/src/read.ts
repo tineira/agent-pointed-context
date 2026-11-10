@@ -449,17 +449,43 @@ export interface Outline<E> {
   blank?: (e: E) => boolean;
   /** The words a box is named by, from its own markup: aria-labelledby (the element's words the person sees) or aria-label. */
   named?: (e: E) => string | null;
+  /** A box of the page as a whole (pageLevel), which no control titles. */
+  page?: (e: E) => boolean;
 }
+
+/** Roles that name no box (namesBox). */
+const UNTITLED_ROLES = new Set(["presentation", "none", "generic", "row", "cell", "gridcell", "columnheader", "rowheader", "listitem", "option", "treeitem", "main", "banner", "contentinfo"]);
+
+/**
+ * Whether a box may name itself by its own markup (aria-labelledby and aria-label alike, TIN-766): not the
+ * page's root or body, not `main`, `header` or `footer`, not a row, cell, list item or option, not a
+ * drawing's shape or group (a chart's series), and not a generic or presentational role. Their names say what
+ * the thing is for a reader, not what the panel around the block is about.
+ */
+export function namesBox(tag: string, role: string | null, svg: boolean): boolean {
+  const t = tag.toLowerCase();
+  return !svg && !["html", "body", "main", "header", "footer", "tr", "td", "th", "li", "option"].includes(t) && !(role && UNTITLED_ROLES.has(role));
+}
+
+/**
+ * Whether a box is the page as a whole or one of its bars: `html`, `body`, `main`, `header`, `footer`, `nav`,
+ * or the roles of them. A control at the top of one of these (a tenant, a language, a site menu) belongs to the
+ * page, never to a panel in it, so none of them has a title control (topTitle).
+ */
+export const pageLevel = (tag: string, role: string | null): boolean =>
+  ["html", "body", "main", "header", "footer", "nav"].includes(tag.toLowerCase()) || (!!role && ["main", "banner", "contentinfo", "navigation"].includes(role));
 
 /**
  * Whether a control is the kind a panel is titled by: a dropdown that picks the view or dimension it shows
  * (TIN-766). A select that shows one choice, a `role=combobox` that is not a typed field, or a button that
  * opens a listbox. Never a typed field (its words are the person's), nor a list that shows all its options.
  */
-export function isTitleControl(tag: string, role: string | null, popup: string | null, multiple: boolean): boolean {
+export function isTitleControl(tag: string, role: string | null, popup: string | null, multiple: boolean, editable = false): boolean {
   const t = tag.toLowerCase();
   if (t === "select") return !multiple;
   if (t === "input" || t === "textarea") return false;
+  // Anything that holds what the person typed (aria-autocomplete, an input inside, contenteditable) is never a heading.
+  if (editable) return false;
   if (role === "combobox") return true;
   return (t === "button" || role === "button") && popup === "listbox";
 }
@@ -489,7 +515,7 @@ function headingIn<E>(e: E, t: Outline<E>, last: boolean, top: E | null): E | nu
  * body, not its title.
  */
 function topTitle<E>(box: E, t: Outline<E>, depth = 0): E | null {
-  if (!t.title) return null;
+  if (!t.title || t.page?.(box)) return null;
   for (const c of t.children(box)) {
     if (t.blank?.(c)) continue;
     if (t.title(c)) return c;

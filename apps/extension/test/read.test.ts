@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, isTitleControl, NO_ALT, ownsHeadings, selectTitle, titleOf, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
+import { altText, blockAbove, BOX_MAX, headingOf, isHeading, isItem, isTitleControl, namesBox, NO_ALT, ownsHeadings, pageLevel, selectTitle, titleOf, tableContext, TOKEN_CUT_MAX, visibleWords, WORD_UNITS_MAX, type Rect } from "../src/read.ts";
 
 const described = (tagName: string, attrs: Record<string, string> = {}, inner: Record<string, string> = {}) => ({
   tagName,
@@ -236,7 +236,8 @@ const titled = {
   ...outline,
   title: (n: Node) => isTitleControl(n.tag, n.role, null, false) && textOf(n).length > 0,
   blank: (n: Node) => n.tag !== "select" && textOf(n).length === 0,
-  named: (n: Node) => (n.tag === "section" || n.role === "region" ? (n as Node & { name?: string }).name ?? null : null),
+  named: (n: Node) => (namesBox(n.tag, n.role, false) ? (n as Node & { name?: string }).name ?? null : null),
+  page: (n: Node) => pageLevel(n.tag, n.role),
 };
 const words = (n: Node) => {
   const f = titleOf(n, titled);
@@ -310,6 +311,54 @@ test("a title control is a select with one choice, a combobox, or a listbox butt
   assert.equal(selectTitle(options), "(I) Retailer");
   assert.equal(selectTitle(options.map((o) => ({ ...o, selected: false }))), null);
   assert.equal(selectTitle(options.map((o) => ({ ...o, selected: true }))), null);
+});
+
+test("a row, cell, list item, main, header or footer names no box, by aria-labelledby or aria-label alike (namesBox, TIN-766)", () => {
+  assert.equal(namesBox("section", null, false), true);
+  assert.equal(namesBox("div", "region", false), true);
+  for (const [tag, role] of [["tr", "row"], ["td", "cell"], ["li", "listitem"], ["main", null], ["header", null], ["footer", null], ["div", "generic"], ["body", null], ["html", null]] as const) assert.equal(namesBox(tag, role, false), false, `${tag} ${role}`);
+  // By tag alone, with no role written: a row, cell and list item are what they are.
+  for (const tag of ["tr", "td", "th", "li"]) assert.equal(namesBox(tag, null, false), false, tag);
+  assert.equal(namesBox("g", null, true), false, "a drawing's group");
+  // A named row keeps the panel's heading; a named main does not title a panel inside it.
+  const named = (n: Node, name: string) => Object.assign(n, { name });
+  const row = named(el("tr", [el("th", ["Payment to Vendor A"]), el("td", ["$500"])], { role: "row" }), "Payment to Vendor A");
+  el("body", [el("div", [el("h3", ["Transactions"]), el("table", [row])])]);
+  assert.equal(words(row.kids[1]!), "Transactions");
+  const target = el("td", ["$42"]);
+  const main = named(el("main", [el("div", [el("h3", ["Regional Sales"]), el("table", [el("tr", [el("td", ["x"])])])]), el("div", [el("table", [el("tr", [target])])])]), "Analytics Portal");
+  el("body", [el("h1", ["Analytics Portal"]), main]);
+  assert.equal(words(target), "Regional Sales");
+});
+
+test("no control titles the page as a whole: a tenant select in a header never titles a panel (pageLevel, TIN-766)", () => {
+  assert.equal(pageLevel("BODY", null), true);
+  assert.equal(pageLevel("div", "navigation"), true);
+  assert.equal(pageLevel("div", null), false);
+  const cell = el("td", ["100"]);
+  el("body", [el("header", [el("select", ["Acme Corp"])]), el("main", [el("div", [el("table", [el("tr", [cell])])])])]);
+  assert.equal(words(cell), null);
+  // Nor the first thing in main or in a nav.
+  const cell2 = el("td", ["7"]);
+  el("body", [el("main", [el("div", [el("select", ["Language"])]), el("div", [el("table", [el("tr", [cell2])])])])]);
+  assert.equal(words(cell2), null);
+});
+
+test("a combobox that holds what the person typed is never a title (isTitleControl)", () => {
+  assert.equal(isTitleControl("div", "combobox", null, false, false), true);
+  assert.equal(isTitleControl("div", "combobox", null, false, true), false, "aria-autocomplete, an input inside it, contenteditable");
+  assert.equal(isTitleControl("button", null, "listbox", false, true), false);
+});
+
+test("an icon with no name before the title control does not stop the search for it (titleOf, TIN-766)", () => {
+  const select = el("select", ["(I) Retailer"]);
+  const cell = el("td", ["$100"]);
+  el("body", [el("h2", ["Before"]), el("div", [el("div", [el("svg", [], { inline: true }), select]), el("table", [el("tr", [cell])])])]);
+  assert.equal(words(cell), "(I) Retailer");
+  // A picture or words before it do stop it: the control is then not the first thing the box shows.
+  const cell2 = el("td", ["$2"]);
+  el("body", [el("h2", ["Before"]), el("div", [el("div", [el("span", ["Filters"]), el("select", ["(I) Retailer"])]), el("table", [el("tr", [cell2])])])]);
+  assert.equal(words(cell2), "Before");
 });
 
 // TIN-622: a token with no space that spans lines is kept only where it shows.

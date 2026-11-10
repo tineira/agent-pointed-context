@@ -1187,6 +1187,21 @@ try {
     assert.doesNotMatch(saldo.text, /4111/, "a secret control is never a title");
     // A box named by its aria-labelledby.
     await expectAt(panels.sid, "#basic", /Under the heading: Churn por plan\n/);
+    // A panel with no title at the top of main: the page's heading, not the header's tenant select nor main's name.
+    const first = await expectAt(panels.sid, "#total", /Under the heading: Ventas\n/);
+    assert.doesNotMatch(first.text, /Acme|Globex/, "a site-wide select titles no panel");
+    // A named row keeps the panel's heading.
+    await expectAt(panels.sid, "#tx-amt", /Under the heading: Transacciones\n/);
+    // A combobox that holds what the person typed, or an input inside one, is never a title; the panel is under the heading before it.
+    const free = await expectAt(panels.sid, "#free", /Under the heading: Venta Perdida por tipo\n/);
+    assert.doesNotMatch(free.text, /confidencial/);
+    const inp = await expectAt(panels.sid, "#inp", /Under the heading: Venta Perdida por tipo\n/);
+    assert.doesNotMatch(inp.text.split("\n").slice(0, 3).join(" "), /▼/);
+    // An icon with no name before the dropdown does not stop it.
+    await expectAt(panels.sid, "#icon", /Under the heading: \(E\) Producto Externo\n/);
+    // An aria-hidden box names nothing by its aria-label.
+    const oculto = await expectAt(panels.sid, "#oculto", /Under the heading: Stock\n/);
+    assert.doesNotMatch(oculto.text, /Borrador/);
     await cdp("Target.closeTarget", { targetId: panels.targetId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));

@@ -9,7 +9,19 @@
   td { padding: 4px 8px; border: 1px solid #ddd }
   button.combo { font: inherit; padding: 4px 10px }
 </style>
-<h1>Ventas</h1>
+<!-- A site-wide control in the header: it belongs to the page, never to a panel. -->
+<header><select id="tenant" aria-label="Tenant"><option selected>Acme Corp</option><option>Globex</option></select></header>
+<main aria-labelledby="page-title">
+<h1 id="page-title">Ventas</h1>
+<!-- A panel with no title of its own at the top of main: the page's heading, never the header's select, never main's name. -->
+<div class="panel" id="p-first">
+  <table><tr><td>Total</td><td id="total">$3.000.000</td></tr></table>
+</div>
+<!-- A table whose row is named by aria-labelledby: the panel's heading stays. -->
+<div class="panel" id="p-rows">
+  <h3>Transacciones</h3>
+  <table><tr aria-labelledby="tx-name"><td id="tx-name">Pago a Proveedor A</td><td id="tx-amt">$500</td></tr></table>
+</div>
 <!-- A panel titled by a heading, the one before the select-titled panel (the neighbour a lookup by page order would reach). -->
 <div class="panel" id="p-type">
   <div class="bar"><h2>Venta Perdida por tipo</h2></div>
@@ -34,6 +46,23 @@
   <div class="bar"><button class="combo" id="combo" role="combobox" aria-haspopup="listbox" aria-expanded="false">Por región</button></div>
   <table><tr><td>Norte</td><td id="norte">$55.000</td></tr><tr><td>Sur</td><td>$66.000</td></tr></table>
 </div>
+<!-- A combobox that takes what the person typed is never a title, nor one wrapping an input and a chevron: the panel falls back to the heading before it. -->
+<div class="panel" id="p-free">
+  <div class="bar"><div role="combobox" aria-expanded="false" aria-autocomplete="list"><span>consulta confidencial</span></div></div>
+  <table><tr><td>Libre</td><td id="free">$8</td></tr></table>
+</div>
+<div class="panel" id="p-input">
+  <div class="bar"><div role="combobox" aria-expanded="false"><input type="text" value="Retailer" aria-label="Search"><span>▼</span></div></div>
+  <table><tr><td>Input</td><td id="inp">$9</td></tr></table>
+</div>
+<!-- An icon with no name before the dropdown does not stop it from titling the panel. -->
+<div class="panel" id="p-icon">
+  <div class="bar">
+    <svg width="16" height="16" viewBox="0 0 16 16"><path d="M0 0h16v16H0z" fill="#999"/></svg>
+    <select id="dim2" aria-label="Dimension"><option>(L) Local</option><option selected>(E) Producto Externo</option></select>
+  </div>
+  <table><tr><td>Icono</td><td id="icon">$10</td></tr></table>
+</div>
 <!-- A panel with no title of its own: the heading before it, as before. -->
 <h2>Resumen mensual</h2>
 <div class="panel" id="p-bare">
@@ -55,3 +84,8 @@
   <span id="named-title">Churn por plan</span>
   <table><tr><td>Basic</td><td id="basic">4.1%</td></tr></table>
 </section>
+<!-- A box the person does not see by assistive tech (aria-hidden) names nothing by its aria-label. -->
+<section class="panel" id="p-hidden" aria-label="Borrador" aria-hidden="true">
+  <table><tr><td>Oculto</td><td id="oculto">$11</td></tr></table>
+</section>
+</main>

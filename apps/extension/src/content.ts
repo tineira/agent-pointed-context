@@ -14,7 +14,7 @@ import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../package
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
 import { connectLabel, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { chartAxes, describeMark, describeNamed, isMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type MarkReading, type SvgText } from "./chart.ts";
-import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, classify, formState, intersect, isHeading, isItem, isTitleControl, OPACITY_MIN, ownsHeadings, selectTitle, showsIn, tableContext, titleOf, visibleWords, visuallyHidden, within, type Control, type Rect, type Seen } from "./read.ts";
+import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, classify, formState, intersect, isHeading, isItem, isTitleControl, namesBox, OPACITY_MIN, ownsHeadings, pageLevel, selectTitle, showsIn, tableContext, titleOf, visibleWords, visuallyHidden, within, type Control, type Rect, type Seen } from "./read.ts";
 
 /** What a reading may come from: a block of text, never a form field. */
 const BLOCKS = "p,li,td,th,dd,dt,blockquote,pre,figcaption,caption,h1,h2,h3,h4,h5,h6,[role=heading],a,button,label,legend,summary";
@@ -1194,7 +1194,9 @@ function textWithout(el: Element): string {
 function titleWords(el: Element): string | null {
   const popup = el.getAttribute("aria-haspopup");
   const select = el instanceof HTMLSelectElement ? el : null;
-  if (!isTitleControl(el.tagName, el.getAttribute("role"), popup, !!select?.multiple)) return null;
+  // Editable: its words may be what the person typed (a search box drawn as a combobox, an input inside it).
+  const editable = el.hasAttribute("aria-autocomplete") || (el as HTMLElement).isContentEditable || !!el.querySelector("input,textarea,[contenteditable]:not([contenteditable=false])");
+  if (!isTitleControl(el.tagName, el.getAttribute("role"), popup, !!select?.multiple, editable)) return null;
   // What a person sees of it: a control hidden, clipped away or transparent shows nothing.
   if (!rendered(el) || visuallyHidden(seenOf(el), true)) return null;
   let words: string | null;
@@ -1210,14 +1212,11 @@ function titleWords(el: Element): string | null {
   return words.slice(0, 200);
 }
 
-/** Roles that name no box: an aria-label on them says what the thing is for a reader, not what the panel is about. */
-const UNTITLED_ROLES = new Set(["presentation", "none", "generic", "row", "cell", "gridcell", "columnheader", "rowheader", "listitem", "option", "treeitem", "main", "banner", "contentinfo"]);
-
 /** What a box names itself by: the words aria-labelledby points at that the person sees, else its aria-label (on a box that is a region, table, group, dialog...). */
 function namedBy(el: Element): string | null {
-  if (el === document.documentElement || el === document.body) return null;
-  // A shape's or a group's name in a drawing (a chart's series) names that shape, not the box around the drawing.
-  if (el instanceof SVGElement) return null;
+  // Who may name a box (namesBox) comes before either attribute is read; so does being shown: a box the person does not see names nothing.
+  if (!namesBox(el.tagName, el.getAttribute("role"), el instanceof SVGElement)) return null;
+  if (!rendered(el) || el.closest('[aria-hidden="true"]')) return null;
   const by = el.getAttribute("aria-labelledby");
   if (by) {
     const root = el.getRootNode() as Document | ShadowRoot;
@@ -1230,15 +1229,15 @@ function namedBy(el: Element): string | null {
       .join(" ");
     if (seen) return seen.slice(0, 200);
   }
-  const role = el.getAttribute("role");
-  const label = el.getAttribute("aria-label")?.replace(/\s+/g, " ").trim();
-  const tag = el.tagName.toLowerCase();
-  if (!label || (role && UNTITLED_ROLES.has(role)) || tag === "main" || tag === "header" || tag === "footer") return null;
-  return label.slice(0, 200);
+  return el.getAttribute("aria-label")?.replace(/\s+/g, " ").trim().slice(0, 200) || null;
 }
 
-/** Whether an element shows nothing: no words, no control, no image. */
-const BLANK_KEEPS = "select,input,textarea,button,img,svg,canvas,video,iframe,[role=combobox],[role=button]";
+/**
+ * Whether an element shows nothing that stops the search for a box's title control: no words, no control, no
+ * drawing or picture that names itself. A decorative icon (an svg or img with no alt, aria-label, title or
+ * words) is nothing; a picture that says what it is, a canvas, a video or a frame is something.
+ */
+const BLANK_KEEPS = 'select,input,textarea,button,canvas,video,iframe,[role=combobox],[role=button],img[alt]:not([alt=""]),[aria-label],[title],svg:has(title)';
 const showsNothing = (e: Element): boolean => !rendered(e) || (!e.matches(BLANK_KEEPS) && !e.querySelector(BLANK_KEEPS) && seenLength(e) === 0);
 
 /** headingOf on the page: headings the person sees, across open shadow roots. */
@@ -1255,6 +1254,7 @@ const outline = {
   },
   blank: showsNothing,
   named: namedBy,
+  page: (e: Element) => pageLevel(e.tagName, e.getAttribute("role")) || !parentOf(e),
 };
 
 /** The heading an element is under (titleOf), as the person sees it (readable, or a title control's chosen value), never innerText. */
