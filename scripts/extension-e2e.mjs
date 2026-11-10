@@ -1085,6 +1085,17 @@ try {
     const storeQ1 = await expectAt(hc.sid, "#store0", /Under the heading: Ventas por canal\nPointed at \(rect, chart bar\): Q1 · 70$/m);
     const onlineQ1 = await expectAt(hc.sid, "#online0", /Pointed at \(rect, chart bar\): Q1 · 80$/m, { x: 30, y: 60 });
     for (const t of [storeQ1.text, onlineQ1.text]) assert.doesNotMatch(t.split("\n").pop(), /150/, "the total is no segment's value");
+    // The small segments keep the labels written on them too (fix round 2): Q3's stores (50 px), Q2's online (60 px).
+    await expectAt(hc.sid, "#store2", /Pointed at \(rect, chart bar\): Q3 · 50$/m);
+    await expectAt(hc.sid, "#online1", /Pointed at \(rect, chart bar\): Q2 · 60$/m);
+    // Stale tooltips that write their number apart from their words (an SVG one, its number hanging out of its box under
+    // March's point; an HTML one with no shape over April's): never a value. January's own label is.
+    await expectAt(hc.sid, "#v0", /Under the heading: Visitas por mes\nPointed at \(path, chart point\): Visitas · Ene · 300$/m);
+    await expectAt(hc.sid, "#v2", new RegExp(`Pointed at \\(path, chart point\\): Visitas · Mar ${NONE}$`, "m"));
+    await expectAt(hc.sid, "#v3", new RegExp(`Pointed at \\(path, chart point\\): Visitas · Abr ${NONE}$`, "m"));
+    // A year as the title, drawn in the plot's margin over a column at the top tick: no value of that column's.
+    await expectAt(hc.sid, "#yQ2", new RegExp(`Under the heading: Ventas del año\\nPointed at \\(rect, chart bar\\): Q2 ${NONE}$`, "m"));
+    await expectAt(hc.sid, "#yQ1", /Pointed at \(rect, chart bar\): Q1 · 120$/m);
     await cdp("Target.closeTarget", { targetId: hc.targetId });
 
     // ECharts-like, D3 and Recharts-like (charts-libraries.html).
@@ -1099,14 +1110,14 @@ try {
     await expectAt(libs.sid, "#uv1", new RegExp(`Pointed at \\(path, chart bar\\): Page B ${NONE}$`, "m"));
     // Hidden labels (rule C): text the person cannot see, far off screen or in a control is never read: the series is the
     // visible "Sales" without its hidden span; A, B and C have no value written; D's ordinary label is its value.
-    const SECRETS = /998877665544|424242|112233445566|4321|5566|777|Internal|4455/;
+    const SECRETS = /998877665544|424242|112233445566|4321|5566|777|4040|Internal|4455/;
     for (const [id, end] of [["#hA", `A ${NONE}`], ["#hB", `B ${NONE}`], ["#hC", `C ${NONE}`], ["#hD", "D · 140"]]) {
       const hiddenDrop = await expectAt(libs.sid, id, new RegExp(`Under the heading: Hidden labels\\nPointed at \\(rect, chart bar\\): Sales · ${end}$`, "m"));
       assert.doesNotMatch(hiddenDrop.text, SECRETS, `${id}: nothing hidden, off screen or in a control`);
     }
     // The chart's background: the whole chart, still without what is hidden.
     const hiddenBox = await boxIn(libs.sid, "#hidden svg");
-    assert.doesNotMatch((await dropOnChart(libs.sid, hiddenBox.left + 460, hiddenBox.top + 150)).text, /998877665544|424242|112233445566|777|4455/);
+    assert.doesNotMatch((await dropOnChart(libs.sid, hiddenBox.left + 460, hiddenBox.top + 150)).text, /998877665544|424242|112233445566|777|4040|4455/);
     await cdp("Target.closeTarget", { targetId: libs.targetId });
 
     // A canvas chart, a pie and a map with and without names, a big table and a form (charts-other.html).
@@ -1127,6 +1138,8 @@ try {
     // A form: the field and what was typed in it.
     const goal = await expectAt(rest.sid, "#goalstore", /\n- Store: SMU \(pointed at\)/);
     assert.doesNotMatch(goal.text, /chart (point|bar|mark)|Target %/);
+    // Outside charts: a paragraph clipped by a rect clip path that shows all of it is read whole (fix round 2).
+    await expectAt(rest.sid, "#clippedpara", /Under the heading: Clipped paragraph\nPointed at \(p\): A paragraph clipped by a rect that shows all of it\.$/m);
     await cdp("Target.closeTarget", { targetId: rest.targetId });
     await drag("#b", await payload());
     await until("the SPRING reading again", async () => /SPRING/.test((await tool("page__get_reading")).structuredContent?.page_text ?? ""));

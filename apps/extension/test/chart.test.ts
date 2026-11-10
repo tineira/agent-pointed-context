@@ -14,6 +14,7 @@ const right = (text: string, x: number, y: number): ChartLabel => ({ text, box: 
 /** A label left-aligned at x. */
 const left = (text: string, x: number, y: number): ChartLabel => ({ text, box: { left: x, right: x + 8 * text.length, top: y - 6, bottom: y + 6 } });
 const box = (l: number, t: number, r: number, b: number): Rect => ({ left: l, top: t, right: r, bottom: b });
+const cx = (r: Rect) => (r.left + r.right) / 2;
 const point = (b: Rect): ChartShape => ({ box: b, kind: "point" });
 const barShape = (b: Rect): ChartShape => ({ box: b, kind: "bar" });
 
@@ -332,7 +333,123 @@ test("a shape only in the plot's margin, or holding other shapes, is no mark and
   assert.equal(readAt(withRect, rectSeries, 1, 0), null);
   assert.equal(readAt(withRect, rectSeries, 0, 1)!.text, "Feb · 7");
   // A bar drawn a little past the last tick is still a mark.
-  assert.equal(isMark(box(100, 44, 140, 250), chart, axes), true);
+  assert.equal(isMark(box(150, 44, 190, 250), chart, axes), true);
+});
+
+// ---- fix round 2 (fix checks on #145): the inputs of Grok's and Gemini's reports, one test each ----
+
+test("Grok fix1 #1: a stack segment of any height keeps the label written on it (Chrome's boxes from the corpus)", () => {
+  const dy = 100 - 232;
+  const dx = 120 - 428;
+  const live = (b: Rect) => box(b.left + dx, b.top + dy, b.right + dx, b.bottom + dy);
+  const store2 = barShape(live(box(428, 232, 488, 282)));
+  const online2 = barShape(live(box(428, 282, 488, 382)));
+  const store1 = barShape(live(box(278, 242, 338, 322)));
+  const online1 = barShape(live(box(278, 322, 338, 382)));
+  const t50 = { text: "50", box: live(box(451.88, 249.86, 464.13, 261.86)) };
+  const t60 = { text: "60", box: live(box(301.88, 344.86, 314.13, 356.86)) };
+  const ticks = [0, 50, 100, 150, 200].map((v, i) => right(String(v), 40, 250 - i * 40));
+  const labels = [...ticks, label("Q2", cx(store1.box), 280), label("Q3", cx(store2.box), 280), t50, t60];
+  const series = [[online2, online1], [store2, store1]];
+  assert.equal(readAt(labels, series, 1, 0)!.text, "Q3 · 50");
+  assert.equal(readAt(labels, series, 0, 1)!.text, "Q2 · 60");
+});
+
+test("Grok fix1 #2: a second number the column could own does not erase its own", () => {
+  // The corpus's Ago column with the price point 4 px left: the price label is the point's rival's, nobody's.
+  const ago = barShape(box(171, 62.5, 201, 250));
+  const jul = barShape(box(95, 75, 125, 250));
+  const shifted = point(box(178, 208.5, 186, 216.5));
+  const precio = [right("0", 60, 250), right("160M", 60, 150), right("320M", 60, 50), label("Jul", 110, 268), label("Ago", 186, 268), label("300M", 186, 52.5, 24), label("3.75k", 186, 200.5, 30)];
+  assert.equal(readAt(precio, [[jul, ago], [shifted]], 0, 1)!.text, "Ago · 300M");
+  assert.equal(readAt(precio, [[jul, ago], [shifted]], 1, 0)!.text, `Ago ${NO_VALUE}`);
+  // Two numbers above one bar: the one nearest its end.
+  assert.equal(readAt(small([label("42", 120, 88, 16), label("7", 120, 70, 12)]), [[barShape(box(100, 100, 140, 250)), feb]], 0, 0)!.text, "Jan · 42");
+});
+
+test("Grok fix1 #3, Gemini fix1 P2: a column holding points is a mark; a rect around a bar or a 1 px strip is not", () => {
+  const column = barShape(box(100, 80, 140, 250));
+  const inner = [point(box(116, 120, 124, 128)), point(box(116, 160, 124, 168))];
+  assert.equal(readAt(small([label("42", 120, 68, 16)]), [[column, feb], inner], 0, 0)!.text, "Jan · 42");
+  // A background around the January column only.
+  const jan = barShape(box(100, 100, 140, 250));
+  const bg = barShape(box(80, 40, 160, 250));
+  const bgLabels = small([label("42", 120, 88, 16)]);
+  assert.equal(readAt(bgLabels, [[bg], [jan, feb]], 0, 0), null);
+  assert.equal(readAt(bgLabels, [[bg], [jan, feb]], 1, 0)!.text, "Jan · 42");
+  // Gemini: a plot rect with one column in it.
+  const gem = [right("0", 50, 250), right("100", 50, 150), right("200", 50, 50), label("Jan", 120, 280), label("Feb", 220, 280), label("100", 120, 90, 24)];
+  assert.equal(readAt(gem, [[barShape(box(80, 50, 240, 250))], [jan]], 0, 0), null);
+  assert.equal(readAt(gem, [[barShape(box(80, 50, 240, 250))], [jan]], 1, 0)!.text, "Jan · 100");
+  // A strip crossing the 0 tick by 1 px is no mark; the column keeps "9".
+  const strip = barShape(box(100, 249, 140, 265));
+  const col = barShape(box(100, 150, 140, 250));
+  const stripLabels = small([label("9", 120, 256, 8)]);
+  assert.equal(readAt(stripLabels, [[col, feb], [strip]], 1, 0), null);
+  assert.equal(readAt(stripLabels, [[col, feb], [strip]], 0, 0)!.text, "Jan · 9");
+});
+
+test("Grok fix1 #4: a tick a bar is drawn over leaves the value axis an axis, and never becomes a value", () => {
+  const under = barShape(box(40, 100, 140, 250));
+  const l1 = [right("0", 50, 250), right("100", 50, 150), right("200", 50, 50), label("Jan", 120, 280), label("Feb", 220, 280), label("42", 120, 88, 16)];
+  assert.deepEqual(chartAxes({ labels: l1, shapes: [under, feb] })!.valueAxis.map((l) => l.text), ["0", "100", "200"]);
+  assert.equal(readAt(l1, [[under, feb]], 0, 0)!.text, "Jan · 42");
+  // Every tick drawn over a bar (one out of line, inside it): no axis can be told, so no chart and no mark; a tick is
+  // never taken for the bar's value.
+  const wide = barShape(box(20, 80, 140, 250));
+  const other = barShape(box(180, 150, 230, 250));
+  const l2 = [right("0", 40, 250), right("100", 80, 150), right("200", 40, 50), label("Jan", 80, 280), label("Feb", 205, 280), label("42", 80, 68, 16)];
+  assert.equal(chartAxes({ labels: l2, shapes: [wide, other] }), null);
+  // A tick overlapping a bar by 2 px, with a second axis.
+  const by2 = barShape(box(48, 100, 140, 250));
+  const l3 = [right("0", 50, 250), right("100", 50, 150), right("200", 50, 50), left("0", 300, 250), left("5", 300, 150), left("10", 300, 50), label("Jan", 120, 280), label("Feb", 220, 280), label("42", 120, 88, 16)];
+  assert.equal(readAt(l3, [[by2, feb]], 0, 0)!.text, "Jan · 42");
+});
+
+test("Grok fix1 #7, Gemini fix1 P1: a number above the top tick is never a value, even just above a bar at that tick", () => {
+  // These are the same drawing as a year as the title in the plot's margin (below): constraint 1 wins, no value.
+  const atTick = barShape(box(100, 50, 140, 250));
+  assert.equal(readAt(small([label("42", 120, 28, 16)]), [[atTick, feb]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  const gemCol = barShape(box(100, 100, 140, 200));
+  const gemTicks = [right("0", 50, 200), right("50", 50, 150), right("100", 50, 100), label("Jan", 120, 230), label("Feb", 220, 230)];
+  assert.equal(readAt([...gemTicks, label("100", 120, 84, 24)], [[gemCol, barShape(box(200, 150, 240, 200))]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  // A label above a bar below the top tick still reads.
+  assert.equal(readAt(small([label("42", 120, 88, 16)]), [[barShape(box(100, 100, 140, 250)), feb]], 0, 0)!.text, "Jan · 42");
+});
+
+test("Gemini P2 (round 0), still open: a year as the title in the plot's margin is never a value", () => {
+  const atTick = barShape(box(100, 50, 140, 250));
+  assert.equal(readAt(small([label("2026", 120, 30, 32)]), [[atTick, feb]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  assert.equal(readAt(small([label("2026", 120, 36, 32)]), [[atTick, feb]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+});
+
+test("Grok #3 (round 0), still open: a tooltip's number is never a value, its box or not", () => {
+  // The number hangs 2 px below the tooltip's box, which holds "F".
+  const tip = barShape(box(104, 110, 160, 140));
+  assert.equal(readAt(ventaLabels([left("F", 112, 122), label("400", 120, 138, 24)]), [markers(), [tip]], 0, 1)!.text, `SMU · F ${NO_VALUE}`);
+  const tipB = barShape(box(100, 120, 170, 150));
+  assert.equal(readAt(ventaLabels([left("F", 110, 132), { text: "400", box: box(108, 144, 140, 160) }]), [markers(), [tipB]], 0, 1)!.text, `SMU · F ${NO_VALUE}`);
+  // An HTML tooltip, no shape at all: "F" over "400".
+  assert.equal(readAt(ventaLabels([left("F", 112, 122), label("400", 120, 138, 24)]), [markers()], 0, 1)!.text, `SMU · F ${NO_VALUE}`);
+  // Its word sticks 2 px out of the box.
+  const tipC = barShape(box(104, 98, 170, 128));
+  // (That box then counts as a shape of its own, a second group, so the title no longer names the series: left out.)
+  assert.equal(readAt(ventaLabels([{ text: "F", box: box(110, 90, 122, 106) }, label("400", 120, 118, 24)]), [markers(), [tipC]], 0, 1)!.text, `F ${NO_VALUE}`);
+  // A box with only a number in it, over February: the point is in reach of a number on a bar, so it is nobody's.
+  assert.equal(readAt(ventaLabels([label("400", 120, 112, 24)]), [markers(), [tipC]], 0, 1)!.text, `F ${NO_VALUE}`);
+});
+
+test("Gemini P1 variant: a price label on a column, its point off the label's centre, is nobody's", () => {
+  const ago = barShape(box(171, 62.5, 201, 250));
+  const jul = barShape(box(95, 75, 125, 250));
+  const shifted = point(box(177, 208.5, 185, 216.5));
+  const labels = [right("0", 60, 250), right("160M", 60, 150), right("320M", 60, 50), label("Jul", 110, 268), label("Ago", 186, 268), label("3.75k", 186, 200.5, 30)];
+  assert.equal(readAt(labels, [[jul, ago], [shifted]], 0, 1)!.text, `Ago ${NO_VALUE}`);
+  assert.equal(readAt(labels, [[jul, ago], [shifted]], 1, 0)!.text, `Ago ${NO_VALUE}`);
+  // Grok's probe: a point at the column's edge, 6 px left of a number above the column.
+  const wide = barShape(box(100, 100, 180, 250));
+  const edge = point(box(102, 88, 110, 96));
+  assert.equal(readAt(small([label("4.2k", 130, 86, 28)]), [[wide], [edge]], 0, 0)!.text, `Jan ${NO_VALUE}`);
 });
 
 test("numbers as charts write them tell an axis's ticks and data labels from other text", () => {
@@ -376,10 +493,14 @@ test("the extension's source knows no chart library and estimates no value (TIN-
   assert.match(content, /: scope && !shape\s*\?/);
   // Rule C: every text a chart reading uses goes through chartText (readable's walk, cut to the drawing, no control),
   // aria-labelledby targets too; markAt passes only through what the drawing's holder lays over it.
-  assert.match(content, /function chartText\(e: Element, drawn: Rect\): string \{\s*if \(inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return "";[\s\S]{0,900}?svgClip\(at\);\s*if \(!cut\) return "";[\s\S]{0,200}?return readable\(e, LABEL_MAX, bound\)/);
+  assert.match(content, /function chartText\(e: Element, drawn: Rect\): string \{\s*if \(inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return "";[\s\S]{0,900}?const cut = clipCut\(at\);\s*if \(cut === "hide"\) return "";[\s\S]{0,200}?return readable\(e, LABEL_MAX, bound\)/);
   assert.match(content, /\.filter\(\(t\): t is Element => !!t && scope\.contains\(t\)\)\.map\(\(t\) => chartText\(t, drawn\)\)/);
   assert.match(content, /if \(!holder\?\.contains\(e\) \|\| inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return null;/);
-  assert.ok(content.includes("if (/^url\\(/.test(style.clipPath) && !svgCut) return;"), "an unresolvable SVG clip path hides");
+  // A clip path whose <clipPath> is missing hides; a complex one hides SVG only; HTML text is otherwise read (fix round 2).
+  assert.ok(content.includes('if (clip === "missing" || (clip === "complex" && at instanceof SVGElement)) return "hide";'), "clipCut");
+  assert.match(content, /const cut = clipCut\(e\);\s*if \(cut === "hide"\) return;/);
+  // SVG fill: none is no ink, unless a stroke paints the glyphs.
+  assert.ok(content.includes('style.fill === "none" ? paintOf(e).stroked'), "fill none");
   assert.doesNotMatch(content, /labelSeen|textContent \?\? ""\)\.replace/);
   // No class name is read for a chart: no classList, no class attribute.
   const section = content.slice(content.indexOf("// ---- chart marks"), content.indexOf("/** Whether the person can see this element."));

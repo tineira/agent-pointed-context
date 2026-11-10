@@ -197,18 +197,18 @@ function labelBox(box: Rect, labels: readonly ChartLabel[]): boolean {
 
 /**
  * Whether a shape of a confirmed chart is one of its marks (TIN-765, rule B). It is one when all hold:
- * - its centre is in the plot;
- * - its box crosses the value axis's tick range: the plot's margin past the end ticks may hold the centre of a bar
- *   drawn just past the last tick, never a shape that lies only in that margin;
+ * - its centre is in the plot, and along the values between the end ticks (a shape only past the last tick, or one
+ *   that crosses it by a pixel, is none; a bar drawn a little past it keeps its centre inside);
  * - it is not across most of the plot (coversPlot);
  * - it is not the box of a label (labelBox);
- * - it does not wholly hold two or more of the drawing's other shapes (a background, a plot area).
+ * - it wholly holds no other bar (a background, a plot area, a rect around a column); points drawn on a column do
+ *   not count.
  */
 export function isMark(box: Rect, chart: Pick<Chart, "labels" | "shapes">, axes: Axes): boolean {
-  const [from, to] = axes.vertical ? [box.top, box.bottom] : [box.left, box.right];
-  const crosses = from <= axes.ticks[1] && to >= axes.ticks[0];
-  const holds = chart.shapes.filter((s) => !sameBox(s.box, box) && within(s.box, box)).length;
-  return inPlot(box, axes) && crosses && !coversPlot(box, axes) && !labelBox(box, chart.labels) && holds < 2;
+  const centre = axes.vertical ? cy(box) : cx(box);
+  const between = centre >= axes.ticks[0] && centre <= axes.ticks[1];
+  const holds = chart.shapes.some((s) => s.kind === "bar" && !sameBox(s.box, box) && within(s.box, box));
+  return inPlot(box, axes) && between && !coversPlot(box, axes) && !labelBox(box, chart.labels) && !holds;
 }
 
 /** The category label in line with a box (within half the space between two labels), or null. */
@@ -227,19 +227,23 @@ function categoryLabel(box: Rect, axes: Axes): ChartLabel | null {
 /**
  * Whether a drawing is a chart, and its axes: a value axis (two numbers or more in one aligned line), and a category
  * axis (two labels or more in a line the other way) or data labels. Null otherwise: then no shape in it is a mark of
- * a chart. Every line of numbers along the values that lies beside the plot (none of its numbers over a shape) is an
- * axis (a chart may draw one on each side), never data labels; a number in a longer line the other way is that line's. When both ways would do, the one with more category labels
- * that shapes line up with wins (one per category, where the other way piles them on a few), then the longer value axis.
+ * a chart. Every line of numbers along the values that lies beside the plot (two of its numbers or more beside every
+ * shape) is an axis (a chart may draw one on each side), never data labels; a number in a longer line the other way is that
+ * line's. When both ways would do, the one with more category labels that shapes line up with wins (one per category,
+ * where the other way piles them on a few), then the longer value axis.
  */
 export function chartAxes(chart: Pick<Chart, "labels" | "shapes">): Axes | null {
   const labels = chart.labels.filter((l) => fold(l.text));
   // A number belongs to the longest line of numbers it is in: the ticks of two axes, one on each side, make rows of
   // two numbers each, which are no axis.
   const numbers = labels.filter((l) => parseNumber(l.text) !== null);
-  // An axis lies beside the plot: a line of numbers one of which is drawn over a shape (a stack's labels, one above
-  // the other) is data labels, not an axis.
-  const beside = (line: readonly ChartLabel[]) => !line.some((l) => chart.shapes.some((s) => overlap(l.box, s.box)));
-  const numberLines = { up: columns(numbers).filter((line) => numeric(line) && beside(line)), across: rows(numbers).filter((line) => numeric(line) && beside(line)) };
+  // An axis lies beside the plot: a line of numbers is an axis when two of its numbers or more, of different values,
+  // have their centres beside every shape (a column's left of or right of each shape's span, a row's above or below).
+  // Numbers one above the other over a bar or a stack are data labels; a tick a bar is drawn under leaves its axis an
+  // axis, and stays a tick.
+  const besideAll = (l: ChartLabel, up: boolean) => chart.shapes.every((s) => (up ? cx(l.box) <= s.box.left || cx(l.box) >= s.box.right : cy(l.box) <= s.box.top || cy(l.box) >= s.box.bottom));
+  const beside = (up: boolean) => (line: readonly ChartLabel[]) => numeric(line.filter((l) => besideAll(l, up)));
+  const numberLines = { up: columns(numbers).filter(beside(true)), across: rows(numbers).filter(beside(false)) };
   const longestOf = new Map<ChartLabel, number>();
   for (const line of [...numberLines.up, ...numberLines.across]) for (const l of line) longestOf.set(l, Math.max(longestOf.get(l) ?? 0, line.length));
   const option = (vertical: boolean): Axes | null => {
@@ -275,66 +279,77 @@ export function coversPlot(box: Rect, axes: Axes): boolean {
   return b - a >= span * 0.6;
 }
 
-/** How far a data label may be from the end of its mark. */
+/** How far a data label may be from its mark, along the values. */
 const LABEL_REACH = 24;
 
 const sameBox = (a: Rect, b: Rect) => a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
 const overlap = (a: Rect, b: Rect) => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
-/** The distance between two boxes (0 when they touch or overlap). */
-const distance = (a: Rect, b: Rect) => Math.hypot(Math.max(0, a.left - b.right, b.left - a.right), Math.max(0, a.top - b.bottom, b.top - a.bottom));
+/** Whether a point lies strictly inside a box. */
+const inside = (x: number, y: number, b: Rect) => x > b.left && x < b.right && y > b.top && y < b.bottom;
 
-/**
- * Whether a number could be the value of a mark: its centre strictly inside the mark's span across the values (no
- * gutter), and the number at the mark's value end. A point's number sits above or below it, within LABEL_REACH; a
- * bar's is on it or within LABEL_REACH past one of its ends.
+/*
+ * Who owns a number (TIN-765, rule A, fix round 2). One structural rule, no tolerances that interact:
+ *
+ * 1. A number may be a value only when it is no axis tick, its centre is not above the top tick (on a horizontal
+ *    chart, not above the plot: the title's region), and it is not a tooltip's: no word that is not a number (axis
+ *    labels aside) lies within one line of it, and it does not overlap a shape that holds such words.
+ * 2. A mark is in reach of a number when the number's box overlaps the mark's span across the values (a point's left
+ *    to right, give or take its own width) and, along the values, the number is on it or within LABEL_REACH of it.
+ * 3. A number whose centre lies on a bar is that bar's when it lies on exactly one bar and no point is in reach.
+ * 4. A number on no bar is the one mark's that claims it, when exactly one does: the marks in reach, and every bar
+ *    whose span across holds the number's centre at any distance (a stack's other segments).
+ * 5. A mark that owns several numbers keeps the one nearest one of its ends; a tie gives none.
+ * Anything else is nobody's value: no value beats a wrong value.
  */
-function couldOwn(l: ChartLabel, m: ChartShape, vertical: boolean): boolean {
+
+/** Whether a mark is in reach of a number (rule 2). */
+function inReach(l: ChartLabel, m: ChartShape, vertical: boolean): boolean {
   const b = m.box;
-  if (m.kind === "point") {
-    const c = cx(l.box);
-    return c > b.left && c < b.right && Math.max(0, l.box.top - b.bottom, b.top - l.box.bottom) <= LABEL_REACH;
-  }
-  const c = vertical ? cx(l.box) : cy(l.box);
-  const [lo, hi] = vertical ? [b.left, b.right] : [b.top, b.bottom];
-  if (!(c > lo && c < hi)) return false;
-  const [from, to] = vertical ? [l.box.top, l.box.bottom] : [l.box.left, l.box.right];
-  const [start, end] = vertical ? [b.top, b.bottom] : [b.left, b.right];
+  const across = m.kind === "point" || vertical ? [[l.box.left, l.box.right], [b.left, b.right]] : [[l.box.top, l.box.bottom], [b.top, b.bottom]];
+  // A point is small: one that comes within its own width of the number, across, is in reach too.
+  const slack = m.kind === "point" ? b.right - b.left : 0;
+  if (Math.min(across[0]![1]!, across[1]![1]!) + slack <= Math.max(across[0]![0]!, across[1]![0]!)) return false;
+  const [from, to, start, end] = m.kind === "point" || vertical ? [l.box.top, l.box.bottom, b.top, b.bottom] : [l.box.left, l.box.right, b.left, b.right];
   return Math.max(0, start - to, from - end) <= LABEL_REACH;
 }
 
-/**
- * The one mark a data label is the value of, or null (TIN-765, rule A). A number is a mark's value only when exactly
- * one mark could own it (couldOwn), and no other mark of any series is a rival:
- * - a rival lies within LABEL_REACH of the number, with its centre (across the values) as near to the number's centre
- *   as the owner's is: a point drawn in front of a column, under the number, makes the number nobody's;
- * - with the number outside every mark, a rival is any other bar whose span holds the number's centre: a stack's
- *   total, above its top segment, is no segment's value.
- * Whatever is ambiguous is nobody's value: no value beats a wrong value.
- */
+/** The mark a number is the value of, or null (rules 2 to 4). */
 export function ownerOf(l: ChartLabel, marks: readonly ChartShape[], axes: Axes): ChartShape | null {
-  const owners = marks.filter((m) => couldOwn(l, m, axes.vertical));
-  if (owners.length !== 1) return null;
-  const owner = owners[0]!;
-  const across = axes.vertical ? cx : cy;
-  const at = across(l.box);
-  const mine = Math.abs(across(owner.box) - at);
-  const outside = !marks.some((m) => overlap(l.box, m.box));
-  for (const m of marks) {
-    if (m === owner) continue;
-    if (distance(l.box, m.box) <= LABEL_REACH && Math.abs(across(m.box) - at) <= mine) return null;
-    const [lo, hi] = axes.vertical ? [m.box.left, m.box.right] : [m.box.top, m.box.bottom];
-    if (outside && m.kind === "bar" && at > lo && at < hi) return null;
-  }
-  return owner;
+  const [x, y] = [cx(l.box), cy(l.box)];
+  const bars = marks.filter((m) => m.kind === "bar");
+  const reach = marks.filter((m) => inReach(l, m, axes.vertical));
+  const on = bars.filter((m) => inside(x, y, m.box));
+  if (on.length) return on.length === 1 && !reach.some((m) => m.kind === "point") ? on[0]! : null;
+  const at = axes.vertical ? x : y;
+  const holders = bars.filter((m) => (axes.vertical ? at > m.box.left && at < m.box.right : at > m.box.top && at < m.box.bottom));
+  const claims = new Set([...reach, ...holders]);
+  if (claims.size !== 1) return null;
+  const [owner] = claims;
+  return reach.includes(owner!) ? owner! : null;
 }
 
-/**
- * The numbers that may be values at all: data labels (chartAxes) that do not lie above the plot (a year as the chart's
- * title) and are not in the box of a label (a tooltip's "400" beside its "F").
- */
+/** Of the numbers a mark owns, the one nearest one of its ends (along the values), or null on a tie (rule 5). */
+function nearestEnd(owned: readonly ChartLabel[], mark: ChartShape, vertical: boolean): ChartLabel | null {
+  const along = vertical ? cy : cx;
+  const ends = vertical ? [mark.box.top, mark.box.bottom] : [mark.box.left, mark.box.right];
+  const gap = (l: ChartLabel) => Math.min(...ends.map((e) => Math.abs(along(l.box) - e)));
+  const sorted = [...owned].sort((a, b) => gap(a) - gap(b));
+  if (!sorted.length || (sorted.length > 1 && gap(sorted[0]!) === gap(sorted[1]!))) return null;
+  return sorted[0]!;
+}
+
+/** The numbers that may be values at all (rule 1). */
 function valueLabels(chart: Chart, axes: Axes): ChartLabel[] {
+  const axisLabels = new Set([...axes.valueAxis, ...(axes.categoryAxis ?? [])]);
+  const words = chart.labels.filter((l) => !axisLabels.has(l) && fold(l.text) && parseNumber(l.text) === null);
   const boxes = chart.shapes.filter((s) => labelBox(s.box, chart.labels));
-  return axes.dataLabels.filter((l) => l.box.bottom > axes.plot.top && !boxes.some((s) => within(l.box, s.box)));
+  const nearWord = (l: ChartLabel) => {
+    const h = l.box.bottom - l.box.top;
+    const grown = { left: l.box.left - h, right: l.box.right + h, top: l.box.top - h, bottom: l.box.bottom + h };
+    return words.some((w) => overlap(w.box, grown));
+  };
+  const titleRegion = (l: ChartLabel) => (axes.vertical ? cy(l.box) < axes.ticks[0] : cy(l.box) < axes.plot.top);
+  return axes.dataLabels.filter((l) => !titleRegion(l) && !nearWord(l) && !boxes.some((s) => overlap(l.box, s.box)));
 }
 
 /**
@@ -357,8 +372,8 @@ function titleOf(chart: Chart, axes: Axes): string | null {
  *
  * - category: the category label in line with the mark, when no other mark of its series is nearer to that label;
  * - series: the name its group declares; with one series, the chart's single title;
- * - value: its own accessible text, else the one data label it owns (ownerOf); else none, and the text says no
- *   value is written.
+ * - value: its own accessible text, else the data label it owns (ownerOf, nearestEnd); else none, and the text
+ *   says no value is written.
  */
 export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: string | null): MarkReading | null {
   if (!isMark(mark.box, chart, axes)) return null;
@@ -380,7 +395,8 @@ export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: s
     // The mark among the chart's marks, so that ownerOf can tell it from the others.
     const marks = [...chart.shapes.filter((s) => !sameBox(s.box, mark.box) && isMark(s.box, chart, axes)), mark];
     const owned = valueLabels(chart, axes).filter((l) => ownerOf(l, marks, axes) === mark);
-    if (owned.length === 1) value = fold(owned[0]!.text);
+    const kept = nearestEnd(owned, mark, axes.vertical);
+    if (kept) value = fold(kept.text);
   }
 
   if (!category && !value) return null;

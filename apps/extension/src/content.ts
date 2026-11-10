@@ -637,20 +637,39 @@ function dataShape(el: Element, share = MARK_SHARE): boolean {
 }
 
 /**
- * Where an SVG clip path (`clip-path: url(#id)` holding one rect, as a chart clips its plot) lets an element show, in
- * the viewport, or null when there is none or it is not that simple.
+ * Where a `clip-path: url(#id)` lets an element show, in the viewport (TIN-765). Null when the element has no such clip
+ * path. "missing" when the id names no <clipPath> in the element's document or shadow root: what it clips is not read.
+ * A clip path of one rect (as a chart clips its plot) gives that rect: in user space for an SVG element, from the
+ * element's border box for HTML (in fractions of it with objectBoundingBox, which SVG elements are not read with).
+ * "complex" otherwise: an SVG element under it is not read (its text may be cut anywhere), HTML is read as before.
  */
-function svgClip(at: Element): Rect | null {
+function urlClip(at: Element): Rect | "missing" | "complex" | null {
   const url = /^url\(["']?#([^"')]+)["']?\)$/.exec(getComputedStyle(at).clipPath);
-  if (!url || !(at instanceof SVGGraphicsElement)) return null;
+  if (!url) return /^url\(/.test(getComputedStyle(at).clipPath) ? "missing" : null;
   const clip = (at.getRootNode() as Document | ShadowRoot).getElementById?.(url[1]!) ?? null;
-  const shapes = clip ? [...clip.children] : [];
-  const rect = shapes.length === 1 && shapes[0] instanceof SVGRectElement ? shapes[0] : null;
-  const ctm = at.getScreenCTM();
-  if (!rect || !ctm || clip!.getAttribute("clipPathUnits") === "objectBoundingBox") return null;
+  if (!(clip instanceof SVGClipPathElement)) return "missing";
+  const shapes = [...clip.children];
+  const rect = shapes.length === 1 && shapes[0] instanceof SVGRectElement && !shapes[0].hasAttribute("transform") && !clip.hasAttribute("transform") ? shapes[0] : null;
+  if (!rect) return "complex";
   const { x, y, width, height } = rect.getBBox();
-  const corners = [new DOMPoint(x, y), new DOMPoint(x + width, y + height)].map((p) => p.matrixTransform(ctm));
-  return { left: Math.min(corners[0]!.x, corners[1]!.x), top: Math.min(corners[0]!.y, corners[1]!.y), right: Math.max(corners[0]!.x, corners[1]!.x), bottom: Math.max(corners[0]!.y, corners[1]!.y) };
+  const units = clip.getAttribute("clipPathUnits") === "objectBoundingBox";
+  if (at instanceof SVGGraphicsElement) {
+    const ctm = at.getScreenCTM();
+    if (!ctm || units) return "complex";
+    const corners = [new DOMPoint(x, y), new DOMPoint(x + width, y + height)].map((p) => p.matrixTransform(ctm));
+    return { left: Math.min(corners[0]!.x, corners[1]!.x), top: Math.min(corners[0]!.y, corners[1]!.y), right: Math.max(corners[0]!.x, corners[1]!.x), bottom: Math.max(corners[0]!.y, corners[1]!.y) };
+  }
+  if (at instanceof SVGElement) return "complex";
+  const b = boxOf(at);
+  const [w, h] = [b.right - b.left, b.bottom - b.top];
+  return units ? { left: b.left + x * w, top: b.top + y * h, right: b.left + (x + width) * w, bottom: b.top + (y + height) * h } : { left: b.left + x, top: b.top + y, right: b.left + x + width, bottom: b.top + y + height };
+}
+
+/** How a `clip-path: url()` cuts what an element shows (urlClip): "hide" when nothing of it is read, a rect, or null. */
+function clipCut(at: Element): Rect | "hide" | null {
+  const clip = urlClip(at);
+  if (clip === "missing" || (clip === "complex" && at instanceof SVGElement)) return "hide";
+  return clip === "complex" ? null : clip;
 }
 
 /** The most characters of one chart label. */
@@ -667,17 +686,15 @@ const LABEL_MAX = 200;
 function chartText(e: Element, drawn: Rect): string {
   if (inControl(e, document.documentElement) || !within(boxOf(e), drawn)) return "";
   // What clips the elements around it, which readable's walk (starting at the text) does not see: a clip path that
-  // hides, `clip`, and an SVG clip path (a plot's cuts; one that does not resolve hides all).
+  // hides, `clip`, and a `clip-path: url()` (clipCut: a plot's rect cuts; one that is missing hides all).
   let bound = drawn;
   for (let at = parentOf(e); at && at !== document.documentElement; at = parentOf(at)) {
     const style = getComputedStyle(at);
     if (clipPathHides(style.clipPath)) return "";
     if ((style.position === "absolute" || style.position === "fixed") && style.clip !== "auto" && style.clip !== "") return "";
-    if (/^url\(/.test(style.clipPath)) {
-      const cut = svgClip(at);
-      if (!cut) return "";
-      bound = intersect(bound, cut);
-    }
+    const cut = clipCut(at);
+    if (cut === "hide") return "";
+    if (cut) bound = intersect(bound, cut);
   }
   return readable(e, LABEL_MAX, bound).replace(/\s+/g, " ").trim().slice(0, LABEL_MAX);
 }
@@ -939,13 +956,16 @@ function readable(el: Element, max: number, bound: Rect = ANYWHERE): string {
       return;
     }
     let inner = style.overflowX !== "visible" || style.overflowY !== "visible" ? intersect(clip, boxOf(e)) : clip;
-    // An SVG clip path (a chart's plot) cuts what is drawn in it as an overflow box does (TIN-760).
-    // A clip path the extension cannot resolve (not one rect in user space) may hide anything: what it clips is not read.
-    const svgCut = svgClip(e);
-    if (/^url\(/.test(style.clipPath) && !svgCut) return;
-    if (svgCut) inner = intersect(inner, svgCut);
-    // SVG text is painted by its fill (TIN-765); HTML text by its colour and -webkit-text-fill-color.
-    const inked = (e instanceof SVGElement ? Math.min(alpha(style.fill), Number(style.fillOpacity)) : Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color))) >= OPACITY_MIN;
+    // A `clip-path: url()` (a chart's plot) cuts what is drawn in it as an overflow box does (TIN-760). One whose
+    // <clipPath> is missing hides all; one too complex to resolve hides SVG text and leaves HTML as it was (clipCut).
+    const cut = clipCut(e);
+    if (cut === "hide") return;
+    if (cut) inner = intersect(inner, cut);
+    // SVG text is painted by its fill, or with `fill: none` by a stroke that paints (TIN-765); HTML text by its colour
+    // and -webkit-text-fill-color.
+    const inked = e instanceof SVGElement
+      ? style.fill === "none" ? paintOf(e).stroked : Math.min(alpha(style.fill), Number(style.fillOpacity)) >= OPACITY_MIN
+      : Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)) >= OPACITY_MIN;
     // An SVG <text> is a label of its own, drawn apart from the next, though SVG calls it inline; so is a tspan that
     // starts a line of its own (x or dy).
     const apart = e.tagName === "BR" || !style.display.startsWith("inline") || e instanceof SVGTextElement || (e instanceof SVGTSpanElement && (e.hasAttribute("x") || e.hasAttribute("dy")));
