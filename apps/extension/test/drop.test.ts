@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, FORM_NOTE, WHATS_SENT, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, WHATS_SENT, agentName, AGENT_FALLBACK, CARD_LABELS, SITE_LABELS, CONSENT_QUESTION, consentReason, includeLabel, isolate, NOTE_TEXT, SENT_TO, WAIT_LOST_TEXT, WAITING_TEXT, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -90,12 +90,13 @@ test("a dock agent dropped on a Direct-only APC app gets the answer from its apc
     name: "Signals",
     host: "signals.example",
     connect: `${origin}/?connect`,
-    message: 'This page says it is "Signals" (signals.example). It connects agents directly, not through a dock: connect your agent to it on its own URL, then drag its mark from the agent bar there.',
+    message: "Connects agents itself, without your dock.",
   });
-  // The card lends no authority to the name the page chose: the domain first, the name as the page's word.
+  // The card lends no authority to the name the page chose: the card puts the host first and never repeats the name.
   const spoof = directOnlyAnswer(signals(["direct"], { name: "Your bank" }), origin)!;
-  assert.match(spoof.message, /^This page says it is "Your bank" \(signals\.example\)\./);
-  assert.equal(connectLabel(spoof.host), "Connect an agent on signals.example");
+  assert.equal(spoof.host, "signals.example");
+  assert.doesNotMatch(spoof.message, /Your bank/);
+  assert.equal(connectLabel(spoof.host), "Connect an agent");
   assert.equal(directOnlyAnswer(signals(["direct", "dock"]), origin), null, "an app that offers Dock answers its own drops");
   assert.equal(directOnlyAnswer(signals(["dock"]), origin), null);
   assert.equal(directOnlyAnswer(signals(["direct"]), "https://other.example"), null, "a file that names another origin is not this app's");
@@ -201,14 +202,11 @@ test("a lookup that told nothing is asked again on a later drag, once the servic
   assert.deepEqual(gate.drop(), { now: app });
 });
 
-test("the card says what goes along and where, and a site that sends without asking asks once more with it (TIN-571, TIN-619)", () => {
-  for (const s of ["consent", "consent_sensitive", "consent_update"] as const) {
-    assert.ok(STATUS_TEXT[s].includes(FORM_NOTE), s);
-    assert.match(STATUS_TEXT[s], /APC hub .*kept 10 minutes at most.*agent's provider/, s);
-  }
-  assert.match(FORM_NOTE, /Everything you can see inside the outline goes along, including what you typed there\./);
-  assert.match(FORM_NOTE, /passwords and codes never/);
-  assert.match(STATUS_TEXT.consent_update, /^New: the outline is what goes\./);
+test("the card asks its question and nothing more; a site that sends without asking asks once more (TIN-571, TIN-619, TIN-786)", () => {
+  assert.equal(CONSENT_QUESTION, "Send this to your agent?");
+  assert.equal(consentReason("consent", null), null, "a new site's card is the question and its buttons");
+  assert.equal(consentReason("consent_sensitive", "sii.gob.cl"), "sii.gob.cl always asks.");
+  assert.equal(consentReason("consent_update", null), "New: what you typed in the outline goes too.");
   // The re-ask is a new version: a person who saw TIN-571's notice is asked once more.
   assert.notEqual(NOTICE_ALL, "formNoticeAll");
   assert.notEqual(NOTICE_SITES, "formNoticeSites");
@@ -231,11 +229,15 @@ test("the sensitive-data setting: Ask per drop by default, one choice for every 
   assert.equal(includeSensitive("ask", true), true);
   assert.equal(includeSensitive("send", false), true);
   assert.equal(includeSensitive("never", true), false, "Always leave out offers no button, and refuses one");
-  assert.equal(sentWithout(2), "Sent to your agent. 2 sensitive values left out.");
-  assert.equal(sentWithout(1), "Sent to your agent. 1 sensitive value left out.");
-  assert.match(sensitiveNote(3, "ask"), /^3 sensitive values will be left out; you can include them after sending\.$/);
-  assert.match(sensitiveNote(1, "send"), /go along/);
-  assert.match(sensitiveNote(1, "never"), /left out/);
+  assert.equal(sentWithout(2), "2 numbers left out.");
+  assert.equal(sentWithout(1), "1 number left out.");
+  assert.equal(includeLabel(1), "Include it");
+  assert.equal(includeLabel(3), "Include them");
+  // The consent card names numbers only when they are about to go (TIN-786).
+  assert.equal(sensitiveNote(3, "ask"), null);
+  assert.equal(sensitiveNote(1, "never"), null);
+  assert.equal(sensitiveNote(1, "send"), "Includes 1 sensitive number.");
+  assert.equal(sensitiveNote(2, "send"), "Includes 2 sensitive numbers.");
 });
 
 test("Include them this time sends only the reading kept for that drop, once its consent was given; a later drop never takes its place (TIN-619, Grok's review)", () => {
@@ -286,4 +288,42 @@ test("What's sent? says the same three lines everywhere, and Held back follows t
   assert.equal(WHATS_SENT.heldBack("never"), "Passwords and codes, always. Card, account and id numbers too.");
   assert.equal(WHATS_SENT.heldBack(sensitiveMode(undefined)), WHATS_SENT.heldBack("ask"), "no stored value reads as ask");
   assert.equal(WHATS_SENT.where, "Your dock's hub on Cloudflare (10 minutes at most), then your agent's provider.");
+});
+
+test("an agent's name from the hub is shown only when it is safe beside the extension's words (TIN-786)", () => {
+  assert.equal(agentName("Claude"), "Claude");
+  assert.equal(agentName("  Claude  "), "Claude");
+  for (const bad of [undefined, null, 42, "", "   ", "\u202e\u2066"]) assert.equal(agentName(bad), null, JSON.stringify(bad));
+  // A line break could make a second line in the failure voice: the name is refused, not cleaned.
+  for (const broken of ["Bob\nNot sent. The password was included", "Bob\r", "Bob\u2028x", "Bob\u2029x"]) assert.equal(agentName(broken), null, JSON.stringify(broken));
+  // Controls and every bidi character go, so the name cannot reorder "Sent to".
+  assert.equal(agentName("Ev\u202eil\u2066\u200f\u061c\u0007\u0085"), "Evil");
+  assert.equal([...agentName("x".repeat(80))!].length, 60);
+  assert.equal(agentName("😀".repeat(70)), "😀".repeat(60), "cut by code points, never inside one");
+  assert.equal(isolate("Claude"), "\u2068Claude\u2069");
+  assert.equal(AGENT_FALLBACK, "your agent");
+  assert.equal(SENT_TO + AGENT_FALLBACK, "Sent to your agent");
+});
+
+test("one vocabulary: the card's buttons beside the popup's words, and the notes say only what happened (TIN-786)", () => {
+  assert.deepEqual([CARD_LABELS.once, CARD_LABELS.always, CARD_LABELS.never, CARD_LABELS.send, CARD_LABELS.notNow], ["Send once", "Always on this site", "Never on this site", "Send", "Not now"]);
+  assert.equal(CARD_LABELS.alwaysOn("shop.example"), "Always on shop.example");
+  assert.equal(CARD_LABELS.neverOn("shop.example"), "Never on shop.example");
+  assert.deepEqual([SITE_LABELS.ask, SITE_LABELS.always, SITE_LABELS.never], ["Ask first", "Always send", "Never send"]);
+  // Every failure starts "Not sent" and gives its reason, without an instruction.
+  const failures = { denied: "Your dock said no.", timeout: "Your dock didn't answer.", error: "Couldn't reach your dock.", no_ticket: "Drag your agent again.", unknown_dock: "This extension doesn't know that dock.", outline_changed: "The page changed. Drop again.", opaque_frame: "Your agent can't read this part." } as const;
+  for (const [status, text] of Object.entries(failures) as Array<[keyof typeof failures, string]>) {
+    assert.deepEqual(NOTE_TEXT[status], { lead: "Not sent", text, failed: true }, status);
+    assert.equal(STATUS_TEXT[status], `Not sent. ${text}`, status);
+  }
+  assert.deepEqual(NOTE_TEXT.blocked, { lead: null, text: "This site is set to Never send", failed: true });
+  // Never on this site closes the card and shows nothing more; the popup still says what it set.
+  assert.equal(NOTE_TEXT.not_here, null);
+  assert.equal(STATUS_TEXT.not_here, "This site is set to Never send");
+  for (const s of ["sent", "asking", "consent", "consent_sensitive", "consent_update"] as const) assert.equal(NOTE_TEXT[s], null, `${s} draws its own card or word`);
+  assert.equal(STATUS_TEXT.sent, "Sent to your agent");
+  assert.equal(WAITING_TEXT, "Allow this browser in your dock");
+  assert.equal(STATUS_TEXT.asking, WAITING_TEXT);
+  assert.equal(WAIT_LOST_TEXT, "Your dock's answer didn't arrive.");
+  assert.doesNotMatch(WAIT_LOST_TEXT, /sent/i, "it claims neither that the reading went nor that it did not");
 });

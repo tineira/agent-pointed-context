@@ -532,7 +532,10 @@ test("the extension's source knows no chart library and estimates no value (TIN-
   assert.match(content, /const known = charts\.get\(svg\);\s*if \(known\) return known;/);
   assert.match(content, /function forgetScopes\(\): void \{\s*scopeCache = null;\s*charts\.clear\(\);/);
   // An aborted drag sends neither drop nor dragend: the outline goes after OUTLINE_IDLE_MS without a dragover.
-  assert.match(content, /idleTimer = window\.setTimeout\(\(\) => \{\s*light\(null\);\s*forgetScopes\(\);\s*\}, OUTLINE_IDLE_MS\);/);
+  // Unless a drop holds it for its question (TIN-786).
+  assert.match(content, /idleTimer = window\.setTimeout\(\(\) => \{\s*if \(holding\(\)\) return;\s*light\(null\);\s*forgetScopes\(\);\s*\}, OUTLINE_IDLE_MS\);/);
+  // The consent card's check reads a mark again with what was found about the charts forgotten, as the drop did.
+  assert.match(content, /function sameOutline\([^)]*\): boolean \{\s*charts\.clear\(\);\s*const again = readOutlined\(scope, pointed\);\s*charts\.clear\(\);/);
   // The box is drawn in a closed shadow root of the extension's host.
   assert.match(content, /host\.dataset\.apcOutline = "";[\s\S]{0,400}host\.attachShadow\(\{ mode: "closed" \}\)/);
   // A mark the chart no longer describes at the drop sends element: null, so the dock says the page.

@@ -191,6 +191,17 @@ const GFORM = `<!doctype html><title>Event sign-up</title><h1>Event sign-up</h1>
 <div role="listitem" id="q3" style="padding:20px;margin:12px;border:1px solid #ccc"><div><div role="heading" aria-level="3"><span id="i3">T-shirt size</span></div></div><div role="radiogroup" aria-labelledby="i3"><div role="radio" aria-checked="false">S</div><div role="radio" aria-checked="true">M</div><div role="radio" aria-checked="false">L</div></div></div>
 </div>`;
 const REFUSE = `addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "none"; })`;
+// What the consent card checks before it sends (TIN-786): a paragraph past the reading's cap, a card number, a select,
+// an ARIA checkbox, a login form with its password filled and one with it empty, and plain paragraphs.
+const EDITS = `<!doctype html><title>Edits</title><h1>Edits</h1>
+<p id="long">${"Long words. ".repeat(200)}LONGEND</p>
+<p id="para">Refund to card 4111 1111 1111 1111 by Monday.</p>
+<form id="pick" style="padding:28px;border:1px solid #ccc"><label>Plan <select id="plan"><option>Basic</option><option selected>Pro</option></select></label></form>
+<form id="tickform" style="padding:28px;border:1px solid #ccc"><div role="checkbox" id="tick" aria-checked="false" tabindex="0">Newsletter</div></form>
+<form id="login" style="padding:28px;border:1px solid #ccc"><label>User <input id="user" value="tomas"></label> <label>Password <input id="pw" type="password" value="hunter2"></label></form>
+<form id="login2" style="padding:28px;border:1px solid #ccc"><label>User2 <input id="user2" value="ana"></label> <label>Password2 <input id="pw2" type="password" value=""></label></form>
+<p id="plain">A plain paragraph for the second drag.</p>
+<p id="plain2">Another plain paragraph.</p>`;
 // A table, and a paragraph with what innerText reads badly: a formula next to a hidden copy of itself, as Wikipedia has, and images with and without alt text (TIN-422).
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 // A grid of cards as autio.cl draws them (TIN-697): a photo with a photo-count badge, the car's title as a heading,
@@ -213,7 +224,7 @@ const corpus = (url) => {
   const name = /^\/corpus\/([a-z-]+)$/.exec(url.split("?")[0])?.[1];
   return name ? readFileSync(join(CORPUS, `${name}.html`), "utf8") : null;
 };
-const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/corpus/") ? corpus(req.url) : req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
+const server = createServer((req, res) => res.writeHead(200, { "content-type": "text/html" }).end(req.url.startsWith("/corpus/") ? corpus(req.url) : req.url.startsWith("/busy") ? BUSY : req.url.startsWith("/refusing") ? REFUSING : req.url.startsWith("/checkout") ? CHECKOUT : req.url.startsWith("/edits") ? EDITS : req.url.startsWith("/gform") ? GFORM : req.url.startsWith("/apc") ? APC : req.url.startsWith("/figures") ? FIGURES : req.url.startsWith("/focus") ? FOCUS : req.url.startsWith("/framed-out") ? framed("nothere.localhost") : req.url.startsWith("/framed") ? framed("127.0.0.1") : PAGE)).listen(0, "::");
 await new Promise((r) => server.once("listening", r));
 const pageUrl = `http://127.0.0.1:${server.address().port}/notes?token=s3cr3t`;
 
@@ -426,8 +437,8 @@ try {
     console.log("C0. installing opens the welcome page");
 
     // A page on a site of its own, and what the agent reads.
-    const open = async (host) => {
-      const url = pageUrl.replace("127.0.0.1", host);
+    const open = async (host, path = "/notes") => {
+      const url = pageUrl.replace("127.0.0.1", host).replace("/notes", path);
       const { targetId: id } = await cdp("Target.createTarget", { url });
       const { sessionId: sid } = await cdp("Target.attachToTarget", { targetId: id, flatten: true });
       await sleep(2500);
@@ -446,12 +457,23 @@ try {
         return found;
       };
       return {
-        drop: async (sel) => {
-          const { x, y } = await at(sel);
+        /** Drop on an element's centre, or at `point` (in the viewport) when given; `then` runs right after the drop, before any wait. */
+        drop: async (sel, point = null, then = null) => {
+          const { x, y } = point ?? (await at(sel));
           const data = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
           for (const type of ["dragEnter", "dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x, y, data }, sid);
+          if (then) await then();
           await sleep(1500);
         },
+        /** A drag of an agent over an element that is let go elsewhere (no drop). */
+        dragOver: async (sel) => {
+          const { x, y } = await at(sel);
+          const data = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+          for (const type of ["dragEnter", "dragOver"]) await cdp("Input.dispatchDragEvent", { type, x, y, data }, sid);
+          await cdp("Input.dispatchDragEvent", { type: "dragCancel", x, y, data }, sid).catch(() => {});
+        },
+        at,
+        run: async (expression) => (await cdp("Runtime.evaluate", { expression, returnByValue: true }, sid)).result.value,
         buttons,
         sid,
         click: async (value) => {
@@ -465,6 +487,35 @@ try {
         },
       };
     };
+    /** The values of an attribute on the extension's cards and notes in a page (closed shadow roots: DevTools sees through them). */
+    const attrsIn = async (sid, attr) => {
+      const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+      const found = [];
+      const walk = (n) => {
+        const at = (n.attributes ?? []).indexOf(attr);
+        if (at >= 0) found.push(n.attributes[at + 1]);
+        for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+      };
+      walk(root);
+      return found;
+    };
+    /** Click, with real mouse events, the extension's element carrying an attribute (and that value, when given). */
+    const clickAttr = async (sid, attr, value = null) => {
+      const nodeId = await until(`the element with ${attr}`, async () => {
+        const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
+        let found = null;
+        const walk = (n) => {
+          const at = (n.attributes ?? []).indexOf(attr);
+          if (at >= 0 && (value === null || n.attributes[at + 1] === value)) found = n.nodeId;
+          for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+        };
+        walk(root);
+        return found;
+      }, 10_000);
+      const q = (await cdp("DOM.getBoxModel", { nodeId }, sid)).model.content;
+      for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2, button: "left", clickCount: 1 }, sid);
+      await sleep(1000);
+    };
     const latest = async () => (await tool("call_app_tool", { app: "page", tool: "get_reading" })).structuredContent;
     const reads = (re, host) =>
       until(`a reading matching ${re} from ${host}`, async () => {
@@ -477,11 +528,23 @@ try {
     // second drop waits on its own card: Include sends the first drop's reading, never the second's (TIN-619, Grok's review).
     const a = await open("a.localhost");
     await a.drop("#c");
-    assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "never", "once"]);
+    // Send once, Always and Never on this site, and × (Not now) (TIN-786).
+    assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "dismiss", "never", "once"]);
     await a.click("once");
     const pending = await until("a reader request in the dock", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
+    // The waiting card stays at the drop until the dock answers, and the service worker kept that drop's wait first (TIN-786).
+    await until("the waiting card", async () => (await attrsIn(a.sid, "data-apc-note")).includes("asking"), 10_000);
+    const swC1 = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
+    const { sessionId: swC1Session } = await cdp("Target.attachToTarget", { targetId: swC1.targetId, flatten: true });
+    const waits = JSON.parse((await cdp("Runtime.evaluate", { expression: "chrome.storage.session.get('waiting').then((s) => JSON.stringify(Object.values(s.waiting ?? {}).map((w) => w.state)))", awaitPromise: true, returnByValue: true }, swC1Session)).result.value);
+    assert.deepEqual(waits, ["polling"], "the wait is kept before the page shows its card");
+    // Its Open dock opens that drop's own dock.
+    await clickAttr(a.sid, "data-apc-open-dock");
+    const dockTab = await until("the dock opened from the waiting card", async () => (await cdp("Target.getTargets")).targetInfos.find((t) => t.url.startsWith(`${DOCK}/dock`)));
+    await cdp("Target.closeTarget", { targetId: dockTab.targetId });
     await a.drop("#d");
-    assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "never", "once"], "the second drop waits on its own card");
+    assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "dismiss", "never", "once"], "the second drop waits on its own card");
+    assert.ok((await attrsIn(a.sid, "data-apc-note")).includes("asking"), "and the first drop's waiting card stays");
     await api(`${base}/pairings/${pending.id}`, { action: "approve" });
     assert.match((await reads(/Refund to card/, "a.localhost")).page_text, /Refund to card \[sensitive number left out\] by Friday\./);
     /** The "Include them this time" card's buttons, through its closed shadow root. */
@@ -548,7 +611,7 @@ try {
     // C5b. A bank is not recognised by name: it asks as any site does, until the person sets it to Always ask.
     const bank = await open("bank.localhost");
     await bank.drop("#b");
-    assert.deepEqual([...(await bank.buttons()).keys()].sort(), ["always", "never", "once"], "an ordinary site's card");
+    assert.deepEqual([...(await bank.buttons()).keys()].sort(), ["always", "dismiss", "never", "once"], "an ordinary site's card");
     await bank.click("once");
     // What the popup's Always ask does.
     const origin = new URL(pageUrl.replace("127.0.0.1", "bank.localhost")).origin;
@@ -558,6 +621,83 @@ try {
     await bank.click("once");
     await reads(/SPRING/, "bank.localhost");
     console.log("C5b. a site set to Always ask asks every time, with no Always");
+
+    // C8. The consent card's outline (TIN-786): it stays lit while the card is open, and a sending click sends the drop's
+    // own reading only while the outline still shows what was read; otherwise "The page changed", nothing sent, nothing kept.
+    const takenAt = async () => (await tool("page__get_reading")).structuredContent?.reading?.taken_at ?? null;
+    const held = async () => (await cdp("Runtime.evaluate", { expression: "chrome.storage.session.get('held').then((s) => JSON.stringify(s.held ?? {}))", awaitPromise: true, returnByValue: true }, swSession)).result.value;
+    const cardOpen = (page) => until("the consent card", async () => (await page.buttons()).has("once"), 10_000);
+    const ed = await open("edits.localhost", "/edits");
+    // A paragraph past the reading's cap (2,048 characters, read a little past it): the card opens, and Send once sends it, cut.
+    assert.ok((await ed.run(`document.querySelector("#long").innerText.length`)) > 2112);
+    await ed.drop("#long", { x: 40, y: (await ed.at("#long")).y });
+    await cardOpen(ed);
+    // 700 ms after the drop, with no new drag, the outline is still lit (the extension's own box).
+    await sleep(800);
+    assert.ok((await attrsIn(ed.sid, "data-apc-outline-box")).length === 1, "the outline stays while the card is open");
+    await ed.click("once");
+    const long = await reads(/Long words\./, "edits.localhost");
+    assert.doesNotMatch(long.page_text, /LONGEND/, "the reading is cut at its cap");
+    assert.equal((await attrsIn(ed.sid, "data-apc-outline-box")).length, 0, "the outline goes with the card");
+    // The outlined text, a select's option label and an ARIA checkbox, each changed after the card opened: nothing goes.
+    const changed = async (drop, edit, what) => {
+      // The last check's note first goes (8 s), so this one is seen anew.
+      await until("no note left from before", async () => !(await attrsIn(ed.sid, "data-apc-note")).includes("outline_changed"), 10_000);
+      const before = await takenAt();
+      await drop();
+      await cardOpen(ed);
+      await ed.run(edit);
+      await ed.click("once");
+      assert.ok((await attrsIn(ed.sid, "data-apc-note")).includes("outline_changed"), `${what}: the page changed`);
+      assert.equal((await ed.buttons()).size, 0, `${what}: the card is gone`);
+      await sleep(1000);
+      assert.equal(await takenAt(), before, `${what}: nothing was sent`);
+    };
+    await changed(() => ed.drop("#para"), `document.querySelector("#para").firstChild.textContent = "Refund to card 4111 1111 1111 1111 by Tuesday."`, "the paragraph");
+    await until("the drop's held reading gone", async () => !/by Monday/.test(await held()), 5000);
+    const margin = async (sel) => {
+      const r = await ed.run(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.x + 8, y: r.y + 8 }; })()`);
+      return ed.drop(sel, r);
+    };
+    await changed(() => margin("#pick"), `document.querySelector("#plan").selectedOptions[0].textContent = "Enterprise"`, "the select's label");
+    await changed(() => margin("#tickform"), `document.querySelector("#tick").setAttribute("aria-checked", "true")`, "the ARIA checkbox");
+    // A password filled before the card stays left out on both readings: a manager writing it again changes nothing.
+    await margin("#login");
+    await cardOpen(ed);
+    await ed.run(`document.querySelector("#pw").value = "another-secret"`);
+    await ed.click("once");
+    const login = await reads(/- User: tomas/, "edits.localhost");
+    assert.match(login.page_text, /- Password: \(left out: password or code\)/);
+    assert.doesNotMatch(login.page_text, /hunter2|another-secret/);
+    // An empty password a manager fills after the card is a change: nothing goes.
+    await changed(() => margin("#login2"), `document.querySelector("#pw2").value = "filled-later"`, "a password filled after the card");
+    // A selection-only drop and a drop on the margin: nothing outlined, nothing checked, they send as before.
+    // The page's own right margin (body's 8 px), where no block is: nothing is outlined.
+    const edge = await ed.run(`({ x: document.documentElement.clientWidth - 3, y: 20 })`);
+    await ed.run(`(() => { const t = document.querySelector("#plain").firstChild; const r = document.createRange(); r.setStart(t, 2); r.setEnd(t, 7); getSelection().removeAllRanges(); getSelection().addRange(r); })()`);
+    await ed.drop(null, edge);
+    await cardOpen(ed);
+    assert.equal((await attrsIn(ed.sid, "data-apc-outline-box")).length, 0, "nothing is outlined");
+    await ed.click("once");
+    const selected = await reads(/Selected: plain/, "edits.localhost");
+    assert.match(selected.page_text, /Pointed at: the page, not a block of text on it\./, "nothing was outlined");
+    await ed.run(`getSelection().removeAllRanges()`);
+    await ed.drop(null, edge);
+    await cardOpen(ed);
+    const marginBefore = await takenAt();
+    await ed.click("once");
+    await until("the margin drop's reading", async () => (await takenAt()) !== marginBefore);
+    assert.ok(!(await attrsIn(ed.sid, "data-apc-note")).includes("outline_changed"));
+    // A second agent drag before the card came: the first drop's question closes, nothing shows and nothing goes.
+    const secondBefore = await takenAt();
+    await ed.drop("#plain", null, () => ed.dragOver("#plain2"));
+    await sleep(1500);
+    assert.equal((await ed.buttons()).size, 0, "no card once another drag started");
+    assert.equal(await takenAt(), secondBefore, "nothing was sent");
+    // On a site that sends without asking, the same second drag still shows that drop's outcome: here its Include offer.
+    await a.drop("#d", null, () => a.dragOver("#a"));
+    await clickAttr(a.sid, "data-apc-include", "dismiss");
+    console.log("C8. the card's outline stays lit; a sending click sends only an unchanged outline; a second drag closes a question, not an outcome");
 
     // C6. Never ask: every drop is sent at once, even on a sensitive site.
     await cdp("Runtime.evaluate", { expression: "chrome.storage.local.set({ mode: 'never_ask' })", awaitPromise: true }, swSession);
@@ -578,7 +718,7 @@ try {
     const updated = await open("updated.localhost");
     await updated.drop("#a");
     const offered = await until("the card that asks once more", async () => ((await updated.buttons()).size ? [...(await updated.buttons()).keys()].sort() : null), 10_000);
-    assert.deepEqual(offered, ["always", "never", "once"]);
+    assert.deepEqual(offered, ["always", "dismiss", "never", "once"]);
     await updated.click("never");
     await updated.drop("#a");
     assert.equal((await updated.buttons()).size, 0, "Not here on that card sticks");
@@ -964,13 +1104,13 @@ try {
       const q = (await cdp("DOM.getBoxModel", { nodeId }, sid)).model.content;
       for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await cdp("Input.dispatchMouseEvent", { type, x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2, button: "left", clickCount: 1 }, sid);
     };
-    /** The sent card's words, once it shows. */
+    /** The sent card's words, once it shows: its lines, without its buttons and the isolates around the agent's name. */
     const cardText = async (sid) => {
       const { root } = await cdp("DOM.getDocument", { depth: -1, pierce: true }, sid);
       let text = null;
+      const linesOf = (n) => (n.nodeName === "P" ? [(n.children ?? []).map((c) => c.nodeValue ?? "").join("").replace(/[\u2068\u2069]/g, "")] : (n.children ?? []).flatMap(linesOf));
       const walk = (n) => {
-        if ((n.attributes ?? []).includes("data-apc-include")) return;
-        if (n.nodeName === "P" && (n.children ?? []).some((c) => /left out\./.test(c.nodeValue ?? ""))) text = n.children.map((c) => c.nodeValue).join("");
+        if ((n.attributes ?? []).includes("data-apc-sent")) text = linesOf(n).join("\n");
         for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
       };
       walk(root);
@@ -1031,7 +1171,7 @@ try {
     const selectedCard = await dropOnCheckout("#total");
     assert.match(selectedCard, /\nSelected: Visa \[sensitive number left out\]/);
     noSecret(selectedCard);
-    assert.equal(await until("the sent card", () => cardText(checkout), 10_000), "Sent to your agent. 1 sensitive value left out.");
+    assert.match(await until("the sent card", () => cardText(checkout), 10_000), /^Sent to [^\n]+\n1 number left out\.$/);
     let prior = (await latestReading()).reading.taken_at;
     await clickInclude(checkout, "include");
     assert.match(await nextReading("the selection, included", prior), /\nSelected: Visa 4111 1111 1111 1111/);
@@ -1102,7 +1242,7 @@ try {
     );
     assert.match(whole, /Visa \[sensitive number left out\]/, "the card number in the form's own text is left out, and only it");
     noSecret(whole);
-    assert.match(await until("the sent card", () => cardText(checkout), 10_000), /^Sent to your agent\. \d+ sensitive values left out\.$/);
+    assert.match(await until("the sent card", () => cardText(checkout), 10_000), /^Sent to [^\n]+\n\d+ numbers left out\.$/);
     prior = (await latestReading()).reading.taken_at;
     await clickInclude(checkout, "include");
     const wholeIncluded = await nextReading("the whole form, included", prior);

@@ -16,11 +16,11 @@ export interface DirectOnly {
 }
 
 /**
- * The extension's words on a Direct-only app. They come from the extension, so they lend it no
- * authority: the domain first, and the name only as what the page says it is.
+ * The extension's words on a Direct-only app, under its host (the card puts the host first, as the dock
+ * names an app it does not know). The name the page gives itself is not repeated: it lends it no authority.
  */
-export function directOnlyCardText(name: string, host: string): string {
-  return `This page says it is "${name}" (${host}). It connects agents directly, not through a dock: connect your agent to it on its own URL, then drag its mark from the agent bar there.`;
+export function directOnlyCardText(_name: string, _host: string): string {
+  return "Connects agents itself, without your dock.";
 }
 
 /**
@@ -163,7 +163,7 @@ export function isApcApp(root: { hasAttribute(name: string): boolean; querySelec
  * The card for a dock agent's drop that nothing on an APC app took (TIN-703): the app answers its own
  * drops, and this one it let pass, so without the card the browser would refuse it with no word.
  */
-export const NOT_TAKEN_TEXT = "This page did not take your agent here. It is an APC app: drop your agent on something it highlights. Nothing was sent.";
+export const NOT_TAKEN_TEXT = "Drop your agent on a highlighted part";
 
 /** Where a reply about a drop goes (TIN-752): the frame the drop came from, never every frame of the tab. */
 export function replyTarget(sender: { tab?: { id?: number }; frameId?: number }): { tabId: number; frameId: number } | null {
@@ -207,9 +207,9 @@ export function siteGrant(site: { origin: string; pattern: string }, frames: Rea
  * drop at all. It names the frame's host only when it is the frame under the pointer (frameOutside);
  * otherwise "another site".
  */
-export function frameNote(origin: string | null): string {
+export function frameNote(origin: string | null): { lead: string; text: string } {
   const from = origin ? new URL(origin).host : "another site";
-  return `This part of the page comes from ${from}. Allow this site again in the APC extension to include it.`;
+  return { lead: `This part is from ${from}`, text: "Allow it from the APC icon." };
 }
 
 /**
@@ -461,13 +461,25 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 /** What the content script tells the person after a drop. */
 export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed" | "opaque_frame";
 
-/** The link on the card for a Direct-only app. */
-export const connectLabel = (host: string) => `Connect an agent on ${host}`;
+/** The link on the card for a Direct-only app: the host is already the card's first line. */
+export const connectLabel = (_host: string) => "Connect an agent";
 
-/** Where the text goes (13.5), said before anything is sent. */
-const PASSES_THROUGH = "It passes through the APC hub of your dock, on Cloudflare (kept 10 minutes at most), and then to your agent's provider.";
-/** What goes along (TIN-571, TIN-619), said before anything is sent. */
-export const FORM_NOTE = "Everything you can see inside the outline goes along, including what you typed there. Sensitive numbers (card, account, id) go only as your setting in the APC extension says; passwords and codes never.";
+/**
+ * The consent card's words (TIN-786, one vocabulary): the question, and the buttons, whose wire values stay
+ * `once`, `always` and `never` (Not now, ×, Esc and the 45 s close send no answer at all). In a frame the
+ * buttons name the tab's site, whose setting they keep.
+ */
+export const CONSENT_QUESTION = "Send this to your agent?";
+
+/** The one line under the question, when the card has one: a site that always asks names itself; the card that asks once more says what is new. */
+export function consentReason(status: "consent" | "consent_sensitive" | "consent_update", asks: string | null): string | null {
+  if (status === "consent_sensitive") return asks ? `${asks} always asks.` : null;
+  if (status === "consent_update") return "New: what you typed in the outline goes too.";
+  return null;
+}
+
+/** On the consent card, only when the numbers in the outline are about to go (the setting is Send): "Includes 1 sensitive number." */
+export const includesNote = (n: number) => (n === 1 ? "Includes 1 sensitive number." : `Includes ${n} sensitive numbers.`);
 
 /**
  * "What's sent?" (TIN-786): the three lines the welcome page and the consent card share, so both say
@@ -532,19 +544,74 @@ export function heldForInclude(held: Readonly<Record<string, Held>>, id: string,
   return h && h.consented && now - h.at < HELD_MS ? h : null;
 }
 
-/** "1 sensitive value", "3 sensitive values". */
-export const sensitiveCount = (n: number) => (n === 1 ? "1 sensitive value" : `${n} sensitive values`);
-
-/** What the consent card adds when the outline holds sensitive values, by the setting. */
-export function sensitiveNote(n: number, mode: SensitiveMode): string {
-  if (mode === "send") return `${sensitiveCount(n)} in the outline go along, as your setting says.`;
-  if (mode === "never") return `${sensitiveCount(n)} will be left out, as your setting says.`;
-  return `${sensitiveCount(n)} will be left out; you can include them after sending.`;
+/** What the consent card adds when the outline holds sensitive numbers: a line only when they are about to go (the setting is Send). */
+export function sensitiveNote(n: number, mode: SensitiveMode): string | null {
+  return mode === "send" && n > 0 ? includesNote(n) : null;
 }
 
-/** The card after a drop under Ask per drop, when values were left out. */
-export const sentWithout = (n: number) => `Sent to your agent. ${sensitiveCount(n)} left out.`;
-export const INCLUDE_LABEL = "Include them this time";
+/** The Include card's second line, after "Sent to *agent*": "1 number left out.", "2 numbers left out." */
+export const sentWithout = (n: number) => (n === 1 ? "1 number left out." : `${n} numbers left out.`);
+/** Its button: "Include it", "Include them". */
+export const includeLabel = (n: number) => (n === 1 ? "Include it" : "Include them");
+
+/** The words for an agent with no name the extension can show. */
+export const AGENT_FALLBACK = "your agent";
+/** The start of the note once a reading went; the agent's name follows in a text node of its own. */
+export const SENT_TO = "Sent to ";
+
+/** Code points dropped from an agent's name: C0 and C1 controls, and every bidi mark, embedding, override and isolate. */
+const dropped = (cp: number) => cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f) || cp === 0x61c || cp === 0x200e || cp === 0x200f || (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+
+/**
+ * The agent's name as the hub gave it, made safe to show beside the extension's own words (TIN-786): a string
+ * with no line break, its controls and bidi characters dropped, trimmed, at most 60 characters. Null when
+ * nothing is left, or the name breaks a line, so the caller says "your agent".
+ */
+export function agentName(raw: unknown): string | null {
+  if (typeof raw !== "string" || /[\n\r\u2028\u2029]/.test(raw)) return null;
+  const kept = [...raw].filter((c) => !dropped(c.codePointAt(0)!)).join("").trim();
+  return [...kept].slice(0, 60).join("").trim() || null;
+}
+
+/** A name between bidi isolates (FSI … PDI), so it cannot reorder the words around it. */
+export const isolate = (name: string) => `\u2068${name}\u2069`;
+
+/** What a page note says: a bold lead (or none), the reason, and whether it has the failure look. */
+export interface NoteText {
+  lead: string | null;
+  text: string;
+  failed: boolean;
+}
+
+/** A drop that did not go: "Not sent", then why, without an instruction. */
+const notSent = (text: string): NoteText => ({ lead: "Not sent", text, failed: true });
+
+/**
+ * The note each outcome draws at the drop (TIN-786). Null for the outcomes that draw something else: the
+ * consent card, the waiting card, the Sent word, and "Never on this site", after which the card just closes.
+ */
+export const NOTE_TEXT: Record<DropStatus, NoteText | null> = {
+  sent: null,
+  asking: null,
+  consent: null,
+  consent_sensitive: null,
+  consent_update: null,
+  not_here: null,
+  denied: notSent("Your dock said no."),
+  timeout: notSent("Your dock didn't answer."),
+  error: notSent("Couldn't reach your dock."),
+  no_ticket: notSent("Drag your agent again."),
+  unknown_dock: notSent("This extension doesn't know that dock."),
+  outline_changed: notSent("The page changed. Drop again."),
+  opaque_frame: notSent("Your agent can't read this part."),
+  blocked: { lead: null, text: "This site is set to Never send", failed: true },
+};
+
+/** The waiting card's line while the dock is asked, and the line when its answer never reached the page. */
+export const WAITING_TEXT = "Allow this browser in your dock";
+export const WAIT_LOST_TEXT = "Your dock's answer didn't arrive.";
+/** How long the waiting card waits for the service worker's word before it says so (ASK_MS is 60 s, plus the last poll). */
+export const WAIT_LOST_MS = 75_000;
 
 /**
  * The storage keys that say the person has seen what readings carry now (TIN-571; version 2 since
@@ -562,21 +629,28 @@ export function reask(decision: Decision, seen: boolean): boolean {
   return decision === "send" && !seen;
 }
 
+/** A note's words on one line, as the popup prints a drop's outcome. */
+const flat = (n: NoteText) => (n.lead ? `${n.lead}. ${n.text}` : n.text);
+
+/**
+ * Every outcome in one line, for the popup's last drop (the page draws NOTE_TEXT and its cards instead): the
+ * same words as in the page. "Never on this site" draws nothing in the page; the popup says what it set.
+ */
 export const STATUS_TEXT: Record<DropStatus, string> = {
-  sent: "Sent to your agent",
-  asking: "Allow this browser in your dock to send this page",
-  denied: "Your dock said no: nothing was sent",
-  timeout: "Your dock did not answer in time: nothing was sent",
-  no_ticket: "Drag your agent again from your dock",
-  unknown_dock: "This agent is from a dock this extension does not know: nothing was sent",
-  error: "Could not reach your dock: nothing was sent",
-  consent: `Send this to your agent? ${FORM_NOTE} ${PASSES_THROUGH}`,
-  consent_sensitive: `This site is set to ask every time. Send this to your agent? ${FORM_NOTE} ${PASSES_THROUGH}`,
-  consent_update: `New: the outline is what goes. ${FORM_NOTE} Send this to your agent? ${PASSES_THROUGH} This asks once: your setting for this site stays unless you choose Not here.`,
-  blocked: "You chose not to send from this site. Change it in the APC extension.",
-  not_here: "Nothing was sent. Drops here will not be sent; change it in the APC extension.",
-  outline_changed: "The page changed what was outlined: nothing was sent. Drop again.",
-  opaque_frame: "This part of the page has no address of its own, so your agent cannot read it: nothing was sent.",
+  sent: `${SENT_TO}${AGENT_FALLBACK}`,
+  asking: WAITING_TEXT,
+  denied: flat(NOTE_TEXT.denied!),
+  timeout: flat(NOTE_TEXT.timeout!),
+  no_ticket: flat(NOTE_TEXT.no_ticket!),
+  unknown_dock: flat(NOTE_TEXT.unknown_dock!),
+  error: flat(NOTE_TEXT.error!),
+  consent: CONSENT_QUESTION,
+  consent_sensitive: CONSENT_QUESTION,
+  consent_update: CONSENT_QUESTION,
+  blocked: flat(NOTE_TEXT.blocked!),
+  not_here: flat(NOTE_TEXT.blocked!),
+  outline_changed: flat(NOTE_TEXT.outline_changed!),
+  opaque_frame: flat(NOTE_TEXT.opaque_frame!),
 };
 
 /**
@@ -589,4 +663,21 @@ export const SITE_LABELS = {
   never: "Never send",
   sensitive: "Ask every time",
   sensitiveSite: "Sensitive site: ask every time",
+} as const;
+
+/**
+ * The same choices on the consent card's buttons (TIN-786): nothing stored is Send once, `always` is Always on
+ * this site, `never` is Never on this site; a sensitive site's card has Send and Not now. The wire values stay
+ * `once`, `always` and `never` (Not now, ×, Esc and the 45 s close send no answer at all). In a frame the
+ * buttons name the tab's site, whose setting they keep.
+ */
+export const CARD_LABELS = {
+  once: "Send once",
+  always: "Always on this site",
+  never: "Never on this site",
+  send: "Send",
+  notNow: "Not now",
+  alwaysOn: (host: string) => `Always on ${host}`,
+  neverOn: (host: string) => `Never on ${host}`,
+  openDock: "Open dock",
 } as const;

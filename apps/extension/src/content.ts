@@ -12,7 +12,7 @@
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { connectLabel, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, INCLUDE_LABEL, isApcApp, NOT_TAKEN_TEXT, pinState, sensitiveNote, sentWithout, STATUS_TEXT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { AGENT_FALLBACK, agentName, CARD_LABELS, connectLabel, CONSENT_QUESTION, consentReason, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, includeLabel, isApcApp, isolate, NOT_TAKEN_TEXT, NOTE_TEXT, pinState, SENT_TO, sensitiveMode, sensitiveNote, sentWithout, STATUS_TEXT, WAIT_LOST_MS, WAIT_LOST_TEXT, WAITING_TEXT, WHATS_SENT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type NoteText, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { chartAxes, describeMark, describeNamed, isMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type MarkReading, type SvgText } from "./chart.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, classify, formState, intersect, isHeading, isItem, isTitleControl, namesBox, OPACITY_MIN, ownsHeadings, pageLevel, selectTitle, showsIn, tableContext, titleOf, visibleWords, visuallyHidden, within, type Control, type Rect, type Seen } from "./read.ts";
 
@@ -85,9 +85,58 @@ interface Target {
 
 function listen(): void {
   /** Each drop's place, by its id: its pin and its "Include them this time" may come later, once the person allowed this browser in the dock. */
-  const pending = new Map<string, { target: Target; x: number; y: number }>();
+  const pending = new Map<string, Target>();
   const outlining = outliner();
   const light = outlining.light;
+  /** The open drop's question (TIN-786): from the drop until it is answered, closed, or another drag starts. At most one. */
+  let question: Question | null = null;
+  // A pin dragged to another paragraph closes the question as Not now before its own outline lights.
+  closeQuestion = () => question?.end("drag");
+  /** A trusted drag of an agent starts: the open question closes as Not now, before the outline moves. */
+  const newDrag = () => question?.end("drag");
+  /** Whether a drop's outline is held for its question: then only that question's end clears it. */
+  const holding = () => question !== null && question.node !== null;
+
+  /**
+   * The drop's question, from the drop on (TIN-786). Its node keeps the outline, drawn as the extension's own box, until
+   * the question ends: answered, dismissed (×, Esc, Not now, 45 s), the outline changed, a new agent drag or a pin drag,
+   * or the service worker's answer was not a card. Nothing was sent when it ends unanswered, so that drop's held
+   * reading goes; when a drag closes it before the answer came, only a card answer (nothing sent) forgets it.
+   */
+  const openQuestion = (id: string, node: Element | null, pointed: Element | null, reading: Reading, x: number, y: number): Question => {
+    question?.end("drag");
+    let removeCard: (() => void) | null = null;
+    const q: Question = {
+      id,
+      node,
+      pointed,
+      reading,
+      x,
+      y,
+      state: "waiting",
+      shown(remove) {
+        removeCard = remove;
+        q.state = "open";
+      },
+      ring() {
+        if (node && outlining.lit() === node) light(node, true);
+      },
+      end(how) {
+        if (q.state !== "waiting" && q.state !== "open") return;
+        const was = q.state;
+        q.state = how === "answered" ? "answered" : how === "settled" ? "settled" : "closed";
+        removeCard?.();
+        removeCard = null;
+        if (question === q) question = null;
+        if (node && outlining.lit() === node) light(null);
+        if (how === "dismiss" || how === "changed" || (how === "drag" && was === "open")) forgetHeld(id);
+        if (how === "changed") say("outline_changed", below(x + scrollX, y + scrollY));
+      },
+    };
+    question = q;
+    if (node) light(node, true);
+    return q;
+  };
   /** On an APC app, whether nothing on the page took the last dragover, so the extension did (TIN-703). */
   let unanswered = false;
   /** With `unanswered`: whether the last dragover was over something the app takes (appTakes), so an app that left it unanswered ignores drops on its own targets (Pulse without v2). */
@@ -117,6 +166,8 @@ function listen(): void {
     e.preventDefault();
     // The dock drags a connected agent as "link"; any other answer, the page's own included, makes the browser refuse the drop.
     e.dataTransfer!.dropEffect = "link";
+    // A new drag of an agent: the last drop's question closes as Not now before the outline moves (TIN-786).
+    newDrag();
     // The outline is what goes (TIN-619): the same element is read on the drop.
     light(scopeAt(e.clientX, e.clientY));
     // The browser sends dragover every few dozen milliseconds while the agent is over the page. A drag that ends
@@ -124,6 +175,7 @@ function listen(): void {
     // OUTLINE_IDLE_MS, the outline goes, and what was found about the page's charts with it.
     clearTimeout(idleTimer);
     idleTimer = window.setTimeout(() => {
+      if (holding()) return;
       light(null);
       forgetScopes();
     }, OUTLINE_IDLE_MS);
@@ -152,7 +204,7 @@ function listen(): void {
       overTarget = false;
       if (stale) return;
       e.preventDefault();
-      return answerDirectOnly({ name: "", host: location.host, connect: null, message: NOT_TAKEN_TEXT }, e.clientX, e.clientY);
+      return answerDirectOnly(null, e.clientX, e.clientY);
     }
     // The extension took the drop on dragover, so the browser's own action (opening what was dropped) never runs.
     e.preventDefault();
@@ -184,27 +236,51 @@ function listen(): void {
   const onPageDrop = (e: DragEvent, outlined: Element | null) => {
     e.preventDefault();
     const drag = parseAgentDrag(e.dataTransfer!.getData(APC_AGENT_TYPE));
-    if (!drag?.hub || !drag.ticket) return say("no_ticket");
-    if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock");
+    if (!drag?.hub || !drag.ticket) return say("no_ticket", below(e.pageX, e.pageY));
+    if (!hubAllowed(drag.hub, __APC_DEV__)) return say("unknown_dock", below(e.pageX, e.pageY));
     // A frame with an opaque origin (sandboxed, data:): it has no address a reading could name, so nothing is read (TIN-752).
-    if (location.origin === "null") return say("opaque_frame");
+    if (location.origin === "null") return say("opaque_frame", below(e.pageX, e.pageY));
     // The page took away what was outlined: what is under the pointer now is not what the person saw outlined, so nothing goes.
-    if (outlined && !outlined.isConnected) return say("outline_changed");
-    const reading = readAt(e.clientX, e.clientY, outlined);
+    if (outlined && !outlined.isConnected) return say("outline_changed", below(e.pageX, e.pageY));
+    // The control the drop points at, found once: the consent card's check reads the outline again with it (TIN-786).
+    const pointed = pointedAt(e.clientX, e.clientY);
+    const reading = readAt(e.clientX, e.clientY, outlined, pointed);
     const id = crypto.randomUUID();
     const target: Target = { anchor: outlined, x: e.pageX, y: e.pageY, hub: drag.hub, agent: drag.agent };
-    pending.set(id, { target, x: e.clientX, y: e.clientY });
-    const send = (consent?: Consent) =>
+    pending.set(id, target);
+    // From here the drop has its question, and its outline stays (as the extension's box) until the question ends.
+    const q = openQuestion(id, outlined, pointed, reading, e.clientX, e.clientY);
+    /**
+     * The service worker's answer. A card answer opens the card only while this drop's question is still the open
+     * one, and only when the outline still shows what was read; all of it in this one task, so no drag comes between.
+     * Any other answer is this drop's outcome: it ends the question (its outline goes) and is drawn at its own place.
+     */
+    const answer = (r: Reply | null) => {
+      const status = r?.status ?? "error";
+      if (status === "consent" || status === "consent_sensitive" || status === "consent_update") {
+        if (q.state !== "waiting") {
+          // Closed by a new drag before the card came: nothing was sent, and nothing shows.
+          pending.delete(id);
+          if (q.state === "closed") forgetHeld(id);
+          return;
+        }
+        if (q.node && !(shows(q.node) && sameOutline(q.node, q.pointed, q.reading))) {
+          pending.delete(id);
+          return q.end("changed");
+        }
+        return ask(q, status, r!, send);
+      }
+      q.end("settled");
+      if (status !== "asking") pending.delete(id);
+      sent(r ?? { status }, target, id);
+    };
+    // sendMessage is called in the same task as the click that answers the card: nothing can change the page between.
+    const send = (consent?: Consent): void => {
       chrome.runtime
         .sendMessage<Reply>({ type: "drop", id, drag: { hub: drag.hub, agent: drag.agent, ticket: drag.ticket }, reading, ...(consent ? { consent } : {}) })
-        .then((r) => {
-          const status = r?.status ?? "error";
-          if (status === "consent" || status === "consent_sensitive" || status === "consent_update") return ask(status, e.clientX, e.clientY, send, r?.sensitive, r?.asks);
-          if (status !== "asking") pending.delete(id);
-          sent(r ?? { status }, target, e.clientX, e.clientY);
-        })
-        .catch(() => say("error"));
-    void send();
+        .then(answer, () => answer({ status: "error" }));
+    };
+    send();
   };
 
   // dragenter and drop listen in the capture phase on window, which the content script fills before the
@@ -215,6 +291,8 @@ function listen(): void {
     "dragenter",
     (e) => {
       if (!e.isTrusted || !carriesAgent(e)) return;
+      // A new drag of an agent: the last drop's question closes as Not now (TIN-786); dragover does it too, should a page stop this.
+      newDrag();
       if (isTop) cancelFrameHint();
       else tellTop();
       if (apcApp()) directOnly.start();
@@ -251,7 +329,7 @@ function listen(): void {
     const at = document.elementFromPoint(e.clientX, e.clientY);
     return isFrame(at) ? at : isFrame(e.target) ? e.target : null;
   };
-  const frameHint = async (frame: Element) => {
+  const frameHint = async (frame: Element, at: { x: number; y: number }) => {
     hintTimer = 0;
     const round = hintRound;
     // That frame's id, so the note names its origin only when it is the frame under the pointer (-1 when Chrome cannot tell).
@@ -265,7 +343,9 @@ function listen(): void {
     const r = await chrome.runtime.sendMessage<{ note?: boolean; origin?: string | null } | null>({ type: "frames_outside", frame: id }).catch(() => null);
     if (round !== hintRound || hinted() || !r?.note) return;
     hintedAt = Date.now();
-    hintShown = notice(frameNote(typeof r.origin === "string" ? r.origin : null), "frame", 6000);
+    const words = frameNote(typeof r.origin === "string" ? r.origin : null);
+    // Where the agent went into the frame, as every note is at its drop (TIN-786).
+    hintShown = notice({ lead: words.lead, text: words.text, failed: false }, "frame", 6000, at);
   };
   /** A frame with the content script has the agent's drag: the top frame's note would be wrong. */
   let toldAt = 0;
@@ -279,8 +359,10 @@ function listen(): void {
   window.addEventListener(
     "drop",
     (e) => {
-      // What was outlined when the agent was let go is what is read (TIN-619).
+      // What was outlined when the agent was let go is what is read (TIN-619). The outline is taken off for the
+      // reading, as it always was; a drop that gets a question puts it back as the extension's box (TIN-786).
       const outlined = outlining.lit();
+      clearTimeout(idleTimer);
       light(null);
       forgetScopes();
       if (!e.isTrusted || !carriesAgent(e)) return;
@@ -290,14 +372,17 @@ function listen(): void {
     true,
   );
   window.addEventListener("dragleave", (e) => {
-    if (!e.relatedTarget) light(null);
+    // A drop's held outline goes only with its question (TIN-786).
+    if (!e.relatedTarget && !holding()) light(null);
     if (!isTop || hinted() || !e.isTrusted || !carriesAgent(e)) return;
     const frame = frameInto(e);
     if (!frame) return;
     cancelFrameHint();
-    hintTimer = window.setTimeout(() => void frameHint(frame), 400);
+    const at = { x: e.pageX, y: e.pageY };
+    hintTimer = window.setTimeout(() => void frameHint(frame, at), 400);
   });
   window.addEventListener("dragend", () => {
+    if (holding()) return;
     light(null);
     forgetScopes();
   });
@@ -307,11 +392,11 @@ function listen(): void {
     // A frame of this tab has the agent's drag (TIN-752).
     if (msg.type === "frame_drag") return cancelFrameHint();
     if (msg.type !== "status" || !msg.status || !(msg.status in STATUS_TEXT)) return;
-    // The drop this word is about, by its id: never whichever drop came last.
-    const drop = msg.id ? pending.get(msg.id) : undefined;
-    if (!drop) return say(msg.status);
+    // The drop this word is about, by its id: never whichever drop came last, and nothing for a drop this page does not know.
+    const target = msg.id ? pending.get(msg.id) : undefined;
+    if (!target) return;
     pending.delete(msg.id!);
-    sent(msg, drop.target, drop.x, drop.y);
+    sent(msg, target, msg.id!);
   });
 }
 
@@ -325,28 +410,67 @@ interface Reply {
   id?: string;
   /** On a card that asks every time: the host whose setting or domain makes it ask (the tab's, or a frame's own). */
   asks?: string;
+  /** On a consent card: the numbers setting, for What's sent? (TIN-786). */
+  mode?: SensitiveMode;
+  /** When sent: the agent's name, as the service worker made it safe; absent when there is none. */
+  agent?: string;
+  /** When sent with an offer to include what was left out: until when that drop's reading is kept. */
+  holdUntil?: number;
+}
+
+/** A drop's question (TIN-786): the drop's outline, reading and place, and how far it got. */
+interface Question {
+  id: string;
+  /** The outlined element, or null when nothing was outlined (a selection, the page's margin): then nothing is checked. */
+  node: Element | null;
+  pointed: Element | null;
+  reading: Reading;
+  /** The drop point, in the viewport. */
+  x: number;
+  y: number;
+  /** waiting: the service worker has not answered; open: its card shows; then answered, settled (the answer was no card) or closed. */
+  state: "waiting" | "open" | "answered" | "settled" | "closed";
+  /** The card shows: `remove` takes it away when the question ends. */
+  shown(remove: () => void): void;
+  /** Puts the outline where the element is now (it moved, or the page scrolled). */
+  ring(): void;
+  /** answered (a sending click), settled (the answer was no card), dismiss (×, Esc, Not now, 45 s), changed (the outline did), drag (a new drag). */
+  end(how: "answered" | "settled" | "dismiss" | "changed" | "drag"): void;
+}
+
+/** Closes the open question as Not now: set by listen(), for a pin's drag. */
+let closeQuestion: (() => void) | null = null;
+
+/** The drop's reading the worker keeps for Include goes: its card closed, or its question did, with nothing sent. */
+function forgetHeld(id: string): void {
+  void chrome.runtime.sendMessage({ type: "forget", id }).catch(() => {});
 }
 
 /**
- * After a reading went (or did not): the note, the pin, and under Ask per drop, when sensitive values
- * were left out, the card that offers to send that drop's reading with them (TIN-619): it names the
- * drop's id, and the service worker sends the reading it kept for that id.
+ * A drop's outcome, drawn at that drop (TIN-786): the pin and "Sent to *agent*" beside it, or the card that offers
+ * what was left out (TIN-619), or the waiting card, or the failure. That drop's own waiting card makes way for it.
  */
-function sent(r: Reply, target: Target, x: number, y: number): void {
-  if (r.status === "sent" && r.sensitive?.offer && r.id) {
-    offerInclude(r.sensitive.count, x, y, () =>
-      chrome.runtime
-        .sendMessage<Reply>({ type: "include", id: r.id })
-        .then((again) => {
-          say(again?.status ?? "error");
-          if (again?.status === "sent" && again.pin) pin(target, again.pin);
-        })
-        .catch(() => say("error")),
-    );
-  } else {
-    say(r.status);
+function sent(r: Reply, target: Target, id: string | null): void {
+  stopWait(id);
+  const point = below(target.x, target.y);
+  if (r.status === "asking") {
+    if (id) waitingCard(id, target.hub, point);
+    return;
   }
-  if (r.status === "sent" && r.pin) pin(target, r.pin);
+  if (r.status !== "sent") return say(r.status, point);
+  const at = r.pin ? pin(target, r.pin) : null;
+  // Just below the badge (it may sit in the paragraph's top right corner), never over it.
+  const beside = at ? { x: at.x, y: at.y + 34 } : point;
+  const name = agentName(r.agent);
+  if (r.sensitive?.offer && r.id && typeof r.holdUntil === "number" && r.holdUntil > Date.now()) {
+    const heldId = r.id;
+    return offerInclude(r.sensitive.count, name, beside, heldId, r.holdUntil, () =>
+      chrome.runtime
+        .sendMessage<Reply>({ type: "include", id: heldId })
+        .then((again) => sent(again ?? { status: "error" }, target, null), () => sent({ status: "error" }, target, null)),
+    );
+  }
+  sentWord(name, beside, id);
 }
 
 /** The page's element at a point, under the extension's own pins and cards, which can sit right where the person drops. */
@@ -397,27 +521,34 @@ const outlines = (el: Element | null): el is HTMLElement | SVGSVGElement => el i
  * put back as it was), or, for an SVG element inside a drawing (a chart's mark), where CSS draws none, a
  * box over it, drawn in a closed shadow root of the extension's own host (as the pin and the cards are),
  * which takes no pointer and is put where the element is on each call (the page may scroll while the agent
- * is dragged).
+ * is dragged). `boxed` draws that box for any element: the outline a drop keeps while its card asks (TIN-786),
+ * which the page's own styles and re-renders cannot take away, and which leaves the page's style.outline as it was.
  */
-function outliner(): { light: (el: Element | null) => void; lit: () => Element | null } {
+function outliner(): { light: (el: Element | null, boxed?: boolean) => void; lit: () => Element | null } {
   let lit: Element | null = null;
   let litOutline = "";
+  /** Whether the outline is on the element's own style.outline, to put back. */
+  let inline = false;
+  let litBoxed = false;
   let host: HTMLDivElement | null = null;
   let box: HTMLDivElement | null = null;
   const place = (el: Element) => {
     const r = el.getBoundingClientRect();
     box!.style.cssText = `position:fixed;z-index:2147483646;pointer-events:none;box-sizing:border-box;left:${r.left - 3}px;top:${r.top - 3}px;width:${r.width + 6}px;height:${r.height + 6}px;border:2px solid #d4733a;border-radius:3px`;
   };
-  const light = (el: Element | null) => {
-    if (lit === el) {
+  const light = (el: Element | null, boxed = false) => {
+    if (lit === el && litBoxed === boxed) {
       if (el && box) place(el);
       return;
     }
-    if (outlines(lit)) lit.style.outline = litOutline;
+    if (inline && outlines(lit)) lit.style.outline = litOutline;
+    inline = false;
     host?.remove();
     host = box = null;
     lit = el;
-    if (outlines(el)) {
+    litBoxed = boxed;
+    if (!boxed && outlines(el)) {
+      inline = true;
       litOutline = el.style.outline;
       el.style.outline = "2px solid #d4733a";
     } else if (el) {
@@ -995,8 +1126,31 @@ function readable(el: Element, max: number, bound: Rect = ANYWHERE): string {
  * and every control the person can see inside the outline (formIn). Taken only here, on a drop or a
  * moved pin: nothing is read while the person fills a form.
  */
-function readAt(x: number, y: number, scope: Element | null) {
+function readAt(x: number, y: number, scope: Element | null, pointed: Element | null = pointedAt(x, y)) {
   const selection = String(getSelection() ?? "").slice(0, TEXT_MAX);
+  const outlined = readOutlined(scope, pointed);
+  return {
+    // In a frame (TIN-752), the frame's own address: where the text came from. A frame without one of its own
+    // (about:blank, srcdoc) gives the origin it belongs to.
+    url: /^https?:/.test(location.href) || location.origin === "null" ? location.href : `${location.origin}/`,
+    title: document.title,
+    element: outlined.element,
+    selection: selection || null,
+    selection_context: selection ? selectionContext(scope, selection) : null,
+    form: outlined.form,
+  };
+}
+
+/** A page reading, as readAt takes it. */
+type Reading = ReturnType<typeof readAt>;
+
+/**
+ * The part of a reading that is the outlined element (TIN-786): its words and its form state, from the element
+ * and the control the drop pointed at, and nothing about the pointer or the page around it. The drop's reading
+ * is made of it, and the consent card's check (sameOutline) calls it again on the same element: one function,
+ * so whatever the reading cuts or leaves out, the check cuts and leaves out the same way.
+ */
+function readOutlined(scope: Element | null, pointed: Element | null) {
   // A chart's mark (TIN-760, TIN-765): what the page writes for it, as a "chart point", "chart bar" or "chart mark" (a shape that
   // names itself), under the chart's heading. Should the chart no longer tell anything about it at the drop, no element goes
   // (the dock says the page), and nothing beyond the mark is read.
@@ -1005,10 +1159,6 @@ function readAt(x: number, y: number, scope: Element | null) {
   const cell = scope?.closest<HTMLTableCellElement>("td,th");
   const table = cell?.closest("table");
   return {
-    // In a frame (TIN-752), the frame's own address: where the text came from. A frame without one of its own
-    // (about:blank, srcdoc) gives the origin it belongs to.
-    url: /^https?:/.test(location.href) || location.origin === "null" ? location.href : `${location.origin}/`,
-    title: document.title,
     element: mark
       ? { tag: scope!.tagName.toLowerCase(), role: `chart ${mark.kind}`, name: null, text: mark.text.slice(0, TEXT_MAX), heading: headingFor(scope!) }
       : scope && !shape
@@ -1022,10 +1172,27 @@ function readAt(x: number, y: number, scope: Element | null) {
           ...(cell && table ? tableContext(table, cell, (c) => readable(c, HEADER_MAX).slice(0, HEADER_MAX)) : {}),
         }
       : null,
-    selection: selection || null,
-    selection_context: selection ? selectionContext(scope, selection) : null,
-    form: formIn(scope, x, y),
+    form: formIn(scope, pointed),
   };
+}
+
+/**
+ * Whether the outlined element still shows what the drop read (TIN-786): the same words and the same form
+ * state, by readOutlined itself, with what was found about the page's charts forgotten before and after, as
+ * the drop forgot it. Nothing it reads is kept or sent.
+ */
+function sameOutline(scope: Element, pointed: Element | null, reading: Reading): boolean {
+  charts.clear();
+  const again = readOutlined(scope, pointed);
+  charts.clear();
+  return again.element?.text === reading.element?.text && JSON.stringify(again.form) === JSON.stringify(reading.form);
+}
+
+/** Whether an element still has a box the person can see. */
+function shows(el: Element): boolean {
+  if (!el.isConnected || !el.checkVisibility({ visibilityProperty: true })) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
 }
 
 /**
@@ -1067,16 +1234,20 @@ function deepElementAt(x: number, y: number): Element | null {
   return el;
 }
 
+/** The control a drop points at: the one under the pointer, or the one its label names. Found once, at the drop. */
+function pointedAt(x: number, y: number): Element | null {
+  const under = deepElementAt(x, y);
+  const label = under?.closest("label");
+  return under?.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
+}
+
 /**
  * The form state inside the outline (TIN-619): every control in it, its open shadow roots too, the one
  * under the pointer (or the one its label names) marked; formState keeps those the person can see, inside
  * the outlined box and not cut off by a box around them.
  */
-function formIn(scope: Element | null, x: number, y: number) {
+function formIn(scope: Element | null, pointed: Element | null) {
   if (!scope) return null;
-  const under = deepElementAt(x, y);
-  const label = under?.closest("label");
-  const pointed = under?.closest(CONTROLS) ?? label?.control ?? label?.querySelector(CONTROLS) ?? null;
   const found = controlsIn(scope, CONTROLS_SCANNED) ?? [...scope.querySelectorAll(CONTROLS)].slice(0, CONTROLS_SCANNED);
   const outline = outlineBox(scope);
   const controls = found.map((el) => describe(el, el === pointed, outline)).filter((c): c is Control => c !== null);
@@ -1266,160 +1437,444 @@ function headingFor(el: Element): string | null {
   return words.replace(/\s+/g, " ").trim().slice(0, 200) || null;
 }
 
+/** A place on the page, in page coordinates: where a card or note goes. */
+interface Point {
+  x: number;
+  y: number;
+}
+
+/** Where a card or note goes for a point the person dropped on: just below it, a little to its left. */
+const below = (x: number, y: number): Point => ({ x: x - 16, y: y + 14 });
+
+/** What the cards and notes look like: the extension's own, in closed shadow roots the page's styles cannot reach. */
+const PANEL_CSS = `
+.card, .note { box-sizing: border-box; z-index: 2147483647; background: #1f1f1f; color: #fff; font: 13px/1.45 system-ui, sans-serif; text-align: left; }
+.card { position: absolute; width: 320px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; padding: 12px 30px 12px 14px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
+.card.question { position: fixed; }
+.note { position: absolute; pointer-events: none; max-width: min(300px, calc(100vw - 16px)); padding: 8px 12px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+.failed { border-left: 4px solid #e5484d; padding-left: 10px; }
+p { margin: 0; }
+p + p { margin-top: 2px; }
+.lead { font-weight: 600; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.b { font: inherit; padding: 5px 10px; border-radius: 7px; cursor: pointer; border: 1px solid #555; background: transparent; color: #fff; }
+.b.primary { border-color: #d4733a; background: #d4733a; }
+.b:disabled { opacity: .5; cursor: default; }
+.x { position: absolute; top: 6px; right: 8px; padding: 2px 4px; background: none; border: 0; color: #ccc; font: 16px/1 system-ui, sans-serif; cursor: pointer; }
+.more { display: inline-block; margin-top: 8px; padding: 0; background: none; border: 0; color: #f2a46b; font: inherit; cursor: pointer; text-decoration: underline; }
+dl { margin: 6px 0 0; }
+dt { font-weight: 600; margin-top: 4px; }
+dd { margin: 0; }
+a { color: #f2a46b; font-weight: 600; }
+.spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid #777; border-top-color: #f2a46b; border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+`;
+
+/** One card or note on screen (TIN-786), and what takes it away. An Include offer can also give way to its plain Sent word. */
+interface Shown {
+  id: string | null;
+  kind: "waiting" | "include" | "answer" | "note";
+  close(): void;
+  demote?(): void;
+}
+
 /**
- * The consent card (13.3), where the agent was dropped, in a closed shadow root. Its buttons take
- * trusted clicks only. A sensitive site gets Send and Not now, never Always.
+ * What the extension shows in this frame besides the consent card, in two layers that each hold at most one
+ * thing: a card (the waiting card, the Include offer, the answer on an APC app) and a note (Sent, a failure, the
+ * frame note). A newer one replaces the one in its layer; a note never takes a card's place.
  */
-function ask(status: "consent" | "consent_sensitive" | "consent_update", x: number, y: number, send: (c: Consent) => void, sensitive?: Reply["sensitive"], asks?: string): void {
+const shown: { card: Shown | null; note: Shown | null } = { card: null, note: null };
+function put(layer: "card" | "note", s: Shown): void {
+  shown[layer]?.close();
+  shown[layer] = s;
+}
+function gone(layer: "card" | "note", s: Shown): void {
+  if (shown[layer] === s) shown[layer] = null;
+}
+
+/** A newer question or card, for another drop: that drop's Include offer gives way to its plain Sent word. */
+function demoteInclude(id: string | null): void {
+  for (const layer of ["card", "note"] as const) {
+    const s = shown[layer];
+    if (s?.kind === "include" && s.id !== id) s.demote?.();
+  }
+}
+
+/** A card or note: its host (one of the extension's cards, never what a drop or the outline lands on) and its box. */
+function panel(className: string): { host: HTMLDivElement; box: HTMLDivElement } {
   const host = cardHost();
+  host.style.cssText = "position:absolute!important;left:0!important;top:0!important;width:0!important;height:0!important;z-index:2147483647!important";
   const root = host.attachShadow({ mode: "closed" });
-  const card = document.createElement("div");
-  card.setAttribute("role", "dialog");
-  card.setAttribute("aria-label", "APC");
-  const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
-  const top = Math.max(8, Math.min(y + 12, innerHeight - 280));
-  card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
-  const text = document.createElement("p");
-  text.style.cssText = "margin:0 0 10px";
-  // In a frame (TIN-752) the answers are kept for the tab's site, not the frame's: the card says so by name.
+  const box = document.createElement("div");
+  box.className = className;
+  root.append(Object.assign(document.createElement("style"), { textContent: PANEL_CSS }), box);
+  return { host, box };
+}
+
+const line = (text: string, className = ""): HTMLParagraphElement => Object.assign(document.createElement("p"), { textContent: text, className });
+
+function button(label: string, primary = false): HTMLButtonElement {
+  return Object.assign(document.createElement("button"), { type: "button", textContent: label, className: primary ? "b primary" : "b" });
+}
+
+/** The × in a card's corner. */
+function closeButton(label: string): HTMLButtonElement {
+  const x = Object.assign(document.createElement("button"), { type: "button", textContent: "×", className: "x", title: label });
+  x.setAttribute("aria-label", label);
+  return x;
+}
+
+/** "Sent to *agent*": the name in a text node of its own, between bidi isolates, or "your agent". */
+function sentLine(name: string | null): HTMLParagraphElement {
+  const p = line("", "lead");
+  p.append(document.createTextNode(SENT_TO), document.createTextNode(name ? isolate(name) : AGENT_FALLBACK));
+  return p;
+}
+
+/** Puts a card or note at a place on the page, kept inside the part of the page in view. */
+function placeAt(box: HTMLElement, at: Point): void {
+  const m = 8;
+  const w = box.offsetWidth;
+  const h = box.offsetHeight;
+  const width = document.documentElement.clientWidth || innerWidth;
+  const left = Math.max(scrollX + m, Math.min(at.x, scrollX + width - w - m));
+  const top = Math.max(scrollY + m, Math.min(at.y, scrollY + innerHeight - h - m));
+  box.style.left = `${Math.round(left)}px`;
+  box.style.top = `${Math.round(top)}px`;
+}
+
+/**
+ * The consent card's place (TIN-786): below the outlined element's box, or above it when there is no room below;
+ * over it only when there is room on neither side. With nothing outlined, at the drop point. In the viewport.
+ */
+function placeQuestion(box: HTMLElement, q: Question): void {
+  const m = 8;
+  const width = document.documentElement.clientWidth || innerWidth;
+  const height = innerHeight;
+  const w = box.offsetWidth;
+  const h = box.offsetHeight;
+  const left = Math.max(m, Math.min(q.x - w / 2, width - w - m));
+  let top: number;
+  if (q.node) {
+    const r = q.node.getBoundingClientRect();
+    if (height - r.bottom >= h + 2 * m) top = Math.max(m, r.bottom + m);
+    else if (r.top >= h + 2 * m) top = Math.min(r.top - h - m, height - h - m);
+    else top = height - h - m;
+  } else {
+    top = q.y + 14 + h + m <= height ? q.y + 14 : q.y - 14 - h;
+  }
+  box.style.left = `${Math.round(left)}px`;
+  box.style.top = `${Math.round(Math.max(m, Math.min(top, height - h - m)))}px`;
+}
+
+/**
+ * The consent card (13.3, TIN-786): the question, a reason when there is one, the buttons, × and What's sent?, in a
+ * closed shadow root, below the outline it asks about. Its buttons take trusted clicks only. A sensitive site gets
+ * Send and Not now, never Always. A sending click checks first, in the same task as it sends, that the outline still
+ * shows what the drop read; Never waits for the service worker's answer before the card goes. Not now, ×, Esc and
+ * 45 s send nothing.
+ */
+function ask(q: Question, status: "consent" | "consent_sensitive" | "consent_update", r: Reply, send: (c: Consent) => void): void {
+  demoteInclude(q.id);
+  const { host, box } = panel("card question");
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", "APC");
+  box.append(line(CONSENT_QUESTION, "lead"));
+  const reason = consentReason(status, r.asks ?? null);
+  if (reason) box.append(line(reason));
+  // The outline's sensitive numbers, said only when they are about to go (the setting is Send).
+  const numbers = r.sensitive?.count ? sensitiveNote(r.sensitive.count, r.sensitive.mode) : null;
+  if (numbers) {
+    const p = line(numbers);
+    p.dataset.apcSensitive = String(r.sensitive!.count);
+    box.append(p);
+  }
+  // In a frame (TIN-752) the answers are kept for the tab's site, not the frame's: the buttons say so by name.
   const tabSite = isTop ? null : tabHost();
-  // "is set to ask every time" names whichever site carries that setting: the tab's, or the frame's own (askingSite).
-  const setBy = isTop ? null : (asks ?? tabSite);
-  text.textContent = setBy ? STATUS_TEXT[status].replace("This site is set", `${setBy} is set`) : STATUS_TEXT[status];
-  // What happens to the sensitive values in this outline, by the person's setting (TIN-619).
-  if (sensitive?.count) {
-    const note = document.createElement("b");
-    note.dataset.apcSensitive = String(sensitive.count);
-    note.textContent = ` ${sensitiveNote(sensitive.count, sensitive.mode)}`;
-    text.append(note);
-  }
-  const row = document.createElement("div");
-  row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
-  const choices: Array<[Consent | null, string]> = status === "consent_sensitive" ? [["once", "Send"], [null, "Not now"]] : [["once", "Just this once"], ["always", tabSite ? `Always on ${tabSite}` : "Always on this site"], ["never", tabSite ? `Not on ${tabSite}` : "Not here"]];
-  const close = () => host.remove();
+  const choices: Array<[Consent | null, string]> =
+    status === "consent_sensitive"
+      ? [["once", CARD_LABELS.send], [null, CARD_LABELS.notNow]]
+      : [["once", CARD_LABELS.once], ["always", tabSite ? CARD_LABELS.alwaysOn(tabSite) : CARD_LABELS.always], ["never", tabSite ? CARD_LABELS.neverOn(tabSite) : CARD_LABELS.never]];
+  const row = Object.assign(document.createElement("div"), { className: "row" });
+  const buttons: HTMLButtonElement[] = [];
+  let disarmed = false;
+  const answer = (consent: Consent | null) => (ev: MouseEvent) => {
+    // A page can click a button by script; only the person's own click counts.
+    if (!ev.isTrusted || disarmed) return;
+    if (consent === null) return q.end("dismiss");
+    if (consent === "never") {
+      // Never sends nothing: the card waits for the service worker to say it kept the choice.
+      disarmed = true;
+      for (const b of buttons) b.disabled = true;
+      send("never");
+      return;
+    }
+    // The outline must still show what the drop read; then the drop's own reading goes, in this same task.
+    if (q.node && !(shows(q.node) && sameOutline(q.node, q.pointed, q.reading))) return q.end("changed");
+    q.end("answered");
+    send(consent);
+  };
   for (const [consent, label] of choices) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
+    const b = button(label, consent === "once");
     b.dataset.apcConsent = consent ?? "dismiss";
-    b.style.cssText = `font:inherit;padding:5px 10px;border-radius:7px;cursor:pointer;border:1px solid ${consent === "once" ? "#d4733a" : "#555"};background:${consent === "once" ? "#d4733a" : "transparent"};color:#fff`;
-    b.addEventListener("click", (ev) => {
-      // A page can click a button by script; only the person's own click counts.
-      if (!ev.isTrusted) return;
-      close();
-      if (consent) send(consent);
-    });
+    b.addEventListener("click", answer(consent));
+    buttons.push(b);
     row.append(b);
   }
-  card.append(text, row);
-  root.append(card);
-  document.documentElement.append(host);
-  setTimeout(close, 45_000);
-}
-
-/** The card that offers sensitive values left out, at most one at a time. */
-let includeCard: (() => void) | null = null;
-
-/**
- * After a drop under Ask per drop that left sensitive values out (TIN-619): where the agent was dropped,
- * in a closed shadow root, "Sent to your agent. N sensitive values left out." with "Include them this
- * time", which sends the same reading, taken at the drop, with them. Trusted clicks only.
- */
-function offerInclude(count: number, x: number, y: number, include: () => void): void {
-  includeCard?.();
-  const host = cardHost();
-  const root = host.attachShadow({ mode: "closed" });
-  const card = document.createElement("div");
-  card.setAttribute("role", "dialog");
-  card.setAttribute("aria-label", "APC");
-  const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
-  const top = Math.max(8, Math.min(y + 12, innerHeight - 140));
-  card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
-  const text = document.createElement("p");
-  text.style.cssText = "margin:0 0 10px";
-  text.setAttribute("role", "status");
-  text.textContent = sentWithout(count);
-  const row = document.createElement("div");
-  row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px";
-  let timer = 0;
-  const close = () => {
-    clearTimeout(timer);
-    host.remove();
-    if (includeCard === close) includeCard = null;
-  };
-  for (const [what, label] of [["include", INCLUDE_LABEL], ["dismiss", "Close"]] as const) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    b.dataset.apcInclude = what;
-    b.style.cssText = `font:inherit;padding:5px 10px;border-radius:7px;cursor:pointer;border:1px solid ${what === "include" ? "#d4733a" : "#555"};background:${what === "include" ? "#d4733a" : "transparent"};color:#fff`;
-    b.addEventListener("click", (ev) => {
-      if (!ev.isTrusted) return;
-      close();
-      if (what === "include") include();
-    });
-    row.append(b);
+  const x = closeButton(CARD_LABELS.notNow);
+  x.dataset.apcConsent = "dismiss";
+  x.addEventListener("click", answer(null));
+  buttons.push(x);
+  // What's sent?, closed until clicked: what goes, what is held back by the numbers setting, and where it goes.
+  const more = Object.assign(document.createElement("button"), { type: "button", className: "more", textContent: WHATS_SENT.label });
+  more.setAttribute("aria-expanded", "false");
+  const facts = document.createElement("dl");
+  facts.hidden = true;
+  for (const [term, text] of [
+    [WHATS_SENT.labels.goes, WHATS_SENT.goes],
+    [WHATS_SENT.labels.heldBack, WHATS_SENT.heldBack(sensitiveMode(r.mode))],
+    [WHATS_SENT.labels.where, WHATS_SENT.where],
+  ] as const) {
+    facts.append(Object.assign(document.createElement("dt"), { textContent: term }), Object.assign(document.createElement("dd"), { textContent: text }));
   }
-  card.append(text, row);
-  root.append(card);
-  document.documentElement.append(host);
-  includeCard = close;
-  timer = window.setTimeout(close, 30_000);
-}
-
-/**
- * The answer to a dock agent dropped on a Direct-only APC app (APC 0.5), where it was dropped, in a
- * closed shadow root: the app connects agents directly, with a link to its connect page (from its
- * apc.json, on its own origin) and ×. Nothing is sent anywhere.
- */
-let directOnlyCard: (() => void) | null = null;
-function answerDirectOnly(app: DirectOnly, x: number, y: number): void {
-  // A new drop replaces the card: never a stack of them.
-  directOnlyCard?.();
-  const host = cardHost();
-  const root = host.attachShadow({ mode: "closed" });
-  const card = document.createElement("div");
-  card.setAttribute("role", "status");
-  card.setAttribute("aria-label", "APC");
-  // Which answer it is: a Direct-only app's, or a drop nothing on an APC app took (TIN-703).
-  card.dataset.apcAnswer = app.message === NOT_TAKEN_TEXT ? "not_taken" : "direct_only";
-  const left = Math.max(8, Math.min(x - 160, innerWidth - 336));
-  const top = Math.max(8, Math.min(y + 12, innerHeight - 150));
-  card.style.cssText = `position:fixed;z-index:2147483647;left:${left}px;top:${top}px;width:320px;box-sizing:border-box;padding:12px 30px 12px 14px;border-radius:12px;background:#1f1f1f;color:#fff;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)`;
-  // The domain first, as the dock names an app it does not know; the name, when there is one, is only what the page says it is.
-  const domain = document.createElement("p");
-  domain.style.cssText = "margin:0 0 4px;font-weight:600";
-  domain.textContent = app.host;
-  const text = document.createElement("p");
-  text.style.cssText = "margin:0 0 8px";
-  text.textContent = app.message;
-  card.append(domain, text);
-  if (app.connect) {
-    const link = document.createElement("a");
-    link.href = app.connect;
-    link.textContent = connectLabel(app.host);
-    link.style.cssText = "color:#f2a46b;font-weight:600";
-    card.append(link);
-  }
-  const close = document.createElement("button");
-  close.type = "button";
-  close.textContent = "×";
-  close.setAttribute("aria-label", "Close");
-  close.style.cssText = "position:absolute;top:6px;right:8px;background:none;border:0;color:#ccc;font:16px system-ui,sans-serif;cursor:pointer";
-  let timer = 0;
-  const remove = () => {
-    clearTimeout(timer);
-    host.remove();
-    if (directOnlyCard === remove) directOnlyCard = null;
+  const place = () => {
+    q.ring();
+    placeQuestion(box, q);
   };
-  close.addEventListener("click", (ev) => {
-    if (ev.isTrusted) remove();
+  more.addEventListener("click", (ev) => {
+    if (!ev.isTrusted) return;
+    facts.hidden = !facts.hidden;
+    more.setAttribute("aria-expanded", String(!facts.hidden));
+    place();
   });
-  card.append(close);
-  root.append(card);
+  box.append(row, more, facts, x);
+  const onKey = (e: KeyboardEvent) => {
+    if (e.isTrusted && e.key === "Escape") q.end("dismiss");
+  };
+  const timer = window.setTimeout(() => q.end("dismiss"), 45_000);
+  // Every second, the cheap part: the outlined element is still there and still shows.
+  const tick = window.setInterval(() => {
+    if (q.node && !shows(q.node)) q.end("changed");
+  }, 1000);
+  const observer = q.node ? new ResizeObserver(place) : null;
+  if (q.node) observer!.observe(q.node);
+  addEventListener("scroll", place, true);
+  addEventListener("resize", place);
+  addEventListener("keydown", onKey, true);
   document.documentElement.append(host);
-  directOnlyCard = remove;
-  timer = window.setTimeout(remove, 20_000);
+  q.shown(() => {
+    clearTimeout(timer);
+    clearInterval(tick);
+    observer?.disconnect();
+    removeEventListener("scroll", place, true);
+    removeEventListener("resize", place);
+    removeEventListener("keydown", onKey, true);
+    host.remove();
+  });
+  placeQuestion(box, q);
+}
+
+/**
+ * A note at a drop (TIN-786): what it says, which note it is, how long it stays, where. One at a time; a failure has
+ * a marked edge. Returns what removes it.
+ */
+function notice(words: NoteText, kind: string, ms: number, at: Point, id: string | null = null): () => void {
+  return note(kind, words.failed, ms, at, id, (box) => {
+    if (words.lead) box.append(line(words.lead, "lead"));
+    box.append(line(words.text));
+  });
+}
+
+function note(kind: string, failed: boolean, ms: number, at: Point, id: string | null, fill: (box: HTMLDivElement) => void): () => void {
+  const { host, box } = panel(failed ? "note failed" : "note");
+  box.dataset.apcNote = kind;
+  box.setAttribute("role", "status");
+  fill(box);
+  let timer = 0;
+  const me: Shown = {
+    id,
+    kind: "note",
+    close() {
+      clearTimeout(timer);
+      host.remove();
+      gone("note", me);
+    },
+  };
+  put("note", me);
+  document.documentElement.append(host);
+  placeAt(box, at);
+  timer = window.setTimeout(() => me.close(), ms);
+  return () => me.close();
+}
+
+/** An outcome's note at a place, when it has one: failures stay 8 s. */
+function say(status: DropStatus, at: Point): void {
+  const words = NOTE_TEXT[status];
+  if (words) notice(words, status, words.failed ? 8000 : 3500, at);
+}
+
+/** "Sent to *agent*", beside the pin (or at the drop point), for 3.5 s. */
+function sentWord(name: string | null, at: Point, id: string | null): void {
+  note("sent", false, 3500, at, id, (box) => box.append(sentLine(name)));
+}
+
+/**
+ * After a drop under Ask per drop that left sensitive numbers out (TIN-619): "Sent to *agent*", how many were left
+ * out, and Include it, which sends that drop's reading, taken at the drop, with them. Only while the service worker
+ * still keeps it (holdUntil), 30 s at most. A card, or a note when another drop's waiting card holds the card's
+ * place. Its own × and its timeout let the reading go; a newer card for another drop leaves only the Sent word.
+ */
+function offerInclude(count: number, name: string | null, at: Point, id: string, holdUntil: number, include: () => void): void {
+  const layer = shown.card?.kind === "waiting" && shown.card.id !== id ? "note" : "card";
+  if (layer === "card") demoteInclude(id);
+  const { host, box } = panel("card");
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", "APC");
+  box.dataset.apcSent = "";
+  const row = Object.assign(document.createElement("div"), { className: "row" });
+  const yes = button(includeLabel(count), true);
+  yes.dataset.apcInclude = "include";
+  row.append(yes);
+  const x = closeButton("Close");
+  x.dataset.apcInclude = "dismiss";
+  box.append(sentLine(name), line(sentWithout(count)), row, x);
+  let timer = 0;
+  const end = () => {
+    clearTimeout(timer);
+    host.remove();
+    gone(layer, me);
+  };
+  const me: Shown = {
+    id,
+    kind: "include",
+    close: end,
+    demote() {
+      end();
+      sentWord(name, at, id);
+    },
+  };
+  yes.addEventListener("click", (ev) => {
+    if (!ev.isTrusted) return;
+    // This offer's own timer only: it must not let the reading go after the click.
+    clearTimeout(timer);
+    end();
+    include();
+  });
+  x.addEventListener("click", (ev) => {
+    if (!ev.isTrusted) return;
+    end();
+    forgetHeld(id);
+  });
+  put(layer, me);
+  document.documentElement.append(host);
+  placeAt(box, at);
+  timer = window.setTimeout(
+    () => {
+      end();
+      forgetHeld(id);
+    },
+    Math.max(0, Math.min(30_000, holdUntil - Date.now())),
+  );
+}
+
+/** Each waiting drop's deadline, by its id: it outlives the card when another drop's card takes its place, so the service worker still hears. */
+const waits = new Map<string, number>();
+
+/** A drop's outcome arrived: its wait is over, and its waiting card, when it still shows, makes way. */
+function stopWait(id: string | null): void {
+  if (!id) return;
+  clearTimeout(waits.get(id));
+  waits.delete(id);
+  if (shown.card?.kind === "waiting" && shown.card.id === id) shown.card.close();
+}
+
+/**
+ * The first drop of an agent in this browser (TIN-786): a card at the drop until the dock answers (the service
+ * worker asks it for up to 60 s), with Open dock, which opens that drop's own dock. With no word by WAIT_LOST_MS, one
+ * line says so, claiming neither that the reading went nor that it did not, and the service worker is told.
+ */
+function waitingCard(id: string, hub: string, at: Point): void {
+  demoteInclude(id);
+  const { host, box } = panel("card");
+  box.setAttribute("role", "status");
+  box.setAttribute("aria-label", "APC");
+  box.dataset.apcNote = "asking";
+  const text = line("", "lead");
+  text.append(Object.assign(document.createElement("span"), { className: "spin" }), WAITING_TEXT);
+  const row = Object.assign(document.createElement("div"), { className: "row" });
+  const open = button(CARD_LABELS.openDock, true);
+  open.dataset.apcOpenDock = "";
+  // The drop's own dock, checked when the agent was dropped: the service worker opens exactly that one.
+  open.addEventListener("click", (ev) => {
+    if (ev.isTrusted) void chrome.runtime.sendMessage({ type: "open_dock", hub }).catch(() => {});
+  });
+  row.append(open);
+  box.append(text, row);
+  const me: Shown = {
+    id,
+    kind: "waiting",
+    close() {
+      host.remove();
+      gone("card", me);
+    },
+  };
+  put("card", me);
+  document.documentElement.append(host);
+  placeAt(box, at);
+  clearTimeout(waits.get(id));
+  waits.set(
+    id,
+    window.setTimeout(() => {
+      waits.delete(id);
+      void chrome.runtime.sendMessage({ type: "wait_lost", id }).catch(() => {});
+      const mine = shown.card === me;
+      me.close();
+      if (mine) notice({ lead: null, text: WAIT_LOST_TEXT, failed: true }, "wait_lost", 8000, at, id);
+    }, WAIT_LOST_MS),
+  );
+}
+
+/**
+ * The answer to a dock agent dropped on a Direct-only APC app (APC 0.5), where it was dropped, in a closed shadow
+ * root: the app's host first, as the dock names an app it does not know, that it connects agents itself, and a link
+ * to its connect page (from its apc.json, on its own origin). With no app, the drop nothing on an APC app took
+ * (TIN-703): one line. Nothing is sent anywhere. `x` and `y` are in the viewport.
+ */
+function answerDirectOnly(app: DirectOnly | null, x: number, y: number): void {
+  demoteInclude(null);
+  const { host, box } = panel("card");
+  box.setAttribute("role", "status");
+  box.setAttribute("aria-label", "APC");
+  box.dataset.apcAnswer = app ? "direct_only" : "not_taken";
+  if (app) {
+    box.append(line(app.host, "lead"), line(app.message));
+    if (app.connect) {
+      const link = Object.assign(document.createElement("a"), { href: app.connect, textContent: connectLabel(app.host) });
+      box.append(link);
+    }
+  } else {
+    box.append(line(NOT_TAKEN_TEXT));
+  }
+  const x0 = closeButton("Close");
+  box.append(x0);
+  let timer = 0;
+  const me: Shown = {
+    id: null,
+    kind: "answer",
+    close() {
+      clearTimeout(timer);
+      host.remove();
+      gone("card", me);
+    },
+  };
+  x0.addEventListener("click", (ev) => {
+    if (ev.isTrusted) me.close();
+  });
+  put("card", me);
+  document.documentElement.append(host);
+  placeAt(box, below(x + scrollX, y + scrollY));
+  timer = window.setTimeout(() => me.close(), 20_000);
 }
 
 /** The pins on this page, one per dock and agent: a new drop moves it. */
@@ -1461,7 +1916,7 @@ const PIN_CSS = `
  * Pulse (TIN-354); Esc, or a drop off any paragraph, puts it back. Asks the dock every 3 s until
  * read, then every 10 s until replaced: a read pin still fades when a newer drop replaces its reading.
  */
-function pin(target: Target, mark: PinMark): void {
+function pin(target: Target, mark: PinMark): Point | null {
   const key = `${target.hub} ${target.agent}`;
   pins.get(key)?.();
   const host = document.createElement("div");
@@ -1505,7 +1960,10 @@ function pin(target: Target, mark: PinMark): void {
     }
     badge.style.left = `${Math.round(left)}px`;
     badge.style.top = `${Math.round(top)}px`;
+    pos = { x: Math.round(left), y: Math.round(top) };
   };
+  /** Where the badge is, on the page: the Sent word goes beside it (TIN-786). */
+  let pos: Point = { x: target.x - 14, y: target.y - 14 };
   const observer = new ResizeObserver(place);
   observer.observe(document.documentElement);
   if (target.anchor) observer.observe(target.anchor);
@@ -1537,7 +1995,7 @@ function pin(target: Target, mark: PinMark): void {
     // What was outlined on this page: send its reading with the browser's token, no new consent (TIN-471, TIN-619).
     // Taken away by the page before the release: nothing goes, and the pin goes back.
     if (outlined && !outlined.isConnected) {
-      say("outline_changed");
+      say("outline_changed", below(x + scrollX, y + scrollY));
       return false;
     }
     const anchor = outlined;
@@ -1547,13 +2005,13 @@ function pin(target: Target, mark: PinMark): void {
     const moved: Target = { anchor, x: x + scrollX, y: y + scrollY, hub: target.hub, agent: target.agent };
     void chrome.runtime
       .sendMessage<Reply>({ type: "move", id, hub: target.hub, agent: target.agent, reading })
-      .then((r) => sent(r ?? { status: "error" }, moved, x, y))
-      .catch(() => say("error"));
+      .then((r) => sent(r ?? { status: "error" }, moved, id), () => sent({ status: "error" }, moved, id));
     return true;
   });
   pins.set(key, remove);
   draw();
   timer = window.setTimeout(() => void poll(), 2000);
+  return host.isConnected ? { ...pos } : null;
 }
 
 /**
@@ -1566,6 +2024,8 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
   handle.addEventListener("dragstart", (e) => e.preventDefault());
   handle.addEventListener("pointerdown", (down) => {
     if (!down.isTrusted || down.button !== 0) return;
+    // Moving a pin is a new gesture: the open question closes as Not now before this outline lights (TIN-786).
+    closeQuestion?.();
     down.preventDefault();
     handle.setPointerCapture(down.pointerId);
     let moving = false;
@@ -1610,22 +2070,3 @@ function moveWith(handle: HTMLElement, badge: HTMLElement, back: () => void, dro
   });
 }
 
-/** A short note in the page's corner, in its own shadow root so the page's styles cannot touch it. */
-function say(status: DropStatus): void {
-  notice(STATUS_TEXT[status], status, status === "asking" ? 8000 : 3500);
-}
-
-/** A note in the corner of this frame (the page, or the frame a drop landed in): what it says, which note it is, how long it stays. Returns what removes it. */
-function notice(text: string, kind: string, ms: number): () => void {
-  const host = cardHost();
-  const root = host.attachShadow({ mode: "closed" });
-  const note = document.createElement("div");
-  note.textContent = text;
-  note.dataset.apcNote = kind;
-  note.setAttribute("role", "status");
-  note.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:320px;padding:10px 14px;border-radius:10px;background:#1f1f1f;color:#fff;font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.25)";
-  root.append(note);
-  document.documentElement.append(host);
-  setTimeout(() => host.remove(), ms);
-  return () => host.remove();
-}

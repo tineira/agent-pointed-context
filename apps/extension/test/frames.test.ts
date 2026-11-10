@@ -22,7 +22,7 @@ test("an APC app is told by the standard's own marks, never by data-focus (TIN-7
   // The attribute is the one @tineira/apc-web sets (read from its source: the tests run without the DOM's types).
   const pinning = readFileSync(new URL("../../../packages/web/src/pinning.ts", import.meta.url), "utf8");
   assert.equal(/export const APC_DROPS_ATTR = "([^"]+)"/.exec(pinning)?.[1], NATIVE_DROPS_ATTR);
-  assert.match(NOT_TAKEN_TEXT, /Nothing was sent/);
+  assert.equal(NOT_TAKEN_TEXT, "Drop your agent on a highlighted part");
 });
 
 test("a reply about a drop goes to the frame it came from (TIN-752)", () => {
@@ -64,8 +64,8 @@ test("allowing a site asks for its frames' origins in the same prompt (TIN-752)"
 });
 
 test("the note names a host only for the frame under the pointer, else another site (TIN-752, review on #142)", () => {
-  assert.equal(frameNote("https://tableau.example.com"), "This part of the page comes from tableau.example.com. Allow this site again in the APC extension to include it.");
-  assert.match(frameNote(null), /comes from another site\./);
+  assert.deepEqual(frameNote("https://tableau.example.com"), { lead: "This part is from tableau.example.com", text: "Allow it from the APC icon." });
+  assert.equal(frameNote(null).lead, "This part is from another site");
   const frames = [
     { frameId: 0, url: "https://site.example/" },
     { frameId: 3, url: "https://tracker.example/pixel" },
@@ -94,7 +94,7 @@ test("a frame's own origin adds Always ask and Not here to the tab's consent; an
   // No URL parse that throws on an opaque frame's address.
   for (const url of ["about:blank", "about:srcdoc", "data:text/html,hi", "null", "", undefined]) assert.equal(originOf(url), null);
   assert.equal(originOf("https://b2b.datamind.cl/oauth/authorize?code=x"), "https://b2b.datamind.cl");
-  assert.match(STATUS_TEXT.opaque_frame, /nothing was sent/);
+  assert.equal(STATUS_TEXT.opaque_frame, "Not sent. Your agent can't read this part.");
 });
 
 test("a port-specific grant covers that port only; a pattern without a port covers them all (review on #142)", () => {

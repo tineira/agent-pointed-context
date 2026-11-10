@@ -247,9 +247,16 @@ test("nothing is read outside a drop: the content script reads the page only in 
   assert.doesNotMatch(source, /addEventListener\(\s*"(input|change|keyup|focusin|selectionchange)"/);
   // readAt runs on a drop (onPageDrop) and when a pin is moved; formIn and selectionContext only inside readAt.
   assert.equal(source.match(/readAt\(/g)?.length, 3, "its definition, the drop and the pin's move");
-  assert.equal(source.match(/formIn\(/g)?.length, 2, "its definition and readAt");
+  assert.equal(source.match(/formIn\(/g)?.length, 2, "its definition and readOutlined");
+  // readOutlined is the outlined part of readAt: the reading's, and the consent card's check of it, which sends nothing (TIN-786).
+  assert.equal(source.match(/readOutlined\(/g)?.length, 3, "its definition, readAt and sameOutline");
+  // The second call gets the control the drop pointed at: it never asks what is under a point.
+  for (const fn of ["readOutlined", "formIn", "sameOutline"]) {
+    const body = source.match(new RegExp(`function ${fn}\\([\\s\\S]*?\\n\\}\\n`))![0];
+    assert.doesNotMatch(body, /elementFromPoint|elementsFromPoint|deepElementAt|elementAt\(|pointedAt\(/, fn);
+  }
   assert.equal(source.match(/selectionContext\(/g)?.length, 2, "its definition and readAt");
   // The drop and the pin's release read what was outlined (lit), not what is under the pointer by then.
-  assert.match(source, /const outlined = outlining\.lit\(\);\s*light\(null\);/);
+  assert.match(source, /const outlined = outlining\.lit\(\);\s*clearTimeout\(idleTimer\);\s*light\(null\);/);
   assert.match(source, /const outlined = outlining\.lit\(\);\s*end\(\);/);
 });
