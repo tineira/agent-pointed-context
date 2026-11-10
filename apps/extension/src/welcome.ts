@@ -20,13 +20,20 @@ text("where-label", WHATS_SENT.labels.where);
 text("goes", WHATS_SENT.goes);
 text("where", WHATS_SENT.where);
 
+// Render again when the grant or the numbers setting changes elsewhere (the popup, chrome://extensions), so the
+// page never claims what is no longer true. It touches only what the state decides: never `disabled` (the
+// grant click owns it while Chrome's dialog is open) and never the disclosure's open state. A later call wins.
+let latest = 0;
 async function render(): Promise<void> {
+  const mine = ++latest;
   const has = await chrome.permissions.contains({ origins: ANY_PAGE });
+  const held = WHATS_SENT.heldBack(sensitiveMode((await chrome.storage.local.get("sensitive")).sensitive));
+  if (mine !== latest) return;
   grant.hidden = has;
   granted.hidden = !has;
   step1.classList.toggle("done", has);
   dock.classList.toggle("primary", has);
-  text("held", WHATS_SENT.heldBack(sensitiveMode((await chrome.storage.local.get("sensitive")).sensitive)));
+  text("held", held);
 }
 
 grant.addEventListener("click", async () => {
@@ -35,6 +42,14 @@ grant.addEventListener("click", async () => {
   grant.disabled = false;
   void render();
 });
-dock.addEventListener("click", () => void openDock(false));
+dock.addEventListener("click", () => {
+  dock.disabled = true;
+  void openDock(false).finally(() => (dock.disabled = false));
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && "sensitive" in changes) void render();
+});
+chrome.permissions.onAdded.addListener(() => void render());
+chrome.permissions.onRemoved.addListener(() => void render());
 
 void render();
