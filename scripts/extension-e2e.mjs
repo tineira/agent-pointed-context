@@ -1077,6 +1077,15 @@ try {
     // Its legend's symbol, under the months, is no mark: the whole chart.
     const legend = await expectAt(hc.sid, "#legendsales", /Under the heading: Precios\nPointed at \(div\): /m);
     assert.equal(legend.outlined.box, null, "no box over the legend");
+    // Precios con etiquetas: each column's sales label is its value; a price's label, drawn above its point and on the
+    // column behind it, could be either's, so it is nobody's (rule A).
+    const labelled = await expectAt(hc.sid, "#lcol1", /Under the heading: Precios con etiquetas\nPointed at \(path, chart bar\): Ago · 300M$/m, { x: 15, y: 30 });
+    assert.doesNotMatch(labelled.text, /3[.,]75k/);
+    await expectAt(hc.sid, "#lprice1", new RegExp(`Under the heading: Precios con etiquetas\\nPointed at \\(path, chart point\\): Ago ${NONE}$`, "m"));
+    // A stack: each segment's value is the label inside it; the stack's total above is no segment's (rule A).
+    const storeQ1 = await expectAt(hc.sid, "#store0", /Under the heading: Ventas por canal\nPointed at \(rect, chart bar\): Q1 · 70$/m);
+    const onlineQ1 = await expectAt(hc.sid, "#online0", /Pointed at \(rect, chart bar\): Q1 · 80$/m, { x: 30, y: 60 });
+    for (const t of [storeQ1.text, onlineQ1.text]) assert.doesNotMatch(t.split("\n").pop(), /150/, "the total is no segment's value");
     await cdp("Target.closeTarget", { targetId: hc.targetId });
 
     // ECharts-like, D3 and Recharts-like (charts-libraries.html).
@@ -1089,6 +1098,16 @@ try {
     // Recharts: pv's label is pv's bar's value; uv's bar beside it has none written.
     await expectAt(libs.sid, "#pv1", /Under the heading: Page views\nPointed at \(path, chart bar\): Page B · 1398$/m);
     await expectAt(libs.sid, "#uv1", new RegExp(`Pointed at \\(path, chart bar\\): Page B ${NONE}$`, "m"));
+    // Hidden labels (rule C): text the person cannot see, far off screen or in a control is never read: the series is the
+    // visible "Sales" without its hidden span; A, B and C have no value written; D's ordinary label is its value.
+    const SECRETS = /998877665544|424242|112233445566|4321|5566|777|Internal|4455/;
+    for (const [id, end] of [["#hA", `A ${NONE}`], ["#hB", `B ${NONE}`], ["#hC", `C ${NONE}`], ["#hD", "D · 140"]]) {
+      const hiddenDrop = await expectAt(libs.sid, id, new RegExp(`Under the heading: Hidden labels\\nPointed at \\(rect, chart bar\\): Sales · ${end}$`, "m"));
+      assert.doesNotMatch(hiddenDrop.text, SECRETS, `${id}: nothing hidden, off screen or in a control`);
+    }
+    // The chart's background: the whole chart, still without what is hidden.
+    const hiddenBox = await boxIn(libs.sid, "#hidden svg");
+    assert.doesNotMatch((await dropOnChart(libs.sid, hiddenBox.left + 460, hiddenBox.top + 150)).text, /998877665544|424242|112233445566|777|4455/);
     await cdp("Target.closeTarget", { targetId: libs.targetId });
 
     // A canvas chart, a pie and a map with and without names, a big table and a form (charts-other.html).

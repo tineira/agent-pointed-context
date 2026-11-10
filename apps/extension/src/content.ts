@@ -653,25 +653,20 @@ function svgClip(at: Element): Rect | null {
   return { left: Math.min(corners[0]!.x, corners[1]!.x), top: Math.min(corners[0]!.y, corners[1]!.y), right: Math.max(corners[0]!.x, corners[1]!.x), bottom: Math.max(corners[0]!.y, corners[1]!.y) };
 }
 
+/** The most characters of one chart label. */
+const LABEL_MAX = 200;
+
 /**
- * Whether the person sees a chart's label, by the rule `readable` keeps text by: rendered, an effective
- * opacity of 0.1 or more, ink that is not transparent, not clipped away (`clip-path` that hides,
- * `clip`), and its box inside what clips it (overflow boxes around it, and an SVG clip path such as the
- * plot's).
+ * The words of a text a chart's reading may use (TIN-765, rule C): an SVG <text>, HTML laid over the drawing, or what
+ * aria-labelledby names. Each is taken with readable's own walk, so only words whose boxes show count: transparent ink
+ * (an SVG fill, an HTML colour or -webkit-text-fill-color), opacity, `clip`, `clip-path` (one the extension cannot
+ * resolve hides all), the overflow boxes around it and its own are honoured, as are its descendants' (a hidden span
+ * inside it is left out). Its whole box must lie inside the drawing's, so nothing off screen or outside the chart is
+ * read; and it is never a control or text inside one (a textarea's, a select's options). "" when nothing shows.
  */
-function labelSeen(e: Element): boolean {
-  if (!rendered(e) || effectiveOpacity(e) < OPACITY_MIN) return false;
-  let clip = clipOf(e);
-  for (let at: Element | null = e; at && at !== document.documentElement; at = parentOf(at)) {
-    const style = getComputedStyle(at);
-    if (clipPathHides(style.clipPath)) return false;
-    if ((style.position === "absolute" || style.position === "fixed") && style.clip !== "auto" && style.clip !== "") return false;
-    const own = at instanceof SVGElement ? svgClip(at) : null;
-    if (own) clip = intersect(clip, own);
-  }
-  const style = getComputedStyle(e);
-  const ink = e instanceof SVGElement ? Math.min(alpha(style.fill), Number(style.fillOpacity)) : alpha(style.color);
-  return ink >= OPACITY_MIN && showsIn(boxOf(e), clip);
+function chartText(e: Element, drawn: Rect): string {
+  if (inControl(e, document.documentElement) || !within(boxOf(e), drawn)) return "";
+  return readable(e, LABEL_MAX, drawn).replace(/\s+/g, " ").trim().slice(0, LABEL_MAX);
 }
 
 /** How an SVG text is painted: with a stroke at all, and with a stroke only (a fill that is none, transparent or the stroke's own colour). */
@@ -706,21 +701,6 @@ function outlineCopy(e: Element): boolean {
   return isOutlineCopy({ text: e.textContent ?? "", box: boxOf(e), ...paint }, twins);
 }
 
-/** An SVG label's words, its outline copies left out; a tspan that starts a new line starts a new word. */
-function labelText(t: Element): string {
-  const parts: string[] = [];
-  const walk = (e: Element) => {
-    if (outlineCopy(e)) return;
-    if (e !== t && e.tagName === "tspan" && (e.hasAttribute("dy") || e.hasAttribute("x"))) parts.push(" ");
-    for (const node of e.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) parts.push(node.textContent ?? "");
-      else if (node.nodeType === Node.ELEMENT_NODE) walk(node as Element);
-    }
-  };
-  walk(t);
-  return parts.join("").replace(/\s+/g, " ").trim();
-}
-
 /** The element a drawing's HTML labels may be in: the drawing's own parent, unless that is the page. */
 function holderOf(svg: SVGSVGElement): Element | null {
   const parent = svg.parentElement;
@@ -728,21 +708,22 @@ function holderOf(svg: SVGSVGElement): Element | null {
 }
 
 /**
- * The text a page declares as a name: aria-label, else the text of what aria-labelledby names, when that is inside
- * `scope` (the drawing and what is laid over it: nothing else on the page is read) and the person sees it.
+ * The text a page declares as a name: aria-label, else the words of what aria-labelledby names, when that is inside
+ * `scope` (the drawing's holder) and inside the drawing's box, and taken as any chart text is (chartText): what the
+ * person sees of it, never a control.
  */
-function declaredName(el: Element, scope: Element): string | null {
+function declaredName(el: Element, scope: Element, drawn: Rect): string | null {
   const label = el.getAttribute("aria-label")?.trim();
-  if (label) return label;
+  if (label) return label.slice(0, LABEL_MAX);
   const ids = el.getAttribute("aria-labelledby")?.trim().split(/\s+/) ?? [];
   const root = el.getRootNode() as Document | ShadowRoot;
-  const texts = ids.map((id): Element | null => root.getElementById?.(id) ?? null).filter((t): t is Element => !!t && scope.contains(t) && labelSeen(t)).map((t) => (t instanceof SVGTextElement ? labelText(t) : (t.textContent ?? "").replace(/\s+/g, " ").trim()));
+  const texts = ids.map((id): Element | null => root.getElementById?.(id) ?? null).filter((t): t is Element => !!t && scope.contains(t)).map((t) => chartText(t, drawn));
   return texts.join(" ").trim() || null;
 }
 
 /** A shape's own accessible text: its declared name, or its <title> or <desc>. */
-function accessibleOf(mark: Element, scope: Element): string | null {
-  const name = declaredName(mark, scope);
+function accessibleOf(mark: Element, scope: Element, drawn: Rect): string | null {
+  const name = declaredName(mark, scope, drawn);
   if (name) return name;
   for (const child of mark.children) if (child.tagName === "title" || child.tagName === "desc") return child.textContent?.trim() || null;
   return null;
@@ -767,26 +748,25 @@ function kindOf(shape: Element, box: Rect, siblings: readonly Rect[]): "point" |
 
 /**
  * What a drawing draws, as chartAxes and describeMark take it, and whether it is a chart: every label the person sees
- * in it (labelSeen) and every HTML text laid over it (in its parent, inside its box, no control), its shapes that
+ * in it and every HTML text laid over it (in its parent, inside its box, no control; chartText), its shapes that
  * could be marks and the groups they are drawn in. Once per drawing and drag (charts).
  */
 function chartInfo(svg: SVGSVGElement): ChartInfo {
   const known = charts.get(svg);
   if (known) return known;
+  const drawn = boxOf(svg);
   const labels: ChartLabel[] = [];
   for (const t of [...svg.querySelectorAll("text")].slice(0, CHART_SCANNED)) {
-    if (outlineCopy(t) || !labelSeen(t)) continue;
-    const text = labelText(t);
+    if (outlineCopy(t)) continue;
+    const text = chartText(t, drawn);
     if (text) labels.push({ text, box: boxOf(t) });
   }
   const holder = holderOf(svg);
   if (holder) {
-    const drawn = boxOf(svg);
     const leaves = [...holder.querySelectorAll("*")].slice(0, ELEMENTS_SCANNED).filter((e) => !(e instanceof SVGElement) && !e.children.length && e.textContent?.trim());
     for (const e of leaves.slice(0, CHART_SCANNED)) {
-      const box = boxOf(e);
-      if (!within(box, drawn) || inControl(e, holder) || !labelSeen(e)) continue;
-      labels.push({ text: (e.textContent ?? "").replace(/\s+/g, " ").trim(), box });
+      const text = chartText(e, drawn);
+      if (text) labels.push({ text, box: boxOf(e) });
     }
   }
   const all = [...svg.querySelectorAll(SHAPES)].slice(0, CHART_SCANNED);
@@ -805,9 +785,9 @@ function chartInfo(svg: SVGSVGElement): ChartInfo {
   for (const s of shapes) members.set(groups.get(s)!, [...(members.get(groups.get(s)!) ?? []), s]);
   const kinds = shapes.map((s) => ({ box: boxes.get(s)!, kind: kindOf(s, boxes.get(s)!, members.get(groups.get(s)!)!.filter((o) => o !== s).map((o) => boxes.get(o)!)) }));
   const axes = chartAxes({ labels, shapes: kinds });
-  const series = new Set(shapes.filter((s) => axes && isMark(boxes.get(s)!, labels, axes)).map((s) => groups.get(s))).size;
+  const series = new Set(shapes.filter((s) => axes && isMark(boxes.get(s)!, { labels, shapes: kinds }, axes)).map((s) => groups.get(s))).size;
   // Only a drawing with no axes can have shapes that name themselves (describeNamed).
-  const named = axes ? [] : all.filter((s) => dataShape(s, NAMED_SHARE)).map((s) => accessibleOf(s, holder ?? svg)).filter((t): t is string => !!t);
+  const named = axes ? [] : all.filter((s) => dataShape(s, NAMED_SHARE)).map((s) => accessibleOf(s, holder ?? svg, drawn)).filter((t): t is string => !!t);
   const info: ChartInfo = { chart: { labels, shapes: kinds, series }, axes, shapes, groups, named, marks: new Map() };
   charts.set(svg, info);
   return info;
@@ -824,16 +804,17 @@ function readMark(mark: Element): MarkReading | null {
   const info = chartInfo(svg);
   if (info.marks.has(mark)) return info.marks.get(mark)!;
   const scope = holderOf(svg) ?? svg;
+  const drawn = boxOf(svg);
   let reading: MarkReading | null = null;
   const i = info.shapes.indexOf(mark);
   if (info.axes && i >= 0) {
     const group = info.groups.get(mark)!;
     const siblings = info.shapes.filter((s) => s !== mark && info.groups.get(s) === group).map(boxOf);
     // A series' name is declared on its group, never on the drawing itself (that names the chart).
-    const series = group === svg ? null : declaredName(group, scope);
-    reading = describeMark({ ...info.chart.shapes[i]!, accessible: accessibleOf(mark, scope), series, siblings }, info.chart, info.axes, headingFor(mark));
+    const series = group === svg ? null : declaredName(group, scope, drawn);
+    reading = describeMark({ ...info.chart.shapes[i]!, accessible: accessibleOf(mark, scope, drawn), series, siblings }, info.chart, info.axes, headingFor(mark));
   } else if (!info.axes && dataShape(mark, NAMED_SHARE)) {
-    reading = describeNamed(accessibleOf(mark, scope), info.named);
+    reading = describeNamed(accessibleOf(mark, scope, drawn), info.named);
   }
   info.marks.set(mark, reading);
   return reading;
@@ -842,8 +823,8 @@ function readMark(mark: Element): MarkReading | null {
 /**
  * The chart mark at a point, or null: going down the elements at the point inside the drawing there, the first that is
  * a mark (readMark), so a data label or a tracker over a bar passes through to the bar. HTML laid over the drawing is
- * passed through too, when it is a label (no control, inside the drawing's box) or not seen; anything else on top (a
- * banner, a dialog, a button) means the drop is on that, not on a mark. A drop on the background, a gridline, an axis
+ * passed through too, when the drawing's holder lays it there (its parent, not the page), inside the drawing's box, and
+ * it is no control; anything else on top (a banner, a dialog, a button) means the drop is on that, not on a mark. A drop on the background, a gridline, an axis
  * or the title finds none.
  */
 function markAt(x: number, y: number, deep: Element | null): Element | null {
@@ -852,10 +833,11 @@ function markAt(x: number, y: number, deep: Element | null): Element | null {
   const first = list.findIndex((e) => e instanceof SVGElement);
   const svg = first < 0 ? null : drawingOf(list[first]!);
   if (!svg) return null;
+  // Only what the drawing's own holder lays over it, inside the drawing's box and no control, passes through.
   const drawn = boxOf(svg);
+  const holder = holderOf(svg);
   for (const e of list.slice(0, first)) {
-    if (!rendered(e) || effectiveOpacity(e) < OPACITY_MIN) continue;
-    if (inControl(e, document.documentElement) || !within(boxOf(e), drawn)) return null;
+    if (!holder?.contains(e) || inControl(e, document.documentElement) || !within(boxOf(e), drawn)) return null;
   }
   for (const el of list.slice(first)) if (el !== svg && svg.contains(el) && el.matches(SHAPES) && readMark(el)) return el;
   return null;
@@ -896,7 +878,7 @@ const outlineBox = (scope: Element): Rect => intersect(boxOf(scope), clipOf(scop
  * the element's own box, or cut off by a box around it that clips what overflows it. A formula often
  * sits next to a hidden copy of itself.
  */
-function readable(el: Element, max: number): string {
+function readable(el: Element, max: number, bound: Rect = ANYWHERE): string {
   if (!rendered(el)) return "";
   const parts: string[] = [];
   let size = 0;
@@ -945,11 +927,15 @@ function readable(el: Element, max: number): string {
     }
     let inner = style.overflowX !== "visible" || style.overflowY !== "visible" ? intersect(clip, boxOf(e)) : clip;
     // An SVG clip path (a chart's plot) cuts what is drawn in it as an overflow box does (TIN-760).
-    const svgCut = e instanceof SVGElement ? svgClip(e) : null;
+    // A clip path the extension cannot resolve (not one rect in user space) may hide anything: what it clips is not read.
+    const svgCut = svgClip(e);
+    if (/^url\(/.test(style.clipPath) && !svgCut) return;
     if (svgCut) inner = intersect(inner, svgCut);
-    const inked = Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color)) >= OPACITY_MIN;
-    // An SVG <text> is a label of its own, drawn apart from the next, though SVG calls it inline.
-    const apart = e.tagName === "BR" || !style.display.startsWith("inline") || e instanceof SVGTextElement;
+    // SVG text is painted by its fill (TIN-765); HTML text by its colour and -webkit-text-fill-color.
+    const inked = (e instanceof SVGElement ? Math.min(alpha(style.fill), Number(style.fillOpacity)) : Math.min(alpha(style.color), alpha(style.getPropertyValue("-webkit-text-fill-color") || style.color))) >= OPACITY_MIN;
+    // An SVG <text> is a label of its own, drawn apart from the next, though SVG calls it inline; so is a tspan that
+    // starts a line of its own (x or dy).
+    const apart = e.tagName === "BR" || !style.display.startsWith("inline") || e instanceof SVGTextElement || (e instanceof SVGTSpanElement && (e.hasAttribute("x") || e.hasAttribute("dy")));
     if (apart) add(" ");
     for (const node of e.childNodes) {
       if (size > max) break;
@@ -961,7 +947,7 @@ function readable(el: Element, max: number): string {
     }
     if (apart) add(" ");
   };
-  walk(el, parent ? effectiveOpacity(parent) : 1, intersect(boxOf(el), clipOf(el)));
+  walk(el, parent ? effectiveOpacity(parent) : 1, intersect(intersect(boxOf(el), clipOf(el)), bound));
   return parts.join("");
 }
 

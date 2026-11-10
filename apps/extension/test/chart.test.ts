@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { chartAxes, coversPlot, describeMark, describeNamed, isMark, isOutlineCopy, NO_VALUE, parseNumber, type Chart, type ChartLabel, type ChartMark, type ChartShape, type SvgText } from "../src/chart.ts";
+import { chartAxes, coversPlot, describeMark, describeNamed, isMark, isOutlineCopy, NO_VALUE, ownerOf, parseNumber, type Chart, type ChartLabel, type ChartMark, type ChartShape, type SvgText } from "../src/chart.ts";
 import type { Rect } from "../src/read.ts";
 
 // The corpus of scripts/extension-e2e-corpus (TIN-765), as the content script hands it over: the labels the person sees
@@ -21,7 +21,7 @@ const barShape = (b: Rect): ChartShape => ({ box: b, kind: "bar" });
 function chartOf(labels: ChartLabel[], series: ChartShape[][]): Chart {
   const shapes = series.flat();
   const axes = chartAxes({ labels, shapes });
-  const groups = axes ? series.filter((g) => g.some((s) => isMark(s.box, labels, axes))).length : 0;
+  const groups = axes ? series.filter((g) => g.some((s) => isMark(s.box, { labels, shapes }, axes))).length : 0;
   return { labels, shapes, series: groups };
 }
 /** describeMark on the shape at (series s, index i) of a chart chartAxes confirms. */
@@ -72,11 +72,11 @@ test("a plot band, a tooltip's box and anything outside the plot is no mark; the
   const axes = chartAxes(chart)!;
   assert.equal(chart.series, 1, "only the markers' group");
   assert.equal(coversPlot(band.box, axes), true);
-  assert.equal(isMark(band.box, labels, axes), false);
-  assert.equal(isMark(tooltip.box, labels, axes), false, "a box with words in it is a label's");
+  assert.equal(isMark(band.box, chart, axes), false);
+  assert.equal(isMark(tooltip.box, chart, axes), false, "a box with words in it is a label's");
   assert.equal(describeMark({ ...tooltip, accessible: null, series: null, siblings: [] }, chart, axes), null);
   // A legend symbol under the month labels.
-  assert.equal(isMark(box(220, 290, 232, 302), labels, axes), false);
+  assert.equal(isMark(box(220, 290, 232, 302), chart, axes), false);
 });
 
 // ---- Highcharts-like: "Instock promedio" ----
@@ -139,7 +139,7 @@ test("on a chart with two value axes, a bar or a point reads its category and no
   assert.deepEqual(axes.dataLabels, []);
   assert.equal(chart.series, 2);
   // The legend's symbols, under the months, are no marks.
-  for (const s of legendSymbols) assert.equal(isMark(s.box, comboLabels, axes), false);
+  for (const s of legendSymbols) assert.equal(isMark(s.box, chart, axes), false);
 });
 
 // ---- ECharts-like (charts-libraries.html) ----
@@ -245,6 +245,85 @@ test("a pie's slice or a map's region that names itself is a mark, read from tha
 
 // ---- numbers and labels ----
 
+// ---- fix round 1 (reviews on #145): who owns a data label (rule A), what is a mark (rule B) ----
+// A small vertical chart: ticks "0", "100", "200" up the left (y = 250, 150, 50), "Jan" and "Feb" along the bottom
+// (x = 120 and 220).
+const small = (extra: ChartLabel[] = []) => [right("0", 50, 250), right("100", 50, 150), right("200", 50, 50), label("Jan", 120, 280), label("Feb", 220, 280), ...extra];
+const feb = barShape(box(200, 150, 240, 250));
+
+test("a number between a column and a point of another series is nobody's value (rule A; Grok #1 P1, Gemini P1)", () => {
+  // Grok: column x 100-140 from y 100, "42" 16 px above it, a point of the price series in that gap.
+  const column = barShape(box(100, 100, 140, 250));
+  const price = point(box(116, 86, 124, 94));
+  const labels = small([label("42", 120, 78, 16)]);
+  assert.equal(readAt(labels, [[column, feb], [price]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  assert.equal(readAt(labels, [[column, feb], [price]], 1, 0)!.text, `Jan ${NO_VALUE}`);
+  // Gemini: "4.2k" drawn just above a price point that stands in front of a column, inside the column's top.
+  const sales = barShape(box(95, 100, 125, 250));
+  const pricePoint = point(box(106, 120, 114, 128));
+  const gemini = [right("0", 50, 250), right("100", 50, 150), right("200", 50, 50), label("Jan", 110, 280), label("Feb", 220, 280), { text: "4.2k", box: box(105, 104, 125, 116) }];
+  assert.equal(readAt(gemini, [[sales, feb], [pricePoint]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  assert.equal(readAt(gemini, [[sales, feb], [pricePoint]], 1, 0)!.text, `Jan ${NO_VALUE}`);
+});
+
+test("a label in the gutter of grouped bars is nobody's; one centred on a bar is that bar's (rule A; Grok #1 P1)", () => {
+  const a = barShape(box(100, 100, 118, 250));
+  const b = barShape(box(122, 150, 140, 250));
+  const gutter = small([label("10", 120, 140, 16)]);
+  assert.equal(readAt(gutter, [[a, feb], [b]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+  assert.equal(readAt(gutter, [[a, feb], [b]], 1, 0)!.text, `Jan ${NO_VALUE}`);
+  const onB = small([label("10", 131, 140, 16)]);
+  assert.equal(readAt(onB, [[a, feb], [b]], 1, 0)!.text, "Jan · 10");
+  assert.equal(readAt(onB, [[a, feb], [b]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+});
+
+test("a stack's segments keep the labels inside them; its total above is no segment's value (rule A; Grok #1 P1)", () => {
+  const bottom = barShape(box(100, 170, 140, 250));
+  const top = barShape(box(100, 100, 140, 170));
+  const labels = small([label("70", 120, 135, 16), label("80", 120, 210, 16), label("150", 120, 88, 24)]);
+  const series = [[bottom, feb], [top]];
+  assert.equal(readAt(labels, series, 1, 0)!.text, "Jan · 70");
+  assert.equal(readAt(labels, series, 0, 0)!.text, "Jan · 80");
+  const chart = chartOf(labels, series);
+  assert.equal(ownerOf(labels.find((l) => l.text === "150")!, series.flat(), chartAxes(chart)!), null);
+});
+
+test("a number in a tooltip's box, beside its words, is never a value (rule A; Grok #3 P1)", () => {
+  // February's marker (x 116-124) with a stale tooltip over it whose "F" and "400" are texts of their own.
+  const box400 = barShape(box(104, 98, 170, 128));
+  const words = [left("F", 114, 108), label("400", 120, 120, 24)];
+  assert.equal(readAt(ventaLabels(words), [markers(), [box400]], 0, 1)!.text, `SMU · F ${NO_VALUE}`);
+});
+
+test("a number above the plot (a year as the title) is never a value (rule A; Gemini P2)", () => {
+  // A bar just over the top tick, with "2026" written above the plot, 22 px over the bar's top.
+  const tall = barShape(box(100, 48, 140, 250));
+  const labels = small([label("2026", 120, 20, 32)]);
+  assert.equal(readAt(labels, [[tall, feb]], 0, 0)!.text, `Jan ${NO_VALUE}`);
+});
+
+test("a shape only in the plot's margin, or holding other shapes, is no mark and takes no label (rule B; Grok #2 P1)", () => {
+  // Grok: a strip at y 252-268 under Jan (below the "0" tick at 250), holding the label "9".
+  const strip = barShape(box(100, 252, 140, 268));
+  const column = barShape(box(100, 150, 140, 250));
+  const labels = small([label("9", 120, 258, 8)]);
+  const series = [[column, feb], [strip]];
+  const chart = chartOf(labels, series);
+  const axes = chartAxes(chart)!;
+  assert.equal(isMark(strip.box, chart, axes), false);
+  assert.equal(readAt(labels, series, 1, 0), null);
+  assert.equal(readAt(labels, series, 0, 0)!.text, "Jan · 9");
+  // A plot-sized rect (two categories, so coversPlot does not apply) holding both columns: no mark, and "7" over Feb is Feb's.
+  const plotRect = barShape(box(60, 40, 260, 250));
+  const withRect = small([label("7", 220, 140, 8)]);
+  const rectSeries = [[column, feb], [plotRect]];
+  assert.equal(isMark(plotRect.box, chartOf(withRect, rectSeries), chartAxes(chartOf(withRect, rectSeries))!), false);
+  assert.equal(readAt(withRect, rectSeries, 1, 0), null);
+  assert.equal(readAt(withRect, rectSeries, 0, 1)!.text, "Feb · 7");
+  // A bar drawn a little past the last tick is still a mark.
+  assert.equal(isMark(box(100, 44, 140, 250), chart, axes), true);
+});
+
 test("numbers as charts write them tell an axis's ticks and data labels from other text", () => {
   for (const [t, v] of [["1 000M", 1e9], ["1 000M", 1e9], ["8G", 8e9], ["12MM", 12e6], ["3k", 3000], ["0", 0], ["90%", 90], ["98,51%", 98.51], ["1,5", 1.5], ["0.25", 0.25], ["1.000", 1000], ["1,000", 1000], ["1.000.000", 1e6], ["1.234,5", 1234.5], ["$1,200", 1200], ["US$ 5", 5], ["-5", -5], ["−5", -5], ["4.0k", 4000]] as const) assert.equal(parseNumber(t), v, t);
   for (const t of ["SMU", "Q1", "E", "Total General", "1.2.3", "1 00M", "SMU: 400 M", "Page B", ""]) assert.equal(parseNumber(t), null, t);
@@ -262,6 +341,9 @@ test("a label drawn twice, its halo under it, is read once; a real label never d
   // A halo elsewhere, or with no twin, is kept.
   assert.equal(isOutlineCopy(halo, [halo, t("98,51%", box(10, 54, 50, 66))]), false);
   assert.equal(isOutlineCopy(halo, [halo]), false);
+  // A 3 px halo: its box is 1.5 px wider on each side than its twin's, its centre the same (rule D; Gemini P2).
+  const wide = t("98,51%", box(8.5, 12.5, 51.5, 27.5), "halo");
+  assert.equal(isOutlineCopy(wide, [wide, realLabel]), true);
 });
 
 test("the extension's source knows no chart library and estimates no value (TIN-765)", () => {
@@ -281,6 +363,13 @@ test("the extension's source knows no chart library and estimates no value (TIN-
   assert.match(content, /host\.dataset\.apcOutline = "";[\s\S]{0,400}host\.attachShadow\(\{ mode: "closed" \}\)/);
   // A mark the chart no longer describes at the drop sends element: null, so the dock says the page.
   assert.match(content, /: scope && !shape\s*\?/);
+  // Rule C: every text a chart reading uses goes through chartText (readable's walk, cut to the drawing, no control),
+  // aria-labelledby targets too; markAt passes only through what the drawing's holder lays over it.
+  assert.match(content, /function chartText\(e: Element, drawn: Rect\): string \{\s*if \(inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return "";\s*return readable\(e, LABEL_MAX, drawn\)/);
+  assert.match(content, /\.filter\(\(t\): t is Element => !!t && scope\.contains\(t\)\)\.map\(\(t\) => chartText\(t, drawn\)\)/);
+  assert.match(content, /if \(!holder\?\.contains\(e\) \|\| inControl\(e, document\.documentElement\) \|\| !within\(boxOf\(e\), drawn\)\) return null;/);
+  assert.ok(content.includes("if (/^url\\(/.test(style.clipPath) && !svgCut) return;"), "an unresolvable SVG clip path hides");
+  assert.doesNotMatch(content, /labelSeen|textContent \?\? ""\)\.replace/);
   // No class name is read for a chart: no classList, no class attribute.
   const section = content.slice(content.indexOf("// ---- chart marks"), content.indexOf("/** Whether the person can see this element."));
   assert.doesNotMatch(section, /classList|getAttribute\("class"\)|className/);

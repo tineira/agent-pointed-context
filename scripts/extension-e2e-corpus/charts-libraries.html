@@ -130,4 +130,24 @@
 <div class="recharts-legend-wrapper" style="position:absolute;width:490px;height:auto;left:5px;bottom:5px"><ul class="recharts-default-legend" style="padding:0;margin:0;text-align:center;font:12px sans-serif"><li class="recharts-legend-item legend-item-0" style="display:inline-block;margin-right:10px"><svg class="recharts-surface" width="14" height="14" viewBox="0 0 32 32" style="display:inline-block;vertical-align:middle;margin-right:4px"><path stroke="none" fill="#8884d8" d="M0,4h32v24h-32z" class="recharts-legend-icon"></path></svg><span class="recharts-legend-item-text" style="color:#8884d8">pv</span></li><li class="recharts-legend-item legend-item-1" style="display:inline-block;margin-right:10px"><svg class="recharts-surface" width="14" height="14" viewBox="0 0 32 32" style="display:inline-block;vertical-align:middle;margin-right:4px"><path stroke="none" fill="#82ca9d" d="M0,4h32v24h-32z" class="recharts-legend-icon"></path></svg><span class="recharts-legend-item-text" style="color:#82ca9d">uv</span></li></ul></div>
 <div tabindex="-1" class="recharts-tooltip-wrapper" style="visibility:hidden;pointer-events:none;position:absolute;top:0;left:0"><div class="recharts-default-tooltip" style="margin:0;padding:10px;background-color:#fff;border:1px solid #ccc"><p class="recharts-tooltip-label">Page C</p><ul class="recharts-tooltip-item-list"><li class="recharts-tooltip-item">pv : 9800</li></ul></div></div>
 </div>
+
+<h2>Hidden labels</h2>
+<!-- A plain bar chart, its series named by aria-labelledby (a visible "Sales" with a hidden span inside), and text where
+     a label could be that the person does not see or that is a control: an HTML number painted transparent over A, an
+     SVG number with a transparent fill over B, B named by an element far off screen, C named by a textarea and under a
+     clip path that does not resolve, D named by a select. D has an ordinary data label. -->
+<div id="hidden" style="position:relative;width:500px;height:300px;font:12px sans-serif"><svg width="500" height="300">
+<g><text x="50" y="250" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">0</text><text x="50" y="200" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">50</text><text x="50" y="150" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">100</text><text x="50" y="100" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">150</text><text x="50" y="50" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">200</text></g>
+<g><text x="120" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">A</text><text x="200" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">B</text><text x="280" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">C</text><text x="360" y="280" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">D</text></g>
+<g aria-labelledby="hiddenseries" fill="#2f7ed8"><rect id="hA" x="100" y="150" width="40" height="100"></rect><rect id="hB" x="180" y="130" width="40" height="120" aria-labelledby="offscreen"></rect><rect id="hC" x="260" y="170" width="40" height="80" aria-labelledby="notes"></rect><rect id="hD" x="340" y="110" width="40" height="140" aria-labelledby="pick"></rect></g>
+<text x="200" y="120" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" fill="transparent">424242</text>
+<text x="280" y="160" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" clip-path="url(#nowhere)">777</text>
+<text x="360" y="100" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">140</text>
+</svg>
+<div id="hiddenseries" style="position:absolute;left:400px;top:10px">Sales<span style="display:none"> Internal 4455</span></div>
+<div style="position:absolute;left:80px;top:128px;width:80px;text-align:center;color:#000;-webkit-text-fill-color:transparent">998877665544</div>
+<div id="offscreen" style="position:absolute;left:-8000px;top:0;width:200px">112233445566</div>
+<textarea id="notes" style="position:absolute;left:70px;top:8px;width:110px;height:24px">PIN 4321</textarea>
+<select id="pick" style="position:absolute;left:200px;top:8px"><option>Visible</option><option>Hidden 5566</option></select>
+</div>
 </body>

@@ -94,4 +94,54 @@
 <g class="highcharts-legend" transform="translate(220,290)"><g class="highcharts-legend-item highcharts-column-series highcharts-series-0"><text x="18" y="6" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">Venta</text><rect class="highcharts-point" id="legendsales" x="0" y="0" width="12" height="12" fill="#7cb5ec"/></g>
 <g class="highcharts-legend-item highcharts-line-series highcharts-series-1" transform="translate(90,0)"><text x="22" y="6" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">Precio</text><path class="highcharts-graph" d="M 0 6 L 16 6" stroke="#434348" stroke-width="2" fill="none"/><path class="highcharts-point" d="M 4 2 h 8 v 8 h -8 Z" fill="#434348"/></g></g>
 </svg></div>
+
+<h2>Precios con etiquetas</h2>
+<!-- The combo again, now with data labels on both series: each column's sales above it, each price above its point,
+     which stands in front of the column, so the price's label lies on the column too. -->
+<div class="highcharts-container" id="combolabels" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
+<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
+<g class="highcharts-series-group">
+<g class="highcharts-series highcharts-series-0 highcharts-column-series highcharts-tracker">
+<path class="highcharts-point" id="lcol0" fill="#7cb5ec" d="M 95 250 V 75 H 125 V 250 Z"/>
+<path class="highcharts-point" id="lcol1" fill="#7cb5ec" d="M 171 250 V 62.5 H 201 V 250 Z"/>
+<path class="highcharts-point" id="lcol2" fill="#7cb5ec" d="M 247 250 V 68.75 H 277 V 250 Z"/>
+<path class="highcharts-point" id="lcol3" fill="#7cb5ec" d="M 323 250 V 56.25 H 353 V 250 Z"/>
+</g>
+<g class="highcharts-series highcharts-series-1 highcharts-line-series"><path class="highcharts-graph" d="M 110 225 L 186 212.5 L 262 200 L 338 220" fill="none" stroke="#434348" stroke-width="2"/></g>
+<g class="highcharts-markers highcharts-series-1 highcharts-tracker">
+<path class="highcharts-point" id="lprice0" fill="#434348" d="M 106 221 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="lprice1" fill="#434348" d="M 182 208.5 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="lprice2" fill="#434348" d="M 258 196 h 8 v 8 h -8 Z"/>
+<path class="highcharts-point" id="lprice3" fill="#434348" d="M 334 216 h 8 v 8 h -8 Z"/>
+</g></g>
+<g class="highcharts-data-labels highcharts-series-0"><text x="110" y="65" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">280M</text><text x="186" y="52.5" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">300M</text><text x="262" y="58.75" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">290M</text><text x="338" y="46.25" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">310M</text></g>
+<g class="highcharts-data-labels highcharts-series-1"><text x="110" y="213" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">3.70k</text><text x="186" y="200.5" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">3.75k</text><text x="262" y="188" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">3.80k</text><text x="338" y="208" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">3.72k</text></g>
+<g class="highcharts-axis-labels highcharts-xaxis-labels"><text x="110" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Jul</text><text x="186" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Ago</text><text x="262" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Sep</text><text x="338" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Oct</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="60" y="250" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">0</text><text x="60" y="200" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">80M</text><text x="60" y="150" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">160M</text><text x="60" y="100" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">240M</text><text x="60" y="50" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">320M</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="540" y="250" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">3.6k</text><text x="540" y="200" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">3.8k</text><text x="540" y="150" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">4.0k</text><text x="540" y="100" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">4.2k</text><text x="540" y="50" text-anchor="start" dominant-baseline="middle" style="font:11px sans-serif">4.4k</text></g>
+</svg></div>
+
+<h2>Ventas por canal</h2>
+<!-- A stacked column chart: online at the bottom, stores on top, each segment's value written inside it, and each
+     stack's total above it. -->
+<div class="highcharts-container" id="stack" style="position:relative;width:600px;height:300px"><svg class="highcharts-root" width="600" height="300">
+<rect class="highcharts-background" x="0" y="0" width="600" height="300" fill="#ffffff"/>
+<g class="highcharts-series-group">
+<g class="highcharts-series highcharts-series-0 highcharts-column-series highcharts-tracker">
+<rect class="highcharts-point" id="online0" x="120" y="170" width="60" height="80" fill="#7cb5ec"/>
+<rect class="highcharts-point" id="online1" x="270" y="190" width="60" height="60" fill="#7cb5ec"/>
+<rect class="highcharts-point" id="online2" x="420" y="150" width="60" height="100" fill="#7cb5ec"/>
+</g>
+<g class="highcharts-series highcharts-series-1 highcharts-column-series highcharts-tracker">
+<rect class="highcharts-point" id="store0" x="120" y="100" width="60" height="70" fill="#434348"/>
+<rect class="highcharts-point" id="store1" x="270" y="110" width="60" height="80" fill="#434348"/>
+<rect class="highcharts-point" id="store2" x="420" y="100" width="60" height="50" fill="#434348"/>
+</g></g>
+<g class="highcharts-data-labels highcharts-series-0"><text x="150" y="210" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">80</text><text x="300" y="220" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">60</text><text x="450" y="200" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">100</text></g>
+<g class="highcharts-data-labels highcharts-series-1"><text x="150" y="135" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" fill="#ffffff">70</text><text x="300" y="150" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" fill="#ffffff">80</text><text x="450" y="125" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" fill="#ffffff">50</text></g>
+<g class="highcharts-stack-labels"><text x="150" y="88" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">150</text><text x="300" y="98" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">140</text><text x="450" y="88" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">150</text></g>
+<text x="300" y="20" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif" class="highcharts-title">Ventas por canal</text>
+<g class="highcharts-axis-labels highcharts-xaxis-labels"><text x="150" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Q1</text><text x="300" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Q2</text><text x="450" y="268" text-anchor="middle" dominant-baseline="middle" style="font:11px sans-serif">Q3</text></g>
+<g class="highcharts-axis-labels highcharts-yaxis-labels"><text x="60" y="250" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">0</text><text x="60" y="200" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">50</text><text x="60" y="150" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">100</text><text x="60" y="100" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">150</text><text x="60" y="50" text-anchor="end" dominant-baseline="middle" style="font:11px sans-serif">200</text></g>
+</svg></div>
 </body>

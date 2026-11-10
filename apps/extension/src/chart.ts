@@ -50,10 +50,12 @@ export interface Axes {
   vertical: boolean;
   valueAxis: ChartLabel[];
   categoryAxis: ChartLabel[] | null;
-  /** The numbers drawn in the chart that are no axis's: each is the value of the mark it is drawn at. */
+  /** The numbers drawn in the chart that are no axis's: each may be the value of the one mark that owns it (ownerOf). */
   dataLabels: ChartLabel[];
   /** Where marks are: between the value axis's ends and along the categories, on the plot's side of the category labels. */
   plot: Rect;
+  /** The value axis's end ticks (their centres, along the values): a mark's box crosses this range. */
+  ticks: [number, number];
 }
 
 export interface MarkReading {
@@ -188,12 +190,25 @@ export function inPlot(box: Rect, axes: Axes): boolean {
   return x >= axes.plot.left && x <= axes.plot.right && y >= axes.plot.top && y <= axes.plot.bottom;
 }
 
+/** Whether a shape is the box of a label (a tooltip's, a legend's, a button's): it wholly holds words that are not a number. */
+function labelBox(box: Rect, labels: readonly ChartLabel[]): boolean {
+  return labels.some((l) => within(l.box, box) && parseNumber(l.text) === null && !!fold(l.text));
+}
+
 /**
- * Whether a shape of a confirmed chart is one of its marks: in the plot, not across most of it (coversPlot), and not
- * the box of a label (a tooltip's, a legend's, a button's: it holds words that are not a number).
+ * Whether a shape of a confirmed chart is one of its marks (TIN-765, rule B). It is one when all hold:
+ * - its centre is in the plot;
+ * - its box crosses the value axis's tick range: the plot's margin past the end ticks may hold the centre of a bar
+ *   drawn just past the last tick, never a shape that lies only in that margin;
+ * - it is not across most of the plot (coversPlot);
+ * - it is not the box of a label (labelBox);
+ * - it does not wholly hold two or more of the drawing's other shapes (a background, a plot area).
  */
-export function isMark(box: Rect, labels: readonly ChartLabel[], axes: Axes): boolean {
-  return inPlot(box, axes) && !coversPlot(box, axes) && !labels.some((l) => within(l.box, box) && parseNumber(l.text) === null && fold(l.text));
+export function isMark(box: Rect, chart: Pick<Chart, "labels" | "shapes">, axes: Axes): boolean {
+  const [from, to] = axes.vertical ? [box.top, box.bottom] : [box.left, box.right];
+  const crosses = from <= axes.ticks[1] && to >= axes.ticks[0];
+  const holds = chart.shapes.filter((s) => !sameBox(s.box, box) && within(s.box, box)).length;
+  return inPlot(box, axes) && crosses && !coversPlot(box, axes) && !labelBox(box, chart.labels) && holds < 2;
 }
 
 /** The category label in line with a box (within half the space between two labels), or null. */
@@ -212,8 +227,8 @@ function categoryLabel(box: Rect, axes: Axes): ChartLabel | null {
 /**
  * Whether a drawing is a chart, and its axes: a value axis (two numbers or more in one aligned line), and a category
  * axis (two labels or more in a line the other way) or data labels. Null otherwise: then no shape in it is a mark of
- * a chart. Every line of numbers along the values is an axis (a chart may draw one on each side), never data labels; a
- * number in a longer line the other way is that line's. When both ways would do, the one with more category labels
+ * a chart. Every line of numbers along the values that lies beside the plot (none of its numbers over a shape) is an
+ * axis (a chart may draw one on each side), never data labels; a number in a longer line the other way is that line's. When both ways would do, the one with more category labels
  * that shapes line up with wins (one per category, where the other way piles them on a few), then the longer value axis.
  */
 export function chartAxes(chart: Pick<Chart, "labels" | "shapes">): Axes | null {
@@ -221,7 +236,10 @@ export function chartAxes(chart: Pick<Chart, "labels" | "shapes">): Axes | null 
   // A number belongs to the longest line of numbers it is in: the ticks of two axes, one on each side, make rows of
   // two numbers each, which are no axis.
   const numbers = labels.filter((l) => parseNumber(l.text) !== null);
-  const numberLines = { up: columns(numbers).filter(numeric), across: rows(numbers).filter(numeric) };
+  // An axis lies beside the plot: a line of numbers one of which is drawn over a shape (a stack's labels, one above
+  // the other) is data labels, not an axis.
+  const beside = (line: readonly ChartLabel[]) => !line.some((l) => chart.shapes.some((s) => overlap(l.box, s.box)));
+  const numberLines = { up: columns(numbers).filter((line) => numeric(line) && beside(line)), across: rows(numbers).filter((line) => numeric(line) && beside(line)) };
   const longestOf = new Map<ChartLabel, number>();
   for (const line of [...numberLines.up, ...numberLines.across]) for (const l of line) longestOf.set(l, Math.max(longestOf.get(l) ?? 0, line.length));
   const option = (vertical: boolean): Axes | null => {
@@ -234,7 +252,8 @@ export function chartAxes(chart: Pick<Chart, "labels" | "shapes">): Axes | null 
     const taken = new Set([...ticks, ...(categoryAxis ?? [])]);
     const dataLabels = rest.filter((l) => !taken.has(l) && parseNumber(l.text) !== null);
     if (!categoryAxis && !dataLabels.length) return null;
-    return { vertical, valueAxis, categoryAxis, dataLabels, plot: plotOf(vertical, valueAxis, categoryAxis) };
+    const ends = valueAxis.map((l) => (vertical ? cy : cx)(l.box));
+    return { vertical, valueAxis, categoryAxis, dataLabels, plot: plotOf(vertical, valueAxis, categoryAxis), ticks: [Math.min(...ends), Math.max(...ends)] };
   };
   const options = [option(true), option(false)].filter((a): a is Axes => a !== null);
   // How many category labels have a shape in line with them: in the wrong way, many shapes fall by one label.
@@ -256,29 +275,67 @@ export function coversPlot(box: Rect, axes: Axes): boolean {
   return b - a >= span * 0.6;
 }
 
-/**
- * How far a label is from a shape, as a data label of it, or null when it cannot be one: a point's label sits above
- * or below it, centred on it; a bar's is in line with it, on it (0) or past one of its ends.
- */
-function labelGap(l: ChartLabel, shape: ChartShape, vertical: boolean): number | null {
-  const b = shape.box;
-  if (shape.kind === "point") {
-    if (cx(l.box) < b.left - 4 || cx(l.box) > b.right + 4) return null;
-    return Math.max(0, l.box.top - b.bottom, b.top - l.box.bottom);
-  }
-  const across = vertical ? cx(l.box) : cy(l.box);
-  const [lo, hi] = vertical ? [b.left, b.right] : [b.top, b.bottom];
-  if (across < lo - 2 || across > hi + 2) return null;
-  const [from, to] = vertical ? [l.box.top, l.box.bottom] : [l.box.left, l.box.right];
-  const [start, end] = vertical ? [b.top, b.bottom] : [b.left, b.right];
-  if (Math.min(to, end) - Math.max(from, start) > 0) return 0;
-  return Math.max(start - to, from - end);
-}
-
-/** How far a data label may be from its mark. */
+/** How far a data label may be from the end of its mark. */
 const LABEL_REACH = 24;
 
 const sameBox = (a: Rect, b: Rect) => a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+const overlap = (a: Rect, b: Rect) => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
+/** The distance between two boxes (0 when they touch or overlap). */
+const distance = (a: Rect, b: Rect) => Math.hypot(Math.max(0, a.left - b.right, b.left - a.right), Math.max(0, a.top - b.bottom, b.top - a.bottom));
+
+/**
+ * Whether a number could be the value of a mark: its centre strictly inside the mark's span across the values (no
+ * gutter), and the number at the mark's value end. A point's number sits above or below it, within LABEL_REACH; a
+ * bar's is on it or within LABEL_REACH past one of its ends.
+ */
+function couldOwn(l: ChartLabel, m: ChartShape, vertical: boolean): boolean {
+  const b = m.box;
+  if (m.kind === "point") {
+    const c = cx(l.box);
+    return c > b.left && c < b.right && Math.max(0, l.box.top - b.bottom, b.top - l.box.bottom) <= LABEL_REACH;
+  }
+  const c = vertical ? cx(l.box) : cy(l.box);
+  const [lo, hi] = vertical ? [b.left, b.right] : [b.top, b.bottom];
+  if (!(c > lo && c < hi)) return false;
+  const [from, to] = vertical ? [l.box.top, l.box.bottom] : [l.box.left, l.box.right];
+  const [start, end] = vertical ? [b.top, b.bottom] : [b.left, b.right];
+  return Math.max(0, start - to, from - end) <= LABEL_REACH;
+}
+
+/**
+ * The one mark a data label is the value of, or null (TIN-765, rule A). A number is a mark's value only when exactly
+ * one mark could own it (couldOwn), and no other mark of any series is a rival:
+ * - a rival lies within LABEL_REACH of the number, with its centre (across the values) as near to the number's centre
+ *   as the owner's is: a point drawn in front of a column, under the number, makes the number nobody's;
+ * - with the number outside every mark, a rival is any mark whose span holds the number's centre: a stack's total,
+ *   above its top segment, is no segment's value.
+ * Whatever is ambiguous is nobody's value: no value beats a wrong value.
+ */
+export function ownerOf(l: ChartLabel, marks: readonly ChartShape[], axes: Axes): ChartShape | null {
+  const owners = marks.filter((m) => couldOwn(l, m, axes.vertical));
+  if (owners.length !== 1) return null;
+  const owner = owners[0]!;
+  const across = axes.vertical ? cx : cy;
+  const at = across(l.box);
+  const mine = Math.abs(across(owner.box) - at);
+  const outside = !marks.some((m) => overlap(l.box, m.box));
+  for (const m of marks) {
+    if (m === owner) continue;
+    if (distance(l.box, m.box) <= LABEL_REACH && Math.abs(across(m.box) - at) <= mine) return null;
+    const [lo, hi] = axes.vertical ? [m.box.left, m.box.right] : [m.box.top, m.box.bottom];
+    if (outside && at > lo && at < hi) return null;
+  }
+  return owner;
+}
+
+/**
+ * The numbers that may be values at all: data labels (chartAxes) that do not lie above the plot (a year as the chart's
+ * title) and are not in the box of a label (a tooltip's "400" beside its "F").
+ */
+function valueLabels(chart: Chart, axes: Axes): ChartLabel[] {
+  const boxes = chart.shapes.filter((s) => labelBox(s.box, chart.labels));
+  return axes.dataLabels.filter((l) => l.box.bottom > axes.plot.top && !boxes.some((s) => within(l.box, s.box)));
+}
 
 /**
  * The single label above everything the chart draws (its axes and its marks) that is not a number: the chart's title.
@@ -287,7 +344,7 @@ const sameBox = (a: Rect, b: Rect) => a.left === b.left && a.top === b.top && a.
 function titleOf(chart: Chart, axes: Axes): string | null {
   const axisLabels = [...axes.valueAxis, ...(axes.categoryAxis ?? [])];
   const used = new Set([...axisLabels, ...axes.dataLabels]);
-  const marks = chart.shapes.filter((s) => isMark(s.box, chart.labels, axes));
+  const marks = chart.shapes.filter((s) => isMark(s.box, chart, axes));
   const top = Math.min(...axisLabels.map((l) => l.box.top), ...marks.map((s) => s.box.top));
   const above = chart.labels.filter((l) => fold(l.text) && !used.has(l) && l.box.bottom <= top && parseNumber(l.text) === null);
   return above.length === 1 ? fold(above[0]!.text) : null;
@@ -300,11 +357,11 @@ function titleOf(chart: Chart, axes: Axes): string | null {
  *
  * - category: the category label in line with the mark, when no other mark of its series is nearer to that label;
  * - series: the name its group declares; with one series, the chart's single title;
- * - value: its own accessible text, else the data label drawn at it that no other mark is as near to; else none, and
- *   the text says no value is written.
+ * - value: its own accessible text, else the one data label it owns (ownerOf); else none, and the text says no
+ *   value is written.
  */
 export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: string | null): MarkReading | null {
-  if (!isMark(mark.box, chart.labels, axes)) return null;
+  if (!isMark(mark.box, chart, axes)) return null;
   const along = axes.vertical ? cx : cy;
 
   let category: string | null = null;
@@ -320,16 +377,10 @@ export function describeMark(mark: ChartMark, chart: Chart, axes: Axes, omit?: s
   const accessible = fold(mark.accessible ?? "");
   let value: string | null = accessible || null;
   if (!value) {
-    const others = chart.shapes.filter((s) => !sameBox(s.box, mark.box) && isMark(s.box, chart.labels, axes));
-    let found: { label: ChartLabel; gap: number } | null = null;
-    for (const l of axes.dataLabels) {
-      const gap = labelGap(l, mark, axes.vertical);
-      if (gap === null || gap > LABEL_REACH) continue;
-      // Another mark as near or nearer: the label may be that one's, so it is no one's here.
-      if (others.some((o) => (labelGap(l, o, axes.vertical) ?? Infinity) <= gap)) continue;
-      if (!found || gap < found.gap) found = { label: l, gap };
-    }
-    if (found) value = fold(found.label.text);
+    // The mark among the chart's marks, so that ownerOf can tell it from the others.
+    const marks = [...chart.shapes.filter((s) => !sameBox(s.box, mark.box) && isMark(s.box, chart, axes)), mark];
+    const owned = valueLabels(chart, axes).filter((l) => ownerOf(l, marks, axes) === mark);
+    if (owned.length === 1) value = fold(owned[0]!.text);
   }
 
   if (!category && !value) return null;
@@ -367,11 +418,12 @@ export interface SvgText {
 /**
  * Whether an SVG text is the outline copy of a label drawn twice: a halo drawn under the label so it reads on any
  * background. It is drawn with a stroke only, and an unstroked twin with the same words is drawn at the same place
- * (their boxes within a pixel). A label drawn with a fill (bold-looking text with a stroke too) is never one.
+ * (their centres within a pixel). A label drawn with a fill (bold-looking text with a stroke too) is never one.
  */
 export function isOutlineCopy(el: SvgText, twins: readonly SvgText[]): boolean {
   const words = fold(el.text);
   if (!el.strokeOnly || !words) return false;
-  const near = (a: Rect, b: Rect) => Math.abs(a.left - b.left) <= 1 && Math.abs(a.top - b.top) <= 1 && Math.abs(a.right - b.right) <= 1 && Math.abs(a.bottom - b.bottom) <= 1;
+  // Centres, not edges: a stroke widens a halo's box by half its width on each side (1.5 px for a 3 px halo). Rule D.
+  const near = (a: Rect, b: Rect) => Math.abs(cx(a) - cx(b)) <= 1 && Math.abs(cy(a) - cy(b)) <= 1;
   return twins.some((t) => t !== el && !t.stroked && fold(t.text) === words && near(t.box, el.box));
 }
