@@ -578,3 +578,15 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   outline_changed: "The page changed what was outlined: nothing was sent. Drop again.",
   opaque_frame: "This part of the page has no address of its own, so your agent cannot read it: nothing was sent.",
 };
+
+/**
+ * The words for a site's choice, as the popup shows them (TIN-786). One vocabulary: the stored value on the
+ * left of each pair is what `sites` holds ("ask" is no stored value). The card's own buttons are worded beside it.
+ */
+export const SITE_LABELS = {
+  ask: "Ask first",
+  always: "Always send",
+  never: "Never send",
+  sensitive: "Ask every time",
+  sensitiveSite: "Sensitive site: ask every time",
+} as const;
