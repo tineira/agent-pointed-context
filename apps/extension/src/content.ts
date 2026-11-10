@@ -157,14 +157,13 @@ function listen(): void {
   const onDragover = (e: DragEvent) => {
     if (!e.isTrusted || !carriesAgent(e)) return;
     if (apcApp()) {
-      unanswered = false;
-      if (!directOnly.accepts()) {
-        // The app answers its own drops, and its handlers ran before this one (keepLast). When none took this
-        // dragover, the browser would refuse the drop with no word (TIN-703): the extension takes it, to say so.
-        if (e.defaultPrevented) return;
-        unanswered = true;
-        overTarget = appTakes(document.elementFromPoint(e.clientX, e.clientY));
-      }
+      // The app's handlers ran before this one (keepLast): whether any took this dragover, noted on every one, also
+      // while the apc.json lookup is on its way, so a drop held for it is answered as it would be after (TIN-777).
+      unanswered = !e.defaultPrevented;
+      overTarget = unanswered && appTakes(document.elementFromPoint(e.clientX, e.clientY));
+      // The app answers its own drops. When none took this dragover, the browser would refuse the drop with no word
+      // (TIN-703): the extension takes it, to say so.
+      if (!directOnly.accepts() && !unanswered) return;
       // A Direct-only app that would lose the drop (or one that may be, its file still on its way), or a drop
       // nothing on the page takes: take it anywhere, to answer it. Nothing is outlined: there is nothing to read.
       e.preventDefault();
@@ -202,17 +201,17 @@ function listen(): void {
 
   /** An APC app's drop (APC 0.5): the app's own, unless it is Direct-only and would lose it. */
   const onAppDrop = (e: DragEvent) => {
+    // Nothing on the page took the drag (TIN-703): the card of a drop an app cannot take (TIN-579), not silence.
+    // Decided at the drop point too: the last dragover may have been off a target and the drop on one, which
+    // the app then takes (it decides from the drop point as well).
+    // The app's own rule (appTakes = its targetOf), from the element its targetAt starts at. An app that left the
+    // last dragover unanswered ON a target does not take drops there at all (Pulse without v2, TIN-756): the card.
+    const left = notTaken(unanswered, overTarget, appTakes(document.elementFromPoint(e.clientX, e.clientY)));
+    unanswered = false;
+    overTarget = false;
     const answer = directOnly.drop();
     if (!answer) {
-      // Nothing on the page took the drag (TIN-703): the card of a drop an app cannot take (TIN-579), not silence.
-      // Decided at the drop point too: the last dragover may have been off a target and the drop on one, which
-      // the app then takes (it decides from the drop point as well).
-      // The app's own rule (appTakes = its targetOf), from the element its targetAt starts at. An app that left the
-      // last dragover unanswered ON a target does not take drops there at all (Pulse without v2, TIN-756): the card.
-      const stale = !notTaken(unanswered, overTarget, appTakes(document.elementFromPoint(e.clientX, e.clientY)));
-      unanswered = false;
-      overTarget = false;
-      if (stale) return;
+      if (!left) return;
       e.preventDefault();
       return answerDirectOnly(null, e.clientX, e.clientY);
     }
@@ -225,7 +224,8 @@ function listen(): void {
     }
     // Still reading the app's file: the drop is held, so the page does not act on it and then get a card
     // too. When the file says Direct-only, the card; otherwise the same drop goes back to the page, on the
-    // element it landed on, with the same data (untrusted, so this listener lets it through).
+    // element it landed on, with the same data (untrusted, so this listener lets it through). A drop the page then
+    // leaves alone gets the card it would have had without the lookup: the one above (TIN-777).
     e.stopImmediatePropagation();
     const { clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey } = e;
     const at = e.target;
@@ -234,7 +234,9 @@ function listen(): void {
       if (app) return answerDirectOnly(app, clientX, clientY);
       const transfer = new DataTransfer();
       for (const [type, value] of items) transfer.setData(type, value);
-      at?.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, dataTransfer: transfer }));
+      // dispatchEvent is false when a handler of the page cancelled the drop: the app took it (as @tineira/apc-web does).
+      const taken = !!at && !at.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, composed: true, clientX, clientY, screenX, screenY, ctrlKey, shiftKey, altKey, metaKey, dataTransfer: transfer }));
+      if (left && !taken) answerDirectOnly(null, clientX, clientY);
     });
   };
 

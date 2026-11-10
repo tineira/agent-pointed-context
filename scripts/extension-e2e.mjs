@@ -1039,6 +1039,57 @@ try {
     await cdp("Target.closeTarget", { targetId: muteId });
     console.log("3. on an APC app the app keeps the drop, and the extension sends nothing and pins nothing; a drop the app leaves says so");
 
+    // 3a. A drop that lands while the extension is still reading the app's apc.json (TIN-777). The app's server holds
+    // the file's answer until the drop is in, so the drop is the held one on every run; each case has an origin of its
+    // own, since the service worker keeps a lookup per origin. The file is not there (404: the lookup told nothing), so
+    // the held drop goes back to the page: one the app leaves gets the card, once; one the app takes gets none.
+    const heldDrop = async (sel) => {
+      const asked = [];
+      const slow = createServer((req, res) => {
+        if (req.url.startsWith("/.well-known/apc.json")) return void asked.push(res);
+        res.writeHead(200, { "content-type": "text/html" }).end(APC);
+      }).listen(0, "::");
+      await new Promise((r) => slow.once("listening", r));
+      try {
+        const { targetId } = await cdp("Target.createTarget", { url: `http://127.0.0.1:${slow.address().port}/apc` });
+        const { sessionId: sid } = await cdp("Target.attachToTarget", { targetId, flatten: true });
+        await sleep(2500);
+        // The drops the page sees: the extension holds the person's (trusted) one from it and hands it back untrusted.
+        await cdp("Runtime.evaluate", { expression: `window.__drops = []; addEventListener("drop", (e) => __drops.push(e.isTrusted));` }, sid);
+        const at = (await cdp("Runtime.evaluate", { expression: `(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`, returnByValue: true }, sid)).result.value;
+        const data = { items: [{ mimeType: T, data: await payload() }], dragOperationsMask: 2 };
+        await cdp("Input.dispatchDragEvent", { type: "dragEnter", x: at.x, y: at.y, data }, sid);
+        await until("the extension asking for the app's apc.json", async () => asked.length > 0, 2000);
+        for (const type of ["dragOver", "drop"]) await cdp("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data }, sid);
+        await sleep(300);
+        assert.deepEqual(await answers(sid), [], "no card while the lookup is on its way");
+        for (const res of asked) res.writeHead(404, { "content-type": "text/plain" }).end("no file");
+        const seen = async () => (await cdp("Runtime.evaluate", { expression: `JSON.stringify(window.__drops)`, returnByValue: true }, sid)).result.value;
+        await until("the held drop handed back to the page", async () => (await seen()) !== "[]", 8000);
+        await sleep(1000);
+        const result = {
+          drops: JSON.parse(await seen()),
+          answers: await answers(sid),
+          text: (await cdp("Runtime.evaluate", { expression: `document.getElementById("app").textContent`, returnByValue: true }, sid)).result.value,
+          pins: (await pinNodes(sid)).states.length,
+        };
+        await cdp("Target.closeTarget", { targetId });
+        return result;
+      } finally {
+        slow.closeAllConnections();
+        slow.close();
+      }
+    };
+    const left = await heldDrop("#ignored");
+    assert.deepEqual(left.drops, [false], "the drop was held for the lookup and handed back to the page");
+    assert.deepEqual(left.answers, ["not_taken"], "a held drop the app leaves gets the card, once");
+    assert.equal(left.pins, 0);
+    const took = await heldDrop("#app");
+    assert.deepEqual(took.drops, [false], "the drop was held for the lookup and handed back to the page");
+    assert.equal(took.text, "app took it");
+    assert.deepEqual(took.answers, [], "a held drop the app takes gets no card");
+    console.log("3a. a drop held for the apc.json lookup is answered as after it: the card when the app leaves it, none when it takes it");
+
     // 3b. data-focus alone is not an APC app (TIN-703): the page takes the agent and its reading goes.
     const { targetId: focusId } = await cdp("Target.createTarget", { url: pageUrl.replace("/notes", "/focus") });
     const { sessionId: focus } = await cdp("Target.attachToTarget", { targetId: focusId, flatten: true });
