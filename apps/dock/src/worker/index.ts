@@ -4,7 +4,7 @@
  * The page is static assets: the landing of the APC standard at / (TIN-420; always, whoever asks, TIN-610) and the hub dock at /dock. /v1 belongs to V1
  * (apc-demo, by zone routes); if a request for it still gets here, it is sent on or refused, never the dock page (TIN-605).
  */
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
@@ -63,17 +63,29 @@ app.get("/api/dock/mine", async (c) => c.json({ has_dock: await ownsDock(c.env, 
 app.get("/api/health", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
 
 /**
+ * The cookie that names the dock lives as long as the dock: DOCK_TTL_MS after its last use (TIN-823). The hub
+ * slides its own end on every use (touch); the cookie is sent again on every resume and every state read, so
+ * a dock used daily, or a desktop dock left open for days, never loses its cookie while the dock lives on.
+ */
+function keepCookie(c: Context, did: string, owner: string): void {
+  setCookie(c, COOKIE, `${did}.${owner}`, { path: "/", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: Math.floor(DOCK_TTL_MS / 1000) });
+}
+
+/**
  * Resume the visitor's dock, or open a new one. With { resume: true } (the desktop dock's pets, #84,
  * which open beside the dock's own window and must not make a second dock), only resume: 404 without one.
  */
 app.post("/api/dock", async (c) => {
   const current = session(getCookie(c, COOKIE));
-  if (current && (await stubFor(c.env, current.did).isOwner(current.owner))) return c.json({ did: current.did, created: false });
+  if (current && (await stubFor(c.env, current.did).isOwner(current.owner))) {
+    keepCookie(c, current.did, current.owner);
+    return c.json({ did: current.did, created: false });
+  }
   const body = (await c.req.json().catch(() => null)) as { resume?: unknown } | null;
   if (body?.resume === true) return c.json({ error: "no_dock" }, 404);
   const did = randomHex(16);
   const { owner } = await stubFor(c.env, did).init(did);
-  setCookie(c, COOKIE, `${did}.${owner}`, { path: "/", httpOnly: true, sameSite: "Lax", secure: new URL(c.req.url).protocol === "https:", maxAge: Math.floor(DOCK_TTL_MS / 1000) });
+  keepCookie(c, did, owner);
   return c.json({ did, created: true });
 });
 
@@ -87,7 +99,10 @@ app.use("/api/d/:did/*", async (c, next) => {
 });
 
 const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.did);
-app.get("/api/d/:did/state", async (c) => c.json(await stub(c).state(new URL(c.req.url).origin)));
+app.get("/api/d/:did/state", async (c) => {
+  keepCookie(c, c.var.did, c.var.owner);
+  return c.json(await stub(c).state(new URL(c.req.url).origin));
+});
 app.post("/api/d/:did/agents", async (c) => c.json(await stub(c).addAgent()));
 app.post("/api/d/:did/kept", async (c) => c.json(await stub(c).keptAtHand()));
 /** Start over (TIN-411): the dock gives its grants back and forgets everything, and its cookie goes. */
