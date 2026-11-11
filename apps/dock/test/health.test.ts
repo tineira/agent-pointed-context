@@ -105,3 +105,46 @@ test("the root is always the landing; /api/dock/mine says whether the visitor ha
   assert.equal(startOver.headers.get("x-frame-options"), "DENY");
   assert.equal((await app.request("https://example.com/api/dock/mine", {}, env)).headers.get("x-frame-options"), "DENY");
 });
+
+test("the dock cookie is sent again on every resume and state read, so it lasts 7 days after last use, not after creation (TIN-823)", async () => {
+  const did = "a".repeat(32);
+  const owner = "b".repeat(32);
+  const live = `apc_dock=${did}.${owner}`;
+  let inits = 0;
+  const env = {
+    HUB: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        isOwner: async (secret: string) => name === did && secret === owner,
+        init: async () => (inits++, { owner: "e".repeat(32) }),
+        state: async () => ({ agents: [] }),
+      }),
+    },
+  };
+  const renewed = (r: Response, what: string) => {
+    const cookie = r.headers.get("set-cookie") ?? "";
+    assert.match(cookie, new RegExp(`^apc_dock=${did}\.${owner};`), what);
+    assert.match(cookie, /Max-Age=604800\b/, what);
+    assert.match(cookie, /HttpOnly/, what);
+    assert.match(cookie, /SameSite=Lax/, what);
+  };
+  // Resuming a live dock: the same dock, its cookie renewed, no new dock.
+  for (const body of [{}, { resume: true }]) {
+    const r = await app.request("https://example.com/api/dock", { method: "POST", headers: { cookie: live, "content-type": "application/json" }, body: JSON.stringify(body) }, env);
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { did, created: false });
+    renewed(r, `resume ${JSON.stringify(body)}`);
+  }
+  assert.equal(inits, 0);
+  // A dock left open (the desktop dock) reads its state on every change: each read renews the cookie too.
+  const state = await app.request(`https://example.com/api/d/${did}/state`, { headers: { cookie: live } }, env);
+  assert.equal(state.status, 200);
+  renewed(state, "state");
+  // Someone else's or a dead dock's cookie is never renewed.
+  const refused = await app.request(`https://example.com/api/d/${did}/state`, { headers: { cookie: `apc_dock=${did}.${"f".repeat(32)}` } }, env);
+  assert.equal(refused.status, 404);
+  assert.equal(refused.headers.get("set-cookie"), null);
+  const pets = await app.request("https://example.com/api/dock", { method: "POST", headers: { cookie: `apc_dock=${did}.${"f".repeat(32)}`, "content-type": "application/json" }, body: JSON.stringify({ resume: true }) }, env);
+  assert.equal(pets.status, 404);
+  assert.equal(pets.headers.get("set-cookie"), null);
+});

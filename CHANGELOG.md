@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### A dock in use keeps its cookie: it lasts 7 days after the last use, not 7 days after the dock was made (2026-11-11, TIN-823)
+
+- **Reopening the dock (the web page or the Windows dock) more than 7 days after it was made no longer opens a new, empty dock with the agents shown as not connected.** The cookie that names the dock was set only when the dock was made, while the dock itself lives 7 days past its last use; the cookie is now sent again, with 7 more days, on every resume (`POST /api/dock`) and every state read, so a dock left open for days keeps it too. A dock already lost this way cannot be opened again: its agents reconnect to the new one. (`apps/dock/src/worker/index.ts`, `apps/dock/test/health.test.ts`)
+
 ### A drop an APC app does not take gets its card even when it lands before the `apc.json` lookup answers (2026-11-10, TIN-777)
 
 - **On an APC app without `data-apc-native-drops`, a drop that arrives while the extension is still reading the app's `apc.json` now gets "Drop your agent on a highlighted part" when nothing on the page takes it, as it would after the lookup; before, it ended in silence about two times in three.** The extension notes on every `dragover` whether the page took it, also during the lookup, and a held drop handed back to the page that no handler cancels gets the card under the same rule (`notTaken`); a drop the app takes, or a Direct-only answer, gets no second card, and nothing is sent in any case. (`apps/extension/src/content.ts`, `scripts/extension-e2e.mjs`, `DESIGN.md`)
