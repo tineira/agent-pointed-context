@@ -119,28 +119,44 @@ export function LinkPanel(props: { state: DockState; base: string; back: () => v
   const [error, setError] = useState<string | null>(null);
   const devicesAtStart = useRef((props.state.devices ?? []).length);
   const now = useNow();
+  // One request at a time (Review round 1 on #158): a newer code ends the last, so two in flight could leave
+  // the one on screen dead. And a code that arrives after the panel closed is cancelled at once.
+  const [making, setMaking] = useState(false);
+  const left = useRef(false);
+  const cancelCode = (code: string) => void call(`${props.base}/link/cancel`, { code }).catch(() => undefined);
   const make = () => {
+    if (making) return;
+    setMaking(true);
     setError(null);
-    void call<{ ok?: boolean; code?: string; expires_at?: number; error?: string }>(`${props.base}/link`, {}).then(
-      (r) => {
-        if (r.ok && r.code && r.expires_at) setMade({ code: r.code, expires_at: r.expires_at });
-        else setError(r.error === "too_many_devices" ? "This dock has as many computers as it can hold. Remove one first." : "Could not make a code. Try again.");
-        props.refresh();
-      },
-      () => setError("Could not reach your dock. Try again."),
-    );
+    void call<{ ok?: boolean; code?: string; expires_at?: number; error?: string }>(`${props.base}/link`, {})
+      .then(
+        (r) => {
+          if (left.current) return r.ok && r.code ? cancelCode(r.code) : undefined;
+          if (r.ok && r.code && r.expires_at) setMade({ code: r.code, expires_at: r.expires_at });
+          else setError(r.error === "too_many_devices" ? "This dock has as many computers as it can hold. Remove one first." : "Could not make a code. Try again.");
+          props.refresh();
+        },
+        () => !left.current && setError("Could not reach your dock. Try again."),
+      )
+      .finally(() => setMaking(false));
   };
   useEffect(make, []);
   const cancel = () => {
-    if (made && made.expires_at > Date.now()) void call(`${props.base}/link/cancel`, { code: made.code }).catch(() => undefined);
+    left.current = true;
+    if (made && made.expires_at > Date.now()) cancelCode(made.code);
     props.back();
   };
   const devices = props.state.devices ?? [];
   const joined = devices.length > devicesAtStart.current ? devices[devices.length - 1] : null;
   const waiting = pendingJoins(props.state, now);
-  // The code is open until claimed; a claimed one shows as the request above, and the panel says so.
-  const claimed = !!made && props.state.link?.code !== made.code && (waiting.length > 0 || (props.state.joins ?? []).some((j) => j.status === "approved"));
-  const expired = !!made && made.expires_at <= now && !claimed;
+  // The code is open until claimed. Once the hub showed it open, a code it no longer shows is spent: claimed
+  // and waiting (the request above), or used, denied, cancelled elsewhere (Review round 1 on #158: a denied
+  // code stayed on screen as if it still worked).
+  const shownOpen = useRef<string | null>(null);
+  if (made && props.state.link?.code === made.code) shownOpen.current = made.code;
+  const spent = !!made && shownOpen.current === made.code && props.state.link?.code !== made.code;
+  const claimed = spent && (waiting.length > 0 || (props.state.joins ?? []).some((j) => j.status === "approved"));
+  const expired = !!made && !claimed && (made.expires_at <= now || spent);
 
   if (joined)
     return (
@@ -176,8 +192,8 @@ export function LinkPanel(props: { state: DockState; base: string; back: () => v
       {claimed && <p className="join-note">A computer entered the code. Answer its request above: nothing joins without your yes.</p>}
       {expired && (
         <div className="row">
-          <p>This code expired.</p>
-          <button type="button" className="primary" onClick={make}>
+          <p>{spent ? "This code no longer works: it was used, or the request was denied." : "This code expired."}</p>
+          <button type="button" className="primary" onClick={make} disabled={making}>
             New code
           </button>
         </div>
@@ -202,6 +218,7 @@ const JOIN_ERRORS: Record<string, string> = {
   forbidden: "Open this from your dock's own page.",
   denied: "The other computer said no. Nothing joined.",
   expired: "Nobody answered on the other computer in time. Make a new code there and try again.",
+  full: "That dock has as many computers as it can hold. Remove one there first.",
   unreachable: "Could not reach the dock. Try again.",
 };
 
@@ -252,7 +269,7 @@ export function JoinPanel(props: { initialCode: string; desktop: boolean; leavin
   return (
     <section className="dock-panel" aria-labelledby="join-panel-title">
       <div className="dock-panel-head">
-        <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={props.cancel} disabled={phase.kind === "waiting"}>
+        <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={props.cancel}>
           ←
         </button>
         <h2 id="join-panel-title">Join a dock you already have</h2>
@@ -261,8 +278,14 @@ export function JoinPanel(props: { initialCode: string; desktop: boolean; leavin
         <div className="join-waiting" role="status">
           <b>Waiting for a yes on your other computer…</b>
           <p>
-            It shows there as <b>{phase.label}</b>. Answer within 2 minutes.
+            It shows there as <b>{phase.label}</b>. Answer within 2 minutes, and keep this page open until then.
           </p>
+          {/* Stop waiting (Review round 1 on #158): the request on the other computer ends by itself. */}
+          <div className="row">
+            <button type="button" onClick={() => setPhase({ kind: "idle" })}>
+              Stop waiting
+            </button>
+          </div>
         </div>
       ) : (
         <form
@@ -300,7 +323,7 @@ export function JoinPanel(props: { initialCode: string; desktop: boolean; leavin
 export function ComputersPanel(props: { state: DockState; base: string; back: () => void; link: () => void; refresh: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const remove = (d: DockDevice) => {
-    if (!confirm(`Remove ${d.label} from this dock? It stops opening this dock. Your agents, their connection and the other computers stay.`)) return;
+    if (!confirm(`Remove ${d.label} from this dock? It stops opening this dock. Your agents, their connection and the other computers stay. Every browser extension sending page readings is unpaired too, so each asks once again on its next drop.`)) return;
     setError(null);
     void call<{ ok?: boolean }>(`${props.base}/devices/${d.id}/remove`, {})
       .then((r) => r?.ok === false && setError("Could not remove it: it may be gone already."))

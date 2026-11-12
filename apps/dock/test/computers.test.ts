@@ -179,6 +179,33 @@ test("a no, or no answer in time, joins nothing; the other computer is told", as
   assert.equal((await a.send(`/api/d/${did}/joins/${late.id}`, { action: "approve" })).status, 400);
 });
 
+test("the alarm ends a request nobody answered and tells the open docks", async () => {
+  const env = world();
+  const a = computer(env, CHROME_WIN);
+  const did = await a.open();
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
+  await computer(env, EDGE_WIN).send("/api/dock/join", { code });
+  const { object: hub, room } = env.HUB.objects.get(did);
+  assert.ok(room.alarm !== null && room.alarm <= Date.now() + 2 * 60_000 + 1000, "the alarm rings by the request's end");
+  const page = room.openPage();
+  room.db.prepare("update joins set answer_by = ?").run(Date.now() - 1);
+  await hub.alarm();
+  assert.equal(room.db.prepare("select count(*) as n from joins").get()!.n, 0);
+  assert.ok(page.sent.some((m: string) => m.includes('"state"')), "the dock page is told to read its state again");
+});
+
+test("guessing is limited per client: one client's misses do not block another's join", async () => {
+  const env = world();
+  const a = computer(env, CHROME_WIN);
+  const did = await a.open();
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
+  const guesser = computer(env, FIREFOX_MAC);
+  for (let i = 0; i < 30; i++) assert.equal((await guesser.send("/api/dock/join", { code: "000000000" }, { "cf-connecting-ip": "203.0.113.9" })).json.error, "unknown_code");
+  assert.equal((await guesser.send("/api/dock/join", { code }, { "cf-connecting-ip": "203.0.113.9" })).status, 429, "the guesser is held");
+  const asked = await computer(env, EDGE_WIN).send("/api/dock/join", { code }, { "cf-connecting-ip": "198.51.100.7" });
+  assert.equal(asked.status, 200, "someone else joins as usual");
+});
+
 test("a code nobody claims in time is gone; a new code ends the last one; Cancel ends it", async () => {
   const env = world();
   const a = computer(env, CHROME_WIN);
@@ -233,6 +260,55 @@ test("a computer removes another, never itself; the removed one's cookie stops o
   // The removed computer's page was closed; this one's stays open.
   assert.equal(pageB.readyState, 3);
   assert.equal(pageA.readyState, 1);
+  // Its secret no longer opens the dock's socket either (403 before any upgrade).
+  const removedSecret = b.cookie.split(".")[1]!;
+  const upgrade = await env.HUB.get(did).fetch(new Request(`${ORIGIN}/api/d/${did}/ws`, { headers: { "x-apc-owner": removedSecret, upgrade: "websocket" } }));
+  assert.equal(upgrade.status, 403);
+  // Its next visit opens a new dock, and the page is told why (not a silent empty dock).
+  const again = await b.send("/api/dock", {});
+  assert.equal(again.json.created, true);
+  assert.equal(again.json.replaced, true);
+  assert.notEqual(again.json.did, did);
+  // A first visit with no cookie says nothing of the kind.
+  assert.equal((await computer(env, FIREFOX_MAC).send("/api/dock", {})).json.replaced, undefined);
+});
+
+test("Remove unpairs every browser sending page readings, and a page socket from before this change is closed to come back tagged", async () => {
+  const env = world();
+  const a = computer(env, CHROME_WIN);
+  const b = computer(env, EDGE_WIN);
+  const did = await a.open();
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
+  const claim = (await b.send("/api/dock/join", { code })).json.claim;
+  await a.send(`/api/d/${did}/joins/${(await a.state(did)).joins[0].id}`, { action: "approve" });
+  await b.send("/api/dock/join/status", { claim });
+  const { room } = env.HUB.objects.get(did);
+  const agent = room.db.prepare("select id from agents").get()!.id as string;
+  // A browser's extension paired with the agent, and pointing it at a page: its token carries no computer.
+  room.db.prepare("insert into readers (id, agent_id, label, origin, status, token, created_at) values ('rd_1', ?, 'Edge on Windows', 'chrome-extension://x', 'paired', ?, ?)").run(agent, `${did}.${"9".repeat(32)}`, new Date().toISOString());
+  room.db.prepare("insert into pointer (agent_id, pairing_id, app, focus) values (?, 'rd_1', '{}', '{}')").run(agent);
+  const old = room.openPage(); // a socket accepted before TIN-838: no computer in its attachment
+  const theirs = (await a.state(did)).devices.find((d: Json) => !d.current);
+  assert.deepEqual((await a.send(`/api/d/${did}/devices/${theirs.id}/remove`, {})).json, { ok: true });
+  assert.equal(room.db.prepare("select count(*) as n from readers").get()!.n, 0, "the removed computer's extension can no longer point the agent");
+  assert.equal(room.db.prepare("select count(*) as n from pointer").get()!.n, 0, "nor does a pointer from it stay");
+  assert.equal(old.readyState, 3, "the untagged socket was closed, so its page reconnects with a tag");
+});
+
+test("an approval collected when the dock is already full says so, and adds no computer", async () => {
+  const env = world();
+  const a = computer(env, CHROME_WIN);
+  const did = await a.open();
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
+  const b = computer(env, EDGE_WIN);
+  const claim = (await b.send("/api/dock/join", { code })).json.claim;
+  await a.send(`/api/d/${did}/joins/${(await a.state(did)).joins[0].id}`, { action: "approve" });
+  // Meanwhile the dock filled up (another approval collected first).
+  const { room } = env.HUB.objects.get(did);
+  for (let i = 0; i < 9; i++) room.db.prepare("insert into devices (id, secret, label, created_at) values (?, ?, 'x', ?)").run(`dv_f${i}`, String(i).repeat(32), new Date().toISOString());
+  assert.deepEqual((await b.send("/api/dock/join/status", { claim })).json, { status: "full" });
+  assert.equal(b.cookie, "");
+  assert.equal(room.db.prepare("select count(*) as n from devices").get()!.n, 10);
 });
 
 test("a dock from before (one owner secret) becomes its first computer, and its old cookie still opens it", async () => {
@@ -275,14 +351,11 @@ test("leaving a dock with something in it keeps it for its agents; Start over st
   assert.equal((await d.send(`/api/d/${did2}/state`)).status, 404);
 });
 
-test("guessing codes: past 60 misses in a minute the directory answers busy, even for a real code", async () => {
-  const env = world();
-  const a = computer(env, CHROME_WIN);
-  const did = await a.open();
-  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
-  const b = computer(env, EDGE_WIN);
-  for (let i = 0; i < 60; i++) assert.equal((await b.send("/api/dock/join", { code: "000000000" })).json.error, "unknown_code");
-  const busy = await b.send("/api/dock/join", { code });
-  assert.equal(busy.status, 429);
-  assert.equal(busy.json.error, "busy");
+test("guessing from many addresses: past 3000 misses in a minute, all together, the directory answers busy", async () => {
+  const room = durableObjectRoom();
+  const codes = new JoinCodes(room.ctx, {});
+  assert.equal(await codes.put("KQ7M4P2XD", "a".repeat(32), Date.now() + 60_000), true);
+  assert.equal(await codes.put("KQ7M4P2XD", "b".repeat(32), Date.now() + 60_000), false, "a code is one dock's");
+  for (let i = 0; i < 3000; i++) assert.deepEqual(await codes.take("000000000", `client-${i % 200}`), { error: "unknown_code" });
+  assert.deepEqual(await codes.take("KQ7M4P2XD", "someone-new"), { error: "busy" });
 });

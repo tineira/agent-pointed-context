@@ -618,11 +618,24 @@ export class Hub extends DurableObject<Env> {
   private closeDevice(deviceId: string): void {
     for (const ws of this.ctx.getWebSockets()) {
       try {
-        if ((ws.deserializeAttachment() as { device?: string } | null)?.device === deviceId) ws.close(REMOVED_CLOSE, "removed from this dock");
+        const device = (ws.deserializeAttachment() as { device?: string } | null)?.device;
+        if (device === deviceId) ws.close(REMOVED_CLOSE, "removed from this dock");
+        // A socket from before TIN-838 says no computer: it is closed plainly, and its page opens a new one, which does.
+        else if (!device) ws.close(1000, "reconnect");
       } catch {
         // closed already
       }
     }
+  }
+  /**
+   * Every browser sending page readings goes (TIN-838, Review round 1 on #158): a reader is a browser's
+   * extension, sent with a token and no cookie, so the hub cannot tell which computer's it is. A computer
+   * removed or left must not keep pointing the agents from its extension; the others ask once again, on
+   * their next drop.
+   */
+  private dropReaders(): void {
+    for (const r of this.sql.exec<{ id: string }>("select id from readers").toArray()) this.sql.exec("delete from pointer where pairing_id = ?", r.id);
+    this.sql.exec("delete from readers");
   }
 
   /**
@@ -686,15 +699,22 @@ export class Hub extends DurableObject<Env> {
    * The waiting computer asks for its answer with its claim: pending, denied (once), expired, or joined, with
    * the secret for its cookie (once: the join goes and the computer is on the dock from then on).
    */
-  async joinStatus(claim: unknown): Promise<{ status: "pending" | "denied" | "expired" } | { status: "joined"; secret: string }> {
+  async joinStatus(claim: unknown): Promise<{ status: "pending" | "denied" | "expired" | "full" } | { status: "joined"; secret: string }> {
     if (typeof claim !== "string" || !/^[0-9a-f]{32}$/.test(claim) || !(await this.alive())) return { status: "expired" };
     this.expireJoins();
     const join = this.joins().find((j) => j.claim === claim);
     if (!join) return { status: "expired" };
     if (join.status === "pending") return { status: "pending" };
+    // Full (another computer collected first): said as such, not as a request nobody answered.
+    if (join.status === "approved" && this.devices().length >= MAX_DEVICES) {
+      this.sql.exec("delete from joins where id = ?", join.id);
+      return { status: "full" };
+    }
     this.sql.exec("delete from joins where id = ?", join.id);
-    if (join.status === "denied") return { status: "denied" };
-    if (this.devices().length >= MAX_DEVICES) return { status: "expired" };
+    if (join.status === "denied") {
+      this.broadcast();
+      return { status: "denied" };
+    }
     const secret = this.insertDevice(join.label);
     await this.touch();
     this.broadcast();
@@ -712,6 +732,7 @@ export class Hub extends DurableObject<Env> {
     if (device.secret === callerSecret) return { ok: false, error: "this_device" };
     this.sql.exec("delete from devices where id = ?", deviceId);
     this.closeDevice(deviceId);
+    this.dropReaders();
     this.broadcast();
     return { ok: true };
   }
@@ -726,7 +747,9 @@ export class Hub extends DurableObject<Env> {
     if (!device) return { ok: false, wiped: false };
     this.sql.exec("delete from devices where id = ?", device.id);
     this.closeDevice(device.id);
-    const empty = this.devices().length === 0 && this.agents().every((a) => !a.client_name) && !this.sql.exec("select 1 from pairings limit 1").toArray().length && !this.sql.exec("select 1 from readers limit 1").toArray().length;
+    // This browser's extension readings went with it (it may be the reader); a dock no computer opens keeps none.
+    this.dropReaders();
+    const empty = this.devices().length === 0 && this.agents().every((a) => !a.client_name) && !this.sql.exec("select 1 from pairings limit 1").toArray().length;
     if (empty) {
       await this.wipe();
       return { ok: true, wiped: true };

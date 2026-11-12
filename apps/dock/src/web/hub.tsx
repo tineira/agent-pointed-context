@@ -129,7 +129,15 @@ export function HubDock() {
    * (/dock/join#<code>) opens here with the code filled in, and opens no dock of its own first: on a
    * computer with none, nothing is made unless the person cancels.
    */
-  const [joining, setJoining] = useState<string | null>(() => (JOIN_ROUTE && !FLOATING ? decodeURIComponent(location.hash.slice(1)) : null));
+  const [joining, setJoining] = useState<string | null>(() => {
+    if (!JOIN_ROUTE || FLOATING) return null;
+    // A link a mail or chat app mangled ("…#KQ7%") must not break the page: the raw text, then the person's fix.
+    try {
+      return decodeURIComponent(location.hash.slice(1));
+    } catch {
+      return location.hash.slice(1);
+    }
+  });
   const [held, setHeld] = useState(JOIN_ROUTE && !FLOATING);
   useEffect(() => {
     // The code is read; the address goes back to the dock's, so a reload does not join again.
@@ -141,6 +149,11 @@ export function HubDock() {
   };
   /** Another computer removed this one from the dock (TIN-838): the hub closed its socket saying so. */
   const [removed, setRemoved] = useState(false);
+  /**
+   * This page opened a new dock because its cookie no longer opened the old one (removed on another
+   * computer, Start over there, or the dock ended; Review round 1 on #158): it says so, with Join.
+   */
+  const [replaced, setReplaced] = useState(false);
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
   const [reopen, setReopen] = useState(0);
@@ -149,8 +162,11 @@ export function HubDock() {
     // The strip and the pets only resume the dock its window opened, and wait for it on a first run (#84).
     let retry = 0;
     const open = () =>
-      call<{ did: string }>("/api/dock", FLOATING ? { resume: true, desktop: DESKTOP_SHELL } : { desktop: DESKTOP_SHELL }).then(
-        (r) => setDid(r.did),
+      call<{ did: string; replaced?: boolean }>("/api/dock", FLOATING ? { resume: true, desktop: DESKTOP_SHELL } : { desktop: DESKTOP_SHELL }).then(
+        (r) => {
+          setDid(r.did);
+          if (r.replaced) setReplaced(true);
+        },
         (e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError({ message: String(e), retry: unreachable(e) })),
       );
     void open();
@@ -526,8 +542,21 @@ export function HubDock() {
       {noticeEl}
       {joinRequests}
       {requests}
+      {replaced && (
+        <div className="decision-notice" role="status">
+          <p>
+            This is a new dock: this computer no longer opened its old one (it was removed on another computer, or that dock ended).{" "}
+            <button type="button" className="link-button" onClick={() => setJoining("")}>
+              Join a dock on another computer
+            </button>
+          </p>
+          <button type="button" onClick={() => setReplaced(false)}>
+            OK
+          </button>
+        </div>
+      )}
       {/* A fresh dock on a computer that may have one elsewhere (TIN-838): join that one instead. */}
-      {!setup.connected && devices.length <= 1 && (
+      {!replaced && !setup.connected && devices.length <= 1 && (
         <p className="join-hint">
           Already have a dock on another computer?{" "}
           <button type="button" className="link-button" onClick={() => setJoining("")}>

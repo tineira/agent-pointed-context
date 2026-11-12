@@ -4,19 +4,22 @@
  * dock that made the code still has to say yes before the new computer gets one of its own.
  *
  * A code is taken once (the first claim wins and the code goes) and lives JOIN_CODE_TTL_MS. Lookups of a
- * code that is not here are counted: past MISSES_PER_MINUTE in a minute the directory answers "busy",
- * so guessing codes costs more than the two minutes one lives.
+ * code that is not here are counted per client (its IP): past MISSES_PER_CLIENT in a minute that client
+ * gets "busy". A much higher ceiling for everyone together, MISSES_PER_MINUTE, caps guessing from many
+ * addresses (Review round 1 on #158: a single global count let one client block every join for a minute).
+ * At that ceiling a guess still has about a 1 in 10^10 chance per minute of hitting one live code.
  */
 import { DurableObject } from "cloudflare:workers";
 
 /** The one directory: every dock's codes go to the object of this name. */
 export const DIRECTORY = "join-codes";
-const MISSES_PER_MINUTE = 60;
+const MISSES_PER_CLIENT = 30;
+const MISSES_PER_MINUTE = 3000;
 
 export class JoinCodes extends DurableObject {
   private sql: SqlStorage;
-  /** Lookups that found nothing, this minute (memory only: a restart forgets them, which is fine). */
-  private misses = { minute: 0, count: 0 };
+  /** Lookups that found nothing, this minute, in all and per client (memory only: a restart forgets them, which is fine). */
+  private misses = { minute: 0, count: 0, byClient: new Map<string, number>() };
 
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env as never);
@@ -36,15 +39,19 @@ export class JoinCodes extends DurableObject {
     return true;
   }
 
-  /** The dock a live code belongs to, once: the code goes. "busy" while too many codes were not found this minute. */
-  async take(code: string): Promise<{ did: string } | { error: "unknown_code" | "busy" }> {
+  /**
+   * The dock a live code belongs to, once: the code goes. "busy" while this client, or everyone together,
+   * looked up too many codes that were not here this minute. `client` is the caller's IP (or "" when unknown).
+   */
+  async take(code: string, client = ""): Promise<{ did: string } | { error: "unknown_code" | "busy" }> {
     const minute = Math.floor(Date.now() / 60_000);
-    if (this.misses.minute !== minute) this.misses = { minute, count: 0 };
-    if (this.misses.count >= MISSES_PER_MINUTE) return { error: "busy" };
+    if (this.misses.minute !== minute) this.misses = { minute, count: 0, byClient: new Map() };
+    if (this.misses.count >= MISSES_PER_MINUTE || (this.misses.byClient.get(client) ?? 0) >= MISSES_PER_CLIENT) return { error: "busy" };
     this.purge();
     const row = this.sql.exec<{ did: string }>("select did from codes where code = ?", code).toArray()[0];
     if (!row) {
       this.misses.count++;
+      this.misses.byClient.set(client, (this.misses.byClient.get(client) ?? 0) + 1);
       return { error: "unknown_code" };
     }
     this.sql.exec("delete from codes where code = ?", code);

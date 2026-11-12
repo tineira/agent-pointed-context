@@ -92,7 +92,9 @@ app.post("/api/dock", async (c) => {
   const did = randomHex(16);
   const { owner } = await stubFor(c.env, did).init(did, labelOf(c, body?.desktop));
   keepCookie(c, did, owner);
-  return c.json({ did, created: true });
+  // A cookie that named a dock it no longer opens (removed on another computer, Start over there, or the dock
+  // ended, TIN-838): the page says this is a new dock, with Join beside it, rather than nothing.
+  return c.json({ did, created: true, ...(current ? { replaced: true } : {}) });
 });
 
 /**
@@ -116,7 +118,7 @@ app.post("/api/dock/join", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { code?: unknown; desktop?: unknown } | null;
   const code = normalizeJoinCode(body?.code);
   if (!code) return c.json({ ok: false, error: "bad_code" }, 400);
-  const found = await directory(c.env).take(code);
+  const found = await directory(c.env).take(code, c.req.header("cf-connecting-ip") ?? "");
   if ("error" in found) return c.json({ ok: false, error: found.error }, found.error === "busy" ? 429 : 400);
   const label = labelOf(c, body?.desktop);
   const asked = await stubFor(c.env, found.did).askJoin(code, label);
