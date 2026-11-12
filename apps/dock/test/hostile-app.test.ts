@@ -348,6 +348,10 @@ test("the wait loop: an unverified app's then and page_open never count, so it c
   w.pulseRoom.openPage();
   const view = await w.callHub("get_current_view");
   assert.equal(typeof view.structuredContent.then, "string", "a verified app's presence still counts");
+  // A wait that came back with no focus ends the loop, on the hub too (APC 0.8).
+  const empty = await w.callHub("wait_for_focus", { timeout_s: 1 });
+  assert.equal(empty.structuredContent.focus, null);
+  assert.equal("then" in empty.structuredContent, false, "no then on an empty wait");
 });
 
 test("blocked pairings hold no place under the cap", async (t) => {

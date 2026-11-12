@@ -15,9 +15,16 @@
  *   `"hub"` alone, so apps and tools can tell a dock from an app. Words a reader does not know are ignored.
  * - **`mcp.path`**: where its MCP URLs live. Every grant's MCP URL on this origin starts with
  *   `origin + mcp.path`. A hub pairs only an MCP URL under it, so a path the domain did not declare in
- *   its own `/.well-known/` (another tenant's, on a shared host) is never paired.
+ *   its own `/.well-known/` (another tenant's, on a shared host) is never paired. Since APC 0.8 a Direct
+ *   app whose grants share one MCP URL (a bearer token names the grant, as with OAuth) may serve it at
+ *   `mcp.path` itself, or at `mcp.path` without its last `/` (`/api/mcp` for `"/api/mcp/"`); one origin
+ *   may serve several such endpoints under the path, one per role (`declaresMcpUrl` with `shared`).
  * - **`direct.connect`** (with `"direct"`): the page, on the same origin, where the person connects an
  *   agent directly: what a person is shown when they drop a dock agent on a Direct-only app.
+ * - **`direct.auth`** (APC 0.8, optional, information only): how a Direct agent authenticates, a short
+ *   word such as `"url"` (the secret URL) or `"oauth"`; with OAuth, `direct.resource_metadata` may give
+ *   the URL of its OAuth protected-resource metadata, on its origin. A reader never requires either: the
+ *   standard does not fix how agents authenticate (`GrantRequirement`).
  * - **`dock`** (a hub): where it takes pairings, `pair` and `confirm`, as absolute URLs on its origin.
  *
  * A hub reads an app's `apc.json` when the app asks to pair (`POST {hub}/apc/pair`) and refuses the
@@ -51,8 +58,12 @@ export interface ApcManifest {
   profiles: ApcRole[];
   /** Every grant's MCP URL on this origin starts with origin + path. */
   mcp: { path: string };
-  /** With "direct": where the person connects an agent directly, on the same origin. */
-  direct?: { connect: string };
+  /**
+   * With "direct": where the person connects an agent directly, on the same origin; and, as information
+   * only (APC 0.8), how agents authenticate (`auth`, e.g. "url" or "oauth") and, with OAuth, the URL of
+   * the protected-resource metadata (`resource_metadata`, on the same origin).
+   */
+  direct?: { connect: string; auth?: string; resource_metadata?: string };
   /** A hub's pairing endpoints, on its origin. */
   dock?: { pair: string; confirm: string };
 }
@@ -62,6 +73,7 @@ export type ApcJsonRefusal = "apc_json_missing" | "apc_json_redirected" | "apc_j
 
 const VERSION_RE = /^(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,5})$/;
 const PATH_RE = /^\/([A-Za-z0-9._~!$&'()*+,;=:@-]+\/)*$/;
+const AUTH_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /**
@@ -119,6 +131,11 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
     const connect = isObject(raw.direct) ? onOrigin(raw.direct.connect, origin) : null;
     if (!connect) return bad("direct.connect is not a URL on its origin");
     manifest.direct = { connect };
+    // Information only (APC 0.8): kept when well formed, otherwise left out, never a reason to refuse.
+    const direct = raw.direct as Record<string, unknown>;
+    if (typeof direct.auth === "string" && AUTH_RE.test(direct.auth)) manifest.direct.auth = direct.auth;
+    const metadata = onOrigin(direct.resource_metadata, origin);
+    if (metadata) manifest.direct.resource_metadata = metadata;
   }
   if (profiles.includes("hub")) {
     const dock = isObject(raw.dock) ? raw.dock : {};
@@ -136,8 +153,12 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
  * ones, which a server may decode afterwards: so the rest of the path after `mcp.path` may hold no
  * encoded slash, backslash or dot (`%2f`, `%5c`, `%2e`), no encoded percent (`%25`, a second round of
  * encoding), and no backslash.
+ *
+ * With `shared` (APC 0.8: a Direct endpoint whose grants share one URL, the credential naming the grant),
+ * the URL may also be `mcp.path` itself or `mcp.path` without its last `/`. Without it, as a hub pairing a
+ * Dock app checks, the URL must lie strictly under `mcp.path`: one URL per grant.
  */
-export function declaresMcpUrl(manifest: Pick<ApcManifest, "origin" | "mcp">, mcpUrl: string): boolean {
+export function declaresMcpUrl(manifest: Pick<ApcManifest, "origin" | "mcp">, mcpUrl: string, options: { shared?: boolean } = {}): boolean {
   let url: URL;
   try {
     url = new URL(mcpUrl);
@@ -145,8 +166,10 @@ export function declaresMcpUrl(manifest: Pick<ApcManifest, "origin" | "mcp">, mc
     return false;
   }
   if (!urlOnOrigin(url.href, manifest.origin)) return false;
-  if (!url.pathname.startsWith(manifest.mcp.path) || url.pathname.length <= manifest.mcp.path.length) return false;
-  const rest = url.pathname.slice(manifest.mcp.path.length);
+  const path = manifest.mcp.path;
+  if (options.shared && path !== "/" && (url.pathname === path || url.pathname === path.slice(0, -1))) return !/%(2f|5c|2e|25)/i.test(mcpUrl.split(/[?#]/, 1)[0]!);
+  if (!url.pathname.startsWith(path) || url.pathname.length <= path.length) return false;
+  const rest = url.pathname.slice(path.length);
   // Checked on the URL as sent too: the parser turns some encoded dots into segments it then removes.
   const sent = mcpUrl.split(/[?#]/, 1)[0]!;
   const encoded = /%(2f|5c|2e|25)/i;

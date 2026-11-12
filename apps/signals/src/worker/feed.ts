@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ApcProfile, FocusRow } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -68,6 +68,8 @@ export class Feed extends DurableObject<Env> {
   private waiting = new Set<string>();
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
   private links!: ApcLinks;
+  /** One wait_for_focus per grant (APC 0.8): every request of this feed runs in this object, so the places live in memory. */
+  private readonly waitSlots = new MemoryWaitSlots();
   /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
@@ -343,6 +345,7 @@ export class Feed extends DurableObject<Env> {
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant?.hub) return { ok: false };
     this.links.forget(grant.id);
+    this.waitSlots.forget(grant.id);
     this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
     this.sql.exec("delete from grants where id = ?", grant.id);
     this.broadcast();
@@ -368,6 +371,7 @@ export class Feed extends DurableObject<Env> {
       // A Direct grant has no hub or agent; the table, older than Direct, wants text there.
       this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub ?? "", grant.agent ?? "", at);
       this.links.forget(grant.id);
+      this.waitSlots.forget(grant.id);
       this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
       this.sql.exec("delete from grants where id = ?", grant.id);
     }
@@ -454,14 +458,17 @@ export class Feed extends DurableObject<Env> {
       readView: async () => viewPayload(this.storedView(), origin),
       readFocus: async () => focusPayload(this.focusRow(grant.id), posts, origin),
       focusUnread: async () => isUnread(this.focusRow(grant.id)),
-      markSeen: async () => {
+      // Seen once delivered (APC 0.8): the exact pin the result carried, never a newer one dropped since.
+      markSeen: async (pinnedAt) => {
         const row = this.focusRow(grant.id);
-        if (!row || !isUnread(row)) return;
-        this.sql.exec("update agent_focus set seen_at = ? where grant_id = ?", new Date().toISOString(), grant.id);
+        if (!row || row.pinned_at !== pinnedAt || !isUnread(row)) return;
+        this.sql.exec("update agent_focus set seen_at = ? where grant_id = ? and pinned_at = ?", new Date().toISOString(), grant.id, pinnedAt);
         this.broadcast();
       },
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
       pageOpen: async () => (this.holds(grant.secret) ? this.pageOpen() : false),
+      waitSlot: this.waitSlots.for(grant.id),
+      signal: request.signal,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: WAIT_CEILING_S,
     });
@@ -552,7 +559,7 @@ export class Feed extends DurableObject<Env> {
           this.broadcast({ type: "presence", event: presenceEvent({ grantId, tool, kind: "read", targets }) });
         }
         // Signals shares the view always (it has no switch), so attendance is the page itself.
-        result = attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen()));
+        result = attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen(), row?.pinned_at ?? null));
         // apc_link: at most once per session, the offer to show this agent as one with its other path.
         const offer = result.isError ? null : await this.links.offer(grantId, tool);
         return offer ? attachApcLink(result, offer) : result;

@@ -7,7 +7,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
@@ -86,6 +86,8 @@ export class Sandbox extends DurableObject<Env> {
   private sql: SqlStorage;
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. Its table is made again with the others (migrate). */
   private links!: ApcLinks;
+  /** One wait_for_focus per grant (APC 0.8): every request of this sandbox runs in this object, so the places live in memory. */
+  private readonly waitSlots = new MemoryWaitSlots();
   /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. In the same table as the links. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
@@ -569,6 +571,7 @@ export class Sandbox extends DurableObject<Env> {
       const link = this.sql.exec<{ hub: string; agent: string }>("select hub, agent from hub_links where grant_id = ?", id).toArray()[0];
       this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, id, link?.hub ?? null, link?.agent ?? null, at);
       this.links.forget(id);
+      this.waitSlots.forget(id);
       this.sql.exec("delete from agent_focus where grant_id = ?", id);
       this.sql.exec("delete from hub_links where grant_id = ?", id);
       this.sql.exec("delete from grants where id = ?", id);
@@ -603,6 +606,7 @@ export class Sandbox extends DurableObject<Env> {
   /** A dock's grant goes with its pins and its link: given back by the hub, or no longer paired there. */
   private async dropHubGrant(grantId: string): Promise<void> {
     this.links.forget(grantId);
+    this.waitSlots.forget(grantId);
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("delete from hub_links where grant_id = ?", grantId);
     this.sql.exec("delete from grants where id = ?", grantId);
@@ -746,16 +750,19 @@ export class Sandbox extends DurableObject<Env> {
       readView: async () => trimView(this.storedView(), grant, data, origin),
       readFocus: async () => resolveFocus(this.focusRow(grant.id), grant, data, origin),
       focusUnread: async () => isUnread(this.focusRow(grant.id)),
-      markSeen: async () => {
+      // Seen once delivered (APC 0.8): the exact pin the result carried, never a newer one dropped since.
+      markSeen: async (pinnedAt) => {
         const row = this.focusRow(grant.id);
-        if (!row || !isUnread(row)) return;
+        if (!row || row.pinned_at !== pinnedAt || !isUnread(row)) return;
         const seenAt = new Date().toISOString();
-        this.sql.exec("update agent_focus set seen_at = ? where grant_id = ?", seenAt, grant.id);
+        this.sql.exec("update agent_focus set seen_at = ? where grant_id = ? and pinned_at = ?", seenAt, grant.id, pinnedAt);
         this.log("seen", grant.id, { pinned_at: row.pinned_at, seen_at: seenAt, via: call.tool });
         this.broadcast({ type: "pin", grant_id: grant.id, pin: this.focusRow(grant.id) });
       },
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
       pageOpen: async () => (this.holds(grant.secret) ? this.attendance() : false),
+      waitSlot: this.waitSlots.for(grant.id),
+      signal: request.signal,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
@@ -853,7 +860,7 @@ export class Sandbox extends DurableObject<Env> {
           this.log("envelope_delivered", grant.id, { tool, pinned_at: row.pinned_at, bytes: envelope });
         }
         // The loop hint, while a page is open and the person shares their view. A wait that returned no focus carries its own note and ends the loop.
-        const hinted = loopHinted(tool, result.structuredContent?.focus != null, this.attendance());
+        const hinted = loopHinted(tool, result.structuredContent?.focus != null, this.attendance(), row?.pinned_at ?? null);
         result = attachThen(result, hinted);
         // apc_link (APC 0.4): at most once per session, the offer to show this agent as one with its other path.
         const offer = result.isError ? null : await this.links.offer(grant.id, tool);

@@ -1,6 +1,7 @@
 export * from "./envelope.ts";
 export * from "./presence.ts";
 export * from "./tools.ts";
+export * from "./waits.ts";
 export * from "./prompts.ts";
 export * from "./revoke.ts";
 export * from "./kv.ts";

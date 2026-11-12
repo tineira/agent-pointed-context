@@ -8,7 +8,7 @@ The contract an app and an agent share in Agent Pointed Context: wire types, the
 npm i @tineira/apc-protocol@next
 ```
 
-Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.7.x ships APC 0.7).
+Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.8.x ships APC 0.8).
 
 ```ts
 import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@tineira/apc-protocol";
@@ -32,11 +32,11 @@ What every APC app implements, whichever way agents reach it ([`src/core.ts`](sr
 | The pin | Keeps one pin per grant, dropped by the person on a target (`FocusTarget`), and gives it as `FocusPayload` with `next` and `next_args`, the call that reads it. While it is unread, every tool result carries `attention`. |
 | Presence | After each successful tool call, publishes a `PresenceEvent` (ids only) to the person's page; a read of a target names it. |
 | The focus format | `FocusPayload`, from the grammar in [`src/target.ts`](src/target.ts): kinds, ids, parts and key-only params. |
-| `get_current_view`, `wait_for_focus` | The two core tools (`CORE_TOOLS`), with `then` on results while a page of the person's is open, never on a wait that came back empty. A wait returns a pin dropped during it, times out cleanly, and ends as soon as the app knows the page is closed. |
+| `get_current_view`, `wait_for_focus` | The two core tools (`CORE_TOOLS`), with `then` on results while a page of the person's is open and the grant was pinned in the last 30 minutes (0.8), never on a wait that came back empty. A wait returns a pin dropped during it, times out cleanly, and ends as soon as the app knows the page is closed. One wait per grant: a newer one takes over (0.8). A pin is marked seen only once the result that carries it is final, by its `pinned_at` (0.8): delivered twice at worst, never lost. |
 | `apc.json` | Serves `/.well-known/apc.json` from its own origin: what it is and which profiles it offers (below). |
 | `apc_link` | Only with both profiles: the same agent on both paths shown as one, with a one-time code; it grants nothing (below). |
 | Mobile (0.6) | On a phone or any touch viewport (`APC_MOBILE_MEDIA`) shows its agents in its own page, on both profiles (below). |
-| Revoke from the app | Revoke on every agent in the agent bar. At once, in the app alone (it calls nobody): the grant's MCP URL answers 403 with `RevokedAnswer` from then on, a call already running ends the same way (told by the grant's secret, never an id a later grant may reuse, 0.7), and the grant never works again. |
+| Revoke from the app | Revoke on every agent in the agent bar. At once, in the app alone (it calls nobody): every request with the grant answers `RevokedAnswer` from then on (403 with a secret URL, 401 with a bearer token, 0.8), a call already running ends the same way (told by the grant itself, never an id a later grant may reuse, 0.7), and the grant never works again. |
 
 What belongs to a profile, not to the core:
 

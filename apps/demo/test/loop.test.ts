@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusPayload } from "@tineira/apc-protocol";
-import { THEN_NOTE, WAIT_TIMED_OUT_NOTE, attachThen, registerApcTools, thenBytes, type ToolResult } from "@tineira/apc-server";
+import { MemoryWaitSlots, THEN_NOTE, WAIT_TIMED_OUT_NOTE, attachThen, registerApcTools, thenBytes, type ToolResult } from "@tineira/apc-server";
 import { attendance, loopHinted } from "../src/worker/page.ts";
 
 const focus: FocusPayload = {
@@ -20,22 +20,28 @@ const focus: FocusPayload = {
 
 type Result = ToolResult & { structuredContent: { focus?: FocusPayload | null; timed_out?: boolean; page_open?: boolean; note?: string; then?: string } };
 
-/** The APC tools wired as the sandbox wires them: pageOpen and the loop hint both go through attendance(). */
-async function sandbox(opts: { share: boolean; open: boolean; closeAfterMs?: number; pinAfterMs?: number }) {
+/**
+ * The APC tools wired as the sandbox wires them: pageOpen and the loop hint both go through attendance(), and
+ * the loop hint also needs a pin in the last 30 minutes (APC 0.8). `pinnedAgoMin` is a pin the agent already
+ * read that long ago.
+ */
+async function sandbox(opts: { share: boolean; open: boolean; closeAfterMs?: number; pinAfterMs?: number; pinnedAgoMin?: number }) {
   const page = { open: opts.open };
-  const row = { pinned: false, seen: false };
+  const row: { pinned: boolean; seen: boolean; at: string | null } =
+    opts.pinnedAgoMin === undefined ? { pinned: false, seen: false, at: null } : { pinned: true, seen: true, at: new Date(Date.now() - opts.pinnedAgoMin * 60_000).toISOString() };
   if (opts.closeAfterMs !== undefined) setTimeout(() => (page.open = false), opts.closeAfterMs);
-  if (opts.pinAfterMs !== undefined) setTimeout(() => (row.pinned = true), opts.pinAfterMs);
+  if (opts.pinAfterMs !== undefined) setTimeout(() => Object.assign(row, { pinned: true, seen: false, at: new Date().toISOString() }), opts.pinAfterMs);
   const attending = () => attendance(opts.share, () => page.open);
   const server = new McpServer({ name: "t", version: "0" });
   registerApcTools(server, {
     readView: async () => null,
-    readFocus: async () => (row.pinned ? focus : null),
+    readFocus: async () => (row.pinned ? { ...focus, pinned_at: row.at! } : null),
     focusUnread: async () => row.pinned && !row.seen,
-    markSeen: async () => {
-      row.seen = true;
+    markSeen: async (pinnedAt) => {
+      if (pinnedAt === row.at) row.seen = true;
     },
     pageOpen: async () => attending(),
+    waitSlot: new MemoryWaitSlots().for("g"),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     pollMs: 50,
     waitCeilingS: 3,
@@ -46,13 +52,13 @@ async function sandbox(opts: { share: boolean; open: boolean; closeAfterMs?: num
   return async (name: string, args: Record<string, unknown> = {}) => {
     const started = Date.now();
     const raw = (await client.callTool({ name, arguments: args })) as unknown as Result;
-    const hinted = loopHinted(name, raw.structuredContent.focus != null, attending());
+    const hinted = loopHinted(name, raw.structuredContent.focus != null, attending(), row.at);
     return { result: attachThen(raw, hinted) as Result, then_bytes: thenBytes(hinted), ms: Date.now() - started };
   };
 }
 
-test("sharing on, page open: results carry then, and a wait that times out says page_open: true", async () => {
-  const call = await sandbox({ share: true, open: true });
+test("sharing on, page open, pinned lately: results carry then, and a wait that times out says page_open: true", async () => {
+  const call = await sandbox({ share: true, open: true, pinnedAgoMin: 5 });
   const view = await call("get_current_view");
   assert.equal(view.result.structuredContent.then, THEN_NOTE);
   assert.ok(view.then_bytes > 0);
@@ -94,7 +100,18 @@ test("sharing on, no page open: page_open: false at once (unchanged)", async () 
   assert.equal(wait.then_bytes, 0);
 });
 
+test("page open but no pin in the last 30 minutes: no then, so the agent does not wait after every answer (APC 0.8)", async () => {
+  for (const opts of [{}, { pinnedAgoMin: 31 }]) {
+    const call = await sandbox({ share: true, open: true, ...opts });
+    const view = await call("get_current_view");
+    assert.equal("then" in view.result.structuredContent, false, JSON.stringify(opts));
+    assert.equal(view.then_bytes, 0);
+  }
+});
+
 test("set_agent_name carries no loop hint: naming itself answers nothing (TIN-356)", () => {
-  assert.equal(loopHinted("set_agent_name", false, true), false);
-  assert.equal(loopHinted("get_figure", false, true), true);
+  const recent = new Date().toISOString();
+  assert.equal(loopHinted("set_agent_name", false, true, recent), false);
+  assert.equal(loopHinted("get_figure", false, true, recent), true);
+  assert.equal(loopHinted("get_figure", false, true, null), false, "never pinned: no then (APC 0.8)");
 });

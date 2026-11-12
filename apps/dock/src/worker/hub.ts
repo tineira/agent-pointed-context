@@ -11,7 +11,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
 import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
-import { attachAttention, attachThen, toolError, toolResult, WAIT_PAGE_CLOSED_NOTE, WAIT_TIMED_OUT_NOTE, type ToolResult } from "@tineira/apc-server";
+import { attachAttention, attachThen, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
@@ -183,7 +183,10 @@ const BUSY_TAIL_MS = 1500;
 export class Hub extends DurableObject<Env> {
   private sql: SqlStorage;
   /** Agents with a wait_for_focus in flight, for the dock's icon (memory only). */
-  private waiting = new Set<string>();
+  /** Waits running per agent; more than one only while a newer wait takes over (APC 0.8). */
+  private waiting = new Map<string, number>();
+  /** One wait_for_focus per agent (APC 0.8): a newer wait takes over, and the one it replaced delivers nothing. */
+  private readonly waitSlots = new MemoryWaitSlots();
   /** Calls in flight per agent, other than wait_for_focus, for the pet's "calling tools" (TIN-483; memory only). */
   private busy = new Map<string, number>();
   /** Until when an agent still shows as calling after its last call ended (memory only): a quick call would be gone before the dock asked. */
@@ -364,6 +367,11 @@ export class Hub extends DurableObject<Env> {
     this.forgetBlocked();
     const r = this.sql.exec<Record<string, string | null>>("select * from pointer where agent_id = ?", agentId).toArray()[0];
     return r ? { agent_id: r.agent_id!, pairing_id: r.pairing_id!, app: JSON.parse(r.app!) as AppRef, focus: JSON.parse(r.focus!) as FocusPayload, seen_at: r.seen_at ?? null } : null;
+  }
+  /** Marks the agent's pin seen if it is still the one dropped at `pinnedAt`: never a newer one (APC 0.8). */
+  private markPointerSeen(agentId: string, pinnedAt: string): void {
+    const row = this.pointer(agentId);
+    if (row && !row.seen_at && row.focus.pinned_at === pinnedAt) this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
   }
   private unread(agentId: string): PointerRow | null {
     const row = this.pointer(agentId);
@@ -1446,8 +1454,21 @@ export class Hub extends DurableObject<Env> {
         done = true;
         resolve({ got, open: this.presence(agentId) });
       };
+      const deadline = Date.now() + timeoutS * 1000;
+      // An app's refusal of a wait right after another on the same grant (APC 0.8: retry_after_s) is not an empty
+      // wait: the hub waits that long and asks again, within its own timeout.
+      const ask = async (p: Pairing): Promise<AppToolResult> => {
+        for (;;) {
+          const left = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+          const result = await callAppTool(p.mcp_url, "wait_for_focus", { timeout_s: left }, left * 1000 + LIMITS.waitGraceMs, transport(p));
+          const s = structured(result);
+          const retryS = !result.isError && s.focus == null && typeof s.retry_after_s === "number" && s.retry_after_s > 0 ? s.retry_after_s : null;
+          if (retryS === null || done || Date.now() + retryS * 1000 >= deadline) return result;
+          await new Promise((resolve) => setTimeout(resolve, retryS * 1000));
+        }
+      };
       for (const p of paired) {
-        callAppTool(p.mcp_url, "wait_for_focus", { timeout_s: timeoutS }, timeoutS * 1000 + LIMITS.waitGraceMs, transport(p))
+        ask(p)
           .then((result) => {
             // A pin that arrives after another app's ended the wait is still taken, unread, for next time.
             if (this.take(p, result, "wait")) finish(true);
@@ -1548,8 +1569,10 @@ export class Hub extends DurableObject<Env> {
       this.broadcast();
       return { tools: [...HUB_TOOLS, ...(await this.prefixedTools(agent.id))] };
     });
-    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       const name = req.params.name;
+      // A client that hung up or cancelled gets nothing marked seen and frees its wait (APC 0.8).
+      const cancelled = () => !!(extra.signal?.aborted || request.signal?.aborted);
       const args = (req.params.arguments ?? {}) as Record<string, unknown>;
       this.sql.exec("update agents set last_active_at = ? where id = ?", new Date().toISOString(), agent.id);
       // The pin before the call, to log whether the call read it (TIN-419).
@@ -1564,7 +1587,7 @@ export class Hub extends DurableObject<Env> {
       }
       let result: ToolResult;
       try {
-        result = await this.callTool(agent.id, name, args);
+        result = await this.callTool(agent.id, name, args, cancelled);
       } finally {
         if (counted) {
           const left = (this.busy.get(agent.id) ?? 1) - 1;
@@ -1577,10 +1600,13 @@ export class Hub extends DurableObject<Env> {
         }
       }
       this.logCall(agent.id, this.entry(agent.id, name, args, result, before));
-      // Every result carries the hub's attention while the focus is unread, and then while the dock is open and the person is on a paired app's page.
+      // Every result carries the hub's attention while the focus is unread, and then while the dock is open, the person is on a
+      // paired app's page and the agent was pinned in the last 30 minutes (APC 0.8).
       const row = this.unread(agent.id);
       if (row) result = attachAttention(result, { focus: this.render(agent.id, row), note: ATTENTION_NOTE });
-      result = attachThen(result, this.attendance(agent.id));
+      // A wait that came back with no focus ends the loop: no then on it.
+      const emptyWait = name === "wait_for_focus" && result.structuredContent?.focus == null;
+      result = attachThen(result, !emptyWait && thenApplies(this.attendance(agent.id), this.pointer(agent.id)?.focus.pinned_at));
       this.broadcast();
       return result;
     });
@@ -1647,65 +1673,84 @@ export class Hub extends DurableObject<Env> {
     return hubFocus(row.focus, row.app, usePrefix);
   }
 
-  private async callTool(agentId: string, name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  private async callTool(agentId: string, name: string, args: Record<string, unknown>, cancelled: () => boolean = () => false): Promise<ToolResult> {
     const str = (v: unknown, max: number) => (typeof v === "string" && v.length <= max ? v : undefined);
     if (name === "get_current_view") {
       await this.look(agentId);
       const row = this.pointer(agentId);
-      if (row && !row.seen_at) this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
       const views = this.pairings(agentId, "paired")
         .map((p) => ({ app: appRef(p), view: p.view, ...(p.verified ? {} : { untrusted: true }) }))
         .sort((a, b) => (b.view?.updated_at ?? "").localeCompare(a.view?.updated_at ?? ""));
-      return toolResult({ focus: row ? this.render(agentId, row) : null, views });
+      const result = toolResult({ focus: row ? this.render(agentId, row) : null, views });
+      // Seen once delivered (APC 0.8): that exact pin, after the result is built, and not for a cancelled request.
+      if (row && !row.seen_at && !cancelled()) this.markPointerSeen(agentId, row.focus.pinned_at);
+      return result;
     }
     if (name === "wait_for_focus") {
       const t = args.timeout_s;
       if (t !== undefined && (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > WAIT_CEILING_S)) return toolError("invalid_arguments", `timeout_s is a whole number from 1 to ${WAIT_CEILING_S}.`);
       this.sql.exec("update agents set waits = coalesce(waits, 0) + 1 where id = ?", agentId);
-      const deliver = () => {
-        const row = this.unread(agentId);
-        if (!row) return null;
-        this.sql.exec("update pointer set seen_at = ? where agent_id = ?", new Date().toISOString(), agentId);
-        return toolResult({ focus: this.render(agentId, row), timed_out: false });
-      };
-      // A pin the hub took but has not handed over yet: ask its app first, since it may have revoked the grant
-      // since (APC 0.2); a revoked pairing's pin goes before it could be delivered. Only the pin's own app, and
-      // within LIMITS.pinLookMs or the wait's own timeout, whichever is shorter (TIN-606): a slow app delays the
-      // pin by that much at most. One that does not answer in time keeps its pin, target ids only, as § 14 says
-      // of an app that revoked and cannot be reached.
-      const unread = this.unread(agentId);
-      const holder = unread ? this.pairings(agentId, "paired").find((p) => p.id === unread.pairing_id) : undefined;
-      if (holder) await this.lookAt(holder, Math.min(LIMITS.pinLookMs, ((t as number | undefined) ?? WAIT_DEFAULT_S) * 1000));
-      const ready = deliver();
-      if (ready) return ready;
-      const timeoutS = (t as number | undefined) ?? WAIT_DEFAULT_S;
-      const apps = this.pairings(agentId, "paired").length > 0;
-      // A browser that sends page readings (TIN-421) wakes the wait too: the person may point from any web page.
-      const pages = this.readers(agentId, "paired").length > 0;
-      if (!apps && !pages) return toolResult({ focus: null, timed_out: false, page_open: false, note: NO_APPS_NOTE });
-      this.waiting.add(agentId);
-      this.broadcast();
+      // One wait per agent (APC 0.8): a second within the claim gap is refused; otherwise the newest takes the place,
+      // and the wait it replaced delivers nothing and marks nothing seen.
+      const slot = this.waitSlots.for(agentId);
+      const claim = await slot.claim();
+      if (!("token" in claim)) return toolResult({ focus: null, timed_out: false, retry_after_s: claim.retryAfterS, note: waitBusyNote(claim.retryAfterS) });
+      const takenOver = async () => !(await slot.holds(claim.token));
       try {
-        const reading = pages ? this.nextReading(agentId, timeoutS * 1000) : null;
-        let got = false;
-        let open: boolean | null = null;
-        if (apps) {
-          const fromApps = this.waitApps(agentId, timeoutS).then((r) => ({ from: "apps" as const, ...r }));
-          const first = reading ? await Promise.race([fromApps, reading.then((g) => ({ from: "page" as const, got: g, open: null }))]) : await fromApps;
-          got = first.got;
-          open = first.open;
-          // The apps came back empty (their pages closed, or their waits ran out): a reading may still come.
-          if (!got && first.from === "apps" && reading) got = await reading;
-        } else {
-          got = await reading!;
+        const deliver = () => {
+          const row = this.unread(agentId);
+          if (!row) return null;
+          const result = toolResult({ focus: this.render(agentId, row), timed_out: false });
+          if (!cancelled()) this.markPointerSeen(agentId, row.focus.pinned_at);
+          return result;
+        };
+        // A pin the hub took but has not handed over yet: ask its app first, since it may have revoked the grant
+        // since (APC 0.2); a revoked pairing's pin goes before it could be delivered. Only the pin's own app, and
+        // within LIMITS.pinLookMs or the wait's own timeout, whichever is shorter (TIN-606): a slow app delays the
+        // pin by that much at most. One that does not answer in time keeps its pin, target ids only, as § 14 says
+        // of an app that revoked and cannot be reached.
+        const unread = this.unread(agentId);
+        const holder = unread ? this.pairings(agentId, "paired").find((p) => p.id === unread.pairing_id) : undefined;
+        if (holder) await this.lookAt(holder, Math.min(LIMITS.pinLookMs, ((t as number | undefined) ?? WAIT_DEFAULT_S) * 1000));
+        const ready = deliver();
+        if (ready) return ready;
+        const timeoutS = (t as number | undefined) ?? WAIT_DEFAULT_S;
+        const apps = this.pairings(agentId, "paired").length > 0;
+        // A browser that sends page readings (TIN-421) wakes the wait too: the person may point from any web page.
+        const pages = this.readers(agentId, "paired").length > 0;
+        if (!apps && !pages) return toolResult({ focus: null, timed_out: false, page_open: false, note: NO_APPS_NOTE });
+        this.waiting.set(agentId, (this.waiting.get(agentId) ?? 0) + 1);
+        this.broadcast();
+        try {
+          const reading = pages ? this.nextReading(agentId, timeoutS * 1000) : null;
+          let got = false;
+          let open: boolean | null = null;
+          if (apps) {
+            const fromApps = this.waitApps(agentId, timeoutS).then((r) => ({ from: "apps" as const, ...r }));
+            const first = reading ? await Promise.race([fromApps, reading.then((g) => ({ from: "page" as const, got: g, open: null }))]) : await fromApps;
+            got = first.got;
+            open = first.open;
+            // The apps came back empty (their pages closed, or their waits ran out): a reading may still come.
+            if (!got && first.from === "apps" && reading) got = await reading;
+          } else {
+            got = await reading!;
+          }
+          // A wait a newer one took over, or whose request was cancelled, delivers nothing and marks nothing seen (APC 0.8).
+          if (await takenOver()) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
+          if (cancelled()) return toolResult({ focus: null, timed_out: false, note: WAIT_CANCELLED_NOTE });
+          if (got) return deliver() ?? toolResult({ focus: null, timed_out: false });
+          // The extension reports no presence (13.5): with a browser paired, whether the person left is unknown.
+          if (pages) return toolResult({ focus: null, timed_out: true, note: WAIT_TIMED_OUT_NOTE });
+          if (open === false) return toolResult({ focus: null, timed_out: false, page_open: false, note: WAIT_PAGE_CLOSED_NOTE });
+          return toolResult({ focus: null, timed_out: true, ...(open === null ? {} : { page_open: open }), note: WAIT_TIMED_OUT_NOTE });
+        } finally {
+          // Counted, not a set: a wait that ends must not clear the newer one's state on the pet.
+          const left = (this.waiting.get(agentId) ?? 1) - 1;
+          if (left > 0) this.waiting.set(agentId, left);
+          else this.waiting.delete(agentId);
         }
-        if (got) return deliver() ?? toolResult({ focus: null, timed_out: false });
-        // The extension reports no presence (13.5): with a browser paired, whether the person left is unknown.
-        if (pages) return toolResult({ focus: null, timed_out: true, note: WAIT_TIMED_OUT_NOTE });
-        if (open === false) return toolResult({ focus: null, timed_out: false, page_open: false, note: WAIT_PAGE_CLOSED_NOTE });
-        return toolResult({ focus: null, timed_out: true, ...(open === null ? {} : { page_open: open }), note: WAIT_TIMED_OUT_NOTE });
       } finally {
-        this.waiting.delete(agentId);
+        await slot.release(claim.token);
       }
     }
     if (name === "list_app_tools") {

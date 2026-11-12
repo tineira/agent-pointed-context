@@ -6,7 +6,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { FocusPayload, FocusRow, PresenceEvent } from "@tineira/apc-protocol";
 import {
   THEN_NOTE,
+  MemoryWaitSlots,
   WAIT_PAGE_CLOSED_NOTE,
+  WAIT_TAKEN_OVER_NOTE,
   WAIT_TIMED_OUT_NOTE,
   attachAttention,
   attachThen,
@@ -14,6 +16,7 @@ import {
   isUnread,
   presenceEvent,
   registerApcTools,
+  thenApplies,
   thenBytes,
   toolError,
   toolResult,
@@ -89,10 +92,11 @@ async function connect(pinAfterMs: number | null, page: { open: boolean; closeAf
     readView: async () => null,
     readFocus: async () => (row.pinned ? focus : null),
     focusUnread: async () => row.pinned && !row.seen,
-    markSeen: async () => {
-      row.seen = true;
+    markSeen: async (pinnedAt) => {
+      if (pinnedAt === focus.pinned_at) row.seen = true;
     },
     ...(page ? { pageOpen: async () => page.open } : {}),
+    waitSlot: new MemoryWaitSlots().for("g"),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     pollMs: 20,
     waitCeilingS: 2,
@@ -155,7 +159,126 @@ test("the tools teach the loop: instructions and descriptions name wait_for_focu
   const { tools } = await client.listTools();
   const wait = tools.find((t) => t.name === "wait_for_focus")!;
   const view = tools.find((t) => t.name === "get_current_view")!;
-  assert.match(wait.description!, /^Call this after you answer, only while the person is on the page/);
+  assert.match(wait.description!, /^Call this after you answer, only while your last results carried 'then'/);
+  assert.match(wait.description!, /in the background/, "it says to wait in the background where the client can (APC 0.8)");
   assert.match(wait.description!, /default 2\)/, "the default is capped by the ceiling (2 s in this fake)");
   assert.match(view.description!, /then answer, then call wait_for_focus/i);
+  assert.match(APC_INSTRUCTIONS, /in the background/);
+});
+
+/** A fake grant with a pin store the test drives, for the APC 0.8 rules. */
+async function grantWithPins(slots = new MemoryWaitSlots(), grantId = "g") {
+  const pin: { at: string | null; seenAt: string | null } = { at: null, seenAt: null };
+  const marked: string[] = [];
+  const server = new McpServer({ name: "t", version: "0" });
+  registerApcTools(server, {
+    readView: async () => null,
+    readFocus: async () => (pin.at ? { ...focus, pinned_at: pin.at } : null),
+    focusUnread: async () => !!pin.at && pin.seenAt !== pin.at,
+    markSeen: async (pinnedAt) => {
+      marked.push(pinnedAt);
+      if (pin.at === pinnedAt) pin.seenAt = pinnedAt;
+    },
+    pageOpen: async () => true,
+    waitSlot: slots.for(grantId),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    pollMs: 20,
+    waitCeilingS: 5,
+  });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "c", version: "0" });
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const drop = (at: string) => {
+    pin.at = at;
+  };
+  return { client, pin, marked, drop };
+}
+
+type Waited = { structuredContent: { focus: FocusPayload | null; timed_out: boolean; retry_after_s?: number; note?: string } };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const wait = (client: Client, timeout_s: number, signal?: AbortSignal) => client.callTool({ name: "wait_for_focus", arguments: { timeout_s } }, undefined, signal ? { signal } : undefined) as Promise<unknown> as Promise<Waited>;
+
+test("one wait per grant: a newer wait takes over, the older delivers nothing and marks nothing (APC 0.8)", async () => {
+  let clock = 0;
+  const g = await grantWithPins(new MemoryWaitSlots(() => clock));
+  const older = wait(g.client, 3);
+  await sleep(60);
+  clock = 2500; // past the claim gap
+  const newer = wait(g.client, 3);
+  const old = await older;
+  assert.equal(old.structuredContent.focus, null);
+  assert.equal(old.structuredContent.timed_out, false);
+  assert.equal(old.structuredContent.note, WAIT_TAKEN_OVER_NOTE);
+  g.drop("2026-11-12T10:00:00.000Z");
+  const got = await newer;
+  assert.equal(got.structuredContent.focus?.pinned_at, "2026-11-12T10:00:00.000Z", "the newer wait gets the pin");
+  assert.deepEqual(g.marked, ["2026-11-12T10:00:00.000Z"], "only the delivering wait marked it");
+});
+
+test("a second wait within the claim gap is refused with retry_after_s, and the first keeps its place (APC 0.8)", async () => {
+  const g = await grantWithPins();
+  const first = wait(g.client, 2);
+  await sleep(40);
+  const second = await wait(g.client, 2);
+  assert.equal(second.structuredContent.focus, null);
+  assert.equal(second.structuredContent.timed_out, false);
+  assert.ok(second.structuredContent.retry_after_s! >= 1 && second.structuredContent.retry_after_s! <= 2);
+  assert.match(second.structuredContent.note!, /retry in \d+ s/);
+  g.drop("2026-11-12T10:00:01.000Z");
+  assert.equal((await first).structuredContent.focus?.pinned_at, "2026-11-12T10:00:01.000Z", "the first wait still delivers");
+});
+
+test("a cancelled wait frees its place at once and leaves the pin unread (APC 0.8)", async () => {
+  const slots = new MemoryWaitSlots();
+  const g = await grantWithPins(slots);
+  const controller = new AbortController();
+  const waiting = wait(g.client, 3, controller.signal).catch((e: unknown) => e);
+  await sleep(60);
+  controller.abort();
+  await waiting;
+  await sleep(60);
+  assert.ok("token" in (await slots.for("g").claim()), "the place is free right after the cancel, even within the claim gap");
+  g.drop("2026-11-12T10:00:02.000Z");
+  await sleep(60);
+  assert.deepEqual(g.marked, [], "a cancelled wait marks nothing seen");
+});
+
+test("seen once delivered: the exact pin is marked, never a newer one dropped meanwhile (APC 0.8)", async () => {
+  const g = await grantWithPins();
+  g.drop("2026-11-12T10:00:03.000Z");
+  const view = (await g.client.callTool({ name: "get_current_view", arguments: {} })) as unknown as { structuredContent: { focus: FocusPayload } };
+  assert.equal(view.structuredContent.focus.pinned_at, "2026-11-12T10:00:03.000Z");
+  assert.deepEqual(g.marked, ["2026-11-12T10:00:03.000Z"], "marked by its pinned_at");
+  g.drop("2026-11-12T10:00:04.000Z");
+  assert.equal(g.pin.seenAt, "2026-11-12T10:00:03.000Z", "the newer pin stays unread");
+});
+
+test("the result goes out even when marking seen fails (APC 0.8)", async () => {
+  const server = new McpServer({ name: "t", version: "0" });
+  registerApcTools(server, {
+    readView: async () => null,
+    readFocus: async () => focus,
+    focusUnread: async () => true,
+    markSeen: async () => {
+      throw new Error("store down");
+    },
+    waitSlot: new MemoryWaitSlots().for("g"),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "c", version: "0" });
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const view = (await client.callTool({ name: "get_current_view", arguments: {} })) as unknown as { isError?: boolean; structuredContent: { focus: FocusPayload } };
+  assert.ok(!view.isError);
+  assert.equal(view.structuredContent.focus.next, "get_figure");
+});
+
+test("then applies only with a page open and a pin within the window (APC 0.8)", () => {
+  const now = Date.parse("2026-11-12T12:00:00.000Z");
+  assert.equal(thenApplies(true, "2026-11-12T11:45:00.000Z", now), true);
+  assert.equal(thenApplies(true, "2026-11-12T11:29:59.000Z", now), false, "older than 30 minutes");
+  assert.equal(thenApplies(true, null, now), false, "never pinned");
+  assert.equal(thenApplies(false, "2026-11-12T11:59:00.000Z", now), false, "no page open");
+  assert.equal(thenApplies(null, "2026-11-12T11:59:00.000Z", now), false, "the view is not shared");
+  assert.equal(thenApplies(true, "2026-11-12T11:00:00.000Z", now, 2 * 3600_000), true, "the app sets its own window");
 });
