@@ -8,7 +8,7 @@ import { encode } from "uqr";
 import { useMemo } from "react";
 
 /** Black modules on a white plate, so a phone camera can read it in either theme. */
-export function Qr(props: { text: string }) {
+export function Qr(props: { text: string; label?: string }) {
   const code = useMemo(() => encode(props.text, { ecc: "M", border: 4 }), [props.text]);
   const n = code.size;
   let d = "";
@@ -18,7 +18,7 @@ export function Qr(props: { text: string }) {
     for (let x = 0; x < n; x++) if (row[x]) d += `M${x} ${y}h1v1h-1z`;
   }
   return (
-    <svg className="qr" viewBox={`0 0 ${n} ${n}`} width="196" height="196" role="img" aria-label="QR code of the MCP URL" shapeRendering="crispEdges">
+    <svg className="qr" viewBox={`0 0 ${n} ${n}`} width="196" height="196" role="img" aria-label={props.label ?? "QR code of the MCP URL"} shapeRendering="crispEdges">
       <rect width={n} height={n} fill="#fff" />
       <path d={d} fill="#141a24" />
     </svg>

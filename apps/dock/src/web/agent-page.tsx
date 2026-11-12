@@ -47,11 +47,32 @@ export interface DockAgent {
   pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed" }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
+/** A computer on this dock (TIN-838); `current` is the one this page runs on. */
+export interface DockDevice {
+  id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+  current: boolean;
+}
+/** A computer that claimed a join code: waiting for a yes (pending), or collecting its answer. */
+export interface DockJoin {
+  id: string;
+  label: string;
+  status: "pending" | "approved" | "denied";
+  asked_at: string | null;
+  answer_by: number | null;
+}
+
 export interface DockState {
   setup_done: boolean;
   onboarding: Onboarding;
   expires_at: string;
   agents: DockAgent[];
+  /** TIN-838; absent from a hub older than this page for a moment after a deploy. */
+  devices?: DockDevice[];
+  link?: { code: string; expires_at: number } | null;
+  joins?: DockJoin[];
 }
 
 export const host = (origin: string) => {

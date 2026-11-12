@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### One dock on several computers: link another computer with a code, and your agent keeps one connection (2026-11-12, TIN-838)
+
+- **A dock opens on every computer you link to it, so an agent connects once and gets your drops from any of them.** The dock's "⋯" menu has Link another computer (a code that works once and for 2 minutes, with its QR and link), Join a dock on another computer, and Computers on this dock with Remove; the new computer joins only after Allow on a computer already linked, and each one gets its own secret, so removing one leaves the others. Docks made before keep opening with their cookie. (`apps/dock/src/worker/devices.ts`, `apps/dock/src/worker/join-codes.ts`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/web/computers.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/wrangler.jsonc`)
+
 ### A dock in use keeps its cookie: it lasts 7 days after the last use, not 7 days after the dock was made (2026-11-11, TIN-823)
 
 - **Reopening the dock (the web page or the Windows dock) more than 7 days after it was made no longer opens a new, empty dock with the agents shown as not connected.** The cookie that names the dock was set only when the dock was made, while the dock itself lives 7 days past its last use; the cookie is now sent again, with 7 more days, on every resume (`POST /api/dock`) and every state read, so a dock left open for days keeps it too. A dock already lost this way cannot be opened again: its agents reconnect to the new one. (`apps/dock/src/worker/index.ts`, `apps/dock/test/health.test.ts`)

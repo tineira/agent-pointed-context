@@ -419,3 +419,35 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent); tex
 .float-ask-card p { margin: 0; }
 .float-ask-go { font-size: 1.05em; padding: 10px 18px; justify-self: center; }
 .float-ask-close { position: absolute; top: 8px; right: 8px; border: none; background: transparent; color: inherit; font-size: 15px; cursor: pointer; opacity: 0.6; }
+
+/* Your dock on more than one computer (TIN-838): link, join, the yes, and the list of computers. */
+.dock-panel { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.dock-panel p { font-size: 13px; }
+.dock-panel-head { display: flex; align-items: center; gap: 8px; }
+.dock-panel-head h2 { margin: 0; font-size: 15px; color: var(--fg); text-transform: none; letter-spacing: normal; }
+.dock-panel-head .icon-button { width: 32px; height: 32px; padding: 0; }
+.join-code-block { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.join-code-block .qr { width: 168px; height: 168px; border-radius: 10px; border: 1px solid var(--line); margin-bottom: 8px; }
+.join-code-block .muted { font-size: 12px; }
+.join-code { font: 700 26px/1.2 ui-monospace, "Cascadia Mono", monospace; letter-spacing: 0.08em; user-select: all; }
+.join-note { font-size: 12px; color: var(--muted); padding: 10px 12px; border-radius: 10px; background: var(--chip); display: flex; flex-direction: column; gap: 6px; }
+.join-note p { font-size: 12px; margin: 0; }
+.join-note b { color: var(--fg); }
+.join-form { display: flex; flex-direction: column; gap: 10px; }
+.join-form label { font-size: 12px; font-weight: 600; }
+.join-code-input { font: 600 20px ui-monospace, "Cascadia Mono", monospace; letter-spacing: 0.08em; text-transform: uppercase; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); min-width: 0; }
+.join-waiting, .join-done { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--accent); border-radius: 10px; }
+.join-done { border-color: var(--ok); }
+.join-done b { color: var(--ok); }
+.join-request .join-title { margin: 0; font-size: 14px; color: var(--fg); text-transform: none; letter-spacing: normal; }
+.join-facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; }
+.join-facts dt { color: var(--muted); }
+.join-facts dd { margin: 0; }
+.join-hint { font-size: 12px; }
+.link-button { padding: 0; border: 0; background: none; color: var(--accent); text-decoration: underline; font-size: inherit; cursor: pointer; }
+.computers { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px; }
+.computers li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.computers li + li { border-top: 1px solid var(--line); }
+.computer-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.computer-who .muted { font-size: 12px; }
+.computer-this { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); white-space: nowrap; }
