@@ -20,6 +20,8 @@ import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, 
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
 import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView } from "./trust.ts";
+import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJoinCode, REMOVED_CLOSE } from "./devices.ts";
+import type { JoinCodes } from "./join-codes.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
 const TICKET_TTL_MS = 60_000;
@@ -32,6 +34,8 @@ const READINGS_KEPT = 50;
 
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
+  /** The join codes' directory (TIN-838): which dock a code typed on another computer belongs to. */
+  JOIN_CODES: DurableObjectNamespace<JoinCodes>;
   ASSETS: Fetcher;
   /** Comma-separated origins of the apps a hub may pair with: the verified apps (TIN-580). */
   APP_ORIGINS?: string;
@@ -137,6 +141,33 @@ interface Reader {
   read_at: string | null;
 }
 
+/** A computer that opens this dock (TIN-838), with its own secret in its cookie. */
+interface Device {
+  id: string;
+  secret: string;
+  /** "Edge on Windows": what the dock shows; null for the first computer of a dock from before TIN-838 until it is next seen. */
+  label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+/**
+ * Linking another computer (TIN-838): a code this dock made. open: shown, not claimed yet. pending: a
+ * computer claimed it and waits for a yes. approved: the yes came, the computer has not collected its
+ * secret yet. denied: the no came, for the computer to read once. Each ends at expires_at (open) or
+ * answer_by (the rest), and goes.
+ */
+interface Join {
+  id: string;
+  code: string;
+  status: "open" | "pending" | "approved" | "denied";
+  expires_at: number;
+  label: string | null;
+  claim: string | null;
+  asked_at: string | null;
+  answer_by: number | null;
+}
+
 /** The app id and name a reader has for the agent; no app can take the id (see pair). */
 const PAGE_APP = { id: "page", name: "This browser" };
 
@@ -213,7 +244,17 @@ export class Hub extends DurableObject<Env> {
         origin text not null, at text not null, site text not null, bytes integer not null);
       create table if not exists apc_json (origin text primary key, body text not null, read_at integer not null);
       create table if not exists unverified_ok (origin text primary key, approved_at text not null);
+      create table if not exists devices (id text primary key, secret text not null unique, label text, created_at text not null, last_used_at text);
+      create table if not exists joins (
+        id text primary key, code text not null unique, status text not null, expires_at integer not null,
+        label text, claim text unique, asked_at text, answer_by integer);
     `);
+    // A dock from before TIN-838 had one owner secret: it becomes the dock's first computer, so its cookie still opens it.
+    const owner = this.meta("owner");
+    if (owner) {
+      if (!this.sql.exec("select 1 from devices limit 1").toArray().length) this.sql.exec("insert into devices (id, secret, label, created_at) values (?, ?, null, ?)", `dv_${randomHex(4)}`, owner, this.meta("created_at") ?? new Date().toISOString());
+      this.sql.exec("delete from meta where key = 'owner'");
+    }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
     for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"]]) {
       try {
@@ -378,8 +419,10 @@ export class Hub extends DurableObject<Env> {
     const oldest = this.sql.exec<{ at: string | null }>("select min(reading_at) as at from readers").toArray()[0]?.at;
     const pending = this.sql.exec<{ at: string | null }>("select min(created_at) as at from pairings where status = 'pending'").toArray()[0]?.at;
     const approving = this.sql.exec<{ at: string | null }>("select min(approved_at) as at from pairings where status = 'approving'").toArray()[0]?.at;
+    // A join's end (TIN-838): the open code's, or the claimed one's answer_by, so the dock drops a request nobody answered.
+    const joinEnd = this.sql.exec<{ at: number | null }>("select min(case when status = 'open' then expires_at else answer_by end) as at from joins").toArray()[0]?.at;
     await this.ctx.storage.setAlarm(
-      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity),
+      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, joinEnd ?? Infinity),
     );
   }
   /** What storage says of a pairing, under the blocked overlay pairings() reads: "approving" while held is still approving here. */
@@ -470,7 +513,7 @@ export class Hub extends DurableObject<Env> {
     if (giveBack.length) this.later(this.giveBack(giveBack));
   }
   private async alive(): Promise<boolean> {
-    if (!this.meta("owner")) return false;
+    if (!this.meta("did")) return false;
     if (Number(this.meta("expires_at") ?? 0) > Date.now()) return true;
     await this.wipe();
     return false;
@@ -487,6 +530,7 @@ export class Hub extends DurableObject<Env> {
   async alarm(): Promise<void> {
     this.expireReadings();
     if (Number(this.meta("expires_at") ?? 0) <= Date.now()) return this.wipe();
+    this.expireJoins();
     await this.giveBack(this.expirePending());
     this.broadcast();
     await this.arm();
@@ -507,22 +551,211 @@ export class Hub extends DurableObject<Env> {
 
   // ---- owner RPC (the worker checked the owner secret first) ----
 
-  async init(did: string): Promise<{ owner: string }> {
-    const existing = this.meta("owner");
-    if (existing) return { owner: existing };
-    const owner = randomHex(16);
-    this.setMeta("owner", owner);
+  /**
+   * A new dock, on the computer that asked for it: that computer's secret is the `owner` the worker puts in
+   * its cookie (TIN-838: one secret per computer; a dock made before had one for all, now its first computer's).
+   */
+  async init(did: string, label: string | null = null): Promise<{ owner: string }> {
+    if (this.meta("did")) return { owner: "" };
     this.setMeta("did", did);
     this.setMeta("created_at", new Date().toISOString());
+    const owner = this.insertDevice(label);
     this.insertAgent("Your agent");
     await this.touch();
     return { owner };
   }
 
-  async isOwner(secret: string): Promise<boolean> {
-    if (!(await this.alive()) || this.meta("owner") !== secret) return false;
+  /**
+   * Whether `secret` is one of this dock's computers (TIN-838), the dock still live. A yes keeps the dock
+   * alive another DOCK_TTL_MS and marks the computer used; `label` names a computer that has no name yet
+   * (the first one of a dock from before).
+   */
+  async isOwner(secret: string, label: string | null = null): Promise<boolean> {
+    if (!(await this.alive())) return false;
+    const device = this.deviceBySecret(secret);
+    if (!device) return false;
+    const now = Date.now();
+    if (!device.last_used_at || now - Date.parse(device.last_used_at) >= LAST_USED_STEP_MS) this.sql.exec("update devices set last_used_at = ? where id = ?", new Date(now).toISOString(), device.id);
+    if (!device.label && label) this.sql.exec("update devices set label = ? where id = ?", label.slice(0, 60), device.id);
     await this.touch();
     return true;
+  }
+
+  // ---- the computers on this dock (TIN-838) ----
+
+  private devices(): Device[] {
+    return this.sql.exec<Record<string, string | null>>("select * from devices order by created_at").toArray() as unknown as Device[];
+  }
+  private deviceBySecret(secret: string): Device | null {
+    if (!/^[0-9a-f]{32}$/.test(secret)) return null;
+    return (this.sql.exec<Record<string, string | null>>("select * from devices where secret = ?", secret).toArray()[0] as unknown as Device | undefined) ?? null;
+  }
+  /** A new computer on this dock; its secret, for its cookie. */
+  private insertDevice(label: string | null): string {
+    const secret = randomHex(16);
+    const now = new Date().toISOString();
+    this.sql.exec("insert into devices (id, secret, label, created_at, last_used_at) values (?, ?, ?, ?, ?)", `dv_${randomHex(4)}`, secret, label?.slice(0, 60) ?? null, now, now);
+    return secret;
+  }
+  private joins(): Join[] {
+    return this.sql.exec<Record<string, string | number | null>>("select * from joins order by expires_at").toArray() as unknown as Join[];
+  }
+  /** The end of a join as it stands: the open code's, or the claimed one's answer_by. */
+  private static joinEnd(j: Join): number {
+    return j.status === "open" ? j.expires_at : (j.answer_by ?? j.expires_at);
+  }
+  /** Joins past their end go (TIN-838); the dock is told when one did. Run by the alarm and before every read of them. */
+  private expireJoins(): void {
+    const now = Date.now();
+    const gone = this.joins().filter((j) => Hub.joinEnd(j) <= now);
+    for (const j of gone) this.sql.exec("delete from joins where id = ?", j.id);
+    if (gone.length) this.broadcast();
+  }
+  /**
+   * Close the sockets of a computer that left the dock, with REMOVED_CLOSE: its page then says so. A close
+   * that fails (the socket is going already) never fails the removal.
+   */
+  private closeDevice(deviceId: string): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        const device = (ws.deserializeAttachment() as { device?: string } | null)?.device;
+        if (device === deviceId) ws.close(REMOVED_CLOSE, "removed from this dock");
+        // A socket from before TIN-838 says no computer: it is closed plainly, and its page opens a new one, which does.
+        else if (!device) ws.close(1000, "reconnect");
+      } catch {
+        // closed already
+      }
+    }
+  }
+  /**
+   * Every browser sending page readings goes (TIN-838, Review round 1 on #158): a reader is a browser's
+   * extension, sent with a token and no cookie, so the hub cannot tell which computer's it is. A computer
+   * removed or left must not keep pointing the agents from its extension; the others ask once again, on
+   * their next drop.
+   */
+  private dropReaders(): void {
+    for (const r of this.sql.exec<{ id: string }>("select id from readers").toArray()) this.sql.exec("delete from pointer where pairing_id = ?", r.id);
+    this.sql.exec("delete from readers");
+  }
+
+  /**
+   * Link another computer (TIN-838): a new code, open JOIN_CODE_TTL_MS. One code at a time: the codes made
+   * before and not yet claimed go, and are returned for the worker to drop from the directory too.
+   */
+  async newLink(): Promise<{ ok: true; code: string; expires_at: number; dropped: string[] } | { ok: false; error: "too_many_devices" }> {
+    this.expireJoins();
+    if (this.devices().length >= MAX_DEVICES) return { ok: false, error: "too_many_devices" };
+    const dropped = this.joins().filter((j) => j.status === "open").map((j) => j.code);
+    this.sql.exec("delete from joins where status = 'open'");
+    const code = newJoinCode();
+    const expiresAt = Date.now() + JOIN_CODE_TTL_MS;
+    this.sql.exec("insert into joins (id, code, status, expires_at) values (?, ?, 'open', ?)", `jn_${randomHex(4)}`, code, expiresAt);
+    await this.arm();
+    this.broadcast();
+    return { ok: true, code, expires_at: expiresAt, dropped };
+  }
+
+  /** Cancel on the code's screen: an open code goes (a claimed one is answered with Deny instead). */
+  async cancelLink(code: unknown): Promise<{ ok: boolean }> {
+    if (typeof code !== "string") return { ok: false };
+    const gone = this.sql.exec("select 1 from joins where code = ? and status = 'open'", code).toArray().length > 0;
+    this.sql.exec("delete from joins where code = ? and status = 'open'", code);
+    if (gone) this.broadcast();
+    return { ok: gone };
+  }
+
+  /**
+   * A computer claimed one of this dock's codes (the directory gave it here, once): it waits for a yes on a
+   * computer already linked, JOIN_ANSWER_MS. The claim is its proof when it asks for the answer.
+   */
+  async askJoin(code: string, label: string): Promise<{ ok: true; claim: string } | { ok: false; error: "unknown_code" | "dock_expired" | "too_many_devices" }> {
+    if (!(await this.alive())) return { ok: false, error: "dock_expired" };
+    this.expireJoins();
+    const join = this.joins().find((j) => j.code === code && j.status === "open");
+    if (!join) return { ok: false, error: "unknown_code" };
+    if (this.devices().length >= MAX_DEVICES) return { ok: false, error: "too_many_devices" };
+    const claim = randomHex(16);
+    const answerBy = Date.now() + JOIN_ANSWER_MS;
+    this.sql.exec("update joins set status = 'pending', label = ?, claim = ?, asked_at = ?, answer_by = ? where id = ?", label.slice(0, 60), claim, new Date().toISOString(), answerBy, join.id);
+    await this.arm();
+    this.broadcast();
+    return { ok: true, claim };
+  }
+
+  /** The answer on a linked computer: allow or deny the computer that claimed a code. */
+  async decideJoin(joinId: string, action: unknown): Promise<{ ok: boolean; error?: string }> {
+    this.expireJoins();
+    const join = this.joins().find((j) => j.id === joinId);
+    if (!join || join.status !== "pending") return { ok: false, error: "unknown_join" };
+    if (action !== "approve" && action !== "deny") return { ok: false, error: "bad_action" };
+    // The computer collects the answer within the same window again (an approved one gets its secret then).
+    this.sql.exec("update joins set status = ?, answer_by = ? where id = ?", action === "approve" ? "approved" : "denied", Date.now() + JOIN_ANSWER_MS, join.id);
+    await this.arm();
+    this.broadcast();
+    return { ok: true };
+  }
+
+  /**
+   * The waiting computer asks for its answer with its claim: pending, denied (once), expired, or joined, with
+   * the secret for its cookie (once: the join goes and the computer is on the dock from then on).
+   */
+  async joinStatus(claim: unknown): Promise<{ status: "pending" | "denied" | "expired" | "full" } | { status: "joined"; secret: string }> {
+    if (typeof claim !== "string" || !/^[0-9a-f]{32}$/.test(claim) || !(await this.alive())) return { status: "expired" };
+    this.expireJoins();
+    const join = this.joins().find((j) => j.claim === claim);
+    if (!join) return { status: "expired" };
+    if (join.status === "pending") return { status: "pending" };
+    // Full (another computer collected first): said as such, not as a request nobody answered.
+    if (join.status === "approved" && this.devices().length >= MAX_DEVICES) {
+      this.sql.exec("delete from joins where id = ?", join.id);
+      return { status: "full" };
+    }
+    this.sql.exec("delete from joins where id = ?", join.id);
+    if (join.status === "denied") {
+      this.broadcast();
+      return { status: "denied" };
+    }
+    const secret = this.insertDevice(join.label);
+    await this.touch();
+    this.broadcast();
+    return { status: "joined", secret };
+  }
+
+  /**
+   * Remove a computer from the dock, from another one (TIN-838): its secret stops opening the dock and its
+   * pages are closed. The agents, their connection and the other computers stay. Never the computer asking:
+   * it leaves by joining another dock, or with Start over.
+   */
+  async removeDevice(deviceId: string, callerSecret: string): Promise<{ ok: boolean; error?: string }> {
+    const device = this.devices().find((d) => d.id === deviceId);
+    if (!device) return { ok: false, error: "unknown_device" };
+    if (device.secret === callerSecret) return { ok: false, error: "this_device" };
+    this.sql.exec("delete from devices where id = ?", deviceId);
+    this.closeDevice(deviceId);
+    this.dropReaders();
+    this.broadcast();
+    return { ok: true };
+  }
+
+  /**
+   * This computer joined another dock (TIN-838) and leaves this one. A dock left with no computer and
+   * nothing in it (no agent ever connected, nothing paired) goes at once; one with something in it stays
+   * for its agents until it expires, DOCK_TTL_MS after its last use.
+   */
+  async leave(secret: string): Promise<{ ok: boolean; wiped: boolean }> {
+    const device = this.deviceBySecret(secret);
+    if (!device) return { ok: false, wiped: false };
+    this.sql.exec("delete from devices where id = ?", device.id);
+    this.closeDevice(device.id);
+    // This browser's extension readings went with it (it may be the reader); a dock no computer opens keeps none.
+    this.dropReaders();
+    const empty = this.devices().length === 0 && this.agents().every((a) => !a.client_name) && !this.sql.exec("select 1 from pairings limit 1").toArray().length;
+    if (empty) {
+      await this.wipe();
+      return { ok: true, wiped: true };
+    }
+    this.broadcast();
+    return { ok: true, wiped: false };
   }
 
   private insertAgent(label: string): Agent {
@@ -562,13 +795,22 @@ export class Hub extends DurableObject<Env> {
     return { id: a.id };
   }
 
-  async state(origin: string) {
+  /** The dock for its page; `secret` is the asking computer's, so the page can tell which computer it is (TIN-838). */
+  async state(origin: string, secret: string | null = null) {
     this.expireNow();
+    this.expireJoins();
     const did = this.meta("did");
     const blocked = this.blocked();
+    const joins = this.joins();
+    const open = joins.find((j) => j.status === "open");
     // No demo world here any more (TIN-621): the demo apps show one world to everyone and open on their own.
     // A dock made before keeps a "seed" in its metadata that nothing reads.
     return {
+      // The computers on this dock (TIN-838): never their secrets, only which one is asking.
+      devices: this.devices().map((d) => ({ id: d.id, label: d.label ?? "This dock's first computer", created_at: d.created_at, last_used_at: d.last_used_at, current: !!secret && d.secret === secret })),
+      // The code being shown, if any, and the computers waiting for a yes (or collecting one).
+      link: open ? { code: open.code, expires_at: open.expires_at } : null,
+      joins: joins.filter((j) => j.status !== "open").map((j) => ({ id: j.id, label: j.label ?? "A computer", status: j.status, asked_at: j.asked_at, answer_by: j.answer_by })),
       // Kept for older dock clients; the checklist no longer gates the dock on this flag.
       setup_done: !!this.meta("setup_done") || this.sql.exec("select 1 from pairings limit 1").toArray().length > 0,
       onboarding: this.onboarding(),
@@ -1223,12 +1465,13 @@ export class Hub extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.endsWith("/ws")) {
-      const owner = this.meta("owner");
-      if (!owner || request.headers.get("x-apc-owner") !== owner) return new Response("forbidden", { status: 403 });
+      // One of this dock's computers (TIN-838); its socket carries which, so removing that computer closes it.
+      const device = this.deviceBySecret(request.headers.get("x-apc-owner") ?? "");
+      if (!device) return new Response("forbidden", { status: 403 });
       if (request.headers.get("upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
-      pair[1].serializeAttachment({ accepted_at: Date.now() });
+      pair[1].serializeAttachment({ accepted_at: Date.now(), device: device.id });
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     const match = url.pathname.match(/^\/mcp\/[0-9a-f]{32}\/([0-9a-f]{32})$/);

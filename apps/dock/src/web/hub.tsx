@@ -25,6 +25,8 @@ import { DockMenu } from "./dock-menu.tsx";
 import { ExtensionOutdatedNotice } from "./extension.tsx";
 import { FloatIcon, PlusIcon } from "./icons.tsx";
 import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
+import { ComputersPanel, JoinPanel, JoinRequests, LinkPanel } from "./computers.tsx";
+import { REMOVED_CLOSE } from "../worker/devices.ts";
 import { buttonsOff, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
@@ -74,6 +76,8 @@ const unreachable = (e: unknown) => e instanceof TypeError;
 
 /** An agent's page (TIN-419): /dock/agents/<id>. */
 const agentRoute = (path: string) => path.match(/^\/dock\/agents\/(ag_[0-9a-f]+)\/?$/)?.[1] ?? null;
+/** The link another computer opens to join this dock (TIN-838): /dock/join#<code>. */
+const JOIN_ROUTE = /^\/dock\/join\/?$/.test(location.pathname);
 
 export function HubDock() {
   // The dock's own address: the list at /dock, an agent's page at /dock/agents/<id>; Back works.
@@ -118,20 +122,56 @@ export function HubDock() {
   const [tryOpen, setTryOpen] = useState<boolean | null>(() => (new URLSearchParams(location.search).has("float") ? true : null));
   /** Opens Start over's dialog, from the "⋯" menu (TIN-702). */
   const startOver = useRef<(() => void) | null>(null);
+  /** Link another computer or the computers on this dock (TIN-838), in place of the agents. */
+  const [panel, setPanel] = useState<"link" | "computers" | null>(null);
+  /**
+   * Join a dock you already have (TIN-838): the code so far, or null when not joining. The join link
+   * (/dock/join#<code>) opens here with the code filled in, and opens no dock of its own first: on a
+   * computer with none, nothing is made unless the person cancels.
+   */
+  const [joining, setJoining] = useState<string | null>(() => {
+    if (!JOIN_ROUTE || FLOATING) return null;
+    // A link a mail or chat app mangled ("…#KQ7%") must not break the page: the raw text, then the person's fix.
+    try {
+      return decodeURIComponent(location.hash.slice(1));
+    } catch {
+      return location.hash.slice(1);
+    }
+  });
+  const [held, setHeld] = useState(JOIN_ROUTE && !FLOATING);
+  useEffect(() => {
+    // The code is read; the address goes back to the dock's, so a reload does not join again.
+    if (JOIN_ROUTE) history.replaceState(null, "", "/dock");
+  }, []);
+  const stopJoining = () => {
+    setJoining(null);
+    setHeld(false);
+  };
+  /** Another computer removed this one from the dock (TIN-838): the hub closed its socket saying so. */
+  const [removed, setRemoved] = useState(false);
+  /**
+   * This page opened a new dock because its cookie no longer opened the old one (removed on another
+   * computer, Start over there, or the dock ended; Review round 1 on #158): it says so, with Join.
+   */
+  const [replaced, setReplaced] = useState(false);
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
   const [reopen, setReopen] = useState(0);
   useEffect(() => {
+    if (held) return;
     // The strip and the pets only resume the dock its window opened, and wait for it on a first run (#84).
     let retry = 0;
     const open = () =>
-      call<{ did: string }>("/api/dock", FLOATING ? { resume: true } : {}).then(
-        (r) => setDid(r.did),
+      call<{ did: string; replaced?: boolean }>("/api/dock", FLOATING ? { resume: true, desktop: DESKTOP_SHELL } : { desktop: DESKTOP_SHELL }).then(
+        (r) => {
+          setDid(r.did);
+          if (r.replaced) setReplaced(true);
+        },
         (e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError({ message: String(e), retry: unreachable(e) })),
       );
     void open();
     return () => clearTimeout(retry);
-  }, [reopen]);
+  }, [reopen, held]);
   const base = did ? `/api/d/${did}` : null;
   const refresh = useCallback(() => {
     if (!base) return;
@@ -145,6 +185,10 @@ export function HubDock() {
         setDid(null);
         setState(null);
         setReopen((n) => n + 1);
+      } else if (/: 40[34]$/.test(String(e))) {
+        // The web dock's cookie no longer opens it (TIN-838): removed on another computer, or the dock ended.
+        setState(null);
+        setRemoved(true);
       } else setError({ message: String(e), retry: FLOATING || unreachable(e) });
     });
   }, [base]);
@@ -171,8 +215,15 @@ export function HubDock() {
       ws.onmessage = (e) => e.data !== "pong" && refresh();
       // The hub closes the socket when the dock goes (Start over, expiry): reading the state again then
       // shows it, which the desktop app's windows need to open the dock again.
-      ws.onclose = () => {
+      ws.onclose = (e) => {
         if (closed) return;
+        // Removed on another computer (REMOVED_CLOSE from the hub): say so, rather than open a new dock unasked.
+        if (e.code === REMOVED_CLOSE && !FLOATING) {
+          closed = true;
+          setState(null);
+          setRemoved(true);
+          return;
+        }
         refresh();
         setTimeout(open, 2000);
       };
@@ -256,6 +307,40 @@ export function HubDock() {
   }, [error, base, refresh]);
 
   const unreached = "Could not reach your dock. Trying again…";
+  if (removed && joining === null)
+    return (
+      <main className="dock">
+        <Header />
+        <section className="dock-panel" role="status">
+          <p>This computer no longer opens your dock: it was removed on another computer, or the dock ended.</p>
+          <div className="row">
+            <button type="button" className="primary" onClick={() => setJoining("")}>
+              Join a dock on another computer
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRemoved(false);
+                setDid(null);
+                setReopen((n) => n + 1);
+              }}
+            >
+              New dock
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  // Joining another dock (TIN-838): before the dock opens (the join link), or from the "⋯" menu.
+  if (joining !== null && !FLOATING) {
+    const connected = state?.agents.filter((a) => a.client_name).length ?? 0;
+    return (
+      <main className="dock">
+        <Header />
+        <JoinPanel initialCode={joining} desktop={DESKTOP_SHELL} leaving={state ? ((state.devices?.length ?? 1) > 1 || connected ? { agents: connected } : null) : "unknown"} cancel={stopJoining} />
+      </main>
+    );
+  }
   if (error) return PET ? <PetWaiting note={unreached} /> : STRIP ? <div className="float float-empty">{unreached}</div> : <main><Header /><p>{error.retry ? unreached : `Could not open your dock: ${error.message}`}</p></main>;
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
@@ -439,12 +524,46 @@ export function HubDock() {
         toggle={() => setTryOpen(!(tryOpen ?? !setup.connected))}
       />
     );
+    const devices = state.devices ?? [];
+    const joinRequests = <JoinRequests state={state} base={base} refresh={refresh} />;
+    if (panel)
+      return (
+        <main className="dock">
+          <Header />
+          {noticeEl}
+          {joinRequests}
+          {panel === "link" ? <LinkPanel state={state} base={base} back={() => setPanel(null)} refresh={refresh} /> : <ComputersPanel state={state} base={base} back={() => setPanel(null)} link={() => setPanel("link")} refresh={refresh} />}
+        </main>
+      );
     return (
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
       {noticeEl}
+      {joinRequests}
       {requests}
+      {replaced && (
+        <div className="decision-notice" role="status">
+          <p>
+            This is a new dock: this computer no longer opened its old one (it was removed on another computer, or that dock ended).{" "}
+            <button type="button" className="link-button" onClick={() => setJoining("")}>
+              Join a dock on another computer
+            </button>
+          </p>
+          <button type="button" onClick={() => setReplaced(false)}>
+            OK
+          </button>
+        </div>
+      )}
+      {/* A fresh dock on a computer that may have one elsewhere (TIN-838): join that one instead. */}
+      {!replaced && !setup.connected && devices.length <= 1 && (
+        <p className="join-hint">
+          Already have a dock on another computer?{" "}
+          <button type="button" className="link-button" onClick={() => setJoining("")}>
+            Join it
+          </button>
+        </p>
+      )}
       {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>+</b> below, then connect it.</p>}
       <ul className="tiles">
         {state.agents.map((a) => {
@@ -517,6 +636,18 @@ export function HubDock() {
         </button>
         {controls}
         <DockMenu>
+          {/* Your dock on more than one computer (TIN-838). */}
+          <button type="button" role="menuitem" className="menu-item" title="Show a code that lets another computer of yours use this dock and its agents" onClick={() => setPanel("link")}>
+            Link another computer
+          </button>
+          <button type="button" role="menuitem" className="menu-item" onClick={() => setPanel("computers")}>
+            <span>Computers on this dock</span>
+            <small>{devices.length || 1}</small>
+          </button>
+          <button type="button" role="menuitem" className="menu-item" title="Use a dock you already have on another computer, with a code from it" onClick={() => setJoining("")}>
+            Join a dock on another computer
+          </button>
+          <div role="separator" className="menu-separator" />
           <button type="button" role="menuitem" className="menu-item" onClick={showTry}>
             {setup.ready ? "Try your dock (done)" : `Try your dock · ${setup.count} of ${setup.done.length}`}
           </button>

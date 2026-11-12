@@ -9,6 +9,8 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
 import { DOCK_TTL_MS, type Env, type Hub } from "./hub.ts";
+import { deviceLabel, normalizeJoinCode } from "./devices.ts";
+import { DIRECTORY } from "./join-codes.ts";
 import { withByteRanges } from "./range.ts";
 
 /** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */
@@ -17,6 +19,7 @@ function hubManifest(origin: string): ApcManifest {
 }
 
 export { Hub } from "./hub.ts";
+export { JoinCodes } from "./join-codes.ts";
 
 const COOKIE = "apc_dock";
 type Stub = DurableObjectStub<Hub>;
@@ -41,6 +44,9 @@ app.use("*", async (c, next) => {
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 const stubFor = (env: Env, did: string): Stub => env.HUB.get(env.HUB.idFromName(did));
+const directory = (env: Env) => env.JOIN_CODES.get(env.JOIN_CODES.idFromName(DIRECTORY));
+/** How the dock names the computer asking (TIN-838): its browser and system, or the desktop app (it says so in the body). */
+const labelOf = (c: Context, desktop?: unknown) => deviceLabel(c.req.header("user-agent"), desktop === true);
 
 function session(cookie: string | undefined): { did: string; owner: string } | null {
   const m = cookie?.match(/^([0-9a-f]{32})\.([0-9a-f]{32})$/);
@@ -76,23 +82,71 @@ function keepCookie(c: Context, did: string, owner: string): void {
  * which open beside the dock's own window and must not make a second dock), only resume: 404 without one.
  */
 app.post("/api/dock", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { resume?: unknown; desktop?: unknown } | null;
   const current = session(getCookie(c, COOKIE));
-  if (current && (await stubFor(c.env, current.did).isOwner(current.owner))) {
+  if (current && (await stubFor(c.env, current.did).isOwner(current.owner, labelOf(c, body?.desktop)))) {
     keepCookie(c, current.did, current.owner);
     return c.json({ did: current.did, created: false });
   }
-  const body = (await c.req.json().catch(() => null)) as { resume?: unknown } | null;
   if (body?.resume === true) return c.json({ error: "no_dock" }, 404);
   const did = randomHex(16);
-  const { owner } = await stubFor(c.env, did).init(did);
+  const { owner } = await stubFor(c.env, did).init(did, labelOf(c, body?.desktop));
   keepCookie(c, did, owner);
-  return c.json({ did, created: true });
+  // A cookie that named a dock it no longer opens (removed on another computer, Start over there, or the dock
+  // ended, TIN-838): the page says this is a new dock, with Join beside it, rather than nothing.
+  return c.json({ did, created: true, ...(current ? { replaced: true } : {}) });
+});
+
+/**
+ * Join a dock you already have (TIN-838), on a computer that may have no dock or its own: the code the
+ * other computer shows, typed or from its link. The directory gives the dock it belongs to, once; that
+ * dock asks its computers for a yes. The answer comes with the claim (POST /api/dock/join/status).
+ */
+/**
+ * Only the dock's own page may join (TIN-838). A join hands this browser a cookie for another dock with no
+ * cookie of its own to check, so a page on another site must never be able to start or finish one: it
+ * would move the person into a dock someone else holds, and their drops to that dock's agents.
+ */
+function fromThisSite(c: Context): boolean {
+  const origin = c.req.header("origin");
+  if (origin) return origin === new URL(c.req.url).origin;
+  return ["same-origin", "none", undefined].includes(c.req.header("sec-fetch-site"));
+}
+app.use("/api/dock/join", async (c, next) => (fromThisSite(c) ? next() : c.json({ ok: false, error: "forbidden" }, 403)));
+app.use("/api/dock/join/status", async (c, next) => (fromThisSite(c) ? next() : c.json({ ok: false, error: "forbidden" }, 403)));
+app.post("/api/dock/join", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { code?: unknown; desktop?: unknown } | null;
+  const code = normalizeJoinCode(body?.code);
+  if (!code) return c.json({ ok: false, error: "bad_code" }, 400);
+  const found = await directory(c.env).take(code, c.req.header("cf-connecting-ip") ?? "");
+  if ("error" in found) return c.json({ ok: false, error: found.error }, found.error === "busy" ? 429 : 400);
+  const label = labelOf(c, body?.desktop);
+  const asked = await stubFor(c.env, found.did).askJoin(code, label);
+  if (!asked.ok) return c.json(asked, 400);
+  return c.json({ ok: true, claim: `${found.did}.${asked.claim}`, label }, 200, { "cache-control": "no-store" });
+});
+
+/**
+ * The answer for a computer waiting to join (TIN-838). Joined: its cookie now opens that dock, and the
+ * dock it had before (if any, and another) is left: deleted when nothing was in it, otherwise kept for
+ * its other computers and agents until it expires.
+ */
+app.post("/api/dock/join/status", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { claim?: unknown } | null;
+  const m = typeof body?.claim === "string" ? body.claim.match(/^([0-9a-f]{32})\.([0-9a-f]{32})$/) : null;
+  if (!m) return c.json({ status: "expired" }, 200, { "cache-control": "no-store" });
+  const answer = await stubFor(c.env, m[1]!).joinStatus(m[2]!);
+  if (answer.status !== "joined") return c.json({ status: answer.status }, 200, { "cache-control": "no-store" });
+  const before = session(getCookie(c, COOKIE));
+  if (before && before.did !== m[1]) await stubFor(c.env, before.did).leave(before.owner);
+  keepCookie(c, m[1]!, answer.secret);
+  return c.json({ status: "joined", did: m[1] }, 200, { "cache-control": "no-store" });
 });
 
 app.use("/api/d/:did/*", async (c, next) => {
   const current = session(getCookie(c, COOKIE));
   if (!current || current.did !== c.req.param("did")) return c.json({ error: "forbidden" }, 403);
-  if (!(await stubFor(c.env, current.did).isOwner(current.owner))) return c.json({ error: "dock_expired" }, 404);
+  if (!(await stubFor(c.env, current.did).isOwner(current.owner, labelOf(c)))) return c.json({ error: "dock_expired" }, 404);
   c.set("did", current.did);
   c.set("owner", current.owner);
   await next();
@@ -101,7 +155,34 @@ app.use("/api/d/:did/*", async (c, next) => {
 const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.did);
 app.get("/api/d/:did/state", async (c) => {
   keepCookie(c, c.var.did, c.var.owner);
-  return c.json(await stub(c).state(new URL(c.req.url).origin));
+  return c.json(await stub(c).state(new URL(c.req.url).origin, c.var.owner));
+});
+/** Link another computer (TIN-838): a new code, kept in the directory for as long as it lives. */
+app.post("/api/d/:did/link", async (c) => {
+  const made = await stub(c).newLink();
+  if (!made.ok) return c.json(made, 400);
+  if (made.dropped.length) await directory(c.env).drop(made.dropped);
+  // A code already someone's (45 bits: next to never) is let go and the person asks again.
+  if (!(await directory(c.env).put(made.code, c.var.did, made.expires_at))) {
+    await stub(c).cancelLink(made.code);
+    return c.json({ ok: false, error: "try_again" }, 400);
+  }
+  return c.json({ ok: true, code: made.code, expires_at: made.expires_at }, 200, { "cache-control": "no-store" });
+});
+app.post("/api/d/:did/link/cancel", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { code?: unknown };
+  const result = await stub(c).cancelLink(body.code);
+  if (result.ok && typeof body.code === "string") await directory(c.env).drop([body.code]);
+  return c.json(result);
+});
+app.post("/api/d/:did/joins/:jid", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
+  const result = await stub(c).decideJoin(c.req.param("jid"), body.action);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/d/:did/devices/:id/remove", async (c) => {
+  const result = await stub(c).removeDevice(c.req.param("id"), c.var.owner);
+  return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/d/:did/agents", async (c) => c.json(await stub(c).addAgent()));
 app.post("/api/d/:did/kept", async (c) => c.json(await stub(c).keptAtHand()));
