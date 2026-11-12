@@ -149,7 +149,7 @@ export function Landing() {
           <li>Only what you pointed at, in apps you paired, after you allowed it in the app and in the dock.</li>
           <li>No screenshots and no screen sharing: each app answers with its own data, through its own tools.</li>
           <li>Each app keeps its data. The agent does the joining, in your conversation.</li>
-          <li>You can remove an agent or an app from the dock at any time, and start over on every site.</li>
+          <li>You can remove an agent, an app or a computer from the dock at any time, and start over on every site.</li>
         </ul>
       </section>
 

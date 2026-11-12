@@ -9,6 +9,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 ### One dock on several computers: link another computer with a code, and your agent keeps one connection (2026-11-12, TIN-838)
 
 - **A dock opens on every computer you link to it, so an agent connects once and gets your drops from any of them.** The dock's "⋯" menu has Link another computer (a code that works once and for 2 minutes, with its QR and link), Join a dock on another computer, and Computers on this dock with Remove; the new computer joins only after Allow on a computer already linked, and each one gets its own secret, so removing one leaves the others. Docks made before keep opening with their cookie. (`apps/dock/src/worker/devices.ts`, `apps/dock/src/worker/join-codes.ts`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/web/computers.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/wrangler.jsonc`)
+- **The site says so: /try tells you to link the dock on another computer from its menu, and the landing says you can remove a computer from the dock, as you can an agent or an app.** (`apps/dock/src/web/try.tsx`, `apps/dock/src/web/landing.tsx`)
 
 ### A dock in use keeps its cookie: it lasts 7 days after the last use, not 7 days after the dock was made (2026-11-11, TIN-823)
 
