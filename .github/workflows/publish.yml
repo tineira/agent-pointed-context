@@ -1,7 +1,8 @@
 name: Publish @tineira/apc-* to npm
 
 # The four packages (@tineira/apc-protocol, @tineira/apc-server, @tineira/apc-web, @tineira/apc-conformance) go to
-# npm as 0.x pre-releases on the `next` dist-tag (TIN-612), never `latest` before the standard is 1.0. The dist-tag is
+# npm as 0.x pre-releases on the `next` dist-tag (TIN-612); `latest` is moved to the release by hand afterwards (OIDC covers
+# only `npm publish`, not `npm dist-tag`; README "Using the packages"). The dist-tag is
 # the explicit `--tag next` below: pnpm and npm ignore publishConfig.tag.
 #
 # - A tag `apc-v<version>` on a commit of main publishes that version (job `publish`, in the GitHub environment
