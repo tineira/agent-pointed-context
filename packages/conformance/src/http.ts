@@ -496,8 +496,13 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
   const tokens = [options.bearer, options.revokedBearer].filter((t): t is string => !!t);
   const hide = (s: string) => {
     let out = redactSecrets(s, [grant, revoked]);
-    for (const t of tokens) out = out.split(t).join("<token>");
-    return out;
+    // Messages cut a quoted body at 200 characters, so a token may appear cut short: any run of 8 or more of
+    // its first characters goes too, and anything sent as a Bearer credential.
+    for (const t of tokens) {
+      out = out.split(t).join("<token>");
+      if (t.length >= 8) out = out.replace(new RegExp(`${escapeRegExp(t.slice(0, 8))}[^\\s"'<]*`, "g"), "<token>");
+    }
+    return out.replace(/(bearer\s+)[^\s"'<]+/gi, "$1<token>");
   };
   const safe = checks.map<HttpCheck>((c) => ({
     ...c,

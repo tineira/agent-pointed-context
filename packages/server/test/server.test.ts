@@ -282,3 +282,22 @@ test("then applies only with a page open and a pin within the window (APC 0.8)",
   assert.equal(thenApplies(null, "2026-11-12T11:59:00.000Z", now), false, "the view is not shared");
   assert.equal(thenApplies(true, "2026-11-12T11:00:00.000Z", now, 2 * 3600_000), true, "the app sets its own window");
 });
+
+test("notifications/cancelled in a POST of its own aborts the call it names, on that grant only (APC 0.8)", async () => {
+  const { InflightCalls } = await import("../src/index.ts");
+  const calls = new InflightCalls();
+  const wait = calls.track("g1", { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "wait_for_focus" } });
+  const other = calls.track("g2", { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "wait_for_focus" } });
+  const batch = calls.track("g1", [{ jsonrpc: "2.0", id: "a", method: "tools/call" }, { jsonrpc: "2.0", method: "notifications/initialized" }]);
+  assert.equal(calls.cancel("g1", { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "7" } }), 0, "a string id is not the number 7");
+  assert.equal(calls.cancel("g1", { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7 } }), 1);
+  assert.equal(wait.signal.aborted, true);
+  assert.equal(other.signal.aborted, false, "another grant's call with the same id runs on");
+  assert.equal(batch.signal.aborted, false);
+  wait.done();
+  assert.equal(calls.cancel("g1", { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7 } }), 0, "a finished call is forgotten");
+  assert.equal(calls.cancel("g1", [{ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "a" } }]), 1, "in a batch too");
+  assert.equal(batch.signal.aborted, true);
+  other.done();
+  batch.done();
+});

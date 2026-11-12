@@ -77,7 +77,7 @@ The person drops an agent's mark on a target. The server keeps one pin per grant
 
 One MCP server per request, for the grant in the URL. `registerApcTools` adds `get_current_view` and `wait_for_focus`, reading through the functions you give it; your own tools sit next to them. A revoked grant is answered 403 before anything else, whatever the method.
 
-Three of those functions keep the core's promises (APC 0.8). `markSeen(pinnedAt)` marks that exact pin seen, never a newer one: the tools call it only once the result is final, so a pin is never lost. `waitSlot` is the grant's one place for a wait: `MemoryWaitSlots` keeps it in memory, which is right when every request of the person runs in one process (as here, or in a Durable Object); on stateless functions keep a row per grant with the holder's token and when it claimed. `signal`, the request's own, ends a wait the client gave up on.
+Three of those functions keep the core's promises (APC 0.8). `markSeen(pinnedAt)` marks that exact pin seen, never a newer one: the tools call it only once the result is final, so a pin is never lost. `waitSlot` is the grant's one place for a wait: `MemoryWaitSlots` keeps it in memory, which is right when every request of the person runs in one process (as here, or in a Durable Object); on stateless functions keep a row per grant with the holder's token and when it claimed. `signal` ends a wait the client gave up on: the request's own, and `InflightCalls`', since a server that is new for every POST sees MCP's `notifications/cancelled` only in a POST of its own.
 
 <!-- include orders-app.ts#mcp -->
 

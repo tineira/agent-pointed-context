@@ -103,17 +103,23 @@ export interface CurrentViewResult {
  *
  * **One wait per grant (APC 0.8).** At most one wait of a grant delivers. A new wait takes over: the one
  * it replaces ends at its next check with `focus: null, timed_out: false` and a note, delivers nothing,
- * and never marks a pin seen. A new wait that starts within `WAIT_CLAIM_GAP_S` of the last one is
+ * and never marks a pin seen. A new wait that starts within `WAIT_CLAIM_GAP_S` of one still running is
  * refused instead, with `focus: null, timed_out: false, retry_after_s` and a note: two waits fired
  * together would otherwise take over from each other in a loop. A wait whose request the client cancels
- * (an HTTP abort, or MCP's `notifications/cancelled`) stops and frees its place at once.
+ * stops and frees its place at once: MCP's `notifications/cancelled` (which, to a stateless server, comes
+ * in a POST of its own: the app keeps the calls in flight per grant to find the one it names,
+ * `InflightCalls` in `@tineira/apc-server`), and an HTTP abort where the host reports one (on Cloudflare
+ * Workers, `request.signal` with the `enable_request_signal` flag, or a compatibility date from 2026-11-17).
  *
  * **Seen once delivered (APC 0.8).** Checking for a pin, or polling for one, never marks it seen:
- * only returning it does. An app marks a pin seen
- * only once the result that carries it is final (in a wait, after it gave its place up and checked one
- * last time that its request was not cancelled), and marks that exact pin (by its `pinned_at`), never a
- * newer one dropped meanwhile. It returns the result whether or not the mark succeeds. A pin may be
- * delivered twice; it is never lost.
+ * only returning it does. An app marks a pin seen only once the result that carries it is final (in a
+ * wait, after it gave its place up and checked one last time that its request was not cancelled), and
+ * marks that exact pin (by its `pinned_at`), never a newer one dropped meanwhile. It returns the result
+ * whether or not the mark succeeds. So a pin may be delivered twice, and is never lost to a wait that was
+ * taken over or cancelled, or to a newer pin. MCP has no acknowledgement: a result lost after the app sent
+ * it (the connection dropped with no abort the app could see) is not something an app can tell, and that
+ * pin is marked seen. A hub that relays a wait holds the pin it was handed: it keeps it unread until its
+ * own agent gets it.
  */
 export type WaitForFocusResult = WaitGotFocus | WaitNoFocus;
 export interface WaitGotFocus {
@@ -138,7 +144,10 @@ export const WAIT_CLAIM_GAP_S = 2;
  *
  * - `stable_id`: **a stable id per agent connection.** Pins, views, presence and `apc_link` are keyed by it.
  * - `revocable_in_app`: **revocable from the app alone.** The app revokes it in its own store, calling
- *   nobody, and checks it on every request, and before and after each tool call.
+ *   nobody, and checks it on every request, and before and after each tool call. Revoking ends everything
+ *   that could bring the grant back without the person: with OAuth, the refresh tokens and the
+ *   authorization behind it too, so a client that answers a 401 by refreshing or re-authorizing silently
+ *   gets nothing. The person lets the agent back with a new grant.
  * - `revoked_told_apart`: **revoked is told apart from expired or unknown**, with a `RevokedAnswer` body,
  *   so the agent tells the person and stops retrying, where an expired credential may just be renewed.
  * - `trimmed_per_grant`: **pointing grants no access.** What a grant may read is trimmed per grant; a pin

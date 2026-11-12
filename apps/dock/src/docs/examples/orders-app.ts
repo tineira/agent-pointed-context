@@ -17,6 +17,7 @@ import {
   ApcLinks,
   CONSENT_REQUIRED,
   DockConsent,
+  InflightCalls,
   MemoryWaitSlots,
   apcJsonResponse,
   apcManifest,
@@ -121,6 +122,8 @@ export class OrdersApp {
   private readonly pins = new Map<string, FocusRow>();
   /** One wait_for_focus per grant: every request runs in this one object, so the places live in memory. */
   private readonly waitSlots = new MemoryWaitSlots();
+  /** MCP's notifications/cancelled comes in a POST of its own: the calls in flight, to find the one it names. */
+  private readonly calls = new InflightCalls();
   private view: { screen: string; params: Record<string, string | string[]>; selection: { kind: string; id: string } | null; updated_at: string } | null = null;
   /** The person's open pages: each is a stream of messages (server-sent events). */
   private readonly pages = new Set<(message: PageMessage) => void>();
@@ -263,8 +266,13 @@ export class OrdersApp {
     }
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
 
+    const body: unknown = await request.clone().json().catch(() => null);
+    // A cancel in this POST ends the call it names; the calls this POST carries can be cancelled the same way.
+    this.calls.cancel(grant.id, body);
+    const inflight = this.calls.track(grant.id, body);
+
     // A connection arrives: note its client (for the bar, and for apc_link).
-    const arriving = initializeOf(await request.clone().json().catch(() => null));
+    const arriving = initializeOf(body);
     if (arriving) {
       grant.client = linkClient(arriving, grant.path);
       if (grant.path === "direct" && grant.name === "New agent" && arriving.name) grant.name = arriving.name;
@@ -288,7 +296,7 @@ export class OrdersApp {
       pageOpen: async () => this.grants.get(secret) === grant && this.pages.size > 0,
       // One wait per grant: a newer wait takes over, a cancelled one frees its place.
       waitSlot: this.waitSlots.for(grant.id),
-      signal: request.signal,
+      signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       pollMs: 500,
     });
@@ -315,7 +323,11 @@ export class OrdersApp {
     // The transport wants a client that takes both JSON and an event stream; some clients send less.
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
-    return transport.handleRequest(new Request(request, { headers }));
+    try {
+      return await transport.handleRequest(new Request(request, { headers }));
+    } finally {
+      inflight.done();
+    }
   }
   // #endregion
 

@@ -56,6 +56,67 @@ export class MemoryWaitSlots {
 }
 
 /**
+ * MCP's cancel for a stateless server (APC 0.8). A server that builds a new MCP server per POST never sees a
+ * `notifications/cancelled` for a call running in another POST: the SDK's `extra.signal` cannot fire. The app
+ * keeps one of these where all of a person's requests run (a Durable Object), and for each POST:
+ *
+ * ```ts
+ * calls.cancel(grantId, body);                         // a notifications/cancelled in this POST aborts those calls
+ * const call = calls.track(grantId, body);              // the calls this POST carries
+ * try { … ctx.signal = AbortSignal.any([request.signal, call.signal]) … } finally { call.done(); }
+ * ```
+ *
+ * A call is named by its grant and JSON-RPC id. Cancelling an id aborts every call of that grant with that id.
+ */
+export class InflightCalls {
+  private readonly calls = new Map<string, Set<AbortController>>();
+
+  /** The calls (requests with an id) a POST body carries, one message or a batch: a signal that aborts when any is cancelled. */
+  track(grantId: string, body: unknown): { signal: AbortSignal; done(): void } {
+    const controller = new AbortController();
+    const keys: string[] = [];
+    for (const m of messagesOf(body)) {
+      if (typeof m.method === "string" && !m.method.startsWith("notifications/") && isId(m.id)) keys.push(key(grantId, m.id));
+    }
+    for (const k of keys) {
+      const set = this.calls.get(k) ?? new Set();
+      set.add(controller);
+      this.calls.set(k, set);
+    }
+    return {
+      signal: controller.signal,
+      done: () => {
+        for (const k of keys) {
+          const set = this.calls.get(k);
+          set?.delete(controller);
+          if (set && !set.size) this.calls.delete(k);
+        }
+      },
+    };
+  }
+
+  /** Aborts the calls of this grant that a `notifications/cancelled` in the body names; how many it found. */
+  cancel(grantId: string, body: unknown): number {
+    let found = 0;
+    for (const m of messagesOf(body)) {
+      if (m.method !== "notifications/cancelled") continue;
+      const id = (m.params as { requestId?: unknown } | undefined)?.requestId;
+      if (!isId(id)) continue;
+      for (const controller of this.calls.get(key(grantId, id)) ?? []) {
+        controller.abort();
+        found++;
+      }
+    }
+    return found;
+  }
+}
+
+type RpcMessage = { method?: unknown; id?: unknown; params?: unknown };
+const messagesOf = (body: unknown): RpcMessage[] => (Array.isArray(body) ? body : [body]).filter((m): m is RpcMessage => !!m && typeof m === "object");
+const isId = (id: unknown): id is string | number => typeof id === "string" || (typeof id === "number" && Number.isFinite(id));
+const key = (grantId: string, id: string | number) => `${grantId}\u0000${typeof id}:${id}`;
+
+/**
  * Whether a result carries `then` (APC 0.8): a page of the person's is open and shared (`attending` is
  * true; null while they do not share their view), and the grant's pin, read or unread, was dropped
  * within `windowMs` (`THEN_PIN_WINDOW_MIN` unless the app sets its own). With no recent pin an open page

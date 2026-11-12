@@ -7,7 +7,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
@@ -88,6 +88,10 @@ export class Sandbox extends DurableObject<Env> {
   private links!: ApcLinks;
   /** One wait_for_focus per grant (APC 0.8): every request of this sandbox runs in this object, so the places live in memory. */
   private readonly waitSlots = new MemoryWaitSlots();
+  /** MCP's notifications/cancelled, which arrives in a POST of its own, reaches the call it names (APC 0.8). */
+  private readonly calls = new InflightCalls();
+  /** Waits running per grant, for the page's "waiting" state: a wait taken over must not clear the newer one's. */
+  private readonly waitingCount = new Map<string, number>();
   /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. In the same table as the links. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
@@ -670,10 +674,13 @@ export class Sandbox extends DurableObject<Env> {
     // Stateless: no server-to-client stream (GET) and no session to end (DELETE). 405 is what the spec allows.
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     await this.touch();
+    // A notifications/cancelled in this POST aborts the call it names, running in another POST (APC 0.8).
+    const rpcBody = (await request.clone().json().catch(() => null)) as unknown;
+    this.calls.cancel(grant.id, rpcBody);
 
     if (request.method === "POST") {
       try {
-        const body = (await request.clone().json()) as unknown;
+        const body = rpcBody;
         const messages = Array.isArray(body) ? body : [body];
         const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
         for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown; icons?: unknown; title?: unknown } } } | null>) {
@@ -746,6 +753,8 @@ export class Sandbox extends DurableObject<Env> {
     // Which tool this request runs, so a "seen" stamp records how the pin was read.
     const call = { tool: "" };
     this.instrument(server, grant, hash, data, origin, call);
+    // The calls this POST carries, so a later notifications/cancelled can end them; the client hanging up ends them too.
+    const inflight = this.calls.track(grant.id, rpcBody);
     registerApcTools(server, {
       readView: async () => trimView(this.storedView(), grant, data, origin),
       readFocus: async () => resolveFocus(this.focusRow(grant.id), grant, data, origin),
@@ -762,7 +771,7 @@ export class Sandbox extends DurableObject<Env> {
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
       pageOpen: async () => (this.holds(grant.secret) ? this.attendance() : false),
       waitSlot: this.waitSlots.for(grant.id),
-      signal: request.signal,
+      signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
     });
@@ -808,7 +817,11 @@ export class Sandbox extends DurableObject<Env> {
     // Answers are always JSON, never a stream: a client that accepts only application/json is fine too.
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
-    return transport.handleRequest(new Request(request, { headers }));
+    try {
+      return await transport.handleRequest(new Request(request, { headers }));
+    } finally {
+      inflight.done();
+    }
   }
 
   /**
@@ -838,14 +851,26 @@ export class Sandbox extends DurableObject<Env> {
         this.log("inbound", grant.id, { tool, args: tool === APC_LINK_TOOL ? { code: "(hidden)" } : args });
         // The page animates an agent's icon while it waits (TIN-350): only the start and the end, no content.
         const waiting = tool === "wait_for_focus";
-        if (waiting) this.broadcast({ type: "waiting", grant_id: grant.id, on: true });
+        if (waiting) {
+          const n = (this.waitingCount.get(grant.id) ?? 0) + 1;
+          this.waitingCount.set(grant.id, n);
+          if (n === 1) this.broadcast({ type: "waiting", grant_id: grant.id, on: true });
+        }
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grant.id);
 
         let result: ToolResult;
         try {
           result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
         } finally {
-          if (waiting) this.broadcast({ type: "waiting", grant_id: grant.id, on: false });
+          if (waiting) {
+            // Counted: a wait taken over or refused ends while the newer one still runs.
+            const n = (this.waitingCount.get(grant.id) ?? 1) - 1;
+            if (n > 0) this.waitingCount.set(grant.id, n);
+            else {
+              this.waitingCount.delete(grant.id);
+              this.broadcast({ type: "waiting", grant_id: grant.id, on: false });
+            }
+          }
         }
         const after = cut();
         if (after) return after;

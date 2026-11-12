@@ -114,7 +114,8 @@ async function main(argv: string[]): Promise<number> {
     if (name === undefined) continue;
     const token = process.env[name];
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !token) {
-      process.stderr.write(`--${flag}: give the name of an environment variable that holds the token; ${/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? `${name} is unset or empty` : "that is not a variable name"}\n`);
+      // The value is never echoed: a token passed here by mistake can look like a variable name.
+      process.stderr.write(`--${flag}: give the name of an environment variable that holds the token; the one given ${/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? "is unset or empty" : "is not a variable name"} (not shown)\n`);
       return 2;
     }
     tokens[key] = token;

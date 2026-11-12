@@ -11,7 +11,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
 import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
-import { attachAttention, attachThen, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
+import { attachAttention, attachThen, InflightCalls, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
@@ -187,6 +187,8 @@ export class Hub extends DurableObject<Env> {
   private waiting = new Map<string, number>();
   /** One wait_for_focus per agent (APC 0.8): a newer wait takes over, and the one it replaced delivers nothing. */
   private readonly waitSlots = new MemoryWaitSlots();
+  /** MCP's notifications/cancelled, which arrives in a POST of its own, reaches the call it names (APC 0.8). */
+  private readonly inflightCalls = new InflightCalls();
   /** Calls in flight per agent, other than wait_for_focus, for the pet's "calling tools" (TIN-483; memory only). */
   private busy = new Map<string, number>();
   /** Until when an agent still shows as calling after its last call ended (memory only): a quick call would be gone before the dock asked. */
@@ -1465,6 +1467,7 @@ export class Hub extends DurableObject<Env> {
           const retryS = !result.isError && s.focus == null && typeof s.retry_after_s === "number" && s.retry_after_s > 0 ? s.retry_after_s : null;
           if (retryS === null || done || Date.now() + retryS * 1000 >= deadline) return result;
           await new Promise((resolve) => setTimeout(resolve, retryS * 1000));
+          if (done) return result;
         }
       };
       for (const p of paired) {
@@ -1555,6 +1558,10 @@ export class Hub extends DurableObject<Env> {
     } catch {
       // not JSON: the transport answers the error
     }
+    // A notifications/cancelled in this POST aborts the call it names, running in another POST (APC 0.8).
+    const rpcBody = (await request.clone().json().catch(() => null)) as unknown;
+    this.inflightCalls.cancel(agent.id, rpcBody);
+    const inflight = this.inflightCalls.track(agent.id, rpcBody);
 
     // A low-level server: the hub lists each paired app's tools under a prefix with the app's own
     // JSON Schemas (TIN-384), which McpServer's zod shapes cannot carry.
@@ -1572,7 +1579,8 @@ export class Hub extends DurableObject<Env> {
     server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       const name = req.params.name;
       // A client that hung up or cancelled gets nothing marked seen and frees its wait (APC 0.8).
-      const cancelled = () => !!(extra.signal?.aborted || request.signal?.aborted);
+      const signal = AbortSignal.any([extra.signal, request.signal, inflight.signal].filter((s): s is AbortSignal => !!s));
+      const cancelled = () => signal.aborted;
       const args = (req.params.arguments ?? {}) as Record<string, unknown>;
       this.sql.exec("update agents set last_active_at = ? where id = ?", new Date().toISOString(), agent.id);
       // The pin before the call, to log whether the call read it (TIN-419).
@@ -1587,7 +1595,7 @@ export class Hub extends DurableObject<Env> {
       }
       let result: ToolResult;
       try {
-        result = await this.callTool(agent.id, name, args, cancelled);
+        result = await this.callTool(agent.id, name, args, cancelled, signal);
       } finally {
         if (counted) {
           const left = (this.busy.get(agent.id) ?? 1) - 1;
@@ -1615,7 +1623,11 @@ export class Hub extends DurableObject<Env> {
     await server.connect(transport);
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
-    return transport.handleRequest(new Request(request, { headers }));
+    try {
+      return await transport.handleRequest(new Request(request, { headers }));
+    } finally {
+      inflight.done();
+    }
   }
 
   /** The log line for one call: the tool and app, never the arguments' values or the result. */
@@ -1673,7 +1685,7 @@ export class Hub extends DurableObject<Env> {
     return hubFocus(row.focus, row.app, usePrefix);
   }
 
-  private async callTool(agentId: string, name: string, args: Record<string, unknown>, cancelled: () => boolean = () => false): Promise<ToolResult> {
+  private async callTool(agentId: string, name: string, args: Record<string, unknown>, cancelled: () => boolean = () => false, signal?: AbortSignal): Promise<ToolResult> {
     const str = (v: unknown, max: number) => (typeof v === "string" && v.length <= max ? v : undefined);
     if (name === "get_current_view") {
       await this.look(agentId);
@@ -1712,7 +1724,7 @@ export class Hub extends DurableObject<Env> {
         const unread = this.unread(agentId);
         const holder = unread ? this.pairings(agentId, "paired").find((p) => p.id === unread.pairing_id) : undefined;
         if (holder) await this.lookAt(holder, Math.min(LIMITS.pinLookMs, ((t as number | undefined) ?? WAIT_DEFAULT_S) * 1000));
-        const ready = deliver();
+        const ready = (await takenOver()) || cancelled() ? null : deliver();
         if (ready) return ready;
         const timeoutS = (t as number | undefined) ?? WAIT_DEFAULT_S;
         const apps = this.pairings(agentId, "paired").length > 0;
@@ -1723,17 +1735,23 @@ export class Hub extends DurableObject<Env> {
         this.broadcast();
         try {
           const reading = pages ? this.nextReading(agentId, timeoutS * 1000) : null;
+          // A cancel ends the wait at once (APC 0.8): its place is freed, and nothing it later hears is delivered.
+          const aborted = new Promise<{ from: "cancel"; got: false; open: null }>((resolve) => {
+            if (!signal) return;
+            if (signal.aborted) resolve({ from: "cancel", got: false, open: null });
+            else signal.addEventListener("abort", () => resolve({ from: "cancel", got: false, open: null }), { once: true });
+          });
           let got = false;
           let open: boolean | null = null;
           if (apps) {
             const fromApps = this.waitApps(agentId, timeoutS).then((r) => ({ from: "apps" as const, ...r }));
-            const first = reading ? await Promise.race([fromApps, reading.then((g) => ({ from: "page" as const, got: g, open: null }))]) : await fromApps;
+            const first = await Promise.race([fromApps, aborted, ...(reading ? [reading.then((g) => ({ from: "page" as const, got: g, open: null }))] : [])]);
             got = first.got;
             open = first.open;
             // The apps came back empty (their pages closed, or their waits ran out): a reading may still come.
-            if (!got && first.from === "apps" && reading) got = await reading;
+            if (!got && first.from === "apps" && reading) got = (await Promise.race([reading, aborted])) === true;
           } else {
-            got = await reading!;
+            got = (await Promise.race([reading!, aborted])) === true;
           }
           // A wait a newer one took over, or whose request was cancelled, delivers nothing and marks nothing seen (APC 0.8).
           if (await takenOver()) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });

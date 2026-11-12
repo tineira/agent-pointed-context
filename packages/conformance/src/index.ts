@@ -183,6 +183,21 @@ async function send(app: ApcAppAdapter, to: AgentConnection, method: string, par
   return { status: response.status, body, headers: response.headers };
 }
 
+/** A JSON-RPC notification (no id) in a POST of its own: the HTTP status (202 for a Streamable HTTP server). */
+async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown>): Promise<number> {
+  const request = new Request(to.mcpUrl, {
+    method: "POST",
+    headers: { ...to.headers, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
+    body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+  });
+  const response = await (app.fetch ? app.fetch(request) : fetch(request));
+  await response.body?.cancel().catch(() => {});
+  return response.status;
+}
+
+/** What a check of a 0.8 rule says of an app that claims an earlier standard: passed, not checked. */
+const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
+
 async function result(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const { status, body } = await send(app, to, method, params, signal);
   expect(status === 200, `${method}: HTTP ${status}, expected 200 (${JSON.stringify(body).slice(0, 200)})`);
@@ -354,7 +369,8 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     check("then rides on results only while the person's page is open and the agent was pinned lately", async () => {
       const conn = await app.connect();
       await app.page.setOpen(true);
-      if (await claims(conn, "0.8.0")) {
+      const v08 = await claims(conn, "0.8.0");
+      if (v08) {
         const unpinned = await call(app, conn, app.probe.tool, app.probe.args);
         expect(resultKey(unpinned, "then").value === undefined && text(unpinned).then === undefined, "an open page with no pin gives no then (APC 0.8): the agent does not wait after every answer");
       }
@@ -433,7 +449,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     }),
     check("one wait per grant: a newer wait takes over, and the older one delivers nothing (APC 0.8)", async () => {
       const conn = await app.connect();
-      if (!(await claims(conn, "0.8.0"))) return;
+      if (!(await claims(conn, "0.8.0"))) return NOT_08;
       await app.page.setOpen(true);
       const older = call(app, conn, "wait_for_focus", { timeout_s: 10 });
       await sleep((WAIT_CLAIM_GAP_S + 0.3) * 1000);
@@ -448,7 +464,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
 
     check("a second wait started right after the first is refused with retry_after_s, and the first still delivers (APC 0.8)", async () => {
       const conn = await app.connect();
-      if (!(await claims(conn, "0.8.0"))) return;
+      if (!(await claims(conn, "0.8.0"))) return NOT_08;
       await app.page.setOpen(true);
       const running = call(app, conn, "wait_for_focus", { timeout_s: 10 });
       await sleep(200);
@@ -460,24 +476,31 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       checkFocus(data(await running).focus, second, "the first wait, still running");
     }),
 
-    check("a pin is never lost: a wait the client cancels marks nothing seen and frees its place (APC 0.8)", async () => {
-      const conn = await app.connect();
-      if (!(await claims(conn, "0.8.0"))) return;
-      await app.page.setOpen(true);
-      const controller = new AbortController();
-      const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }, controller.signal).catch(() => null);
-      await sleep(300);
-      controller.abort();
-      await waiting;
-      expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
-      await sleep(500);
-      const attention = attentionOf(await call(app, conn, app.probe.tool, app.probe.args));
-      expect(isObject(attention), "the pin dropped after the cancelled wait is still unread: it rides as attention");
-      checkFocus(attention.focus, first, "attention after a cancelled wait");
-      const again = data(await call(app, conn, "wait_for_focus", { timeout_s: 2 }));
-      expect(again.retry_after_s === undefined, `a cancelled wait frees its place at once: ${JSON.stringify(again).slice(0, 200)}`);
-      checkFocus(again.focus, first, "the next wait gets the pin");
-    }),
+    ...(["notifications/cancelled", "an HTTP abort"] as const).map((how) =>
+      check(`a pin is never lost to a cancelled wait (${how}): it marks nothing seen and frees its place at once (APC 0.8)`, async () => {
+        const conn = await app.connect();
+        if (!(await claims(conn, "0.8.0"))) return NOT_08;
+        await app.page.setOpen(true);
+        const controller = new AbortController();
+        // Not awaited before the pin: a handler that ignores the cancel would still be waiting, and would take the pin.
+        const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }, how === "an HTTP abort" ? controller.signal : undefined).catch(() => null);
+        await sleep(300);
+        if (how === "an HTTP abort") controller.abort();
+        // MCP's cancel, in a POST of its own, as a client of a stateless server sends it.
+        else expect((await notify(app, conn, "notifications/cancelled", { requestId: 1, reason: "apc-conformance" })) < 300, "notifications/cancelled was not accepted");
+        await sleep(300);
+        expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
+        // Past a poll of a wait that ignored the cancel (2 s in @tineira/apc-server), so it would have taken the pin by now.
+        await sleep(2500);
+        const attention = attentionOf(await call(app, conn, app.probe.tool, app.probe.args));
+        expect(isObject(attention), `the pin dropped after the cancelled wait is still unread: it rides as attention (the cancelled wait took it)`);
+        checkFocus(attention.focus, first, "attention after a cancelled wait");
+        const again = data(await call(app, conn, "wait_for_focus", { timeout_s: 2 }));
+        expect(again.retry_after_s === undefined, `a cancelled wait frees its place at once: ${JSON.stringify(again).slice(0, 200)}`);
+        checkFocus(again.focus, first, "the next wait gets the pin");
+        await Promise.race([waiting, sleep(11_000)]);
+      }),
+    ),
     ...mobileChecks(app, app.page.mobile),
     ...(app.link ? linkChecks(app, app.link) : []),
   ];

@@ -258,6 +258,16 @@ test("an app whose grants share one URL and a bearer token passes with --bearer,
   const all = JSON.stringify(report);
   assert.ok(!all.includes(LIVE) && !all.includes(GONE), "no token in the report");
 
+  // An app that echoes the credential back in a failing answer: no part of the token reaches the report, even cut at 200 characters.
+  const echoing = async (request: Request) => {
+    if (new URL(request.url).pathname === "/.well-known/apc.json") return fetch(request);
+    return json({ error: "bad", seen: `${"x".repeat(170)}${request.headers.get("authorization")}` }, 500);
+  };
+  const leaky = await runHttpConformance({ origin: ORIGIN, grant: SHARED, bearer: LIVE, fetch: echoing });
+  const leakyText = JSON.stringify(leaky);
+  assert.ok(leaky.failed > 0);
+  assert.ok(!leakyText.includes(LIVE.slice(0, 8)), "not even the start of the token");
+
   // A secret-URL app is still held to 403: a 401 there fails.
   const strict = await run({ revokedStatus: 401 });
   assert.equal(status(strict, "revoked-answers"), "fail");
