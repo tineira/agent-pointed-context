@@ -2,8 +2,8 @@ import { APC_LINK_KEY, type ApcLinkOffer, type Attention, type FocusPayload, typ
 
 export const ATTENTION_NOTE = "The person pinned you to something on their screen. Call get_current_view to read it and mark it seen.";
 
-/** The loop hint, carried only while a page of the person's is open. */
-export const THEN_NOTE = "When you have answered, call wait_for_focus: the person is on the page and may point you at something else.";
+/** The loop hint, carried only while a page of the person's is open and the grant was pinned lately (APC 0.8, `thenApplies`). */
+export const THEN_NOTE = "When you have answered, call wait_for_focus: the person pinned you lately, is on the page and may point you at something else. Run it in the background if your client can; otherwise keep it short and never chain waits.";
 
 /** A tool result as MCP carries it: structured for the client, the same JSON as text for the model. */
 export interface ToolResult {
@@ -41,11 +41,12 @@ export function attachAttention(result: ToolResult, attention: Attention): ToolR
 
 /**
  * The loop hint, placed like the envelope: after answering, wait for the next
- * pin. The host says whether a page of the person's is open; with none, the
- * result is returned unchanged, so an unattended agent is never told to wait.
+ * pin. The host says whether it applies (`thenApplies`: a page of the person's
+ * is open and the grant was pinned lately); when not, the result is returned
+ * unchanged, so an agent is not told to wait after every answer.
  */
-export function attachThen(result: ToolResult, pageOpen: boolean): ToolResult {
-  return pageOpen ? attachKey(result, "then", THEN_NOTE) : result;
+export function attachThen(result: ToolResult, applies: boolean): ToolResult {
+  return applies ? attachKey(result, "then", THEN_NOTE) : result;
 }
 
 /** An `apc_link` offer (APC 0.4), placed like the envelope: a top-level key of the structured result and of the text. */
@@ -78,6 +79,6 @@ export function envelopeBytes(attention: Attention | null): number {
 }
 
 /** What the loop hint adds to a result's text, `,"then":"…"`; counted apart from the envelope. */
-export function thenBytes(pageOpen: boolean): number {
-  return pageOpen ? new TextEncoder().encode(`,"then":${JSON.stringify(THEN_NOTE)}`).length : 0;
+export function thenBytes(applies: boolean): number {
+  return applies ? new TextEncoder().encode(`,"then":${JSON.stringify(THEN_NOTE)}`).length : 0;
 }

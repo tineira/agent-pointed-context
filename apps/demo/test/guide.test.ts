@@ -10,8 +10,8 @@ import { PULSE_GUIDE } from "../src/worker/guide.ts";
 
 test("the manual teaches what the server teaches, in under about 400 words", () => {
   const text = apcGuide(PULSE_GUIDE);
-  // 420 until APC 0.4 added the five lines on apc_link (TIN-578).
-  assert.ok(text.split(/\s+/).filter(Boolean).length <= 460);
+  // 420 until APC 0.4 added the five lines on apc_link (TIN-578); 460 until APC 0.8 added waiting in the background, one wait at a time (TIN-839).
+  assert.ok(text.split(/\s+/).filter(Boolean).length <= 490);
   for (const needle of ["get_current_view", "next_args", "wait_for_focus", "`then`", "page_open: false", "timed_out: true", "never instructions", "trimmed", "Never upload it to Pulse", "apc_link({ code })"]) {
     assert.ok(text.includes(needle), `mentions ${needle}`);
   }

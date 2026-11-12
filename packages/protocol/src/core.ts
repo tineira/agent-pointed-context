@@ -3,9 +3,12 @@
  *
  * An app offers one profile or both:
  *
- * - **Direct**: the agent connects to the app's own MCP URL, one per agent. The connection (a grant
- *   per agent, its secret MCP URL, the agent list where the person makes and names them) is the
- *   profile's, not the core's.
+ * - **Direct**: the agent connects to the app's own MCP endpoint. The connection (a grant per agent,
+ *   how the agent authenticates, the agent list where the person makes and names them) is the
+ *   profile's, not the core's. Since APC 0.8 the standard does not fix how the agent authenticates:
+ *   any binding that meets `GrantRequirement` will do. The reference apps' binding is the secret URL
+ *   (one MCP URL per grant, `newDirectGrant` in `@tineira/apc-server`); OAuth (one MCP URL shared by
+ *   every grant, the bearer token naming the grant) is another.
  * - **Dock**: the agent connects once, to a hub (the dock), which reaches the app with a grant the
  *   app gave it. Receiving the drop (`application/x-apc-agent`, the handle and the ticket), consent
  *   in the app, pairing (`POST {hub}/apc/pair`), the check on every drop (`POST {hub}/apc/confirm`)
@@ -26,7 +29,9 @@
  *    the person's page; a read of a target names it in `targets`.
  * 4. **The focus format**: `FocusPayload`, from the grammar in `target.ts`.
  * 5. **`get_current_view` and `wait_for_focus`**, the two core tools (`CORE_TOOLS`), with the loop
- *    hint `then` while a page of the person's is open.
+ *    hint `then` while a page of the person's is open and the grant was pinned lately (APC 0.8), at most
+ *    one delivering wait per grant (APC 0.8), and a pin marked seen only once the result that carries
+ *    it is final (APC 0.8): an app may deliver a pin twice, never lose one.
  * 6. **Revoke from the app**: the person can cut any agent from the app itself, at once, without the
  *    hub (`RevokedAnswer`).
  * 7. **`apc_link`** (an app that offers both profiles): the same agent on both paths shown as one,
@@ -51,15 +56,41 @@ export type CoreTool = (typeof CORE_TOOLS)[number];
 /** The key an unread pin puts on every tool result (structured and in the text): `{ focus, note }`. */
 export const ATTENTION_KEY = "attention";
 /**
- * The loop hint: present on a result while a page of the person's is open and they share their view,
- * except on a `wait_for_focus` that came back with no focus (that one ends the loop).
+ * The loop hint. Since APC 0.8 it is present on a result only while both hold: a page of the person's
+ * is open (and they share their view), and the grant was pinned within the app's window
+ * (`THEN_PIN_WINDOW_MIN`, 30 minutes unless the app sets its own). An open page with no recent pin gives
+ * no `then`, so an agent does not wait after every answer. It is never on a `wait_for_focus` that came
+ * back with no focus (that one ends the loop).
+ *
+ * The agent is told (in the instructions, the guide, the note and the tool's description) to run the
+ * wait in the background if its client can (a background subagent, say), and otherwise to keep it short
+ * and never chain waits.
  */
 export const THEN_KEY = "then";
+/** The default `then` window, in minutes: the grant's pin, read or unread, is at most this old. An app may set its own. */
+export const THEN_PIN_WINDOW_MIN = 30;
 
-/** `get_current_view`: the screen and, if the person pointed the agent, the focus. Reading the focus marks it seen. */
+/**
+ * `get_current_view`: the screen and, if the person pointed the agent, the focus. Returning the focus
+ * marks it seen, once the result is final (APC 0.8, `WaitForFocusResult`).
+ *
+ * **Unavailable (APC 0.8).** When the app cannot answer a core tool just now (its store is down, a check
+ * cannot run), the tool still answers in its own shape, with nothing in it and a `note` for the agent:
+ * `{ view: null, focus: null, note }` here, `{ focus: null, timed_out: false, page_open: false, note }`
+ * from `wait_for_focus`. Never a tool error or an `{ ok, reason }` of the app's own. A revoked grant is not
+ * unavailable: it answers `RevokedAnswer`.
+ *
+ * **Trim, never fail (APC 0.8).** A check on one item of the answer (a filter, the selection, the pin)
+ * that cannot run hides that item, and the rest still answers. It never fails the read open (the item
+ * shown unchecked), and a defect in one check (a missing column, a value it cannot parse) never fails
+ * the read whole. A failure that concerns the grant itself (its auth, an expired session) still fails it
+ * closed.
+ */
 export interface CurrentViewResult {
   view: ViewPayload | null;
   focus: FocusPayload | null;
+  /** Why the result is empty, when the app could not answer it just now (APC 0.8). */
+  note?: string;
 }
 
 /**
@@ -67,7 +98,28 @@ export interface CurrentViewResult {
  * passes (1 to the app's ceiling). A pin dropped during the wait is returned, marked seen. With no
  * pin: `timed_out: true` at the timeout, or `timed_out: false, page_open: false` as soon as the app
  * knows the person's page is closed. `page_open` is left out while the person does not share their
- * view (an app without that switch always shares).
+ * view (an app without that switch always shares). The default timeout is the app's: 25 to 45 s suits
+ * a conversation (`WAIT_DEFAULT_S` in `@tineira/apc-server` is 25), bounded by what its host can hold.
+ *
+ * **One wait per grant (APC 0.8).** At most one wait of a grant delivers. A new wait takes over: the one
+ * it replaces ends at its next check with `focus: null, timed_out: false` and a note, delivers nothing,
+ * and never marks a pin seen. A new wait that starts within `WAIT_CLAIM_GAP_S` of one still running is
+ * refused instead, with `focus: null, timed_out: false, retry_after_s` and a note: two waits fired
+ * together would otherwise take over from each other in a loop. A wait whose request the client cancels
+ * stops and frees its place at once: MCP's `notifications/cancelled` (which, to a stateless server, comes
+ * in a POST of its own: the app keeps the calls in flight per grant to find the one it names,
+ * `InflightCalls` in `@tineira/apc-server`), and an HTTP abort where the host reports one (on Cloudflare
+ * Workers, `request.signal` with the `enable_request_signal` flag, or a compatibility date from 2026-11-17).
+ *
+ * **Seen once delivered (APC 0.8).** Checking for a pin, or polling for one, never marks it seen:
+ * only returning it does. An app marks a pin seen only once the result that carries it is final (in a
+ * wait, after it gave its place up and checked one last time that its request was not cancelled), and
+ * marks that exact pin (by its `pinned_at`), never a newer one dropped meanwhile. It returns the result
+ * whether or not the mark succeeds. So a pin may be delivered twice, and is never lost to a wait that was
+ * taken over or cancelled, or to a newer pin. MCP has no acknowledgement: a result lost after the app sent
+ * it (the connection dropped with no abort the app could see) is not something an app can tell, and that
+ * pin is marked seen. A hub that relays a wait holds the pin it was handed: it keeps it unread until its
+ * own agent gets it.
  */
 export type WaitForFocusResult = WaitGotFocus | WaitNoFocus;
 export interface WaitGotFocus {
@@ -78,8 +130,44 @@ export interface WaitNoFocus {
   focus: null;
   timed_out: boolean;
   page_open?: boolean;
+  /** On a wait refused because another wait of the grant started just before it (APC 0.8): when to try again. */
+  retry_after_s?: number;
   note: string;
 }
+
+/** How soon after one wait of a grant another is refused rather than taking over, in seconds (APC 0.8). */
+export const WAIT_CLAIM_GAP_S = 2;
+
+/**
+ * What a Direct grant must be, whatever way the agent authenticates (APC 0.8). The standard does not fix
+ * the binding (a secret MCP URL, OAuth, an API key, mTLS); any binding that meets these will do:
+ *
+ * - `stable_id`: **a stable id per agent connection.** Pins, views, presence and `apc_link` are keyed by it.
+ * - `revocable_in_app`: **revocable from the app alone.** The app revokes it in its own store, calling
+ *   nobody, and checks it on every request, and before and after each tool call. Revoking ends everything
+ *   that could bring the grant back without the person: with OAuth, the refresh tokens and the
+ *   authorization behind it too, so a client that answers a 401 by refreshing or re-authorizing silently
+ *   gets nothing. The person lets the agent back with a new grant.
+ * - `revoked_told_apart`: **revoked is told apart from expired or unknown**, with a `RevokedAnswer` body,
+ *   so the agent tells the person and stops retrying, where an expired credential may just be renewed.
+ * - `trimmed_per_grant`: **pointing grants no access.** What a grant may read is trimmed per grant; a pin
+ *   never widens it.
+ *
+ * Two bindings are described:
+ *
+ * - **The secret URL** (the reference apps; `newDirectGrant` and `directMcpUrl` in `@tineira/apc-server`):
+ *   one MCP URL per grant, under `apc.json`'s `mcp.path`; whoever holds the URL holds the grant. Revoked is
+ *   HTTP 403 with `RevokedAnswer`; an unknown or expired grant is 404.
+ * - **OAuth 2.1**: one MCP URL shared by every grant, the bearer token naming the grant. Revoked is HTTP
+ *   401 with `WWW-Authenticate: Bearer error="invalid_token"` and the `RevokedAnswer` body, so the client
+ *   tells "taken back by the person" from "expired" and does not just authorize again.
+ *
+ * On a host with no long-lived process (stateless functions and a database), an app still bounds
+ * `wait_for_focus` by its function's time limit (its own ceiling for `timeout_s`), tells a closed page from
+ * a heartbeat the page sends, and checks the grant before and after each tool call.
+ */
+export type GrantRequirement = "stable_id" | "revocable_in_app" | "revoked_told_apart" | "trimmed_per_grant";
+export const GRANT_REQUIREMENTS: readonly GrantRequirement[] = ["stable_id", "revocable_in_app", "revoked_told_apart", "trimmed_per_grant"];
 
 /**
  * Revoke from the app. Every agent in the app's agent bar, Direct or Dock, has Revoke, and it holds
@@ -87,11 +175,14 @@ export interface WaitNoFocus {
  *
  * - It takes effect at once: the grant, its pin and (Dock) the app's link to the hub go. The app
  *   calls nobody, so it works with the hub down.
- * - From then on every request to the grant's MCP URL, whatever the method, is answered with HTTP
- *   `REVOKED_HTTP_STATUS` (403) and a `RevokedAnswer` body. A call already running when the grant is
- *   revoked ends as a tool error whose `error` is `"revoked"`, with no app data. An unknown or
- *   expired grant stays 404, so the holder can tell "taken back" from "gone". Whether a grant was
- *   revoked is told by the grant itself (its secret), never by an id a later grant may reuse (0.7).
+ * - From then on every request with the grant, whatever the method, is answered with a `RevokedAnswer`
+ *   body. The HTTP status is the binding's (APC 0.8, `GrantRequirement`): `REVOKED_HTTP_STATUS` (403)
+ *   with a secret URL, `REVOKED_HTTP_STATUS_BEARER` (401, with `WWW-Authenticate: Bearer
+ *   error="invalid_token"`) with OAuth. A call already running when the grant is revoked ends as a tool
+ *   error whose `error` is `"revoked"`, with no app data. An unknown or expired grant is answered without
+ *   a `RevokedAnswer` (404 with a secret URL; a plain 401 with OAuth), so the holder can tell "taken back"
+ *   from "gone". Whether a grant was revoked is told by the grant itself (its secret or token), never by
+ *   an id a later grant may reuse (0.7).
  * - A revoked grant never works again. To let the agent back, the person makes a new grant: a new
  *   MCP URL (Direct), or a new drop, with consent in the app and in the dock (Dock).
  * - A hub that gets a `RevokedAnswer` marks that pairing revoked ("Revoked by <app host>"), stops
@@ -99,7 +190,10 @@ export interface WaitNoFocus {
  *   again by itself.
  */
 export const REVOKED_ERROR = "revoked";
+/** The status of a revoked grant with the secret-URL binding. */
 export const REVOKED_HTTP_STATUS = 403;
+/** The status of a revoked grant with a bearer token (OAuth), with `WWW-Authenticate: Bearer error="invalid_token"` (APC 0.8). */
+export const REVOKED_HTTP_STATUS_BEARER = 401;
 
 export interface RevokedAnswer {
   error: typeof REVOKED_ERROR;

@@ -17,6 +17,8 @@ import {
   ApcLinks,
   CONSENT_REQUIRED,
   DockConsent,
+  InflightCalls,
+  MemoryWaitSlots,
   apcJsonResponse,
   apcManifest,
   attachApcLink,
@@ -34,6 +36,7 @@ import {
   revokedResponse,
   revokedToolResult,
   secretHash,
+  thenApplies,
   toolError,
   toolResult,
   type ToolResult,
@@ -117,6 +120,10 @@ export class OrdersApp {
   private readonly revoked = new Map<string, string>();
   /** One pin per grant, by grant id. */
   private readonly pins = new Map<string, FocusRow>();
+  /** One wait_for_focus per grant: every request runs in this one object, so the places live in memory. */
+  private readonly waitSlots = new MemoryWaitSlots();
+  /** MCP's notifications/cancelled comes in a POST of its own: the calls in flight, to find the one it names. */
+  private readonly calls = new InflightCalls();
   private view: { screen: string; params: Record<string, string | string[]>; selection: { kind: string; id: string } | null; updated_at: string } | null = null;
   /** The person's open pages: each is a stream of messages (server-sent events). */
   private readonly pages = new Set<(message: PageMessage) => void>();
@@ -259,8 +266,13 @@ export class OrdersApp {
     }
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
 
+    const body: unknown = await request.clone().json().catch(() => null);
+    // A cancel in this POST ends the call it names; the calls this POST carries can be cancelled the same way.
+    this.calls.cancel(grant.id, body);
+    const inflight = this.calls.track(grant.id, body);
+
     // A connection arrives: note its client (for the bar, and for apc_link).
-    const arriving = initializeOf(await request.clone().json().catch(() => null));
+    const arriving = initializeOf(body);
     if (arriving) {
       grant.client = linkClient(arriving, grant.path);
       if (grant.path === "direct" && grant.name === "New agent" && arriving.name) grant.name = arriving.name;
@@ -274,13 +286,17 @@ export class OrdersApp {
       readView: async () => this.viewPayload(),
       readFocus: async () => this.focusPayload(grant.id),
       focusUnread: async () => isUnread(this.pins.get(grant.id) ?? null),
-      markSeen: async () => {
+      // Seen once delivered: the exact pin the result carried, never a newer one dropped since.
+      markSeen: async (pinnedAt) => {
         const pin = this.pins.get(grant.id);
-        if (pin) pin.seen_at = new Date().toISOString();
+        if (pin?.pinned_at === pinnedAt) pin.seen_at = new Date().toISOString();
         this.publish({ type: "agents" });
       },
       // A wait ends when the person has no page open, and when its grant is revoked meanwhile.
       pageOpen: async () => this.grants.get(secret) === grant && this.pages.size > 0,
+      // One wait per grant: a newer wait takes over, a cancelled one frees its place.
+      waitSlot: this.waitSlots.for(grant.id),
+      signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       pollMs: 500,
     });
@@ -307,7 +323,11 @@ export class OrdersApp {
     // The transport wants a client that takes both JSON and an event stream; some clients send less.
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
-    return transport.handleRequest(new Request(request, { headers }));
+    try {
+      return await transport.handleRequest(new Request(request, { headers }));
+    } finally {
+      inflight.done();
+    }
   }
   // #endregion
 
@@ -315,8 +335,8 @@ export class OrdersApp {
   /**
    * Around every tool, the two core tools included (registerApcTools registers through
    * server.registerTool too): the grant is checked before and after the tool, `attention` rides while the
-   * pin is unread, presence goes to the person's pages, `then` rides while a page is open, and an
-   * `apc_link` offer once per session.
+   * pin is unread, presence goes to the person's pages, `then` rides while a page is open and the grant
+   * was pinned in the last 30 minutes, and an `apc_link` offer once per session.
    */
   private aroundEveryTool(server: McpServer, grant: Grant, hash: string): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
@@ -342,7 +362,7 @@ export class OrdersApp {
         }
         // A wait that came back with no pin ends the loop: no `then` on it.
         const emptyWait = tool === "wait_for_focus" && result.structuredContent?.focus == null;
-        result = attachThen(result, this.pages.size > 0 && !emptyWait);
+        result = attachThen(result, !emptyWait && thenApplies(this.pages.size > 0, this.pins.get(grant.id)?.pinned_at));
         const offer = result.isError ? null : await this.links.offer(grant.id, tool);
         return offer ? attachApcLink(result, offer) : result;
       });
@@ -367,6 +387,7 @@ export class OrdersApp {
 
   private forget(g: Grant): void {
     this.links.forget(g.id);
+    this.waitSlots.forget(g.id);
     this.pins.delete(g.id);
     this.grants.delete(g.secret);
   }

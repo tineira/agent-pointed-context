@@ -63,7 +63,9 @@ registerApcTools(server, {
   readView: async () => myViewTrimmedTo(grant),          // identifiers only, cut to the caller's access
   readFocus: async () => myPinFor(grant),                 // { kind, id, part, params, next, next_args, ... }
   focusUnread: async () => isUnread(await myPinRow(grant)),
-  markSeen: async () => stampSeen(grant),
+  markSeen: async (pinnedAt) => stampSeen(grant, pinnedAt), // that exact pin, once the answer is final
+  waitSlot: waits.for(grant), // one wait per grant: const waits = new MemoryWaitSlots() where requests share a process
+  signal: request.signal, // a client that hangs up ends its wait
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
 

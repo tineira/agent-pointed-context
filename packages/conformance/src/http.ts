@@ -16,6 +16,7 @@ import {
   APC_STANDARD_VERSION,
   CORE_TOOLS,
   REVOKED_HTTP_STATUS,
+  REVOKED_HTTP_STATUS_BEARER,
   declaresMcpUrl,
   isRevokedAnswer,
   parseApcManifest,
@@ -28,8 +29,15 @@ export interface HttpConformanceOptions {
   origin: string;
   /** The MCP URL of a live grant (an agent connected directly). Without it the MCP checks are skipped. */
   grant?: string;
+  /**
+   * The grant's bearer token, when the URL alone does not carry the grant (APC 0.8: OAuth, one MCP URL shared
+   * by every grant). Sent as `Authorization: Bearer …`, never shown in the report.
+   */
+  bearer?: string;
   /** The MCP URL of a grant the person revoked in the app. Without it the revoked-answer check is skipped. */
   revoked?: string;
+  /** The revoked grant's bearer token, as `bearer` (APC 0.8). */
+  revokedBearer?: string;
   /** Lets `http:` through, on a loopback host only (localhost, 127.0.0.1, [::1]): a dev server. */
   allowHttp?: boolean;
   /** Per request, in ms (default 15000). */
@@ -92,6 +100,8 @@ export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
 ];
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** A revoked bearer grant's challenge (APC 0.8). */
+const INVALID_TOKEN = /^bearer\b.*error="?invalid_token"?/i;
 /** The most bytes read of an MCP reply. */
 const MCP_MAX_BYTES = 1_048_576;
 const PROTOCOL_VERSION = "2025-06-18";
@@ -204,6 +214,7 @@ interface Fetched {
   status: number;
   contentType: string;
   text: string;
+  wwwAuthenticate: string;
 }
 
 /** The HTTP checks against a live app, in order. Throws `HttpConformanceUsageError` when the options name an unsafe URL. */
@@ -214,6 +225,13 @@ export function httpConformance(options: HttpConformanceOptions): HttpCheck[] {
 function build(options: HttpConformanceOptions): { origin: string; checks: HttpCheck[]; manifest: () => ApcManifest | null } {
   const { origin, grant, revoked } = checkOptions(options);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  for (const [token, what] of [[options.bearer, "the bearer token"], [options.revokedBearer, "the revoked grant's bearer token"]] as const) {
+    if (token !== undefined && (!token || /[\s,"]/.test(token) || token.length > 8192)) throw new HttpConformanceUsageError(`${what} is empty or not a token (not shown)`);
+  }
+  /** The credential headers of the live grant and of the revoked one (APC 0.8): the two may share one URL, so each check says which it sends. */
+  const bearer = (token: string | undefined): Record<string, string> => (token ? { authorization: `Bearer ${token}` } : {});
+  const liveAuth = bearer(options.bearer);
+  const revokedAuth = bearer(options.revokedBearer);
   const doFetch = options.fetch ?? ((request: Request) => fetch(request));
   let manifest: ApcManifest | null = null;
   let manifestRaw: unknown = undefined;
@@ -232,7 +250,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       await response.body?.cancel().catch(() => {});
       throw new ConformanceError(`${init.method ?? "GET"} ${shown(url)}: answered with a redirect (HTTP ${response.status}); APC never follows one`);
     }
-    return { status: response.status, contentType: response.headers.get("content-type") ?? "", text: await readCapped(response, maxBytes, url) };
+    return { status: response.status, contentType: response.headers.get("content-type") ?? "", wwwAuthenticate: response.headers.get("www-authenticate") ?? "", text: await readCapped(response, maxBytes, url) };
   }
 
   async function readCapped(response: Response, maxBytes: number, url: string): Promise<string> {
@@ -264,24 +282,25 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
     return new TextDecoder().decode(all);
   }
 
-  /** A grant URL is never shown whole: its secret is the grant. */
+  /** A grant URL is never shown whole: its last segment may be the secret, even when a bearer token is given too. */
   function shown(url: string): string {
     return url === `${origin}${APC_JSON_PATH}` ? url : redactGrantUrl(url);
   }
 
-  async function rpc(url: URL, method: string, params: Record<string, unknown>, abortMs?: number): Promise<{ status: number; body: unknown; ms: number }> {
+  /** A JSON-RPC call; with the live grant's credential unless `headers` names another (the revoked grant's). */
+  async function rpc(url: URL, method: string, params: Record<string, unknown>, abortMs?: number, headers: Record<string, string> = liveAuth): Promise<{ status: number; body: unknown; ms: number; wwwAuthenticate: string }> {
     const started = Date.now();
     const r = await get(
       url.href,
       {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL_VERSION },
+        headers: { ...headers, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL_VERSION },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       },
       MCP_MAX_BYTES,
       abortMs,
     );
-    return { status: r.status, body: rpcBody(r.contentType, r.text), ms: Date.now() - started };
+    return { status: r.status, body: rpcBody(r.contentType, r.text), ms: Date.now() - started, wwwAuthenticate: r.wwwAuthenticate };
   }
 
   async function result(url: URL, method: string, params: Record<string, unknown> = {}, abortMs?: number): Promise<{ value: unknown; ms: number }> {
@@ -356,7 +375,9 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       name: "the grant's MCP URL lies under the origin and mcp.path its apc.json declares",
       run: withGrant(async (g) => {
         if (!manifest) return "apc.json did not parse";
-        expect(declaresMcpUrl(manifest, g.href), `the grant's MCP URL ${redactGrantUrl(g.href)} is not under ${origin}${manifest.mcp.path} (mcp.path)`);
+        // With a bearer token the grants may share one URL, served at mcp.path itself (APC 0.8).
+        const shared = !!options.bearer;
+        expect(declaresMcpUrl(manifest, g.href, { shared }), `the grant's MCP URL ${shown(g.href)} is not under ${origin}${manifest.mcp.path} (mcp.path)${shared ? ", nor that path itself" : ""}`);
       }),
     },
     {
@@ -427,6 +448,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       id: "grant-unknown-404",
       name: "an unknown grant answers HTTP 404, told apart from a revoked one (403)",
       run: withGrant(async (g) => {
+        if (options.bearer) return "with a bearer token the grants share the URL: an unknown token is the auth's own 401, not a URL to try";
         const unknown = new URL(g.href);
         const parts = unknown.pathname.split("/");
         const last = parts.findLastIndex((p) => p.length > 0);
@@ -439,35 +461,49 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
     },
     {
       id: "revoked-answers",
-      name: `a revoked grant answers HTTP ${REVOKED_HTTP_STATUS} { error: "revoked", revoked_by, revoked_at } to every method, POST, GET and DELETE`,
+      name: `a revoked grant answers { error: "revoked", revoked_by, revoked_at } to every method, POST, GET and DELETE: HTTP ${REVOKED_HTTP_STATUS} with a secret URL, ${REVOKED_HTTP_STATUS_BEARER} with a bearer token`,
       async run() {
         if (!revoked) return "give --revoked <mcp-url>: the MCP URL of a grant you revoked in the app";
-        if (manifest) expect(declaresMcpUrl(manifest, revoked.href), `the revoked grant's MCP URL is not under ${origin}${manifest.mcp.path} (mcp.path)`);
+        const bearer = !!options.revokedBearer;
+        const expected = bearer ? REVOKED_HTTP_STATUS_BEARER : REVOKED_HTTP_STATUS;
+        if (manifest) expect(declaresMcpUrl(manifest, revoked.href, { shared: bearer }), `the revoked grant's MCP URL is not under ${origin}${manifest.mcp.path} (mcp.path)`);
         for (const [method, params] of [
           ["initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "apc-conformance", version: APC_STANDARD_VERSION } }],
           ["tools/list", {}],
           ["tools/call", { name: "get_current_view", arguments: {} }],
         ] as const) {
-          const { status, body } = await rpc(revoked, method, params);
-          expect(status === REVOKED_HTTP_STATUS, `${method} on the revoked grant: HTTP ${status}, expected ${REVOKED_HTTP_STATUS}`);
+          const { status, body, wwwAuthenticate } = await rpc(revoked, method, params, undefined, revokedAuth);
+          expect(status === expected, `${method} on the revoked grant: HTTP ${status}, expected ${expected}`);
+          if (bearer) expect(INVALID_TOKEN.test(wwwAuthenticate), `${method} on the revoked grant: no WWW-Authenticate: Bearer error="invalid_token"`);
           expect(isRevokedAnswer(body) && body.revoked_by.length > 0 && ISO.test(body.revoked_at), `${method} on the revoked grant answers ${JSON.stringify(body).slice(0, 200)}, not { error: "revoked", revoked_by, revoked_at }`);
         }
         for (const method of ["GET", "DELETE"]) {
-          const r = await get(revoked.href, { method, headers: { accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL_VERSION } }, MCP_MAX_BYTES);
+          const r = await get(revoked.href, { method, headers: { ...revokedAuth, accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL_VERSION } }, MCP_MAX_BYTES);
           let body: unknown = null;
           try {
             body = JSON.parse(r.text);
           } catch {
             // not JSON
           }
-          expect(r.status === REVOKED_HTTP_STATUS, `${method} on the revoked grant: HTTP ${r.status}, expected ${REVOKED_HTTP_STATUS}`);
+          expect(r.status === expected, `${method} on the revoked grant: HTTP ${r.status}, expected ${expected}`);
+          if (bearer) expect(INVALID_TOKEN.test(r.wwwAuthenticate), `${method} on the revoked grant: no WWW-Authenticate: Bearer error="invalid_token"`);
           expect(isRevokedAnswer(body), `${method} on the revoked grant answers ${r.text.slice(0, 200)}, not { error: "revoked", ... }`);
         }
       },
     },
   ];
-  // Whatever a check says (a quoted body, an echoed URL, a skip reason, a note), never a grant's secret.
-  const hide = (s: string) => redactSecrets(s, [grant, revoked]);
+  // Whatever a check says (a quoted body, an echoed URL, a skip reason, a note), never a grant's secret or token.
+  const tokens = [options.bearer, options.revokedBearer].filter((t): t is string => !!t);
+  const hide = (s: string) => {
+    let out = redactSecrets(s, [grant, revoked]);
+    // Messages cut a quoted body at 200 characters, so a token may appear cut short: any run of 8 or more of
+    // its first characters goes too, and anything sent as a Bearer credential.
+    for (const t of tokens) {
+      out = out.split(t).join("<token>");
+      if (t.length >= 8) out = out.replace(new RegExp(`${escapeRegExp(t.slice(0, 8))}[^\\s"'<]*`, "g"), "<token>");
+    }
+    return out.replace(/(bearer\s+)[^\s"'<]+/gi, "$1<token>");
+  };
   const safe = checks.map<HttpCheck>((c) => ({
     ...c,
     async run() {

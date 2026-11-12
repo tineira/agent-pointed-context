@@ -31,6 +31,8 @@ import {
   LINK_REFUSED_ERROR,
   REVOKED_ERROR,
   REVOKED_HTTP_STATUS,
+  REVOKED_HTTP_STATUS_BEARER,
+  WAIT_CLAIM_GAP_S,
   canonicalTarget,
   compareStandard,
   declaresMcpUrl,
@@ -57,11 +59,20 @@ export {
   type HttpConformanceReport,
 } from "./http.ts";
 
-/** One agent's way into the app: the MCP URL its holder calls (the agent itself, or a dock's hub) and the app's id for the grant. */
+/**
+ * One agent's way into the app: the MCP URL its holder calls (the agent itself, or a dock's hub), the
+ * app's id for the grant, and (APC 0.8) the headers that carry the grant when the URL alone does not: an
+ * app whose grants share one MCP URL gives `{ authorization: "Bearer …" }`. With a secret URL, leave
+ * `headers` out.
+ */
 export interface AgentConnection {
   mcpUrl: string;
   grantId: string;
+  headers?: Record<string, string>;
 }
+
+/** A grant's credential travels in a header (a bearer token), not in its URL: several grants may share the URL (APC 0.8). */
+const sharesUrl = (conn: AgentConnection) => !!conn.headers && Object.keys(conn.headers).some((h) => h.toLowerCase() === "authorization");
 
 /**
  * What the `apc_link` checks need (APC 0.4), from an app that offers both profiles. The suite makes the
@@ -160,28 +171,56 @@ export interface ConformanceReport {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** One JSON-RPC request over Streamable HTTP, stateless, as a dock's hub sends it: the HTTP status and the reply. */
-async function send(app: ApcAppAdapter, url: string, method: string, params: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
-  const request = new Request(url, {
+async function send(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: number; body: unknown; headers: Headers }> {
+  const request = new Request(to.mcpUrl, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
+    headers: { ...to.headers, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    ...(signal ? { signal } : {}),
   });
   const response = await (app.fetch ? app.fetch(request) : fetch(request));
   const body = rpcBody(response.headers.get("content-type") ?? "", await response.text());
-  return { status: response.status, body };
+  return { status: response.status, body, headers: response.headers };
 }
 
-async function result(app: ApcAppAdapter, url: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
-  const { status, body } = await send(app, url, method, params);
+/** A JSON-RPC notification (no id) in a POST of its own: the HTTP status (202 for a Streamable HTTP server). */
+async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown>): Promise<number> {
+  const request = new Request(to.mcpUrl, {
+    method: "POST",
+    headers: { ...to.headers, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
+    body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+  });
+  const response = await (app.fetch ? app.fetch(request) : fetch(request));
+  await response.body?.cancel().catch(() => {});
+  return response.status;
+}
+
+/** What a check of a 0.8 rule says of an app that claims an earlier standard: passed, not checked. */
+const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
+
+async function result(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
+  const { status, body } = await send(app, to, method, params, signal);
   expect(status === 200, `${method}: HTTP ${status}, expected 200 (${JSON.stringify(body).slice(0, 200)})`);
   expect(isObject(body) && !("error" in body && body.error), `${method}: JSON-RPC error ${JSON.stringify(body).slice(0, 200)}`);
   return (body as { result?: unknown }).result;
 }
 
-async function call(app: ApcAppAdapter, url: string, tool: string, args: Record<string, unknown> = {}): Promise<ToolCallResult> {
-  const r = await result(app, url, "tools/call", { name: tool, arguments: args });
+async function call(app: ApcAppAdapter, to: AgentConnection, tool: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<ToolCallResult> {
+  const r = await result(app, to, "tools/call", { name: tool, arguments: args }, signal);
   expect(isObject(r), `${tool}: no result`);
   return r as ToolCallResult;
+}
+
+/**
+ * A revoked grant's answer (APC 0.8): a `RevokedAnswer` body, with the binding's status: 403 for a secret URL, 401 with
+ * `WWW-Authenticate: Bearer error="invalid_token"` for a bearer token.
+ */
+function checkRevoked(conn: AgentConnection, status: number, body: unknown, what: string, headers: Headers): void {
+  const bearer = sharesUrl(conn);
+  const expected = bearer ? REVOKED_HTTP_STATUS_BEARER : REVOKED_HTTP_STATUS;
+  expect(status === expected, `${what} on a revoked grant: HTTP ${status}, expected ${expected}`);
+  if (bearer) expect(/^bearer\b.*error="?invalid_token"?/i.test(headers.get("www-authenticate") ?? ""), `${what} on a revoked bearer grant: no WWW-Authenticate: Bearer error="invalid_token"`);
+  expect(isRevokedAnswer(body) && body.revoked_by.length > 0 && ISO.test(body.revoked_at), `${what} on a revoked grant answers { error: "revoked", revoked_by, revoked_at }: ${JSON.stringify(body).slice(0, 200)}`);
 }
 
 /** A focus in the core's format, naming `target`. */
@@ -201,11 +240,18 @@ async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
 export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
+  /** Whether the app's apc.json claims `version` or later: a rule added in a version is checked only of apps that claim it. */
+  const claims = async (conn: AgentConnection, version: string): Promise<boolean> => {
+    const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
+    const response = await (app.fetch ? app.fetch(request) : fetch(request));
+    const standard = ((await response.json().catch(() => ({}))) as { standard?: unknown }).standard;
+    return typeof standard === "string" && compareStandard(standard, version) >= 0;
+  };
 
   return [
     check("serves apc.json from its own origin, naming the profiles it serves and where its MCP URLs live", async () => {
-      const { mcpUrl } = await app.connect();
-      const origin = new URL(mcpUrl).origin;
+      const conn = await app.connect();
+      const origin = new URL(conn.mcpUrl).origin;
       const request = new Request(`${origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
       const response = await (app.fetch ? app.fetch(request) : fetch(request));
       expect(response.status === 200, `GET ${APC_JSON_PATH}: HTTP ${response.status}, expected 200`);
@@ -226,21 +272,23 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(!m.profiles.includes("hub"), "an app's profiles are direct, dock or both, never hub");
       expect(m.profiles.includes(app.profile), `profiles ${JSON.stringify(m.profiles)} leave out ${app.profile}, which the app serves`);
       if (app.link) expect(m.profiles.includes("direct") && m.profiles.includes("dock"), `profiles ${JSON.stringify(m.profiles)}: an app that links both paths offers both`);
-      expect(declaresMcpUrl(m, mcpUrl), `the grant's MCP URL is not under ${origin}${m.mcp.path} (mcp.path)`);
+      // A Direct app whose grants share one URL (a bearer token names the grant) may serve it at mcp.path itself (APC 0.8).
+      const shared = app.profile === "direct" && sharesUrl(conn);
+      expect(declaresMcpUrl(m, conn.mcpUrl, { shared }), `the grant's MCP URL is not under ${origin}${m.mcp.path} (mcp.path)${shared ? ", nor that path itself" : ""}`);
       if (m.profiles.includes("direct")) expect(m.direct && new URL(m.direct.connect).origin === origin, "direct.connect is the app's own page");
       if (support.note) return { note: support.note };
     }),
 
     check("lists the core tools, with their arguments", async () => {
-      const { mcpUrl } = await app.connect();
-      checkCoreToolList(await result(app, mcpUrl, "tools/list"), CORE_TOOLS);
+      const conn = await app.connect();
+      checkCoreToolList(await result(app, conn, "tools/list"), CORE_TOOLS);
     }),
 
     check("get_current_view returns the view as identifiers, and no focus before a pin", async () => {
-      const { mcpUrl } = await app.connect();
+      const conn = await app.connect();
       await app.page.setOpen(true);
       await app.page.showView();
-      const r = await call(app, mcpUrl, "get_current_view");
+      const r = await call(app, conn, "get_current_view");
       expect(!r.isError, "get_current_view failed");
       const d = data(r);
       expect("view" in d && "focus" in d, "the result has view and focus");
@@ -250,33 +298,35 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     }),
 
     check("a pin rides as attention on any result until it is read, and next reads it", async () => {
-      const { mcpUrl, grantId } = await app.connect();
+      const conn = await app.connect();
+      const { grantId } = conn;
       expect(await app.page.pin(grantId, first), "the app refused a pin on the first target");
-      const probed = await call(app, mcpUrl, app.probe.tool, app.probe.args);
+      const probed = await call(app, conn, app.probe.tool, app.probe.args);
       expect(!probed.isError, `${app.probe.tool} failed`);
       const attention = attentionOf(probed);
       expect(isObject(attention) && typeof attention.note === "string", "an unread pin puts attention { focus, note } on the result");
       checkFocus(attention.focus, first, "attention");
 
-      const view = await call(app, mcpUrl, "get_current_view");
+      const view = await call(app, conn, "get_current_view");
       const focus = checkFocus(data(view).focus, first, "get_current_view");
-      const after = await call(app, mcpUrl, app.probe.tool, app.probe.args);
+      const after = await call(app, conn, app.probe.tool, app.probe.args);
       expect(attentionOf(after) === undefined, "reading the focus marks it seen: no attention after");
 
-      const read = await call(app, mcpUrl, focus.next as string, focus.next_args as Record<string, unknown>);
+      const read = await call(app, conn, focus.next as string, focus.next_args as Record<string, unknown>);
       expect(!read.isError, `next (${String(focus.next)}) with next_args failed: ${JSON.stringify(read.content).slice(0, 200)}`);
 
       // One pin per grant: a new drop replaces it, unread again.
       expect(await app.page.pin(grantId, second), "the app refused a pin on the second target");
-      const again = attentionOf(await call(app, mcpUrl, app.probe.tool, app.probe.args));
+      const again = attentionOf(await call(app, conn, app.probe.tool, app.probe.args));
       expect(isObject(again), "a new pin is unread again");
       checkFocus(again.focus, second, "attention after a second pin");
     }),
 
     check("wait_for_focus returns a pin dropped during the wait", async () => {
-      const { mcpUrl, grantId } = await app.connect();
+      const conn = await app.connect();
+      const { grantId } = conn;
       await app.page.setOpen(true);
-      const waiting = timed(call(app, mcpUrl, "wait_for_focus", { timeout_s: 10 }));
+      const waiting = timed(call(app, conn, "wait_for_focus", { timeout_s: 10 }));
       await sleep(300);
       expect(await app.page.pin(grantId, second), "the app refused the pin");
       const { value: r, ms } = await waiting;
@@ -285,14 +335,14 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(d.timed_out === false, "a wait that got a pin did not time out");
       checkFocus(d.focus, second, "wait_for_focus");
       expect(ms < 9000, `it returned at ${ms} ms, not soon after the pin`);
-      const after = await call(app, mcpUrl, app.probe.tool, app.probe.args);
+      const after = await call(app, conn, app.probe.tool, app.probe.args);
       expect(attentionOf(after) === undefined, "the wait marks the pin seen");
     }),
 
     check("wait_for_focus times out cleanly", async () => {
-      const { mcpUrl } = await app.connect();
+      const conn = await app.connect();
       await app.page.setOpen(true);
-      const { value: r, ms } = await timed(call(app, mcpUrl, "wait_for_focus", { timeout_s: 1 }));
+      const { value: r, ms } = await timed(call(app, conn, "wait_for_focus", { timeout_s: 1 }));
       expect(!r.isError, "wait_for_focus failed");
       const d = data(r);
       expect(d.focus === null && d.timed_out === true, `a wait with no pin times out: ${JSON.stringify(d)}`);
@@ -303,9 +353,9 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     }),
 
     check("wait_for_focus ends when the person has no page open", async () => {
-      const { mcpUrl } = await app.connect();
+      const conn = await app.connect();
       await app.page.setOpen(false);
-      const { value: r, ms } = await timed(call(app, mcpUrl, "wait_for_focus", { timeout_s: 3 }));
+      const { value: r, ms } = await timed(call(app, conn, "wait_for_focus", { timeout_s: 3 }));
       const d = data(r);
       expect(d.focus === null, "no pin, no focus");
       if (d.page_open === undefined) expect(d.timed_out === true, "an app that cannot tell runs to the timeout");
@@ -316,26 +366,34 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       await app.page.setOpen(true);
     }),
 
-    check("then rides on results only while the person's page is open", async () => {
-      const { mcpUrl } = await app.connect();
+    check("then rides on results only while the person's page is open and the agent was pinned lately", async () => {
+      const conn = await app.connect();
       await app.page.setOpen(true);
-      const open = await call(app, mcpUrl, app.probe.tool, app.probe.args);
+      const v08 = await claims(conn, "0.8.0");
+      if (v08) {
+        const unpinned = await call(app, conn, app.probe.tool, app.probe.args);
+        expect(resultKey(unpinned, "then").value === undefined && text(unpinned).then === undefined, "an open page with no pin gives no then (APC 0.8): the agent does not wait after every answer");
+      }
+      expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
+      expect(!(await call(app, conn, "get_current_view")).isError, "get_current_view failed");
+      const open = await call(app, conn, app.probe.tool, app.probe.args);
       // resultKey: the same value in the structured result and the text (a text-only model follows the text).
       const then = resultKey(open, "then");
       expect(typeof then.value === "string" && typeof text(open).then === "string", "with the page open, a result carries then, structured and in the text");
       await app.page.setOpen(false);
-      const closed = await call(app, mcpUrl, app.probe.tool, app.probe.args);
+      const closed = await call(app, conn, app.probe.tool, app.probe.args);
       expect(resultKey(closed, "then").value === undefined && text(closed).then === undefined, "with no page open, no then");
       await app.page.setOpen(true);
     }),
 
     check("presence names what a read touched, with ids only", async () => {
-      const { mcpUrl, grantId } = await app.connect();
+      const conn = await app.connect();
+      const { grantId } = conn;
       await app.page.setOpen(true);
       expect(await app.page.pin(grantId, first), "the app refused the pin");
-      const focus = checkFocus(data(await call(app, mcpUrl, "get_current_view")).focus, first, "get_current_view");
+      const focus = checkFocus(data(await call(app, conn, "get_current_view")).focus, first, "get_current_view");
       app.page.takePresence();
-      const read = await call(app, mcpUrl, focus.next as string, focus.next_args as Record<string, unknown>);
+      const read = await call(app, conn, focus.next as string, focus.next_args as Record<string, unknown>);
       expect(!read.isError, "next failed");
       const events = app.page.takePresence().filter((e) => e.grant_id === grantId && e.tool === focus.next);
       expect(events.length === 1, `one presence event for the read, got ${events.length}`);
@@ -354,13 +412,12 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(await app.page.pin(a.grantId, first), "the app refused the pin");
       expect(await app.page.revoke(a.grantId), "the app refused to revoke");
       for (const [method, params] of [["initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-conformance", version: "0" } }], ["tools/list", {}], ["tools/call", { name: "get_current_view", arguments: {} }], ["tools/call", { name: app.probe.tool, arguments: app.probe.args }]] as const) {
-        const { status, body } = await send(app, a.mcpUrl, method, params);
-        expect(status === REVOKED_HTTP_STATUS, `${method} on a revoked grant: HTTP ${status}, expected ${REVOKED_HTTP_STATUS}`);
-        expect(isRevokedAnswer(body) && body.revoked_by.length > 0 && ISO.test(body.revoked_at), `${method} on a revoked grant answers { error: "revoked", revoked_by, revoked_at }: ${JSON.stringify(body).slice(0, 200)}`);
+        const { status, body, headers } = await send(app, a, method, params);
+        checkRevoked(a, status, body, method, headers);
       }
       // Whatever the HTTP method: a GET (the SSE stream) or a DELETE (ending a session) is answered "revoked" too, not 405.
       for (const method of ["GET", "DELETE"]) {
-        const request = new Request(a.mcpUrl, { method, headers: { accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" } });
+        const request = new Request(a.mcpUrl, { method, headers: { ...a.headers, accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" } });
         const response = await (app.fetch ? app.fetch(request) : fetch(request));
         const text = await response.text();
         let body: unknown = null;
@@ -369,18 +426,18 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
         } catch {
           // not JSON
         }
-        expect(response.status === REVOKED_HTTP_STATUS, `${method} on a revoked grant: HTTP ${response.status}, expected ${REVOKED_HTTP_STATUS}`);
-        expect(isRevokedAnswer(body), `${method} on a revoked grant answers { error: "revoked", revoked_by, revoked_at }: ${text.slice(0, 200)}`);
+        checkRevoked(a, response.status, body, method, response.headers);
       }
       expect(!(await app.page.pin(a.grantId, second)), "a revoked agent cannot be pinned");
-      const other = await call(app, b.mcpUrl, "get_current_view");
+      const other = await call(app, b, "get_current_view");
       expect(!other.isError && "view" in data(other), "another agent is not touched");
     }),
 
     check("a call already running when the grant is revoked ends revoked, with no data", async () => {
-      const { mcpUrl, grantId } = await app.connect();
+      const conn = await app.connect();
+      const { grantId } = conn;
       await app.page.setOpen(true);
-      const waiting = timed(call(app, mcpUrl, "wait_for_focus", { timeout_s: 10 }));
+      const waiting = timed(call(app, conn, "wait_for_focus", { timeout_s: 10 }));
       await sleep(300);
       expect(await app.page.revoke(grantId), "the app refused to revoke");
       const { value: r, ms } = await waiting;
@@ -390,6 +447,60 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(!("focus" in d) && !("view" in d) && r.structuredContent === undefined, "it carries no focus, view or other data");
       expect(ms < 9000, `it ended at ${ms} ms, not soon after the revoke`);
     }),
+    check("one wait per grant: a newer wait takes over, and the older one delivers nothing (APC 0.8)", async () => {
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.8.0"))) return NOT_08;
+      await app.page.setOpen(true);
+      const older = call(app, conn, "wait_for_focus", { timeout_s: 10 });
+      await sleep((WAIT_CLAIM_GAP_S + 0.3) * 1000);
+      const newer = timed(call(app, conn, "wait_for_focus", { timeout_s: 10 }));
+      const old = data(await older);
+      expect(old.focus === null && old.timed_out === false && typeof old.note === "string", `the wait a newer one took over ends with focus null, timed_out false and a note: ${JSON.stringify(old).slice(0, 200)}`);
+      expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
+      const { value: got, ms } = await newer;
+      checkFocus(data(got).focus, first, "the newer wait");
+      expect(ms < 9000, `the newer wait returned at ${ms} ms, not soon after the pin`);
+    }),
+
+    check("a second wait started right after the first is refused with retry_after_s, and the first still delivers (APC 0.8)", async () => {
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.8.0"))) return NOT_08;
+      await app.page.setOpen(true);
+      const running = call(app, conn, "wait_for_focus", { timeout_s: 10 });
+      await sleep(200);
+      const refused = data(await call(app, conn, "wait_for_focus", { timeout_s: 10 }));
+      expect(refused.focus === null && refused.timed_out === false, `the second wait is refused: ${JSON.stringify(refused).slice(0, 200)}`);
+      expect(typeof refused.retry_after_s === "number" && refused.retry_after_s >= 1 && refused.retry_after_s <= WAIT_CLAIM_GAP_S + 1, `with retry_after_s, 1 to ${WAIT_CLAIM_GAP_S + 1}: ${JSON.stringify(refused).slice(0, 200)}`);
+      expect(typeof refused.note === "string" && refused.note.length > 0, "and a note");
+      expect(await app.page.pin(conn.grantId, second), "the app refused the pin");
+      checkFocus(data(await running).focus, second, "the first wait, still running");
+    }),
+
+    ...(["notifications/cancelled", "an HTTP abort"] as const).map((how) =>
+      check(`a pin is never lost to a cancelled wait (${how}): it marks nothing seen and frees its place at once (APC 0.8)`, async () => {
+        const conn = await app.connect();
+        if (!(await claims(conn, "0.8.0"))) return NOT_08;
+        await app.page.setOpen(true);
+        const controller = new AbortController();
+        // Not awaited before the pin: a handler that ignores the cancel would still be waiting, and would take the pin.
+        const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }, how === "an HTTP abort" ? controller.signal : undefined).catch(() => null);
+        await sleep(300);
+        if (how === "an HTTP abort") controller.abort();
+        // MCP's cancel, in a POST of its own, as a client of a stateless server sends it.
+        else expect((await notify(app, conn, "notifications/cancelled", { requestId: 1, reason: "apc-conformance" })) < 300, "notifications/cancelled was not accepted");
+        await sleep(300);
+        expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
+        // Past a poll of a wait that ignored the cancel (2 s in @tineira/apc-server), so it would have taken the pin by now.
+        await sleep(2500);
+        const attention = attentionOf(await call(app, conn, app.probe.tool, app.probe.args));
+        expect(isObject(attention), `the pin dropped after the cancelled wait is still unread: it rides as attention (the cancelled wait took it)`);
+        checkFocus(attention.focus, first, "attention after a cancelled wait");
+        const again = data(await call(app, conn, "wait_for_focus", { timeout_s: 2 }));
+        expect(again.retry_after_s === undefined, `a cancelled wait frees its place at once: ${JSON.stringify(again).slice(0, 200)}`);
+        checkFocus(again.focus, first, "the next wait gets the pin");
+        await Promise.race([waiting, sleep(11_000)]);
+      }),
+    ),
     ...mobileChecks(app, app.page.mobile),
     ...(app.link ? linkChecks(app, app.link) : []),
   ];
@@ -403,8 +514,8 @@ function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): Co
   return [
     check("the page adapter for a phone is given (required of an app that claims 0.6.0 or later)", async () => {
       if (mobile) return;
-      const { mcpUrl } = await app.connect();
-      const request = new Request(`${new URL(mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
+      const conn = await app.connect();
+      const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
       const response = await (app.fetch ? app.fetch(request) : fetch(request));
       const claimed = ((await response.json().catch(() => ({}))) as { standard?: unknown }).standard;
       expect(typeof claimed === "string" && compareStandard(claimed, "0.6.0") < 0, `apc.json claims standard ${String(claimed)}, which requires the mobile rule to be checked: give page.mobile in the adapter (ApcMobilePage: agentBar, pinByTouch, unpinByTouch)`);
@@ -422,18 +533,19 @@ function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): Co
 
     check("a person pins with a finger, no mouse drag, and the agent reads the pin; unpin works by touch too", async () => {
       if (!mobile) return;
-      const { mcpUrl, grantId } = await app.connect();
+      const conn = await app.connect();
+      const { grantId } = conn;
       await app.page.setOpen(true);
       await app.page.showView();
       expect(await mobile.pinByTouch(grantId, first), "the page refused a pin made by tapping the agent and then the target");
-      const r = await call(app, mcpUrl, "get_current_view");
+      const r = await call(app, conn, "get_current_view");
       expect(!r.isError, "get_current_view failed");
       checkFocus(data(r).focus, first, "get_current_view after a pin by touch");
       // The same again on another target: one pin per grant, replaced.
       expect(await mobile.pinByTouch(grantId, second), "the page refused a second pin by touch");
-      checkFocus(data(await call(app, mcpUrl, "get_current_view")).focus, second, "get_current_view after a second pin by touch");
+      checkFocus(data(await call(app, conn, "get_current_view")).focus, second, "get_current_view after a second pin by touch");
       expect(await mobile.unpinByTouch(grantId), "the page offers no way to remove the pin with a finger");
-      const after = await call(app, mcpUrl, "get_current_view");
+      const after = await call(app, conn, "get_current_view");
       expect(data(after).focus === null, "the pin is still there after the person removed it by touch");
     }),
   ];
@@ -445,7 +557,7 @@ async function arrive(app: ApcAppAdapter, conn: AgentConnection & { path: ApcPro
     conn.path === "direct"
       ? { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: client, version: "1.0.0" } }
       : { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", title: `${client} via dock`, version: "0.1.0" }, _meta: { [APC_AGENT_CLIENT_META]: client } };
-  await result(app, conn.mcpUrl, "initialize", params);
+  await result(app, conn, "initialize", params);
 }
 
 /** The offer on a result, where the model sees it: in the structured result and the same in the text. */
@@ -473,13 +585,13 @@ function linkChecks(app: ApcAppAdapter, link: ApcLinkAdapter): ConformanceCheck[
     await arrive(app, direct, name);
     const dock = await connect("dock");
     await arrive(app, dock, name);
-    const offered = await call(app, dock.mcpUrl, app.probe.tool, app.probe.args);
+    const offered = await call(app, dock, app.probe.tool, app.probe.args);
     expect(!offered.isError, `${app.probe.tool} failed`);
     const offer = offerOf(offered);
     expect(offer, `the second connection of ${name}, on the other path, gets apc_link on a result of one of the app's own tools`);
     return { name, direct, dock, offer };
   };
-  const redeem = (conn: AgentConnection, code: string) => call(app, conn.mcpUrl, APC_LINK_TOOL, { code });
+  const redeem = (conn: AgentConnection, code: string) => call(app, conn, APC_LINK_TOOL, { code });
   const refused = (r: ToolCallResult, reason: ApcLinkRefusal, where: string) => {
     expect(r.isError === true, `${where}: refused, as a tool error (${JSON.stringify(r).slice(0, 200)})`);
     const d = text(r);
@@ -487,14 +599,14 @@ function linkChecks(app: ApcAppAdapter, link: ApcLinkAdapter): ConformanceCheck[
   };
   const linkedEntry = async (a: string, b: string) => (await link.agents()).find((e) => e.grants.includes(a) && e.grants.includes(b));
   const works = async (conn: AgentConnection, where: string) => {
-    const r = await call(app, conn.mcpUrl, "get_current_view");
+    const r = await call(app, conn, "get_current_view");
     expect(!r.isError && "view" in data(r), `${where} still reads the app`);
   };
 
   return [
     check("the same client on the other path is offered a code once per session, and the code links them", async () => {
       const { direct, dock, offer } = await pair();
-      const again = await call(app, dock.mcpUrl, app.probe.tool, app.probe.args);
+      const again = await call(app, dock, app.probe.tool, app.probe.args);
       expect(offerOf(again) === undefined, "asked at most once per MCP session");
       const done = await redeem(direct, offer.code);
       expect(!done.isError && data(done).linked === true, `the other connection redeems it: ${JSON.stringify(done).slice(0, 200)}`);
@@ -526,7 +638,7 @@ function linkChecks(app: ApcAppAdapter, link: ApcLinkAdapter): ConformanceCheck[
       else await sleep((APC_LINK_TTL_S + 1) * 1000);
       refused(await redeem(direct, offer.code), "expired", "after expires_in");
       expect(!(await linkedEntry(direct.grantId, dock.grantId)), "it stays two agents");
-      expect(offerOf(await call(app, dock.mcpUrl, app.probe.tool, app.probe.args)) === undefined, "not asked again in that session");
+      expect(offerOf(await call(app, dock, app.probe.tool, app.probe.args)) === undefined, "not asked again in that session");
     }),
 
     check("a connection of another client is offered nothing", async () => {
@@ -534,7 +646,7 @@ function linkChecks(app: ApcAppAdapter, link: ApcLinkAdapter): ConformanceCheck[
       await arrive(app, direct, client());
       const dock = await connect("dock");
       await arrive(app, dock, client());
-      expect(offerOf(await call(app, dock.mcpUrl, app.probe.tool, app.probe.args)) === undefined, "no offer between two clients");
+      expect(offerOf(await call(app, dock, app.probe.tool, app.probe.args)) === undefined, "no offer between two clients");
     }),
 
     check("revoke on a linked agent cuts both grants", async () => {
@@ -542,8 +654,8 @@ function linkChecks(app: ApcAppAdapter, link: ApcLinkAdapter): ConformanceCheck[
       expect(!(await redeem(direct, offer.code)).isError, "linked");
       expect(await app.page.revoke(dock.grantId), "the app refused to revoke");
       for (const [conn, where] of [[direct, "Direct"], [dock, "Dock"]] as const) {
-        const { status, body } = await send(app, conn.mcpUrl, "tools/call", { name: "get_current_view", arguments: {} });
-        expect(status === REVOKED_HTTP_STATUS && isRevokedAnswer(body), `the ${where} grant answers 403 revoked: HTTP ${status}`);
+        const { status, body, headers } = await send(app, conn, "tools/call", { name: "get_current_view", arguments: {} });
+        checkRevoked(conn, status, body, `get_current_view on the ${where} grant`, headers);
       }
     }),
 

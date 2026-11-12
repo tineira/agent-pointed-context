@@ -61,6 +61,29 @@ test("an MCP URL is declared when it is on the origin and under mcp.path", () =>
   assert.equal(declaresMcpUrl(m, `blob:${O}/mcp/abc`), false, "a blob: URL has the origin, not the scheme");
 });
 
+test("a Direct endpoint whose grants share one URL may be mcp.path itself, only when asked for (APC 0.8)", () => {
+  const m = (parseApcManifest({ ...app(), mcp: { path: "/api/mcp/" } }, O) as { manifest: Parameters<typeof declaresMcpUrl>[0] }).manifest;
+  for (const url of [`${O}/api/mcp`, `${O}/api/mcp/`]) {
+    assert.equal(declaresMcpUrl(m, url, { shared: true }), true, url);
+    assert.equal(declaresMcpUrl(m, url), false, `${url}: a hub pairing a Dock app still wants one URL per grant`);
+  }
+  assert.equal(declaresMcpUrl(m, `${O}/api/mcp/admin`, { shared: true }), true, "another endpoint under the path, by role");
+  assert.equal(declaresMcpUrl(m, `${O}/api/mcpx`, { shared: true }), false);
+  assert.equal(declaresMcpUrl(m, `${O}/api`, { shared: true }), false);
+  assert.equal(declaresMcpUrl(m, `${O}/api/mcp%2f`, { shared: true }), false, "no encoded slash");
+  const root = (parseApcManifest({ ...app(), mcp: { path: "/" } }, O) as { manifest: Parameters<typeof declaresMcpUrl>[0] }).manifest;
+  assert.equal(declaresMcpUrl(root, `${O}/`, { shared: true }), false, "never the origin's root");
+});
+
+test("direct.auth and direct.resource_metadata are kept as information when well formed, and never refuse a file (APC 0.8)", () => {
+  const ok = parseApcManifest({ ...app(), direct: { connect: `${O}/connect`, auth: "oauth", resource_metadata: `${O}/.well-known/oauth-protected-resource` } }, O);
+  assert.equal(ok.ok, true);
+  assert.deepEqual((ok as { manifest: { direct: unknown } }).manifest.direct, { connect: `${O}/connect`, auth: "oauth", resource_metadata: `${O}/.well-known/oauth-protected-resource` });
+  const odd = parseApcManifest({ ...app(), direct: { connect: `${O}/connect`, auth: "OAuth 2.1!", resource_metadata: "https://evil.example/meta" } }, O);
+  assert.equal(odd.ok, true, "a malformed auth or a metadata URL off the origin is dropped, not a refusal");
+  assert.deepEqual((odd as { manifest: { direct: unknown } }).manifest.direct, { connect: `${O}/connect` });
+});
+
 test("a connect page or a hub's endpoint must be http(s) on the origin: blob:, data: and javascript: are refused", () => {
   for (const connect of [`blob:${O}/connect`, "data:text/html,hi", "javascript:alert(1)", `${O.replace("https", "ftp")}/x`]) {
     assert.equal(parseApcManifest(app({ direct: { connect } }), O).ok, false, connect);

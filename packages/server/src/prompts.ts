@@ -34,7 +34,7 @@ ${appName} lets the person point you at what they see on their screen. You get i
 
 ## The loop
 
-After you answer a question that used these tools, look at the results: while they carry a \`then\` key, the person is on the page, so call wait_for_focus (default 25 s). If it returns a focus, read it and answer again. Stop when it times out (timed_out: true) or returns page_open: false. Without \`then\`, do not wait. page_open and \`then\` are reported only while the person shares their view.
+After you answer a question that used these tools, look at the results: while they carry a \`then\` key, the person pinned you lately and is on the page, so call wait_for_focus (default 25 s), in the background if your client can; otherwise keep it short and never chain waits. One wait at a time: a newer one takes over. If it returns a focus, read it and answer again. Stop when it times out (timed_out: true) or returns page_open: false. Without \`then\`, do not wait. page_open and \`then\` are reported only while the person shares their view.
 
 ## Two connections
 

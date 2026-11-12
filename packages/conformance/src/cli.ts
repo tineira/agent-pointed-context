@@ -3,6 +3,7 @@
  * `apc-conformance`: the HTTP conformance checks (`http.ts`) against a live app, from a terminal.
  *
  *   npx @tineira/apc-conformance@next https://pulse.example --grant https://pulse.example/mcp/<sid>/<secret>
+ *   APC_TOKEN=… npx @tineira/apc-conformance@next https://app.example --grant https://app.example/api/mcp --bearer-env APC_TOKEN
  *
  * PASS, FAIL or SKIP per check; exit 1 on any FAIL, 2 on a usage error; `--json` for the report as JSON.
  */
@@ -13,12 +14,17 @@ import { HttpConformanceUsageError, redactSecrets, runHttpConformance, type Http
 const HELP = `apc-conformance: checks a live APC app over HTTP (https://apc.tineira.com/docs)
 
 Usage:
-  apc-conformance <app-origin> [--grant <mcp-url>] [--revoked <mcp-url>] [--json] [--allow-http] [--timeout <s>]
+  apc-conformance <app-origin> [--grant <mcp-url>] [--bearer-env <VAR>] [--revoked <mcp-url>] [--revoked-bearer-env <VAR>]
+                  [--json] [--allow-http] [--timeout <s>]
 
   <app-origin>        The app's origin, e.g. https://pulse.apc.tineira.com
   --grant <mcp-url>   The MCP URL of a live agent connected directly (Direct profile). Runs the MCP checks:
                       initialize, tools/list, get_current_view, wait_for_focus, unknown grant 404.
+  --bearer-env <VAR>  The name of an environment variable that holds the grant's bearer token, for an app whose
+                      agents authenticate with OAuth (one MCP URL shared by every grant, APC 0.8). The token is
+                      sent as Authorization: Bearer and never printed. Never put a token on the command line.
   --revoked <mcp-url> The MCP URL of a grant you revoked in the app: checks the revoked answer.
+  --revoked-bearer-env <VAR>  The same, for the revoked grant's token.
   --json              Print the report as JSON.
   --allow-http        Allow http:, for a dev server on the host localhost, 127.0.0.1 or [::1] only (not *.localhost).
   --timeout <s>       Seconds per request (default 15).
@@ -65,6 +71,8 @@ async function main(argv: string[]): Promise<number> {
       options: {
         grant: { type: "string" },
         revoked: { type: "string" },
+        "bearer-env": { type: "string" },
+        "revoked-bearer-env": { type: "string" },
         json: { type: "boolean", default: false },
         "allow-http": { type: "boolean", default: false },
         timeout: { type: "string" },
@@ -99,12 +107,26 @@ async function main(argv: string[]): Promise<number> {
     }
     timeoutMs = Math.round(s * 1000);
   }
+  // A token is read from the environment by the variable's name, never from the command line, and never printed.
+  const tokens: { bearer?: string; revokedBearer?: string } = {};
+  for (const [flag, key] of [["bearer-env", "bearer"], ["revoked-bearer-env", "revokedBearer"]] as const) {
+    const name = values[flag];
+    if (name === undefined) continue;
+    const token = process.env[name];
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !token) {
+      // The value is never echoed: a token passed here by mistake can look like a variable name.
+      process.stderr.write(`--${flag}: give the name of an environment variable that holds the token; the one given ${/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? "is unset or empty" : "is not a variable name"} (not shown)\n`);
+      return 2;
+    }
+    tokens[key] = token;
+  }
   let report: HttpConformanceReport;
   try {
     report = await runHttpConformance({
       origin: positionals[0]!,
       ...(values.grant !== undefined ? { grant: values.grant } : {}),
       ...(values.revoked !== undefined ? { revoked: values.revoked } : {}),
+      ...tokens,
       allowHttp: values["allow-http"],
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });

@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ApcProfile, FocusRow } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -65,9 +65,14 @@ interface Grant {
 export class Feed extends DurableObject<Env> {
   private sql: SqlStorage;
   /** Grants with a wait_for_focus in flight, for the agent bar's floating mark (memory only). */
-  private waiting = new Set<string>();
+  /** Waits running per grant, for the page's "waiting" state: a wait taken over must not clear the newer one's (APC 0.8). */
+  private waiting = new Map<string, number>();
+  /** MCP's notifications/cancelled, which arrives in a POST of its own, reaches the call it names (APC 0.8). */
+  private readonly calls = new InflightCalls();
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
   private links!: ApcLinks;
+  /** One wait_for_focus per grant (APC 0.8): every request of this feed runs in this object, so the places live in memory. */
+  private readonly waitSlots = new MemoryWaitSlots();
   /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
@@ -343,6 +348,7 @@ export class Feed extends DurableObject<Env> {
     const grant = this.grants().find((g) => g.secret === secret);
     if (!grant?.hub) return { ok: false };
     this.links.forget(grant.id);
+    this.waitSlots.forget(grant.id);
     this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
     this.sql.exec("delete from grants where id = ?", grant.id);
     this.broadcast();
@@ -368,6 +374,7 @@ export class Feed extends DurableObject<Env> {
       // A Direct grant has no hub or agent; the table, older than Direct, wants text there.
       this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub ?? "", grant.agent ?? "", at);
       this.links.forget(grant.id);
+      this.waitSlots.forget(grant.id);
       this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
       this.sql.exec("delete from grants where id = ?", grant.id);
     }
@@ -420,8 +427,11 @@ export class Feed extends DurableObject<Env> {
     }
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     await this.touch();
+    // A notifications/cancelled in this POST aborts the call it names, running in another POST (APC 0.8).
+    const rpcBody = (await request.clone().json().catch(() => null)) as unknown;
+    this.calls.cancel(grant.id, rpcBody);
     try {
-      const arriving = initializeOf(await request.clone().json());
+      const arriving = initializeOf(rpcBody);
       if (arriving) {
         // The hub introduces a dock agent by its title; a Direct agent's client names itself.
         const title = arriving.title?.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null;
@@ -450,18 +460,23 @@ export class Feed extends DurableObject<Env> {
       },
     );
     this.instrument(server, grant, hash, posts, origin);
+    // The calls this POST carries, so a later notifications/cancelled can end them; the client hanging up ends them too.
+    const inflight = this.calls.track(grant.id, rpcBody);
     registerApcTools(server, {
       readView: async () => viewPayload(this.storedView(), origin),
       readFocus: async () => focusPayload(this.focusRow(grant.id), posts, origin),
       focusUnread: async () => isUnread(this.focusRow(grant.id)),
-      markSeen: async () => {
+      // Seen once delivered (APC 0.8): the exact pin the result carried, never a newer one dropped since.
+      markSeen: async (pinnedAt) => {
         const row = this.focusRow(grant.id);
-        if (!row || !isUnread(row)) return;
-        this.sql.exec("update agent_focus set seen_at = ? where grant_id = ?", new Date().toISOString(), grant.id);
+        if (!row || row.pinned_at !== pinnedAt || !isUnread(row)) return;
+        this.sql.exec("update agent_focus set seen_at = ? where grant_id = ? and pinned_at = ?", new Date().toISOString(), grant.id, pinnedAt);
         this.broadcast();
       },
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
       pageOpen: async () => (this.holds(grant.secret) ? this.pageOpen() : false),
+      waitSlot: this.waitSlots.for(grant.id),
+      signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: WAIT_CEILING_S,
     });
@@ -504,7 +519,11 @@ export class Feed extends DurableObject<Env> {
     await server.connect(transport);
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
-    return transport.handleRequest(new Request(request, { headers }));
+    try {
+      return await transport.handleRequest(new Request(request, { headers }));
+    } finally {
+      inflight.done();
+    }
   }
 
   /**
@@ -528,7 +547,7 @@ export class Feed extends DurableObject<Env> {
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grantId);
         const waits = name === "wait_for_focus";
         if (waits) {
-          this.waiting.add(grantId);
+          this.waiting.set(grantId, (this.waiting.get(grantId) ?? 0) + 1);
           this.broadcast();
         }
         let result: ToolResult;
@@ -536,7 +555,9 @@ export class Feed extends DurableObject<Env> {
           result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
         } finally {
           if (waits) {
-            this.waiting.delete(grantId);
+            const left = (this.waiting.get(grantId) ?? 1) - 1;
+            if (left > 0) this.waiting.set(grantId, left);
+            else this.waiting.delete(grantId);
             this.broadcast();
           }
         }
@@ -552,7 +573,7 @@ export class Feed extends DurableObject<Env> {
           this.broadcast({ type: "presence", event: presenceEvent({ grantId, tool, kind: "read", targets }) });
         }
         // Signals shares the view always (it has no switch), so attendance is the page itself.
-        result = attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen()));
+        result = attachThen(result, loopHinted(tool, result.structuredContent?.focus != null, this.pageOpen(), row?.pinned_at ?? null));
         // apc_link: at most once per session, the offer to show this agent as one with its other path.
         const offer = result.isError ? null : await this.links.offer(grantId, tool);
         return offer ? attachApcLink(result, offer) : result;

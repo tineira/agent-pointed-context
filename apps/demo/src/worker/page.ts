@@ -1,3 +1,5 @@
+import { THEN_PIN_WINDOW_MIN } from "@tineira/apc-protocol";
+
 /**
  * Whether a page of the person's is open, from its sockets alone. The page
  * sends "ping" every HEARTBEAT_MS over its WebSocket and the sandbox answers
@@ -38,10 +40,17 @@ export function attendance(shareView: boolean, pageOpen: () => boolean): boolean
   return shareView ? pageOpen() : null;
 }
 
-/** Whether a result carries the loop hint: a page is known open, and it is not a wait that returned no focus (that one ends the loop). */
-export function loopHinted(tool: string, focusReturned: boolean, attending: boolean | null): boolean {
+/**
+ * Whether a result carries the loop hint (APC 0.8, `thenApplies`): a page is known open, the grant was
+ * pinned lately (`lastPinnedAt`, read or unread), and it is not a wait that returned no focus (that one
+ * ends the loop).
+ */
+export function loopHinted(tool: string, focusReturned: boolean, attending: boolean | null, lastPinnedAt: string | null, now: number = Date.now()): boolean {
   const loopEnds = tool === "wait_for_focus" && !focusReturned;
   // Naming itself is not an answer to the person (TIN-356): nothing to wait after.
   if (tool === "set_agent_name") return false;
-  return !loopEnds && attending === true;
+  if (loopEnds || attending !== true || !lastPinnedAt) return false;
+  // The same rule as thenApplies in @tineira/apc-server, kept here so the page bundle (which reads HEARTBEAT_MS) pulls no server code.
+  const at = Date.parse(lastPinnedAt);
+  return Number.isFinite(at) && now - at <= THEN_PIN_WINDOW_MIN * 60_000;
 }

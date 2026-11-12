@@ -6,7 +6,7 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are 0.x pre-releases on npm's `next` dist-tag (never `latest` before the standard is 1.0), and their version follows the standard's: 0.7.x ships APC 0.7.
+The packages are 0.x pre-releases on npm's `next` dist-tag (never `latest` before the standard is 1.0), and their version follows the standard's: 0.8.x ships APC 0.8.
 
 ```sh
 npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
@@ -77,6 +77,8 @@ The person drops an agent's mark on a target. The server keeps one pin per grant
 
 One MCP server per request, for the grant in the URL. `registerApcTools` adds `get_current_view` and `wait_for_focus`, reading through the functions you give it; your own tools sit next to them. A revoked grant is answered 403 before anything else, whatever the method.
 
+Three of those functions keep the core's promises (APC 0.8). `markSeen(pinnedAt)` marks that exact pin seen, never a newer one: the tools call it only once the result is final, so a pin is never lost. `waitSlot` is the grant's one place for a wait: `MemoryWaitSlots` keeps it in memory, which is right when every request of the person runs in one process (as here, or in a Durable Object); on stateless functions keep a row per grant with the holder's token and when it claimed. `signal` ends a wait the client gave up on: the request's own, and `InflightCalls`', since a server that is new for every POST sees MCP's `notifications/cancelled` only in a POST of its own.
+
 <!-- include orders-app.ts#mcp -->
 
 On Cloudflare Workers, give the server `jsonSchemaValidator: new CfWorkerJsonSchemaValidator()` (from `@modelcontextprotocol/sdk/validation/cfworker`), and keep the state in a Durable Object: `sqlKv(ctx.storage.sql)` gives `DockConsent` and `ApcLinks` their table.
@@ -88,7 +90,7 @@ This is where APC rides on your results. Every tool, the two APC tools included,
 - ends the call `revoked` if its grant was revoked, before or while it ran;
 - puts `attention` on the result while the grant's pin is unread;
 - publishes presence to the person's page, naming what a read touched;
-- puts `then` on the result while a page of the person's is open, but never on a wait that came back empty;
+- puts `then` on the result while a page of the person's is open and the grant was pinned in the last 30 minutes (`thenApplies`), but never on a wait that came back empty;
 - carries an `apc_link` offer, once per session, when the same agent is connected both ways.
 
 <!-- include orders-app.ts#around -->
@@ -159,6 +161,7 @@ Localizing changes no protocol text, the tools or conformance: [Conformance](/do
 - `get_current_view` and `wait_for_focus` are registered on every grant.
 - Every tool runs inside the wrapper: revoke check, `attention`, presence, `then`.
 - The agent bar is on every page, with Revoke; on a phone it stays in the page.
-- Revoke answers 403 `revoked` to every method; an unknown grant 404.
+- Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token); an unknown grant 404.
+- `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
 - Dock: every drop goes to the server; consent is the server's nonce.
 - The conformance suite passes, on each profile you offer.

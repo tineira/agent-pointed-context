@@ -5,7 +5,7 @@
   "name": "apc-dock",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   // "/" is the landing, or the dock for a visitor who has one (TIN-420): the Worker decides.
   // /media/* (the landing's clip) runs the Worker too, which answers Range requests: the asset layer does not (TIN-623).
   "assets": {

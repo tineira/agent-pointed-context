@@ -8,7 +8,7 @@ This is the contract an app, an agent and a dock share in Agent Pointed Context,
 
 - **App**: a web app that speaks APC: it has a page the person uses and an MCP endpoint agents call.
 - **Agent**: the person's own AI agent, an MCP client (Claude, ChatGPT, Cursor, Grok and others).
-- **Grant**: one agent's access to one app: a secret MCP URL (whoever holds it holds the grant), with its own pin and name. A grant holds per agent, never per app.
+- **Grant**: one agent's access to one app, with its own pin and name. A grant holds per agent, never per app. How the agent proves it holds the grant is the app's binding: in the reference apps a secret MCP URL (whoever holds it holds the grant); with OAuth a bearer token on a shared URL (see [the Direct profile](#the-direct-profile)).
 - **Hub**: the server side of a **dock**, the window where the person keeps their agents. In the Dock profile the hub holds the grants and relays between agents and apps. The reference hub is at `apc.tineira.com`.
 - **The person's page**: the app's page, open in a browser (or a desktop or phone app).
 - **Profile**: how agents reach an app: **Direct** or **Dock**. An app offers one or both.
@@ -51,7 +51,9 @@ After each successful tool call, the app publishes a `PresenceEvent` to the pers
 
 ### `get_current_view`
 
-Takes no arguments. Returns `{ view, focus }`: the view (or null) and the focus (or null). Reading the focus marks it seen.
+Takes no arguments. Returns `{ view, focus }`: the view (or null) and the focus (or null). Returning the focus marks it seen, once the result is final (see [seen once delivered](#seen-once-delivered)).
+
+When the app cannot answer just now, it still answers in this shape, `{ view: null, focus: null, note }`, never a tool error or a shape of its own. A check on one item of the answer that cannot run hides that item and the rest answers; only a failure of the grant itself (its auth) fails the read.
 
 ### `wait_for_focus` and `then`
 
@@ -59,14 +61,19 @@ Takes no arguments. Returns `{ view, focus }`: the view (or null) and the focus 
 
 - A pin dropped during the wait is returned, marked seen: `{ focus, timed_out: false }`.
 - With none, it returns `focus: null` with a `note`, and `timed_out: true` at the timeout, or `timed_out: false, page_open: false` as soon as the app knows the person's page is closed. `page_open` is left out while the person does not share their view (an app without that switch always shares).
+- **One wait per grant.** At most one wait of a grant delivers. A new wait takes over: the one it replaces ends at its next check with `focus: null, timed_out: false` and a note, and delivers and marks nothing. A new wait within 2 seconds of one still running (`WAIT_CLAIM_GAP_S`) is refused instead, with `focus: null, timed_out: false, retry_after_s` and a note. A wait whose request the client cancels stops and frees its place at once: MCP's `notifications/cancelled` (to a stateless server it comes in a POST of its own, so the app keeps its calls in flight per grant to find the one it names: `InflightCalls`), and an HTTP abort where the host reports one.
 
-`then` is the loop hint: a key on a result, placed like `attention`, present while a page of the person's is open (and they share their view). It tells the agent to call `wait_for_focus` after answering. It **MUST NOT** be on a `wait_for_focus` result that came back with no focus: that result ends the loop.
+`then` is the loop hint: a key on a result, placed like `attention`, present while a page of the person's is open (and they share their view) **and** the grant was pinned in the last 30 minutes, read or unread (`THEN_PIN_WINDOW_MIN`; an app may set its own window). An open page with no recent pin gives no `then`, so an agent does not wait after every answer. It tells the agent to call `wait_for_focus` after answering, in the background if its client can, and otherwise to keep the wait short and never chain waits. It **MUST NOT** be on a `wait_for_focus` result that came back with no focus: that result ends the loop.
+
+### Seen once delivered
+
+Checking for a pin, or polling for one, never marks it seen: only returning it does. An app marks a pin seen only once the result that carries it is final (in a wait, after the wait gave its place up and checked once more that its request was not cancelled), and marks that exact pin, by its `pinned_at`, never a newer one dropped meanwhile. It returns the result whether or not the mark succeeds. So a pin may be delivered twice, and is never lost to a wait that was taken over or cancelled, or to a newer pin. MCP has no acknowledgement: a result lost after the app sent it, with no abort the app could see, cannot be told apart, and that pin is marked seen.
 
 ### Revoke from the app
 
 Every agent in the app's agent bar, Direct or Dock, has Revoke. It holds in the app alone and at once: the app calls nobody, so it works with the hub down.
 
-- From then on every request to the grant's MCP URL, whatever the method, **MUST** be answered HTTP 403 with `{ error: "revoked", revoked_by, revoked_at, message }` (`RevokedAnswer`), `revoked_by` being the app's host. An unknown or expired grant answers 404, so a holder can tell "taken back" from "gone".
+- From then on every request with the grant, whatever the method, **MUST** be answered with `{ error: "revoked", revoked_by, revoked_at, message }` (`RevokedAnswer`), `revoked_by` being the app's host. The HTTP status is the binding's: 403 with a secret URL, 401 with `WWW-Authenticate: Bearer error="invalid_token"` with a bearer token. An unknown or expired grant answers without a `RevokedAnswer` (404 with a secret URL), so a holder can tell "taken back" from "gone".
 - A call already running when the grant is revoked **MUST** end as a tool error with the same answer and no app data. Whether a grant was revoked is told by the grant itself (its secret, and the hash the app keeps of it), never by a grant id a later grant may reuse.
 - A revoked grant never works again. The person lets the agent back with a new grant: a new MCP URL (Direct), or a new drop with consent in the app and in the dock (Dock).
 
@@ -81,9 +88,12 @@ The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims
 
 ## The Direct profile
 
-The agent connects to the app's own MCP URL.
+The agent connects to the app's own MCP endpoint.
 
-- **A grant per agent.** The person makes an agent in the app's page; the app makes a grant with a secret of 128 random bits, which is the last segment of the agent's MCP URL (`newDirectGrant` in `@tineira/apc-server`).
+- **A grant per agent, whatever the auth.** The standard does not fix how the agent authenticates. A grant **MUST** have a stable id per agent connection (pins, views, presence and `apc_link` are keyed by it), be revocable from the app alone (ending everything that could bring it back without the person: with OAuth, its refresh tokens and authorization too) and checked before and after each tool call, tell revoked apart from expired or unknown, and be trimmed per grant (`GrantRequirement`). Any binding that meets that will do.
+- **The secret URL** (the reference apps): the person makes an agent in the app's page; the app makes a grant with a secret of 128 random bits, which is the last segment of the agent's MCP URL (`newDirectGrant` in `@tineira/apc-server`).
+- **OAuth 2.1**: every grant shares one MCP URL, and the bearer token names the grant. A revoked token answers 401 with the `RevokedAnswer` body, so the client does not just authorize again.
+- **Hosts with no long-lived process** (stateless functions and a database) still bound `wait_for_focus` by their function's time limit (their own ceiling for `timeout_s`), tell a closed page from a heartbeat the page sends, and check the grant before and after each tool call.
 - **The agent list**: where the person makes and names agents and copies the URL, or a prompt that asks the agent to add it (`<apc-direct-agents>` in `@tineira/apc-web`). An agent names itself on `initialize` (`clientInfo.name`) until the person renames it.
 - **The agent bar** shows Direct agents in full, always: the app is the only place the person sees and points them.
 
@@ -137,7 +147,7 @@ An app that offers both profiles shows the same agent on both paths as one.
 Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`, from that origin, as JSON of at most 16 KiB:
 
 ```json
-{ "name": "Orders", "standard": "0.7.0", "origin": "https://orders.example",
+{ "name": "Orders", "standard": "0.8.0", "origin": "https://orders.example",
   "profiles": ["direct", "dock"], "mcp": { "path": "/mcp/" },
   "direct": { "connect": "https://orders.example/agents" } }
 ```
@@ -145,8 +155,9 @@ Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`,
 - `standard`: the version of this standard it implements.
 - `origin`: exactly the origin it is served from; a file that names another is refused.
 - `profiles`: `"direct"`, `"dock"` or both for an app; `"hub"` alone for a hub, which then also gives `dock: { pair, confirm }`. A reader ignores words and keys it does not know.
-- `mcp.path`: every grant's MCP URL on the origin starts with `origin + path`. A hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it.
+- `mcp.path`: every grant's MCP URL on the origin starts with `origin + path`. A hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it. A Direct app whose grants share one URL (a bearer token names the grant) may serve it at `mcp.path` itself, or without its last `/` (`/api/mcp` for `"/api/mcp/"`).
 - `direct.connect` (with `"direct"`): the page on the same origin where the person connects an agent directly.
+- `direct.auth` and `direct.resource_metadata` (optional, information only): how agents authenticate (`"url"`, `"oauth"`) and, with OAuth, the protected-resource metadata URL on the origin. A reader never requires them.
 
 A dock agent dropped on an app that offers only Direct is answered, never lost: the page tells the person that it connects agents directly, with its connect page (`directOnlyNote`), and pairs nothing. A page that cannot read its own `apc.json` pairs nothing either.
 

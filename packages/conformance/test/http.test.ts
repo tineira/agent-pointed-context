@@ -224,6 +224,56 @@ test("the CLI never prints a grant's secret: a 500 echoing it, or an invalid --g
   }
 });
 
+test("an app whose grants share one URL and a bearer token passes with --bearer, and the token is never shown (APC 0.8)", async () => {
+  const LIVE = "live-token-0123456789abcdef";
+  const GONE = "gone-token-0123456789abcdef";
+  const SHARED = `${ORIGIN}/api/mcp`;
+  const seen: string[] = [];
+  const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+  const view = { screen: "overview", params: {}, selection: null, app_url: `${ORIGIN}/`, updated_at: "2026-11-12T10:00:00.000Z", age_seconds: 3, stale: false, next: null };
+  const fetch = async (request: Request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/.well-known/apc.json") return json({ name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/api/mcp/" }, direct: { connect: `${ORIGIN}/agents`, auth: "oauth" } });
+    if (url.href !== SHARED) return json({ error: "not_found" }, 404);
+    const auth = request.headers.get("authorization") ?? "";
+    seen.push(auth);
+    if (auth === `Bearer ${GONE}`) return json(revokedAnswer("app.example", "2026-11-12T10:00:00.000Z"), 401, { "www-authenticate": 'Bearer error="invalid_token"' });
+    if (auth !== `Bearer ${LIVE}`) return json({ error: "invalid_token" }, 401, { "www-authenticate": 'Bearer error="invalid_token"' });
+    const rpc = (await request.json()) as { id: number; method: string; params: { name?: string } };
+    const reply = (result: unknown) => json({ jsonrpc: "2.0", id: rpc.id, result });
+    if (rpc.method === "initialize") return reply({ protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } });
+    if (rpc.method === "tools/list")
+      return reply({ tools: [{ name: "get_current_view", inputSchema: { type: "object", properties: {} } }, { name: "wait_for_focus", inputSchema: { type: "object", properties: { timeout_s: { type: "integer", minimum: 1 } } } }] });
+    const tool = (payload: Record<string, unknown>) => ({ content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload });
+    if (rpc.params.name === "get_current_view") return reply(tool({ view, focus: null }));
+    await new Promise((r) => setTimeout(r, 1000));
+    return reply(tool({ focus: null, timed_out: true, note: "No pin came." }));
+  };
+  const report = await runHttpConformance({ origin: ORIGIN, grant: SHARED, bearer: LIVE, revoked: SHARED, revokedBearer: GONE, fetch });
+  assert.equal(report.failed, 0, JSON.stringify(report.results.filter((r) => r.status === "fail"), null, 2));
+  assert.equal(status(report, "grant-declared"), "pass", "the shared URL is mcp.path itself");
+  assert.equal(status(report, "revoked-answers"), "pass", "revoked is 401 with the RevokedAnswer body");
+  assert.equal(status(report, "grant-unknown-404"), "skip");
+  assert.ok(seen.includes(`Bearer ${LIVE}`) && seen.includes(`Bearer ${GONE}`), "each grant's token went with its requests");
+  const all = JSON.stringify(report);
+  assert.ok(!all.includes(LIVE) && !all.includes(GONE), "no token in the report");
+
+  // An app that echoes the credential back in a failing answer: no part of the token reaches the report, even cut at 200 characters.
+  const echoing = async (request: Request) => {
+    if (new URL(request.url).pathname === "/.well-known/apc.json") return fetch(request);
+    return json({ error: "bad", seen: `${"x".repeat(170)}${request.headers.get("authorization")}` }, 500);
+  };
+  const leaky = await runHttpConformance({ origin: ORIGIN, grant: SHARED, bearer: LIVE, fetch: echoing });
+  const leakyText = JSON.stringify(leaky);
+  assert.ok(leaky.failed > 0);
+  assert.ok(!leakyText.includes(LIVE.slice(0, 8)), "not even the start of the token");
+
+  // A secret-URL app is still held to 403: a 401 there fails.
+  const strict = await run({ revokedStatus: 401 });
+  assert.equal(status(strict, "revoked-answers"), "fail");
+  await assert.rejects(runHttpConformance({ origin: ORIGIN, grant: SHARED, bearer: "two words", fetch }), HttpConformanceUsageError);
+});
+
 test("a newer patch of the checks' own standard passes with a note; a newer minor fails", async () => {
   const [major, minor, patch] = APC_STANDARD_VERSION.split(".").map(Number) as [number, number, number];
   const manifest = (standard: string) => ({ name: "Fake", standard, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/?connect` } });

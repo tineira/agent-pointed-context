@@ -12,8 +12,8 @@ On an app (Direct):
 
 | Tool | |
 |---|---|
-| `get_current_view` | the person's screen as identifiers, and the focus if they pointed you; reading the focus marks it seen |
-| `wait_for_focus({ timeout_s })` | holds until the person points you, or the timeout, or they leave the page |
+| `get_current_view` | the person's screen as identifiers, and the focus if they pointed you; getting the focus marks it seen |
+| `wait_for_focus({ timeout_s })` | holds until the person points you, or the timeout, or they leave the page; one at a time (a newer wait takes over, and one started right after another is refused with `retry_after_s`) |
 | the app's own tools | what the focus's `next` and `next_args` name: make exactly that call |
 | `apc_link({ code })` | only when a result on your other connection to this app carried `apc_link` |
 
@@ -30,7 +30,7 @@ On a dock (Dock), one connection for every app the person paired:
 ## Keys on results
 
 - **`attention`**: the person just pointed you at something. Call `get_current_view` to read it; that marks it seen.
-- **`then`**: the person is on the page. After you answer, call `wait_for_focus`; when it times out, or says the person left, go back to them. Without `then`, do not wait.
+- **`then`**: the person pinned you in the last half hour and is on the page. After you answer, call `wait_for_focus`, in the background if your client can (a background subagent, say); otherwise keep it short and never chain waits. When it times out, or says the person left, go back to them. Without `then`, do not wait.
 - **`apc_link`**: you reach this app two ways (directly and through a dock). Send the code back on the other connection, as its note says, so the person sees one agent. Optional; it grants nothing.
 
 The keys are top-level in the structured result and in the JSON text, so a model that sees only text sees them too.

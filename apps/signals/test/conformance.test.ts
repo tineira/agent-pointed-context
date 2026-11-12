@@ -126,9 +126,14 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
 
 standInHub(null);
 for (const profile of ["direct", "dock"] as const) {
-  // Both profiles (TIN-578); the apc_link checks once, with the Direct run.
-  const { app } = await signals(profile, { link: profile === "direct" });
+  // Both profiles (TIN-578).
+  const { app } = await signals(profile);
   for (const check of apcConformance(app)) test(check.name, check.run);
+}
+// The apc_link checks once, on a feed of their own: a feed holds at most 20 Direct agents, and the core checks use most of one.
+{
+  const { app } = await signals("direct", { link: true });
+  for (const check of apcConformance(app).filter((c) => c.name.includes("(apc_link)"))) test(check.name, check.run);
 }
 
 test("a Signals that offers only the dock makes no Direct agent", async () => {
