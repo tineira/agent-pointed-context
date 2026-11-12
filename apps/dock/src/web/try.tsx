@@ -1,11 +1,13 @@
 /**
  * /try (TIN-627): the demo, for people using an AI agent. Four steps that do not overlap (open an app and allow
- * the agent; then point and ask), the one button to the dock, Pulse and Signals each by their own link (Pulse also
- * for Windows), the question to start with standing out, and the browser extension and Direct as quieter notes.
+ * the agent; then point and ask), the one button to the web dock with Dock for Windows beside it, Pulse and Signals
+ * each by their own link (Pulse also for Windows), the question to start with standing out, and the browser
+ * extension and Direct as quieter notes.
  */
 import { SiteFooter, SiteHeader, Steps } from "./site.tsx";
 import { DOCK } from "./site-pages.ts";
-import { APPS, DESKTOP } from "./setup.tsx";
+import { APPS, DESKTOP, DESKTOP_SHELL, DOCK_DESKTOP } from "./setup.tsx";
+import { downloadPlatform } from "./download-platform.ts";
 
 const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
 /** A live Direct app (TIN-578): Signals, with its Connect panel open. */
@@ -15,7 +17,7 @@ const TRY_POST = `${SIGNALS.url}?post=post_013`;
 const TRY_CUSTOMER = PULSE.url.replace(/overview$/, "customers/cus_0048");
 
 const TRY_STEPS = [
-  { title: "Your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie, nothing to install. On another computer, link it from the dock's menu, and your agent stays connected once." },
+  { title: "Your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie. Use it in the browser with nothing to install, or as an app for Windows. On another computer, link it from the dock's menu, and your agent stays connected once." },
   { title: "Connect your agent", text: "Add one MCP server to Claude, ChatGPT, Cursor or Grok. That single connection is all it needs." },
   { title: "Open Pulse or Signals", text: "Open one from this page, below. The first time your agent arrives in it, allow it there, then in your dock." },
   { title: "Point and ask", text: "Drag your agent from the dock onto a bar, a customer or a headline, and ask about \"this\". Point at something in the other app and ask how the two connect." },
@@ -28,9 +30,26 @@ function Cta() {
       // A compact dock beside this page, so Pulse or Signals opens from here next to it.
       if (window.open(DOCK, "apc-dock", "popup,width=420,height=780,left=0,top=0")) e.preventDefault();
     }}>
-      Open your dock
+      Open the web dock
     </a>
   );
+}
+
+/**
+ * Dock for Windows beside the web dock, by the same rule as the dock's own menu (downloadPlatform): a second,
+ * quieter button on Windows, with its unsigned note; on another computer one line that still links it, for a
+ * visitor who will install it on a Windows PC; nothing on a phone. Mac and Linux are a note, never a dead button.
+ */
+function DockForWindows() {
+  const platform = downloadPlatform(navigator.userAgent, DESKTOP_SHELL);
+  return platform.dock ? <a className="landing-cta big ghost" href={DOCK_DESKTOP.url}>Get the dock for Windows</a> : null;
+}
+
+function DockNote() {
+  const platform = downloadPlatform(navigator.userAgent, DESKTOP_SHELL);
+  if (platform.dock) return <p className="small-note">Dock for Windows is unsigned for now: Windows asks once (More info, then Run anyway). Mac and Linux later.</p>;
+  if (platform.later) return <p className="small-note">Also as an app: <a href={DOCK_DESKTOP.url}>Dock for Windows</a>. Mac and Linux later.</p>;
+  return null;
 }
 
 export function TryPage() {
@@ -43,8 +62,12 @@ export function TryPage() {
         <p className="landing-title">Your agent, two demo apps, one drag</p>
         <p className="landing-sub">You need an agent that can add a remote MCP server. The demo is free and its data is made up.</p>
         <Steps steps={TRY_STEPS} />
-        <div className="row landing-try-cta">
-          <Cta />
+        <div className="landing-try-cta">
+          <div className="row">
+            <Cta />
+            <DockForWindows />
+          </div>
+          <DockNote />
         </div>
         <div className="landing-cards">
           <div className="landing-card">

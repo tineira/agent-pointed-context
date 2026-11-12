@@ -300,6 +300,8 @@ main.landing { max-width: 1000px; margin: 0 auto; padding: 20px 16px 48px; gap: 
 .landing-steps p { font-size: 14px; margin-top: 4px; }
 .landing-n { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); font-weight: 600; font-size: 13px; }
 .landing-try-cta { margin: 20px 0; }
+.landing-try-cta .row { gap: 12px; }
+.landing-try-cta .small-note { margin: 8px 0 0; color: var(--muted); }
 .landing-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 .landing-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 .landing-card .row.small { gap: 14px; font-size: 14px; }

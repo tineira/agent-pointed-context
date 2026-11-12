@@ -168,8 +168,13 @@ test("no footer repeats a link of its page", () => {
 });
 
 test("Try it opens the dock once and links each demo app; the dock does not launch them", () => {
-  assert.equal(tryPage.match(/Open your dock/g)?.length, 1, "only the button says it; the step and the top bar say \"Your dock\"");
+  assert.equal(tryPage.match(/Open the web dock/g)?.length, 1, "only the button says it; the step and the top bar say \"Your dock\"");
   assert.equal(tryPage.match(/<Cta \/>/g)?.length, 1, "one button");
+  // Dock for Windows beside it, by the dock menu's rule: a button on Windows, a line elsewhere, Mac and Linux a note.
+  assert.match(tryPage, /<Cta \/>\s*<DockForWindows \/>/);
+  assert.match(tryPage, /platform\.dock \? <a className="landing-cta big ghost" href=\{DOCK_DESKTOP\.url\}>Get the dock for Windows<\/a>/);
+  assert.match(tryPage, /if \(platform\.later\) return <p className="small-note">Also as an app: <a href=\{DOCK_DESKTOP\.url\}>Dock for Windows<\/a>\. Mac and Linux later\.<\/p>/);
+  assert.doesNotMatch(tryPage, /disabled/, "Mac and Linux are a note, never a dead button");
   assert.match(tryPage, /href=\{PULSE\.url/);
   assert.match(tryPage, /href=\{SIGNALS\.url\}/);
   assert.match(tryPage, /Download for \{d\.label\}/);

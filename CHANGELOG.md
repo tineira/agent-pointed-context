@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### /try offers Dock for Windows beside the web dock (2026-11-12)
+
+- **On /try, "Open the web dock" has "Get the dock for Windows" beside it on Windows, and another computer gets a line that still links it; Mac and Linux are a note, "Mac and Linux later".** Before, Dock for Windows was offered only inside the dock (its menu and first-run steps). The "Your dock" step says it works in the browser or as an app for Windows. (`apps/dock/src/web/try.tsx`, `apps/dock/src/web/dock.css`, `apps/dock/test/landing.test.ts`)
+
 ### One dock on several computers: link another computer with a code, and your agent keeps one connection (2026-11-12, TIN-838)
 
 - **A dock opens on every computer you link to it, so an agent connects once and gets your drops from any of them.** The dock's "⋯" menu has Link another computer (a code that works once and for 2 minutes, with its QR and link), Join a dock on another computer, and Computers on this dock with Remove; the new computer joins only after Allow on a computer already linked, and each one gets its own secret, so removing one leaves the others. Docks made before keep opening with their cookie. (`apps/dock/src/worker/devices.ts`, `apps/dock/src/worker/join-codes.ts`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/web/computers.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/wrangler.jsonc`)
