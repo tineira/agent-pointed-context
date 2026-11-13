@@ -27,7 +27,7 @@ It does not check how the page draws presence, the agent bar's two-click Revoke 
 
 ## Run it from the command line
 
-`@tineira/apc-conformance` has a command, `apc-conformance`, that checks a live app over HTTP with no code (the package is a 0.x pre-release on npm's `next` dist-tag; its first publish is pending):
+`@tineira/apc-conformance` has a command, `apc-conformance`, that checks a live app over HTTP with no code (the package is a 0.x pre-release on npm; `next` carries the newest release):
 
 ```sh
 npx @tineira/apc-conformance@next https://orders.example --grant https://orders.example/mcp/<secret>

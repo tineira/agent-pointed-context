@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Docs catch-up (2026-11-13, TIN-881)
+
+- **The docs no longer say the first npm publish is pending, and the overview counts four packages.** The integrate and conformance pages now say the packages are on npm with `next` on the newest release. (`apps/dock/src/docs/pages/integrate.md`, `overview.md`, `conformance.md`)
+
 ### Surplus (PFA) is a verified app in the dock (2026-11-12, TIN-850)
 
 - **Surplus (PFA, https://pfa.tineira.com) is a verified app in the dock, so its tools keep their annotations and its results are not marked untrusted.** It pairs without the unverified-app warning and is named by its own name, not its host. (`apps/dock/wrangler.jsonc`)

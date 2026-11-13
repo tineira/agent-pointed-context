@@ -6,7 +6,7 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are 0.x pre-releases on npm (`next`, and `latest` follows it), and their version follows the standard's: 0.9.x ships APC 0.9.
+The packages are 0.x pre-releases on npm: the `next` dist-tag carries the newest release, and `latest` can trail it by one while the standard is 0.x. Their version follows the standard's: 0.9.x ships APC 0.9.
 
 ```sh
 npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
@@ -14,7 +14,7 @@ npm i @tineira/apc-protocol@next @tineira/apc-web@next         # the page
 npm i -D @tineira/apc-conformance@next                         # the tests
 ```
 
-The first publish is pending: until the packages appear on npm, these lines are what you will run, and meanwhile the sources are in the repo, [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
+The packages are on npm, so these lines work as written. The sources are also in the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
 
 They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-web` have no Node imports (`@tineira/apc-web` is browser code for any bundler); `@tineira/apc-server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@tineira/apc-conformance` needs Node 22.15+.
 
