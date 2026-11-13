@@ -54,9 +54,10 @@ export interface Env {
   /** Secret (wrangler secret put ANALYTICS_SALT): the HMAC key for session keys and IP hashes. */
   ANALYTICS_SALT?: string;
   /**
-   * The pairing code (APC 0.9, TIN-859). "when_sent" (the default): a pairing that carries a code needs it to be
-   * approved, and one without (an app from before 0.9) keeps the old path, counted in MCP_SESSIONS as
-   * "pair_codeless". "required": a pairing without a code is refused.
+   * The pairing code (APC 0.9, TIN-859). "required" (the default, and anything but "when_sent", so a deploy that
+   * misses the var fails closed, TIN-885): a pairing without a code is refused. "when_sent": a pairing that carries
+   * a code needs it to be approved, and one without (an app from before 0.9) keeps the old path, counted in
+   * MCP_SESSIONS as "pair_codeless".
    */
   PAIRING_CODE?: string;
 }
@@ -301,6 +302,10 @@ export class Hub extends DurableObject<Env> {
   /** Whether apps outside APP_ORIGINS may pair, and be called, now: the operator's kill switch (TIN-581). */
   private unverifiedOpen(): boolean {
     return unverifiedOpen(this.env.UNVERIFIED_PAIRING);
+  }
+  /** Whether a pairing without a code (an app from before 0.9) is refused: unless PAIRING_CODE is "when_sent" (TIN-885). */
+  private codeRequired(): boolean {
+    return this.env.PAIRING_CODE !== "when_sent";
   }
   /** Whether the person approved the warning for this app's domain in this dock (TIN-581): it is shown once per domain. */
   private warned(origin: string): boolean {
@@ -1040,8 +1045,8 @@ export class Hub extends DurableObject<Env> {
    */
   private checkCode(p: Pairing, typed: unknown): { ok: false; error: string; attempts_left?: number } | null {
     const row = this.sql.exec<{ pairing_code: string | null; code_attempts: number | null }>("select pairing_code, code_attempts from pairings where id = ? and status = 'pending'", p.id).toArray()[0];
-    // No code: an app from before 0.9, approved as before while PAIRING_CODE is when_sent; never once it is required.
-    if (!row?.pairing_code) return this.env.PAIRING_CODE === "required" ? { ok: false, error: "pairing_code_required" } : null;
+    // No code: an app from before 0.9, approved as before while PAIRING_CODE is when_sent; never otherwise.
+    if (!row?.pairing_code) return this.codeRequired() ? { ok: false, error: "pairing_code_required" } : null;
     if (typed === undefined || typed === null || typed === "") return { ok: false, error: "pairing_code_required" };
     const given = normalizePairingCode(typed);
     if (!given) return { ok: false, error: "invalid_pairing_code" };
@@ -1230,7 +1235,11 @@ export class Hub extends DurableObject<Env> {
     if (!name) return { ok: false, error: "app_not_allowed" };
     // Only an absent key is a pairing without a code (an app from before 0.9); present, it must be a code.
     const codeless = b.pairing_code === undefined;
-    if (codeless && this.env.PAIRING_CODE === "required") return { ok: false, error: "pairing_code_required" };
+    if (codeless && this.codeRequired()) {
+      // Counted, so the operator sees which older apps still try (TIN-885). Before any check of the ticket or the origin.
+      this.countCodeless(origin, "unvalidated", "pair_codeless_refused");
+      return { ok: false, error: "pairing_code_required" };
+    }
     const code = codeless ? null : normalizePairingCode(b.pairing_code);
     if (!codeless && !code) return { ok: false, error: "invalid_pairing_code" };
     // Only now is the ticket read, and spent: synchronously, before anything is awaited.
@@ -1283,7 +1292,7 @@ export class Hub extends DurableObject<Env> {
     );
     this.broadcast();
     // An app that sent no code, counted for the operator's switch to "required" (TIN-859): no ticket, no URL.
-    if (!code) this.countCodeless(origin, verdict.verified);
+    if (!code) this.countCodeless(origin, verdict.verified ? "verified" : "unverified", "pair_codeless");
     // The agent's mark, so the app's first pin already shows who it is.
     const agent = this.agent(t.agent_id)!;
     // The alarm ends the request on time if nobody decides it (TIN-581).
@@ -1291,12 +1300,17 @@ export class Hub extends DurableObject<Env> {
     return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}) };
   }
 
-  /** One Analytics Engine point per pairing without a code (APC 0.9): the app's host and whether it is verified. A failure here never fails the pairing. */
-  private countCodeless(origin: string, verified: boolean): void {
+  /**
+   * One Analytics Engine point per pairing without a code (APC 0.9): "pair_codeless" when it went through
+   * (PAIRING_CODE when_sent), "pair_codeless_refused" when it was refused (TIN-885), with the app's host and whether
+   * it is verified ("unvalidated" when refused: the origin is what the app claimed, before any check). A failure here
+   * never fails the pairing.
+   */
+  private countCodeless(origin: string, trust: "verified" | "unverified" | "unvalidated", event: "pair_codeless" | "pair_codeless_refused"): void {
     const { MCP_SESSIONS, ANALYTICS_SALT } = this.env;
     if (!MCP_SESSIONS || !ANALYTICS_SALT) return;
     try {
-      MCP_SESSIONS.writeDataPoint({ indexes: ["pair_codeless"], blobs: ["pair_codeless", host(origin), verified ? "verified" : "unverified", "dock"], doubles: [1] });
+      MCP_SESSIONS.writeDataPoint({ indexes: [event], blobs: [event, host(origin).slice(0, 200), trust, "dock"], doubles: [1] });
     } catch {
       // analytics only
     }
