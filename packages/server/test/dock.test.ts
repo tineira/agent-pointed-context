@@ -248,6 +248,13 @@ test("M7: a hostile secretOf, a trickling body and a bad origin config never cha
   assert.ok(Date.now() - started < 2000);
   assert.equal(cancelled, true, "the body is cancelled");
   assert.equal(called.length, 0);
+  // A bodyDeadlineMs that is not a finite positive timer value falls back to the default, never to "no deadline".
+  for (const bodyDeadlineMs of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0, 2 ** 31]) {
+    const response = await handleDockGiveBack(json({ mcp_url: `${ORIGIN}/mcp/${SECRET}` }), { origin: ORIGIN, bodyDeadlineMs, endGrantBySecretHash: (h: string) => void called.push(h) });
+    await same(response);
+  }
+  assert.equal(called.length, 5, "each well-formed give-back still reached the store");
+  called.length = 0;
   // The app's own origin is configuration: a bad one throws whatever the request.
   for (const origin of ["not a url", "https://orders.test/path", ""]) {
     await assert.rejects(handleDockGiveBack(json({ mcp_url: `${ORIGIN}/mcp/${SECRET}` }), { origin, endGrantBySecretHash: () => {} }), TypeError, origin);
@@ -419,27 +426,19 @@ test("a request method without an id is another method, never a notification: a 
   assert.deepEqual(dockGrantGate("handoff", notify("notifications/cancelled"), GATE).answer, { kind: "ignored" });
 });
 
-test("a dock grant's answer is final: attention, then and apc_link leave it unchanged", async () => {
-  const { attachApcLink, attachAttention, attachThen, isDockGrantAnswer, toolError, toolResult } = await import("../src/index.ts");
+test("the attach helpers decorate any result, ordinary or not: gating before the wrapper is the app's job", async () => {
+  const { attachAttention, attachThen, toolError, toolResult } = await import("../src/index.ts");
   const attention = { focus: { kind: "order", id: "o_1", part: null, params: null, app_url: "https://orders.test/o/1", pinned_at: "2026-11-13T10:00:00.000Z" }, note: "n" } as unknown as Parameters<typeof attachAttention>[1];
-  const offer = { url: "https://apc.tineira.com/link/x" } as unknown as Parameters<typeof attachApcLink>[1];
-  const answers = [
-    dockGrantToolResult("handoff", "list_orders")!,
-    dockGrantToolResult("dormant", "list_orders")!,
-    dockGrantToolResult("dormant", "get_current_view")!,
-    dockGrantToolResult("dormant", "wait_for_focus")!,
-    { content: [{ type: "text" as const, text: JSON.stringify({ error: "pairing", message: PAIRING_MESSAGE }) }], isError: true },
-  ];
-  for (const answer of answers) {
-    assert.equal(isDockGrantAnswer(answer), true);
-    assert.deepEqual(attachThen(attachApcLink(attachAttention(answer, attention), offer), true), answer);
-  }
-  // Ordinary results and errors still carry them.
   for (const plain of [toolResult({ rows: [1] }), toolError("not_found", "no such order"), toolResult({ view: null, focus: null })]) {
-    assert.equal(isDockGrantAnswer(plain), false);
     const decorated = attachThen(attachAttention(plain, attention), true);
     assert.ok("attention" in decorated.structuredContent! && "then" in decorated.structuredContent!);
   }
+  // A hub relaying a verified app's idle error still adds its own envelope: no shape-based skipping.
+  const relayed = attachAttention(toolError("idle", "Away."), attention);
+  assert.ok("attention" in relayed.structuredContent!);
+  const index = await import("../src/index.ts");
+  assert.equal("isDockGrantAnswer" in index, false);
+  assert.equal("TOOL_ERROR_JSON_SCHEMA" in index || "TOOL_ERROR_OUTPUT_SHAPE" in index, false);
 });
 
 test("dockGrantToolResult: the same answers inside a tool handler, and a throw for states answered before the transport", () => {
