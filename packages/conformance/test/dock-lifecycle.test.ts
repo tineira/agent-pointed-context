@@ -51,6 +51,8 @@ const allowed: Array<[string, FixtureOptions, string[], RegExp?]> = [
   ["an app whose T_connect (30 s) is shorter than its T_idle (60 s)", { connectMs: 30_000 }, ["T_connect", "precedence", "stored expiry", "the answer table: dormant"]],
   ["an app that redirects a host it does not serve to its own origin", { unknownHost: "redirect" }, ["M6:"], /not checked: the request to https:\/\/apc-conformance-internal\.example.*HTTP 308/],
   ["an app behind a proxy that answers 502 for a host it does not serve", { unknownHost: "bad_gateway" }, ["M6:"], /not checked: the request to https:\/\/apc-conformance-internal\.example.*HTTP 502/],
+  ["an app whose Allow carries only the consent and the ticket (hub and agent bound to the consent)", { hubBoundToConsent: true, allowNoAgent: true }, ["M1:", "M6:"]],
+  ["an adapter whose Cancel body hands out grants paired beforehand", { cancelPrepaired: true }, ["M6:"]],
 ];
 for (const [what, options, parts, note] of allowed) {
   test(`${what} passes`, async () => {
@@ -109,7 +111,7 @@ test("without app.fetch (a deployed app), M6 leaves the request to another host 
     const { fetch: _fetch, ...deployed } = adapter;
     const check = named(apcConformance(deployed), "M6:");
     await check.run();
-    assert.match(check.note ?? "", /not checked: the request to https:\/\/apc-conformance-internal\.example.*gives no fetch/);
+    assert.match(check.note ?? "", /not checked: the request to https:\/\/apc-conformance-internal\.example with its own host as Origin \(no answer \(getaddrinfo ENOTFOUND/);
   } finally {
     globalThis.fetch = saved;
   }
@@ -172,6 +174,8 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["allowlist_by_origin_only", "M1:", /hub_not_allowed/],
   ["no_allow_recheck", "M1:", /an Allow sent with hub/],
   ["bound_misdeclared", "M1:", /put in its body called https:\/\/dock\.test\.evil\.example/],
+  ["bound_misdeclared_field", "M1:", /put in its body called https:\/\/dock\.test\.evil\.example/],
+  ["bound_misdeclared_global", "M1:", /put in its body called https:\/\/dock\.test\.evil\.example/],
   ["follows_redirects", "M2:", /redirect/],
   ["follows_then_checks_redirected", "M2:", /reached https:\/\/elsewhere\.example/],
   ["ignores_redirected_flag", "M2:", /answers redirected, the Allow says it paired/],
@@ -181,9 +185,11 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["no_deadline_on_body", "M3:", /answers slow_body, the Allow was still waiting/],
   ["deadline_per_part", "M3:", /answers slow_headers_then_body, the Allow says it paired/],
   ["deadline_short_on_body", "M3:", /answers slow_headers_then_stall, the Allow was still waiting/],
-  ["confirm_follows_redirects", "M2:", /M2 on \/apc\/confirm: with a hub that answers redirect, the app's request reached https:\/\/elsewhere\.example\/apc\/confirm/],
-  ["confirm_no_deadline", "M3:", /M3 on \/apc\/confirm: with a hub that answers slow_headers, the drop was still waiting/],
-  ["confirm_no_cap", "M4:", /M4 on \/apc\/confirm: with a hub that answers length_over_cap, the drop shows .*waiting/],
+  ["pin_before_confirm", "M2:", /M2 on \/apc\/confirm: with a hub that answers [a-z_0-9]+, on a grant in handoff: the drop's target .* was pinned, though the app refused/],
+  ["wake_before_confirm", "M2:", /M2 on \/apc\/confirm: with a hub that answers redirected, on a grant dormant: .*\(it woke\)/],
+  ["confirm_follows_redirects", "M2:", /M2 on \/apc\/confirm: with a hub that answers redirect, on a grant in handoff, the app's request reached https:\/\/elsewhere\.example\/apc\/confirm/],
+  ["confirm_no_deadline", "M3:", /M3 on \/apc\/confirm: with a hub that answers slow_headers, on a grant in handoff, the drop was still waiting/],
+  ["confirm_no_cap", "M4:", /M4 on \/apc\/confirm: with a hub that answers length_over_cap, on a grant in handoff, the drop shows .*waiting/],
   ["trusts_content_length", "M4:", /must refuse the answer/],
   ["content_length_number_parse", "M4:", /answers length_not_digits, the Allow says it paired/],
   ["no_stream_cap", "M4:", /answers body_over_cap, the Allow says it paired/],
@@ -197,7 +203,12 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["origin_from_request_url", "M6:", /Origin https:\/\/apc-conformance-internal\.example, the request's own host/],
   ["origin_prefix_compare", "M6:", /a look-alike Origin with a longer host .* is refused/],
   ["origin_suffix_compare", "M6:", /a look-alike Origin with a prefix .* is refused/],
-  ["get_drop_consent", "M6:", /the drop: after a GET .*the app answered a consent/],
+  ["get_drop_consent", "M6:", /the drop: after a GET .*with which an Allow then paired .*: a GET made a consent/],
+  ["get_drop_consent_renamed", "M6:", /the drop: after a GET .*with which an Allow then paired .*: a GET made a consent/],
+  ["origin_from_request_url_500", "M6:", /got HTTP 500, while the same request with a foreign Origin got HTTP 403: the app took the request's own host as its origin/],
+  ["ws_host_only_compare", "M6:", /the heartbeat: a WebSocket handshake with Origin on another scheme \(http:\/\/fixture\.test\) is refused/, { wsHeartbeat: true }],
+  ["get_cancels", "M6:", /Cancel: after a GET .*answers revoked/],
+  ["get_cancels", "M6:", /Cancel: after a GET .*answers revoked/, { cancelPrepaired: true }],
   ["heartbeat_no_origin_check", "M6:", /the heartbeat: a request with a foreign Origin is refused/],
   ["ws_no_origin_check", "M6:", /the heartbeat: a WebSocket handshake with a foreign Origin is refused/, { wsHeartbeat: true }],
   ["get_changes_state", "M6:", /after a GET with the owner.s session and the body.s fields as a query \(every state change is a POST\)/],
@@ -217,7 +228,7 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
 ];
 
 for (const [brk, part, message, options] of broken) {
-  test(`a broken app (${brk}) fails: ${part}`, async () => {
+  test(`a broken app (${brk}${options ? ` ${JSON.stringify(options)}` : ""}) fails: ${part}`, async () => {
     const { adapter } = dockFixture({ ...options, break: brk });
     await fails(named(apcConformance(adapter), part), message);
   });

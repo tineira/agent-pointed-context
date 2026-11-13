@@ -73,6 +73,8 @@ export type FixtureBreak =
   | "allowlist_by_origin_only"
   | "no_allow_recheck"
   | "bound_misdeclared"
+  | "bound_misdeclared_field"
+  | "bound_misdeclared_global"
   | "follows_redirects"
   | "follows_then_checks_redirected"
   | "ignores_redirected_flag"
@@ -98,9 +100,15 @@ export type FixtureBreak =
   | "no_origin_check"
   | "get_changes_state"
   | "origin_from_request_url"
+  | "origin_from_request_url_500"
   | "origin_prefix_compare"
   | "origin_suffix_compare"
   | "get_drop_consent"
+  | "get_drop_consent_renamed"
+  | "get_cancels"
+  | "ws_host_only_compare"
+  | "pin_before_confirm"
+  | "wake_before_confirm"
   | "heartbeat_no_origin_check"
   | "ws_no_origin_check"
   | "revoke_404_unknown"
@@ -133,6 +141,10 @@ export interface FixtureOptions {
   connectMs?: number;
   /** A request for a host the app does not serve gets a redirect to its own origin, or a proxy's 502. */
   unknownHost?: "redirect" | "bad_gateway";
+  /** With `hubBoundToConsent`: the Allow carries the consent and the ticket only, no hub and no agent (both bound to the consent). */
+  allowNoAgent?: boolean;
+  /** Cancel's `body()` hands out grants paired when the adapter was made, not during the call. */
+  cancelPrepaired?: boolean;
 }
 
 export const ORIGIN = "https://fixture.test";
@@ -184,6 +196,7 @@ interface Config {
   abortSignalDeadline: boolean;
   connectMs: number;
   unknownHost: FixtureOptions["unknownHost"];
+  allowNoAgent: boolean;
 }
 
 const random = (n: number, alphabet = "abcdefghijklmnopqrstuvwxyz0123456789") => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => alphabet[b % alphabet.length]).join("");
@@ -228,6 +241,8 @@ class Fixture {
   }
 
   private has = (b: FixtureBreak) => this.config.brk.has(b);
+  /** The adapter says the hub is bound to the consent, and the app takes the Allow's hub unchecked. */
+  private unbound = () => this.has("bound_misdeclared") || this.has("bound_misdeclared_field") || this.has("bound_misdeclared_global");
   now = () => Date.now() + this.clock.skew;
   private idleLapsed = (g: Grant) => this.config.idle && this.now() - g.lastWake > IDLE_MS;
 
@@ -273,9 +288,14 @@ class Fixture {
       if (url.pathname === "/api/cancel") return json({ ok: await this.cancel(url.searchParams.get("grant_id") ?? "") });
       if (url.pathname === "/api/heartbeat") return json(this.heartbeat());
     }
-    if (this.has("get_drop_consent") && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie && url.pathname === "/api/drop") {
-      // A drop on a GET, parameters from the query: it makes a consent whose nonce an Allow can use.
-      return json(await this.drop(Object.fromEntries(url.searchParams)));
+    if (this.has("get_cancels") && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie && url.pathname === "/api/cancel") {
+      // Cancel on a GET only, the grant's id from the query.
+      return json({ ok: await this.cancel(url.searchParams.get("grant_id") ?? "") });
+    }
+    if ((this.has("get_drop_consent") || this.has("get_drop_consent_renamed")) && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie && url.pathname === "/api/drop") {
+      // A drop on a GET, parameters from the query: it makes a consent whose nonce an Allow can use (renamed: under other names).
+      const r = await this.drop(Object.fromEntries(url.searchParams));
+      return json(this.has("get_drop_consent_renamed") && r.consent !== undefined ? { ok: false, error: "ask_first", nonce: r.consent, code: r.pairing_code } : r);
     }
     if (url.pathname === "/api/drop") return this.owner(request, (b) => this.drop(b));
     if (url.pathname === "/api/heartbeat/ws") return this.wsHeartbeat(request);
@@ -295,7 +315,7 @@ class Fixture {
   private originRefused(request: Request): boolean {
     if (this.has("no_origin_check")) return false;
     const origin = request.headers.get("origin");
-    const configured = this.has("origin_from_request_url") ? new URL(request.url).origin : ORIGIN;
+    const configured = this.has("origin_from_request_url") || this.has("origin_from_request_url_500") ? new URL(request.url).origin : ORIGIN;
     if (origin !== null) {
       const own = new URL(configured);
       // (origin_prefix_compare, origin_suffix_compare: a careless comparison that takes look-alikes.)
@@ -314,6 +334,8 @@ class Fixture {
     if (media !== "application/json") return json({ error: "unsupported_media_type" }, 415);
     const heartbeat = new URL(request.url).pathname === "/api/heartbeat";
     if (!(heartbeat && this.has("heartbeat_no_origin_check")) && this.originRefused(request)) return json({ error: "forbidden" }, 403);
+    // (origin_from_request_url_500: the request's own host taken as the origin, and then a backend called by that host fails.)
+    if (this.has("origin_from_request_url_500") && new URL(request.url).origin !== ORIGIN) return json({ error: "upstream_failed" }, 500);
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object") return json({ error: "invalid" }, 400);
     if (this.has("lock_across_call")) {
@@ -329,7 +351,11 @@ class Fixture {
   private wsHeartbeat(request: Request): Response {
     if (request.method !== "GET" || (request.headers.get("upgrade") ?? "").toLowerCase() !== "websocket") return json({ error: "upgrade_required" }, 426);
     if (request.headers.get("cookie") !== SESSION.cookie) return json({ error: "unauthorized" }, 401);
-    if (!this.has("ws_no_origin_check") && this.originRefused(request)) return json({ error: "forbidden" }, 403);
+    if (this.has("ws_host_only_compare")) {
+      // (ws_host_only_compare: the handshake compares the host and ignores the scheme.)
+      const origin = request.headers.get("origin");
+      if (origin !== null && (!URL.canParse(origin) || new URL(origin).host !== new URL(ORIGIN).host)) return json({ error: "forbidden" }, 403);
+    } else if (!this.has("ws_no_origin_check") && this.originRefused(request)) return json({ error: "forbidden" }, 403);
     this.heartbeat();
     return new Response(null, { status: 200 });
   }
@@ -351,7 +377,10 @@ class Fixture {
 
   private async drop(b: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.config.pairing) return { ok: false, error: "not_available" };
-    const { agent, ticket, consent } = b;
+    const { ticket, consent } = b;
+    let { agent } = b;
+    // An Allow that carries no agent (allowNoAgent): the agent is the consent's.
+    if (consent !== undefined && this.config.hubBoundToConsent && agent === undefined) agent = this.storage.consents.get(String(consent))?.agent;
     if (typeof agent !== "string" || typeof ticket !== "string") return { ok: false, error: "invalid" };
     const target = (b.target as FocusTarget | undefined) ?? null;
     if (consent !== undefined) {
@@ -362,7 +391,11 @@ class Fixture {
         // The consent is taken by the Allow that waits on the hub: a second Allow of the agent meanwhile is in progress.
         if (!c) return { ok: false, error: [...this.locks.keys()].some((k) => k.endsWith(`|${agent}`)) ? "pairing_in_progress" : "consent_expired" };
         hub = c.hub;
-      } else if (this.has("no_allow_recheck") || this.has("bound_misdeclared")) hub = typeof b.hub === "string" && URL.canParse(b.hub) ? new URL(b.hub).origin : null;
+      } else if (this.has("no_allow_recheck") || this.unbound()) {
+        // (bound_misdeclared_field: the Allow's hub is read, unchecked, from a member of another name.)
+        const raw = this.has("bound_misdeclared_field") ? b.dock_hub : b.hub;
+        hub = typeof raw === "string" && URL.canParse(raw) ? new URL(raw).origin : null;
+      }
       else hub = this.parseHub(b.hub);
       if (!hub) return { ok: false, error: "hub_not_allowed" };
       const base = this.has("raw_hub_string") && !this.config.hubBoundToConsent ? String(b.hub) : hub;
@@ -380,6 +413,9 @@ class Fixture {
       if (st === "in_flight") return { ok: false, error: "pairing_in_progress" };
       const held = this.lock(triple);
       try {
+        // (pin_before_confirm, wake_before_confirm: the drop acts before it has the hub's answer.)
+        if (this.has("pin_before_confirm") && target) g.pin = target;
+        if (this.has("wake_before_confirm") && (st === "live" || st === "dormant")) g.lastWake = this.now();
         const base = this.has("raw_hub_string") || this.has("raw_hub_on_confirm") ? String(b.hub) : hub;
         const answer = await this.hubCall(base, "/apc/confirm", { ticket, agent, mcp_url: this.urlOf(g), ...(this.has("code_in_confirm") ? { pairing_code: g.code } : {}) });
         if (this.dead) return { ok: false, error: "gone" };
@@ -422,7 +458,7 @@ class Fixture {
     if (this.locks.has(triple) && !this.has("double_allow_not_refused")) return { ok: false, error: "pairing_in_progress" };
     const c = this.storage.consents.get(nonce);
     // (bound_misdeclared: the consent's hub is not compared either, so the Allow's hub is the one called.)
-    if (!c || c.agent !== agent || (c.hub !== hub && !this.has("bound_misdeclared")) || this.now() > c.expiresAt) return { ok: false, error: "consent_expired" };
+    if (!c || c.agent !== agent || (c.hub !== hub && !this.unbound()) || this.now() > c.expiresAt) return { ok: false, error: "consent_expired" };
     const held = this.lock(triple);
     try {
       this.storage.consents.delete(nonce);
@@ -461,7 +497,9 @@ class Fixture {
     const whole = deadline(DEADLINE_MS);
     let perPart: ReturnType<typeof deadline> | null = null;
     try {
-      const request = this.hub.fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "error", ...(this.config.abortSignalDeadline ? { signal: AbortSignal.timeout(DEADLINE_MS) } : {}) });
+      // (bound_misdeclared_global: a call to a hub other than the stand-in goes out through the global fetch.)
+      const send: typeof fetch = this.has("bound_misdeclared_global") && new URL(base).origin !== HUB ? (u, i) => globalThis.fetch(u, i) : this.hub.fetch;
+      const request = send(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "error", ...(this.config.abortSignalDeadline ? { signal: AbortSignal.timeout(DEADLINE_MS) } : {}) });
       const response = await Promise.race([request, this.has("no_deadline_on_headers") || noDeadline || this.config.abortSignalDeadline ? never : whole.promise]);
       // (deadline_per_part: a fresh timer for the body once the headers came, as a careless app has; deadline_short_on_body: half of one.)
       if (this.has("deadline_per_part") || this.has("deadline_short_on_body")) {
@@ -699,9 +737,11 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     abortSignalDeadline: options.abortSignalDeadline ?? false,
     connectMs: options.connectMs ?? T_CONNECT_MAX_MS,
     unknownHost: options.unknownHost,
+    allowNoAgent: !!(options.hubBoundToConsent && options.allowNoAgent),
   };
   // (bound_misdeclared: the adapter says the hub is bound to the consent, and the app takes the Allow's hub unchecked.)
-  const allowCarriesHub = !options.hubBoundToConsent && !brk.has("bound_misdeclared");
+  const allowCarriesHub = !options.hubBoundToConsent && !brk.has("bound_misdeclared") && !brk.has("bound_misdeclared_field") && !brk.has("bound_misdeclared_global");
+  const hubKey = brk.has("bound_misdeclared_field") ? "dock_hub" : "hub";
   const fresh = (): Storage => ({ grants: [], consents: new Map(), failWrites: false, page: { open: false, presence: [] } });
   const storage = fresh();
   const clock = { skew: 0 };
@@ -725,7 +765,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
         async allow(over) {
           // An app whose hub is bound to the consent sends no hub with the Allow.
           const { hub: dropHub, ...rest } = drop;
-          const sent = options.hubBoundToConsent ? rest : { ...rest, hub: allowCarriesHub ? (over?.hub ?? dropHub) : dropHub };
+          const { agent: _agent, ...noAgent } = rest;
+          const sent = options.hubBoundToConsent ? (config.allowNoAgent ? noAgent : rest) : { ...rest, [hubKey]: allowCarriesHub ? (over?.hub ?? dropHub) : dropHub };
           const a = await post("/api/drop", { ...sent, consent: r.consent });
           return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
         },
@@ -745,6 +786,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     if (!allowed.ok) throw new Error(`the Allow did not pair: ${allowed.error}`);
     return { agent, code: shown.code, grantId: allowed.grantId! };
   };
+  // (cancelPrepaired: grants paired now, when the adapter is made, handed out one per Cancel body.)
+  const prepaired = options.cancelPrepaired ? Promise.all(Array.from({ length: 40 }, () => handoffGrant())) : null;
 
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
@@ -780,11 +823,11 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
           const agent = newAgent();
           const ticket = hub.ticket(agent);
           const asked = await post("/api/drop", { hub: HUB, agent, ticket });
-          return { hub: HUB, agent, ticket, consent: asked.consent };
+          return config.allowNoAgent ? { ticket, consent: asked.consent } : { [hubKey]: HUB, agent, ticket, consent: asked.consent };
         },
       },
       heartbeat: options.wsHeartbeat ? { websocket: "/api/heartbeat/ws" } : { path: "/api/heartbeat", body: () => ({}) },
-      cancel: { path: "/api/cancel", body: async () => ({ grant_id: (await handoffGrant()).grantId }) },
+      cancel: { path: "/api/cancel", body: async () => ({ grant_id: prepaired ? (await prepaired).shift()!.grantId : (await handoffGrant()).grantId }) },
     },
     async pairingDisabled() {
       const off = new Fixture(fresh(), { ...config, pairing: false }, clock, hub);

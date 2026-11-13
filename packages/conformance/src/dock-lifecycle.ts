@@ -60,6 +60,10 @@ const INIT = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { na
 const UNBLOCKED_MS = 2500;
 /** How long a hub call may take past its deadline before the check gives up on it (M3). */
 const DEADLINE_SLACK_MS = 2500;
+/** The least slack M3 allows past a small declared deadline, so a loaded machine does not fail a correct app. */
+const DEADLINE_SLACK_FLOOR_MS = 1000;
+/** How long the suite waits for each give-back after a check. */
+const GIVE_BACK_MS = 2000;
 /** A host the app is never configured with: a request sent there with a matching `Origin` must still be refused (M6). */
 const INTERNAL_ORIGIN = "https://apc-conformance-internal.example";
 /** The members of `dock.lifecycle` a 0.10 Dock app must give (idleMs and hubDeadlineMs are optional). */
@@ -133,12 +137,36 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     const urls = new Set(dock.hub.received.slice(from).map((b) => b.mcp_url).filter((u): u is string => typeof u === "string"));
     for (const url of urls) {
       try {
-        const r = await giveBack(life, JSON.stringify({ mcp_url: url }));
-        await r.body?.cancel().catch(() => {});
+        // Bounded: a give-back the app holds back must not hang the suite, nor hide the check's own result.
+        const r = await within(giveBack(life, JSON.stringify({ mcp_url: url })), GIVE_BACK_MS);
+        if (!r.timedOut) await r.value.body?.cancel().catch(() => {});
       } catch {
         // the check's own result stands; a give-back that fails leaves that grant to its time limits
       }
     }
+  };
+
+  /**
+   * While a check runs, a hub call (`/apc/pair`, `/apc/confirm`) the app sends through the global `fetch` to any
+   * origin but the stand-in's is logged with the stand-in's requests, where M1, M2 and M9 look for calls off the
+   * hub's origin, and is never sent. A call to the stand-in's own origin goes on as before.
+   */
+  const guardGlobalFetch = (): (() => void) => {
+    if (!dock) return () => {};
+    const hub = dock.hub;
+    const original = globalThis.fetch;
+    const guarded = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if ((url.pathname === "/apc/pair" || url.pathname === "/apc/confirm") && url.origin !== hub.origin) {
+        hub.requests.push(url.href);
+        throw new TypeError(`apc-conformance: a hub call to ${url.href}, past the stand-in hub, was not sent`);
+      }
+      return original(input, init);
+    }) as typeof fetch;
+    globalThis.fetch = guarded;
+    return () => {
+      if (globalThis.fetch === guarded) globalThis.fetch = original;
+    };
   };
 
   const check = (name: string, body: (life: ApcDockLifecycleAdapter, d: ApcDockAdapter) => Promise<void | { note: string }>): Named => {
@@ -146,10 +174,15 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       name: `${app.name} (dock): 0.10: ${name}`,
       async run() {
         const from = dock?.hub.received.length ?? 0;
+        const unguard = guardGlobalFetch();
         try {
           await runChecked(named, body);
         } finally {
-          await giveBackSince(from);
+          try {
+            await giveBackSince(from);
+          } finally {
+            unguard();
+          }
         }
       },
     };
@@ -366,10 +399,11 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     return ms;
   };
   /**
-   * How long a refused hub call may take in all (M3): the deadline plus a slack under 30% of it, so two deadlines
-   * that add up past the limit (one on the headers, a fresh one on the body) are late.
+   * How long a refused hub call may take in all (M3): the deadline plus 30% of it (at least 1 s, at most 2.5 s), so
+   * two deadlines that add up past the limit (one on the headers, a fresh one on the body) are late. Under a declared
+   * deadline of about 3.3 s the 1 s floor applies, and a second deadline shorter than the floor goes unseen.
    */
-  const refusalLimit = (life: ApcDockLifecycleAdapter) => deadlineOf(life) + Math.min(DEADLINE_SLACK_MS, Math.floor(deadlineOf(life) * 0.3));
+  const refusalLimit = (life: ApcDockLifecycleAdapter) => deadlineOf(life) + Math.max(DEADLINE_SLACK_FLOOR_MS, Math.min(DEADLINE_SLACK_MS, Math.floor(deadlineOf(life) * 0.3)));
   /** The app's T_connect: the adapter's `connectMs`, at most the standard's (the default). */
   const connectOf = (life: ApcDockLifecycleAdapter) => {
     const ms = life.connectMs ?? T_CONNECT_MAX_MS;
@@ -460,19 +494,27 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     }
   };
   /**
-   * A drop of an agent whose grant is in handoff, against a hub that breaks `/apc/confirm` (`mode`): the app does not
-   * take the answer (no waiting card, no pin), answers within the deadline, never calls past the hub's origin, and
-   * the grant is not made live.
+   * A drop of an agent whose grant is in handoff (or paired: live, or dormant for an app that sleeps), with the
+   * adapter's second target, against a hub that breaks `/apc/confirm` (`mode`): the app does not take the answer (no
+   * waiting card, no pin of the drop's target, no wake), answers within the deadline, never calls past the hub's
+   * origin, and the grant is not made live.
    */
-  const confirmRefusedWith = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, mode: StandInHubMode, rule: string) => {
-    const g = await handoff(life, d);
+  const confirmRefusedWith = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, mode: StandInHubMode, rule: string, on: "handoff" | "paired" = "handoff") => {
+    const g = on === "handoff" ? await handoff(life, d) : await liveGrant(life, d);
+    const dormant = on === "paired" && !!life.idleMs;
+    if (dormant) {
+      await app.page.setOpen(false);
+      await life.advance(life.idleMs! + 1000);
+      await expectState(g.mcpUrl, "idle", `${rule} on /apc/confirm: T_idle after going live`);
+    }
+    const kind = on === "handoff" ? "in handoff" : dormant ? "dormant" : "live";
     const calls = d.hub.requests.length;
     const limit = refusalLimit(life);
-    const where = `${rule} on /apc/confirm: with a hub that answers ${mode}`;
+    const where = `${rule} on /apc/confirm: with a hub that answers ${mode}, on a grant ${kind}`;
     let shown: ApcDockDropOutcome;
     d.hub.confirmMode = mode;
     try {
-      const answer = await within(drop(life, d, g.agent), limit);
+      const answer = await within(drop(life, d, g.agent, d.hub.origin, second), limit);
       expect(!answer.timedOut, `${where}, the drop was still waiting after ${limit / 1000} s (one deadline of ${deadlineOf(life) / 1000} s covers the whole call)`);
       shown = answer.value;
     } finally {
@@ -482,11 +524,24 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     const called = d.hub.requests.slice(calls);
     const elsewhere = called.filter((u) => new URL(u).origin !== d.hub.origin);
     expect(elsewhere.length === 0, `${where}, the app's request reached ${elsewhere.join(", ")}: the secret MCP URL went past the hub (call it with redirect: "error")`);
-    expect(called.includes(`${d.hub.origin}/apc/confirm`), `${where}, the drop of an agent whose grant is in handoff never called ${d.hub.origin}/apc/confirm: it called ${JSON.stringify(called)}`);
-    expect(shown.page === "refused" || shown.page === "consent", `${where}, the drop shows ${JSON.stringify(shown).slice(0, 200)}: the app took the answer, and must refuse it`);
+    expect(called.includes(`${d.hub.origin}/apc/confirm`), `${where}, the drop of an agent the app holds a grant for never called ${d.hub.origin}/apc/confirm: it called ${JSON.stringify(called)}`);
+    expect(shown.page === "refused" || shown.page === "consent", `${where}, the drop shows ${JSON.stringify(shown).slice(0, 200)}: the app took the answer, and must refuse it (a failed confirm shows no code and pins nothing)`);
     const state = await stateOf(g.mcpUrl);
-    expect(state === "pairing" || state === "not_found", `${where}: the grant should stay in handoff (or end), but it ${state === "data" ? "serves app data" : `answers ${state}`}`);
+    if (on === "handoff") {
+      expect(state === "pairing" || state === "not_found", `${where}: the grant should stay in handoff (or end), but it ${state === "data" ? "serves app data" : `answers ${state}`}`);
+      if (state !== "pairing") return;
+      const init = await send(g.mcpUrl, "initialize", INIT);
+      expect(served(init), `${where}: initialize is served afterwards: ${brief(init)}`);
+    } else if (dormant) {
+      expect(state === "idle" || state === "not_found", `${where}: a refused confirm is no wake action, so the grant should stay dormant (or end), but it ${state === "data" ? "serves app data (it woke)" : `answers ${state}`}`);
+      if (state !== "idle") return;
+      await life.heartbeat();
+    } else expect(state === "data" || state === "not_found", `${where}: the grant should stay live (or end), but it answers ${state}`);
+    const view = await toolCall(g.mcpUrl, "get_current_view");
+    const focus = (resultOf(view)?.structuredContent ?? text(resultOf(view) ?? {})).focus;
+    expect(!focusNames(focus, second), `${where}: the drop's target (${canonicalTarget(second)}) was pinned, though the app refused the hub's answer`);
   };
+
   /** An Allow (or, on `/apc/confirm`, a drop of a grant in handoff) against a hub whose answer the app must take (`mode`): it pairs (shows the waiting card), and the grant is in handoff. */
   const takenWith = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, mode: StandInHubMode, rule: string, path: HubPath = "/apc/pair") => {
     if (path === "/apc/confirm") {
@@ -527,6 +582,47 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
   };
   const focusNames = (focus: unknown, target: FocusTarget) =>
     isObject(focus) && canonicalTarget({ kind: focus.kind as string, id: (focus.id ?? null) as string | null, part: (focus.part ?? null) as string | null, params: (focus.params ?? null) as FocusTarget["params"] }) === canonicalTarget(target);
+
+  /**
+   * M6: a drop sent as a GET must not make a consent, whatever its answer calls the nonce. Every token of the GET's
+   * answer that could be one (a string of 8 characters or more in JSON, else a run of 16 URL-safe characters) is
+   * sent as the consent of an Allow, POSTed to `owner.allow` in the shape `owner.allow.body()` gives (the members it
+   * has and the drop's body lacks carry the token), for the GET's agent, hub and ticket. None may make the app send `/apc/pair`.
+   */
+  const getMadeNoConsent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, fields: Record<string, unknown>, raw: string, where: string, notes: Set<string>) => {
+    const known = new Set(Object.values(fields).filter((v): v is string => typeof v === "string"));
+    const tokens = new Set<string>();
+    const walk = (v: unknown): void => {
+      if (typeof v === "string") {
+        if (v.length >= 8 && !known.has(v)) tokens.add(v);
+      } else if (Array.isArray(v)) v.forEach(walk);
+      else if (isObject(v)) Object.values(v).forEach(walk);
+    };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = undefined;
+    }
+    if (parsed !== undefined) walk(parsed);
+    else for (const m of raw.matchAll(/[A-Za-z0-9_-]{16,}/g)) if (!known.has(m[0])) tokens.add(m[0]);
+    if (tokens.size === 0) return;
+    const template = await life.owner.allow.body();
+    const nonceKeys = isObject(template) ? Object.keys(template).filter((k) => !(k in fields)) : [];
+    if (!isObject(template) || nonceKeys.length === 0) {
+      notes.add("not checked: whether a drop sent as a GET makes a consent (owner.allow.body() has no member the drop's body lacks, so the suite cannot tell where a nonce goes)");
+      return;
+    }
+    const { origin, session, allow } = life.owner;
+    for (const token of [...tokens].slice(0, 10)) {
+      const body = { ...template, ...fields, ...Object.fromEntries(nonceKeys.map((k) => [k, token])) };
+      const before = d.hub.received.length;
+      const r = await fetchApp(new Request(new URL(allow.path, origin), { method: "POST", headers: { ...session, "content-type": "application/json", origin, "sec-fetch-site": "same-origin" }, body: JSON.stringify(body) }));
+      await r.body?.cancel().catch(() => {});
+      // Pairing is the app sending /apc/pair: a drop of an agent it already holds a grant for answers yes by /apc/confirm, which is no consent.
+      expect(d.hub.received.length === before, `${where}, its answer carried ${JSON.stringify(token.slice(0, 12))}…, with which an Allow then paired (the app sent /apc/pair): a GET made a consent`);
+    }
+  };
 
   return [
     check("the lifecycle adapter is given, and its owner origin is the app's (required of an app that claims 0.10.0 or later on the Dock profile)", async (life, d) => {
@@ -741,7 +837,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         await expectState(g.mcpUrl, "not_found", `past long dormancy (dormancyMs ${dormancy} ms after falling asleep)`);
         await life.heartbeat();
         await expectState(g.mcpUrl, "not_found", "after long dormancy and a heartbeat (ended stays ended)");
-      }
+      } else return { note: "long dormancy not checked: the adapter gives no dormancyMs" };
     }),
 
     check("agent traffic (initialize, ping, tools/list, tools/call) never wakes a grant or extends it", async (life, d) => {
@@ -769,12 +865,13 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       if (!life.idleMs) return { note: "not checked: the adapter gives no idleMs, so the app does not sleep (dormant is a SHOULD)" };
       await app.page.setOpen(false);
       // Dormant is for live grants only: a grant in handoff past T_idle (and before the app's own T_connect) is still in handoff.
+      let note: string | undefined;
       if (life.idleMs + 1000 < connectOf(life)) {
         const h = await handoff(life, d);
         await life.advance(life.idleMs + 1000);
         await expectState(h.mcpUrl, "pairing", `a grant in handoff for longer than T_idle (${life.idleMs} ms)`);
         expectAnswer("handoff", VIEW, await toolCall(h.mcpUrl, "get_current_view"));
-      }
+      } else note = `handoff over dormant not checked: the app's T_connect (${connectOf(life)} ms) ends a grant in handoff before its T_idle (${life.idleMs} ms) has passed`;
       const r = await liveGrant(life, d);
       await life.advance(life.idleMs + 1000);
       await expectState(r.mcpUrl, "idle", "T_idle after going live");
@@ -786,6 +883,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       await giveBack(life, JSON.stringify({ mcp_url: e.mcpUrl }));
       await table("ended", e.mcpUrl);
       await life.heartbeat();
+      if (note) return { note };
     }),
 
     // The hub call.
@@ -829,23 +927,29 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         }
       }
       // Not on the adapter's word (allowCarriesHub): the Allow as the app's endpoint takes it, with a foreign hub put in
-      // by the suite. Refused, or the hub ignored: it may pair only through the drop's hub.
+      // by the suite, in `hub` and in place of every value that names the drop's hub, whatever its member's name.
+      // Refused, or the hub ignored: no request may reach the foreign hub, and a yes needs an /apc/pair at the stand-in.
       const { origin, session, allow } = life.owner;
+      const swapHub = (v: unknown, hub: string): unknown => {
+        if (typeof v === "string") return URL.canParse(v) && new URL(v).origin === d.hub.origin ? hub : v;
+        if (Array.isArray(v)) return v.map((x) => swapHub(x, hub));
+        if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, swapHub(x, hub)]));
+        return v;
+      };
       for (const hub of [`${d.hub.origin}.evil.example`, "https://evil.example"]) {
         const fields = await allow.body();
         expect(isObject(fields), `owner.allow.body() gave ${JSON.stringify(fields)}, not an object`);
         const before = d.hub.requests.length;
         const received = d.hub.received.length;
         const response = await fetchApp(
-          new Request(new URL(allow.path, origin), { method: "POST", headers: { ...session, "content-type": "application/json", origin, "sec-fetch-site": "same-origin" }, body: JSON.stringify({ ...fields, hub }) }),
+          new Request(new URL(allow.path, origin), { method: "POST", headers: { ...session, "content-type": "application/json", origin, "sec-fetch-site": "same-origin" }, body: JSON.stringify({ ...(swapHub(fields, hub) as Record<string, unknown>), hub }) }),
         );
         const answer = (await response.json().catch(() => null)) as unknown;
         const where = `an Allow sent to ${allow.path} with hub ${JSON.stringify(hub)} put in its body`;
         const off = d.hub.requests.slice(before).filter((u) => new URL(u).origin !== d.hub.origin);
         expect(off.length === 0, `${where} called ${off.join(", ")}: the Allow's hub must be checked against the allowlist again, or ignored for the one bound to the consent`);
         if (response.ok && isObject(answer) && answer.ok === true) {
-          const paired = d.hub.received.slice(received).some((b) => b.agent === fields.agent);
-          expect(paired, `${where} answered ${JSON.stringify(answer).slice(0, 200)}, but the stand-in hub received no /apc/pair for the agent: the app paired somewhere else`);
+          expect(d.hub.received.length > received, `${where} answered ${JSON.stringify(answer).slice(0, 200)}, but the stand-in hub received no /apc/pair since: the app paired somewhere else`);
         }
       }
     }),
@@ -853,6 +957,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     check("M2: a hub that redirects, answers a 3xx, an opaqueredirect or a redirected answer holds no grant, and the app's request never reaches the redirect's target", async (life, d) => {
       // On both hub calls: /apc/confirm carries the ticket and the secret MCP URL too.
       for (const path of HUB_PATHS) for (const mode of ["redirect", "status_3xx", "opaque_redirect", "redirected"] as const) await refusedWith(life, d, mode, "M2", path);
+      // A drop of a paired grant (live, or dormant for an app that sleeps) confirms too: a refused answer neither pins nor wakes.
+      await confirmRefusedWith(life, d, "redirected", "M2", "paired");
     }),
 
     check(`M3: one deadline (${HUB_CALL_DEADLINE_MS / 1000} s at most) covers the headers and the body: stalled headers, a stalled body, and slow headers then a slow body each trip it`, async (life, d) => {
@@ -949,9 +1055,11 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         await response.body?.cancel().catch(() => {});
         return response.status;
       };
-      // Look-alikes of the configured origin: a longer host, another port, a trailing dot, a prefix and a suffix of it.
-      // An app that compares with startsWith, endsWith or includes takes one of them.
+      // The configured origin on the other scheme, and its look-alikes: a longer host, another port, a trailing dot,
+      // a prefix and a suffix of it. An app that compares the host alone, or with startsWith, endsWith or includes, takes one.
+      const otherScheme = `${own.protocol === "https:" ? "http:" : "https:"}//${own.host}`;
       const lookalikes: Array<[string, string]> = [
+        [`Origin on another scheme (${otherScheme})`, otherScheme],
         [`a look-alike Origin with a longer host (${origin}.evil.example)`, `${origin}.evil.example`],
         [`a look-alike Origin on another port`, `${own.protocol}//${own.hostname}:${own.port ? Number(own.port) + 1 : 8443}`],
         [`a look-alike Origin with a trailing dot`, `${own.protocol}//${own.hostname}.${own.port ? `:${own.port}` : ""}`],
@@ -959,21 +1067,27 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         [`a look-alike Origin cut short (${origin.slice(0, -1)})`, origin.slice(0, -1)],
       ];
       /**
-       * A request sent to another host (`INTERNAL_ORIGIN`) with that host as its Origin, as a proxy's inside sees it.
-       * Counts only an answer from the app itself: without `app.fetch` the request cannot reach the app in process,
-       * and a redirect or a 5xx is a host or a proxy answering, not the app; those leave the probe unchecked, with a note.
+       * A request sent to another host (`INTERNAL_ORIGIN`) with that host as its Origin, as a proxy's inside sees it:
+       * a 4xx passes, a 2xx fails. Anything else (a 3xx, a 5xx, a request that does not get through) is compared with
+       * the same request carrying a foreign Origin: the same answer is a host or a proxy answering (a note); another
+       * answer means the app took the request's own host as its origin (a failure).
        */
-      const internal = async (name: string, what: string, send: () => Promise<number>) => {
-        const unchecked = (why: string) => notes.add(`not checked: the request to ${INTERNAL_ORIGIN} with its own host as Origin (${why})`);
-        if (!app.fetch) return unchecked("the adapter gives no fetch, so it cannot reach the app in process");
-        let got: number;
-        try {
-          got = await send();
-        } catch (error) {
-          return unchecked(`it did not reach the app: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        if ((got >= 300 && got < 400) || got >= 500) return unchecked(`answered HTTP ${got}, a host or a proxy rather than the app`);
-        expect(got >= 400 && got < 500, `${name}: a request with ${what} is refused (4xx), got HTTP ${got}`);
+      const internal = async (name: string, what: string, send: (o: string) => Promise<number>) => {
+        const reach = async (o: string): Promise<{ status: number } | { error: string }> => {
+          try {
+            return { status: await send(o) };
+          } catch (error) {
+            return { error: error instanceof Error ? error.message : String(error) };
+          }
+        };
+        const say = (r: { status: number } | { error: string }) => ("status" in r ? `HTTP ${r.status}` : `no answer (${r.error})`);
+        const ownHost = await reach(INTERNAL_ORIGIN);
+        if ("status" in ownHost && ownHost.status >= 400 && ownHost.status < 500) return;
+        expect(!("status" in ownHost) || ownHost.status >= 300, `${name}: a request with ${what} is refused (4xx), got ${say(ownHost)}`);
+        const foreign = await reach("https://evil.example");
+        const same = "status" in ownHost ? "status" in foreign && foreign.status === ownHost.status : "error" in foreign;
+        expect(same, `${name}: a request with ${what} got ${say(ownHost)}, while the same request with a foreign Origin got ${say(foreign)}: the app took the request's own host as its origin`);
+        notes.add(`not checked: the request to ${INTERNAL_ORIGIN} with its own host as Origin (${say(ownHost)}, as with a foreign Origin: a host or a proxy answered, not the app)`);
       };
       const internalWhat = `Origin ${INTERNAL_ORIGIN}, the request's own host, not the configured origin`;
       for (const [name, ep] of endpoints) {
@@ -993,7 +1107,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
             const got = await shake(origin, headers);
             expect(got >= 400 && got < 500, `${name}: a WebSocket handshake with ${what} is refused (4xx), got HTTP ${got}`);
           }
-          await internal(name, `a WebSocket handshake with ${internalWhat}`, () => shake(INTERNAL_ORIGIN, { ...session, origin: INTERNAL_ORIGIN }));
+          await internal(name, `a WebSocket handshake with ${internalWhat}`, (o) => shake(INTERNAL_ORIGIN, { ...session, origin: o }));
           continue;
         }
         const post = async (base: string, headers: Record<string, string>) => status(new URL(ep.path, base), { method: "POST", headers, body: JSON.stringify(await ep.body()) });
@@ -1007,7 +1121,6 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         const refused: Array<[string, Record<string, string>]> = [
           ["a foreign Origin", { ...json, origin: "https://evil.example" }],
           ["Origin null", { ...json, origin: "null" }],
-          [`Origin on another scheme (http://${own.host})`, { ...json, origin: `http://${own.host}` }],
           ...lookalikes.map(([w, o]): [string, Record<string, string>] => [w, { ...json, origin: o }]),
           ["Sec-Fetch-Site cross-site", { ...json, "sec-fetch-site": "cross-site" }],
           ["Sec-Fetch-Site same-site", { ...json, "sec-fetch-site": "same-site" }],
@@ -1021,9 +1134,9 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
           expect(got >= 400 && got < 500, `${name}: a request with ${what} is refused (4xx), got HTTP ${got}`);
         }
         // Sent to another host with that host as Origin (as a proxy's inside sees it): the app compares with its configured origin, never the request's.
-        await internal(name, `a request with ${internalWhat}`, () => post(INTERNAL_ORIGIN, { ...json, origin: INTERNAL_ORIGIN }));
+        await internal(name, `a request with ${internalWhat}`, (o) => post(INTERNAL_ORIGIN, { ...json, origin: o }));
         // Every state change is a POST: a GET with the session and the body's fields as a query may answer
-        // anything, and must change nothing (no hub call, no consent, Cancel's grant still in handoff, a dormant grant still asleep).
+        // anything, and must change nothing (no hub call, no usable consent, no grant revoked, a dormant grant still asleep).
         const received = d.hub.received.length;
         const fields = (await ep.body()) as Record<string, unknown> | null;
         const made = d.hub.received.slice(received).map((b) => b.mcp_url).filter((u): u is string => typeof u === "string");
@@ -1035,6 +1148,15 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
           await expectState(g.mcpUrl, "idle", "the heartbeat's GET probe: T_idle after going live");
           asleep = g.mcpUrl;
         }
+        // Cancel's grant: the one body() paired; else every grant in handoff the stand-in ever paired (body() may hand
+        // out one paired beforehand): none may change on the GET.
+        let watched: string[] = made;
+        if (name === "Cancel" && made.length === 0) {
+          const all = [...new Set(d.hub.received.map((b) => b.mcp_url).filter((u): u is string => typeof u === "string"))].slice(-200);
+          watched = [];
+          for (const u of all) if ((await stateOf(u)) === "pairing") watched.push(u);
+          if (watched.length === 0) notes.add("not checked: Cancel on a GET, since no grant was in handoff (owner.cancel.body() should pair one through the hub: see ApcDockOwnerEndpoint)");
+        }
         const url = new URL(ep.path, origin);
         for (const [k, v] of Object.entries(fields ?? {})) url.searchParams.set(k, typeof v === "string" ? v : JSON.stringify(v));
         const calls = d.hub.requests.length;
@@ -1042,18 +1164,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         const raw = await response.text().catch(() => "");
         const where = `${name}: after a GET with the owner's session and the body's fields as a query (every state change is a POST)`;
         expect(d.hub.requests.length === calls, `${where}, the app called ${d.hub.requests.slice(calls).join(", ")}`);
-        // A consent made on a GET (its nonce and code in the answer) is a state change: the nonce would let an Allow pair.
-        let answer: unknown = null;
-        try {
-          answer = JSON.parse(raw);
-        } catch {
-          // not JSON: a page, say
-        }
-        expect(!(isObject(answer) && (answer.consent !== undefined || answer.pairing_code !== undefined)), `${where}, the app answered a consent (${raw.slice(0, 200)}): a GET must not make one`);
-        if (name === "Cancel") {
-          if (made.length === 0) notes.add("not checked: Cancel on a GET, since owner.cancel.body() made no grant through the hub during the call (pair it there: see ApcDockOwnerEndpoint)");
-          for (const u of made) await expectState(u, "pairing", where);
-        }
+        if (name === "the drop") await getMadeNoConsent(life, d, fields ?? {}, raw, where, notes);
+        if (name === "Cancel") for (const u of watched) await expectState(u, "pairing", where);
         if (asleep) {
           await expectState(asleep, "idle", where);
           await life.heartbeat();
