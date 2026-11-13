@@ -6,8 +6,8 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { APC_LINK_TOOL, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, pairWithHub, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
@@ -72,14 +72,25 @@ function stable(value: unknown): string {
 }
 
 const bytes = (value: unknown) => new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value ?? null)).length;
-/** One call to a dock's hub, server to server (TIN-382, TIN-389). Any failure is an answer, never a throw. */
-async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name?: unknown; icon?: unknown } }> {
-  try {
-    const response = await fetch(`${hub}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
-    return (await response.json().catch(() => ({ ok: false, error: "hub_refused" }))) as Awaited<ReturnType<typeof hubCall>>;
-  } catch {
-    return { ok: false, error: "hub_unreachable" };
-  }
+/** A dock grant waiting for the person to type the pairing code in their dock (APC 0.9): shown only on Pulse's own page. */
+export interface DockPairing {
+  code: string;
+  expires_at: string;
+}
+
+/** What a dock agent's drop answers the page (or Pulse for Windows). */
+export interface PairHubAnswer {
+  ok: boolean;
+  error?: string;
+  grant_id?: string;
+  status?: string;
+  /** consent_required: the nonce the Allow sends back, and the pairing code the consent shows (APC 0.9). */
+  consent?: string;
+  pairing_code?: string;
+  /** The grant waits for the dock owner's code: what the page's waiting card shows. */
+  pairing?: DockPairing;
+  /** The grant was made and handed to the hub, but the pin on the drop's target failed. */
+  pin_error?: string;
 }
 
 export class Sandbox extends DurableObject<Env> {
@@ -130,6 +141,14 @@ export class Sandbox extends DurableObject<Env> {
     for (const column of ["client_icon", "client_title", "agent_name", "owner_name", "conflict", "client_ua"]) {
       try {
         this.sql.exec(`alter table grants add column ${column} text`);
+      } catch {
+        // already there
+      }
+    }
+    // The pairing code a dock grant waits on (APC 0.9, TIN-859), until its hub connects or the grant goes.
+    for (const column of ["pairing_code", "pairing_expires_at"]) {
+      try {
+        this.sql.exec(`alter table hub_links add column ${column} text`);
       } catch {
         // already there
       }
@@ -332,7 +351,11 @@ export class Sandbox extends DurableObject<Env> {
       links: this.links.links(),
       // The docks Pulse pairs with, by host, for the page to name (TIN-402).
       hubs: this.env.APC_V2 === "1" ? (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean).map((h) => new URL(h).host) : [],
-      hub_links: this.sql.exec<{ hub: string; agent: string; grant_id: string }>("select hub, agent, grant_id from hub_links").toArray(),
+      // A dock grant still waiting for the code in the dock (APC 0.9) carries it, for this page only: never over MCP or to the hub.
+      hub_links: this.sql
+        .exec<{ hub: string; agent: string; grant_id: string; pairing_code: string | null; pairing_expires_at: string | null }>("select hub, agent, grant_id, pairing_code, pairing_expires_at from hub_links")
+        .toArray()
+        .map((l) => ({ hub: l.hub, agent: l.agent, grant_id: l.grant_id, pairing: l.pairing_code && l.pairing_expires_at ? { code: l.pairing_code, expires_at: l.pairing_expires_at } : null })),
       expires_at: new Date(Number(this.meta("expires_at") ?? Date.now())).toISOString(),
     };
   }
@@ -482,7 +505,7 @@ export class Sandbox extends DurableObject<Env> {
    * for gets `consent_required` and a nonce; the page shows its consent with it, and only a request that
    * brings it back (once, for the same dock and agent, within two minutes) makes a grant.
    */
-  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }> {
+  async pairHub(sid: string, origin: string, raw: unknown): Promise<PairHubAnswer> {
     if (this.env.APC_V2 !== "1" || !this.offers("dock")) return { ok: false, error: "not_available" };
     const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; region?: unknown; target?: unknown; consent?: unknown } | null;
     const hub = typeof b?.hub === "string" ? b.hub : "";
@@ -503,43 +526,70 @@ export class Sandbox extends DurableObject<Env> {
     }
   }
 
-  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }> {
-    /** The person has not said yes here for this agent: the page asks, with this nonce. */
-    const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown): Promise<PairHubAnswer> {
+    /** The person has not said yes here for this agent: the page asks, with this nonce and the pairing code (APC 0.9). */
+    const askFirst = (): PairHubAnswer => {
+      const asked = this.consent.ask(hub, agent);
+      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
+    };
     const linked = this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, agent).toArray()[0];
     if (linked) {
       // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
       const grant = this.grants().find((g) => g.id === linked.grant_id);
-      const answer = grant ? await hubCall(hub, "/apc/confirm", { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : { ok: false, error: "not_paired" };
+      const answer = grant ? await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }) : ({ ok: false, error: "not_paired" } as const);
       if (!answer.ok) {
-        if (answer.error !== "not_paired") return { ok: false, error: answer.error ?? "hub_refused" };
+        if (answer.error !== "not_paired") return { ok: false, error: answer.error };
         // The dock no longer pairs them: the grant goes, and the ticket is still good, so the person can say yes here and pair at once.
         await this.dropHubGrant(linked.grant_id);
         return askFirst();
       }
-      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: answer.agent?.icon }]), linked.grant_id);
-      return { ...(await this.pin(linked.grant_id, target)), grant_id: linked.grant_id, status: answer.status ?? "paired" };
+      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: answer.agent.icon }]), linked.grant_id);
+      // Paired in the dock: the code is done with. Still pending: the page shows its waiting card again, with the code.
+      if (answer.status === "paired") this.clearPairingCode(linked.grant_id);
+      const pairing = answer.status === "pending" ? this.pairingOf(linked.grant_id) : null;
+      const pinned = await this.pin(linked.grant_id, target);
+      if (pairing) return { ok: true, grant_id: linked.grant_id, status: "pending", pairing, ...(pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" }) };
+      return { ...pinned, grant_id: linked.grant_id, status: answer.status };
     }
     // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
-    if (!this.consent.take(consent, hub, agent)) return askFirst();
+    const taken = this.consent.takeConsent(consent, hub, agent);
+    if (!taken.ok) return askFirst();
     const region = (REGIONS as readonly string[]).includes(rawRegion as string) ? (rawRegion as Region) : null;
     const { id, secret, created_at } = newDirectGrant();
     this.sql.exec(
       "insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, ?, ?)",
       id, secret, `Via dock${region ? ` (${region.toUpperCase()} only)` : ""}`, region ? JSON.stringify([region]) : null, created_at,
     );
-    const answer = await hubCall(hub, "/apc/pair", { ticket, agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
+    // The hub must say it keeps the code (APC 0.9): on any other answer the grant goes before the page hears back.
+    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}`, pairing_code: taken.pairing_code });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
-      return { ok: false, error: answer.error ?? "hub_refused" };
+      return { ok: false, error: answer.error };
     }
-    this.sql.exec("insert into hub_links (hub, agent, grant_id, pairing_id, created_at) values (?, ?, ?, ?, ?)", hub, agent, id, answer.pairing_id ?? null, new Date().toISOString());
+    const pairing: DockPairing = { code: taken.pairing_code, expires_at: new Date(Date.now() + PAIRING_CODE_TTL_MS).toISOString() };
+    this.sql.exec(
+      "insert into hub_links (hub, agent, grant_id, pairing_id, created_at, pairing_code, pairing_expires_at) values (?, ?, ?, ?, ?, ?, ?)",
+      hub, agent, id, answer.pairing_id, new Date().toISOString(), pairing.code, pairing.expires_at,
+    );
     // The agent's mark from the hub (TIN-388), so its first pin shows its logo; initialize keeps it current.
-    this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", cleanName(answer.agent?.name), pickClientIcon([{ src: answer.agent?.icon }]), id);
+    this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", cleanName(answer.agent.name), pickClientIcon([{ src: answer.agent.icon }]), id);
     this.log("hub_paired", id, { hub, agent });
     this.broadcast({ type: "grants" });
+    // Handed to the hub and waiting for the code in the dock, whatever the pin does: a pin that failed is said apart.
     const pinned = await this.pin(id, target);
-    return { ok: pinned.ok, ...(pinned.error ? { error: pinned.error } : {}), grant_id: id, status: "pending" };
+    return { ok: true, grant_id: id, status: "pending", pairing, ...(pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" }) };
+  }
+
+  /** The code a dock grant waits on, while it waits (APC 0.9). */
+  private pairingOf(grantId: string): DockPairing | null {
+    const l = this.sql.exec<{ pairing_code: string | null; pairing_expires_at: string | null }>("select pairing_code, pairing_expires_at from hub_links where grant_id = ?", grantId).toArray()[0];
+    return l?.pairing_code && l.pairing_expires_at ? { code: l.pairing_code, expires_at: l.pairing_expires_at } : null;
+  }
+  /** The hub connected (or said paired): the waiting card goes. */
+  private clearPairingCode(grantId: string): void {
+    if (!this.pairingOf(grantId)) return;
+    this.sql.exec("update hub_links set pairing_code = null, pairing_expires_at = null where grant_id = ?", grantId);
+    this.broadcast({ type: "grants" });
   }
 
   /**
@@ -685,6 +735,8 @@ export class Sandbox extends DurableObject<Env> {
         const userAgent = (request.headers.get("user-agent") ?? "").slice(0, 120);
         for (const m of messages as Array<{ method?: string; params?: { protocolVersion?: unknown; clientInfo?: { name?: unknown; version?: unknown; icons?: unknown; title?: unknown } } } | null>) {
           if (m?.method === "initialize") {
+            // A dock grant is connected once its hub introduces itself (the dock owner's yes): no more code to wait on (APC 0.9).
+            this.clearPairingCode(grant.id);
             const name = m.params?.clientInfo?.name;
             const version = m.params?.clientInfo?.version;
             const protocol = m.params?.protocolVersion;

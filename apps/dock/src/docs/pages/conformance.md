@@ -20,6 +20,7 @@ With an adapter (the [code](#run-it-from-code) way), on the profile under test, 
 
 An adapter whose app authenticates agents with a bearer token (OAuth) gives the token in each connection's `headers` (`{ authorization: "Bearer …" }`); the grant's URL may then be `mcp.path` itself.
 - **Mobile** (0.6 and later): every agent is shown in the page, the bar cannot be collapsed, a finger pins and the agent reads the pin, and unpin works by touch.
+- **The pairing code** (Dock, 0.9 and later; the adapter gives `dock`): the consent shows a well-formed code and the app sends that code, raw, to the hub; every consent shows a new code; a hub that does not acknowledge the code, redirects, or says yes with HTTP 500 holds no grant (its MCP URL answers 404); five wrong codes, or the code's time running out, give the grant back; the right code pairs.
 - **`apc_link`** (an app with both profiles): the same client on the other path is offered a code once per session and the code links them; a code is refused on the connection that got it, on the same path, on another client, once used, and once expired; another client is offered nothing; Revoke on a linked agent cuts both grants; Unlink gives two agents again.
 
 It does not check how the page draws presence, the agent bar's two-click Revoke in a real browser, or the hub's own rules.
@@ -60,11 +61,11 @@ It reads only that origin, over https, never follows a redirect, caps every answ
 
 ## Run it from code
 
-`apcConformance(adapter)` returns named checks for any test runner; `runConformance(adapter)` runs them all and reports. This is the adapter for the Orders app of the [integration guide](/docs/integrate). It runs everything in one process: the app's `fetch` is called directly, the person's page is the app's own event stream, and on the Dock profile a stand-in hub answers pairing.
+`apcConformance(adapter)` returns named checks for any test runner; `runConformance(adapter)` runs them all and reports. This is the adapter for the Orders app of the [integration guide](/docs/integrate). It runs everything in one process: the app's `fetch` is called directly, the person's page is the app's own event stream, and on the Dock profile the suite's stand-in hub answers pairing.
 
 <!-- include orders-conformance.ts#imports -->
 
-A stand-in for a dock's hub, for the Dock profile:
+A dock's hub for the Dock profile: `standInHub` from the suite, which makes tickets, keeps the pairing code the app sends, asks for it to approve, gives the grant back after five wrong codes or when the code expires, and can play a broken hub (no acknowledgement, a redirect, a 500) for the checks that the app fails closed:
 
 <!-- include orders-conformance.ts#hub -->
 
@@ -72,11 +73,15 @@ A stand-in for a dock's hub, for the Dock profile:
 
 <!-- include orders-conformance.ts#connect -->
 
+The pairing code (Dock, 0.9): what the consent shows, and the person's Allow on it. The suite pairs with `hub`, checks what the app sent it, and plays the dock owner typing codes.
+
+<!-- include orders-conformance.ts#dock -->
+
 The person's page: open while its event stream is, which also carries presence.
 
 <!-- include orders-conformance.ts#page -->
 
-The adapter: the app's name and profile, its `fetch`, two targets a full-access agent may be pinned to, one of the app's own read tools (`probe`, on which `attention` must ride), the page, the page on a phone, and with both profiles the `apc_link` hooks.
+The adapter: the app's name and profile, its `fetch`, two targets a full-access agent may be pinned to, one of the app's own read tools (`probe`, on which `attention` must ride), the page, the page on a phone, on the Dock profile the pairing code (`dock`), and with both profiles the `apc_link` hooks.
 
 <!-- include orders-conformance.ts#adapter -->
 

@@ -4,6 +4,26 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor (or, from 1.0, a major) version. A patch (0.7.0 to 0.7.1) never changes the contract; it fixes the packages or the wording, so an app that implements 0.7.0 implements every 0.7.x.
 
+## 0.9.0 (draft, 2026-11-12)
+
+The pairing code: on the Dock profile the app's consent shows a code, and the dock's Allow requires it (TIN-859). A drag can be put on any page, and anyone who runs a dock can mint tickets for their own agent; before, they could lure an app's owner into a drop and an Allow and get their own agent paired with the owner's data. In `packages/protocol/src/core.ts`, `packages/server/src/consent.ts`, `packages/server/src/hub-client.ts`, `packages/conformance` and DESIGN.md section 12.
+
+### Pairing
+
+- **The app shows a pairing code with its consent, and sends it to the hub.** Six characters of Crockford base32 (`PAIRING_CODE_LENGTH`, `PAIRING_CODE_ALPHABET`, 30 bits), new for every consent, shown as `K7M-4P2` (`formatPairingCode`) with the warning to type it only in the person's own dock. After the Allow the app sends it raw in `pairing_code` of `POST {hub}/apc/pair` (`DockPairRequest`). An app that implements 0.9 **must** send it. The code never goes over MCP, in a URL, to `/apc/confirm` or anywhere but the app owner's page and that one request.
+- **The hub keeps it and answers `pairing_code: "required"`** (`PAIRING_CODE_ACK`, `DockPairAnswer`), never shows it (not in the dock's state, a broadcast or any answer), and checks the body before it spends the ticket: a `pairing_code` that is present but not a code (`null`, `""`, a number) is `invalid_pairing_code`. Only an absent key is a pairing without a code; a hub may refuse those (`pairing_code_required`).
+- **The dock owner's Allow needs the code.** The hub compares it in constant time (`pairingCodesMatch`) with what the app sent; a missing or malformed code is refused without counting; a wrong one counts, `wrong_pairing_code` with `attempts_left`, and the fifth (`PAIRING_CODE_MAX_ATTEMPTS`) removes the request and gives the grant back (`pairing_code_refused`). A request with a code that nobody approves goes after `PAIRING_CODE_TTL_MS` (120 s), its grant given back; one without keeps the old ten minutes. Deny and unpair need no code. Typing is forgiving: case, spaces and dashes are ignored, O reads as 0 and I or L as 1 (`normalizePairingCode`).
+- **The app keeps a grant only on the acknowledgement**: a non-redirected HTTP 200 with `ok: true`, `pairing_code: "required"` and a string `pairing_id`. A hub's own refusal is HTTP 400 with `ok: false` and its error. Anything else (another status, a redirect, a missing acknowledgement, no answer) and the app deletes the grant before it answers its page (`hub_refused`, `hub_unreachable`, `hub_ignores_pairing_code`, `HubCallError`). `/apc/confirm` is believed the same way: 200, `ok: true`, `status` `"pending"` or `"paired"`.
+- **A drag's ticket lives 240 s** (`TICKET_TTL_MS`; it was 60 s), longer than the app's two-minute consent, so the person has the time to read the card.
+- **What the app shows after the Allow** (reference behaviour, not a MUST): the code again, the time left, and Cancel, until the hub connects (its first `initialize` on the grant) or the grant goes; if the person's own dock never asks for that code, the agent was someone else's.
+
+### Packages
+
+- `@tineira/apc-server`: `DockConsent.ask` returns `{ nonce, pairing_code }`, and `take` is replaced by `takeConsent`, which returns `{ ok: true, pairing_code }` or `{ ok: false }` (no boolean to test by mistake): every caller has to show the code and send it. New: `newPairingCode`, and `pairWithHub` / `confirmWithHub` (`redirect: "error"`, a 10 s limit, the rules above).
+- `@tineira/apc-conformance`: `standInHub`, a hub to pair with in process, faithful on tickets, the code, wrong codes, expiry, the give-back and the acknowledgement, with broken modes (`no_ack`, `redirect`, `error_500`). An adapter on the Dock profile gives `dock: { hub, drop }`, required of an app that claims 0.9.0 or later (as `page.mobile` since 0.6). New checks: the consent shows a well-formed code and the app sends that code; every consent shows a new code; a hub that does not acknowledge, redirects or says yes with a 500 holds no grant; five wrong codes or the code's expiry give the grant back; the right code pairs.
+
+An app that implements 0.8 keeps pairing with a hub in its default mode (`when_sent`), without a code, until the operator requires one; to claim 0.9.0 it shows and sends the code and fails closed on the hub's answer.
+
 ## 0.8.0 (draft, 2026-11-12)
 
 The core tools made robust, from a second implementation in use, and the Direct profile freed from how the agent authenticates (TIN-839, TIN-667). In `packages/protocol/src/core.ts`, `manifest.ts`, `packages/server/src/tools.ts`, `waits.ts`, `packages/conformance` and DESIGN.md section 21.

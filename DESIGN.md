@@ -222,7 +222,7 @@ interface AgentDrag {
   v: 1;
   hub: string;      // the hub's origin, e.g. "https://apc.tineira.com"
   agent: string;    // public handle, "ag_7f3k…"; safe for any page to read
-  ticket: string;   // single use, 60 s, bound to this agent; opens a pairing request, nothing else
+  ticket: string;   // single use, 240 s (60 s before APC 0.9), bound to this agent; opens a pairing request, nothing else
 }
 ```
 
@@ -234,6 +234,8 @@ On drop, the app looks up `(hub, agent)`:
 - **Not paired:** the app asks for consent on its own page ("Let *agent* from *hub* read Pulse? Full or one region?"). On yes, it creates a grant (v1 `addAgentGrant` or `addRestrictedGrant`) and sends the grant to the hub over a back channel, server to server: `POST {hub}/apc/pair { ticket, app: { id, name, origin, icon }, mcp_url }`. The hub then asks in the dock: "*app at origin* wants to be read by *agent*. Allow?" The pairing counts only when both sides have said yes. The dock shows the origin of `mcp_url`, because that is where the tools come from.
 
 The look-up is the app's server's, not its page's (APC 0.7, § 14): the page sends every drop there, and an agent with no grant comes back `consent_required` with a nonce that the consent's yes must send back.
+
+**The pairing code (APC 0.9, TIN-859).** A drag can be put on any page, and anyone who runs a dock can mint tickets for their own agent: before 0.9 they could lure an app's owner into a drop and an Allow and approve the pairing in their own dock, getting their agent paired with the owner's data. In that case the dock owner is the attacker, so no check in the dock's UI helps; the code is compared in the hub, against what the app sent. The consent now shows a code, 6 characters of Crockford base32 made with the nonce (`DockConsent.ask` returns `{ nonce, pairing_code }`; `takeConsent` gives it back once), formatted `K7M-4P2`, with "Type it only in your own dock; never give it to anyone." After the Allow the app sends it raw in `pairing_code` of `/apc/pair`, and keeps the grant only on the hub's acknowledgement, `pairing_code: "required"` on a non-redirected 200 (`pairWithHub`, which also refuses redirects and gives up after 10 s); on anything else it deletes the grant before it answers the page. The hub checks the body before it spends the ticket, keeps the code in the pairing row (`pairing_code`, `code_attempts`, `code_expires_at`), never shows it (the dock's state says only `code: true`), and approves only with it: the check, the count, the removal after the fifth wrong code and the move to approving happen before `decide()`'s first await, so parallel tries count. A coded request nobody approves goes after two minutes, the grant given back; an older app's code-less request keeps its ten minutes while `PAIRING_CODE` is `when_sent`, counted as `pair_codeless` in `apc_mcp_sessions` until the operator moves to `required`. The ticket lives 240 s so the consent fits in it. In the dock the code is typed on the request's card, on the dock's page and an agent's page (`PairingRequest`, one field, Deny first, Allow off until a code is typed); Float, the strip and the pets show Deny and "Allow it in your dock: it needs the code.", since Float shrinks as an answer leaves and would hide a wrong code. Pulse, Pulse for Windows and Orders then show the code again, with Cancel, until the hub connects (its `initialize`); if the person's own dock never asks for the code, the agent was someone else's. Signals shows the code on its consent and after the Allow, in the page only. The residual is social: a victim who reads the code out to whoever asks.
 
 A local hub (extension, desktop app) cannot take that POST; the app's page would hand the grant to the extension, and how a page reaches an extension it does not know must be verified (`externally_connectable` takes a static list of sites). The long-term answer is MCP's own authorization, OAuth 2.1 with PKCE, with the hub as client and the ticket only starting the flow. v1 deferred OAuth (section 6); v2 brings it in.
 
@@ -277,7 +279,7 @@ Presence events keep `v: 1` and gain an optional `app`. The app's own presence w
 
 What a hostile page can do with a dropped agent:
 
-- read the handle and an unexpired ticket, and ask to pair; the person sees the request in the dock and can say no;
+- read the handle and an unexpired ticket, and ask to pair; the person sees the request in the dock and can say no; and since APC 0.9 a request made from a drag of someone else's dock cannot be approved there without the pairing code that only the app's owner saw (12.1);
 - once paired by the person, pin keys (checked by `parseTarget` and the app's allowlist) and offer tools whose descriptions and results may try injection, as any MCP server the person adds can; the hub never merges an app's `instructions` into its own;
 - pull the agent's attention; the hub rate-limits pins per app (v1's 300 a minute) and the dock shows each one.
 

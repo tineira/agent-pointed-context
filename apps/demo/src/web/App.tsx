@@ -9,7 +9,7 @@ import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { usePulseStrings } from "./apc-strings.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
-import { HubConsent, type PendingDrop } from "./hub-consent.tsx";
+import { DockWaiting, HubConsent, hubError, type PendingDrop } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
@@ -212,11 +212,16 @@ function Sandbox({ sid }: { sid: string }) {
         onUnknownAgent: hubMode
           ? async (drag, target) => {
               const r = await api.hubPair({ hub: drag.hub, agent: drag.agent, ticket: drag.ticket, region: null, target });
-              if (r.error === "consent_required" && r.consent) {
+              if (r.error === "consent_required" && r.consent && r.pairing_code) {
                 void refresh();
-                return setPendingDrop({ drag, target, at: Date.now(), consent: r.consent });
+                return setPendingDrop({ drag, target, at: Date.now(), consent: r.consent, pairing_code: r.pairing_code });
               }
-              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned: ${r.error}`);
+              // Still waiting for the code in the dock (APC 0.9): the waiting card shows it again.
+              if (r.ok && r.status === "pending" && r.pairing) {
+                void refresh();
+                return;
+              }
+              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned: ${hubError(r.error)}`);
               setTimeout(() => setNotice(null), 4000);
               void refresh();
             }
@@ -417,6 +422,27 @@ function Sandbox({ sid }: { sid: string }) {
         <div className="mx-auto mt-3 w-full max-w-7xl px-5">
           <div className="rounded-lg border border-filament/40 bg-filament-soft px-3 py-2 text-sm">{notice}</div>
         </div>
+      )}
+      {(state.hub_links ?? []).flatMap((l) =>
+        l.pairing
+          ? [
+              <DockWaiting
+                key={l.grant_id}
+                hub={l.hub}
+                pairing={l.pairing}
+                onCancel={() =>
+                  void api
+                    .revoke(l.grant_id)
+                    .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled: ${r.error}`), (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`)
+                    .then((message) => {
+                      setNotice(message);
+                      setTimeout(() => setNotice(null), 8000);
+                      void refresh();
+                    })
+                }
+              />,
+            ]
+          : [],
       )}
       <main className={`mx-auto flex w-full flex-1 flex-col gap-4 px-5 py-8 ${route.screen === "howto" ? "max-w-4xl" : "max-w-7xl"}`}>
         {route.screen === "overview" && <Overview sid={sid} state={state} data={data} filters={filters} onFilters={(f) => navigate(route, f)} />}

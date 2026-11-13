@@ -5,7 +5,7 @@
  * unverified, only after the person approves that warning in the dock, and not at all while the
  * operator's kill switch (UNVERIFIED_PAIRING=closed) is on. Pure, so the tests run it.
  */
-import { parseTarget, type FocusPayload } from "@tineira/apc-protocol";
+import { PAIRING_CODE_TTL_MS, parseTarget, type FocusPayload } from "@tineira/apc-protocol";
 import type { AppTool } from "./app-client.ts";
 
 /** The hub's limits on the apps it reads. Tests shorten the times; nothing else changes them. */
@@ -33,6 +33,8 @@ export const LIMITS = {
   pairings: 20,
   /** A pending pairing nobody decides goes after this long, and frees its place (TIN-581). */
   pendingMs: 10 * 60_000,
+  /** A pending pairing with a pairing code goes after this long instead, from /apc/pair (APC 0.9: PAIRING_CODE_TTL_MS, 120 s). */
+  pairingCodeMs: PAIRING_CODE_TTL_MS,
   /** Past this, an approval whose introduction never finished (the object was evicted mid-way) counts as paired. Longer than introducing takes (initializeMs + listMs). */
   approvingMs: 60_000,
   /** What the hub keeps of an unverified app's tools and views. */

@@ -3,8 +3,12 @@
  * MCP URL. Dragging one onto an APC app (Pulse) pairs them after a yes on the app's
  * page and a yes here; from then on the agent follows the person's pointer across every paired app.
  *
- * Each agent's drag carries its public handle, this hub's origin and a single-use ticket (60 s),
- * never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once.
+ * Each agent's drag carries its public handle, this hub's origin and a single-use ticket (240 s since
+ * APC 0.9), never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once,
+ * with at least three minutes left, so the app's two-minute consent fits in it.
+ *
+ * A request whose app sent a pairing code (APC 0.9, TIN-859) is approved with that code: typed on the dock's
+ * page or an agent's page (pairing-request.tsx); Float, the strip and the pets send the person to the dock.
  */
 import { APC_AGENT_TYPE, agentDragPayload } from "@tineira/apc-web";
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
@@ -24,10 +28,11 @@ import { DownloadItems } from "./downloads.tsx";
 import { DockMenu } from "./dock-menu.tsx";
 import { ExtensionOutdatedNotice } from "./extension.tsx";
 import { FloatIcon, PlusIcon } from "./icons.tsx";
-import { DecisionNotice, NotVerified, UnverifiedRequest } from "./unverified.tsx";
+import { DecisionNotice, NotVerified } from "./unverified.tsx";
+import { PairingRequest } from "./pairing-request.tsx";
 import { ComputersPanel, JoinPanel, JoinRequests, LinkPanel } from "./computers.tsx";
 import { REMOVED_CLOSE } from "../worker/devices.ts";
-import { buttonsOff, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, sentOut, type InFlight, type Sent } from "./request-state.ts";
+import { decisionNotice, inFlightOf, isCodeRetryError, kindOf, landed, mayAnswer, sentOut, type CodeError, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "where your agents point"];
@@ -107,6 +112,11 @@ export function HubDock() {
   const [deciding, setDeciding] = useState<Sent>(new Map());
   /** What the hub said when it refused the last answer (Fix check 4 on #120), shown on every surface of this page. */
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * A refused pairing code, per request (APC 0.9): only the refusals the person can try again after on the same card
+   * (a wrong, malformed or missing code). Every other refusal is the notice above.
+   */
+  const [codeErrors, setCodeErrors] = useState<ReadonlyMap<string, CodeError>>(new Map());
   // It stays a while, then goes by itself; the person can close it sooner.
   useEffect(() => {
     if (!notice) return;
@@ -275,13 +285,21 @@ export function HubDock() {
     const top = () => {
       for (const id of ticketed.split(",")) {
         const t = tickets.current.get(id);
-        if (!t || t.expires_at - Date.now() < 20_000) void fetchTicket(id);
+        // A ticket lives 240 s (APC 0.9): a drag always carries one with three minutes left, more than the app's consent takes.
+        if (!t || t.expires_at - Date.now() < 180_000) void fetchTicket(id);
       }
     };
     top();
     const id = setInterval(top, 10_000);
     return () => clearInterval(id);
   }, [ticketed, fetchTicket]);
+
+  // A card's code error goes once its request is no longer pending (approved, denied, removed or expired).
+  const pendingIds = state ? state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => p.id)).join(",") : "";
+  useEffect(() => {
+    const keep = new Set(pendingIds.split(","));
+    setCodeErrors((m) => ([...m.keys()].every((id) => keep.has(id)) ? m : new Map([...m].filter(([id]) => keep.has(id)))));
+  }, [pendingIds]);
 
   // The pets tell the app the dock's agents on every change, so a pet comes and goes with each (TIN-479),
   // with their names for the tray's Float menu (TIN-698).
@@ -345,7 +363,7 @@ export function HubDock() {
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));
-  const decide = (pid: string, action: Decision) => {
+  const decide = (pid: string, action: Decision, code?: string) => {
     // Never the same kind twice, and no yes once anything is on its way; a Deny still goes while an Approve is
     // on its way, from this surface too, so a misclick can be undone (Fix check 2 on #120). The hub lets it win.
     const kind = kindOf(action);
@@ -353,10 +371,18 @@ export function HubDock() {
     if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
     setDeciding((m) => sentOut(m, pid, kind));
     setNotice(null);
-    void call<{ ok?: boolean; error?: unknown }>(`${base}/pairings/${pid}`, { action })
+    // The code, typed on the card, goes in the body (APC 0.9): compared in the hub, then dropped.
+    void call<{ ok?: boolean; error?: unknown; attempts_left?: unknown }>(`${base}/pairings/${pid}`, { action, ...(code ? { code } : {}) })
       // A refusal (400 with { ok: false, error }) is said, never dropped (Fix check 4 on #120); so is a call that failed.
+      // A wrong, malformed or missing code is said on the request's own card, which stays to try again; any other
+      // refusal (the last wrong code included: the request is gone) is the dock's notice.
       .then((r) => {
-        if (r?.ok === false) setNotice(decisionNotice(r.error));
+        if (r?.ok !== false) return setCodeErrors((m) => (m.has(pid) ? new Map([...m].filter(([id]) => id !== pid)) : m));
+        // On its card only when the card has the field (a request with a code); otherwise, the notice.
+        if (isCodeRetryError(r.error) && pending.some((x) => x.pairing.id === pid && x.pairing.code)) {
+          const error: CodeError = { error: r.error, at: Date.now(), ...(typeof r.attempts_left === "number" ? { attempts_left: r.attempts_left } : {}) };
+          setCodeErrors((m) => new Map(m).set(pid, error));
+        } else setNotice(decisionNotice(r.error));
       })
       .catch(() => setNotice(decisionNotice("unreachable")))
       .finally(() => {
@@ -403,36 +429,36 @@ export function HubDock() {
     void fetchTicket(agentId);
   }
 
-  const requests = pending.map(({ agent, pairing }) =>
-    pairing.app.unverified ? (
-      // An app outside APP_ORIGINS (TIN-581): the warning, in the dock, the first time its domain asks here.
-      <section key={pairing.id} className="request unverified">
-        <UnverifiedRequest domain={host(pairing.app.origin)} declared={pairing.app.declared_name ?? null} agent={agent.name} warning={!!pairing.warning} inFlight={inFlight(pairing)} approving={!!pairing.approving} decide={(action) => decide(pairing.id, action)} />
-      </section>
-    ) : (
-    <section key={pairing.id} className="request">
-      <p>
-        {pairing.kind === "reader" ? (
-          <>
-            <b>{pairing.app.name}</b> wants to send <b>{agent.name}</b> page readings from the sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. {READER_NOTICE}
-          </>
-        ) : (
-          <>
-            <b>{pairing.app.name}</b> at <b>{host(pairing.app.origin)}</b> wants to be read by <b>{agent.name}</b>. Its tools and data come from {pairing.app.origin}.
-          </>
-        )}
-      </p>
-      <div className="row">
-        <button type="button" className="primary" disabled={buttonsOff({ inFlight: inFlight(pairing), approving: pairing.approving }).approve} onClick={() => decide(pairing.id, "approve")}>
-          Allow
-        </button>
-        <button type="button" disabled={buttonsOff({ inFlight: inFlight(pairing) }).deny} onClick={() => decide(pairing.id, "deny")}>
-          Deny
-        </button>
-      </div>
+  // The dock's page: the code is typed on the request's card (APC 0.9). An app outside APP_ORIGINS (TIN-581) shows its
+  // warning the first time its domain asks here.
+  const requests = pending.map(({ agent, pairing }) => (
+    <section key={pairing.id} className={`request${pairing.app.unverified ? " unverified" : ""}`}>
+      <PairingRequest
+        entry="field"
+        kind={pairing.kind}
+        app={pairing.app.unverified ? host(pairing.app.origin) : pairing.app.name}
+        host={host(pairing.app.origin)}
+        agent={agent.name}
+        says={
+          pairing.kind === "reader" ? (
+            <>
+              <b>{pairing.app.name}</b> wants to send <b>{agent.name}</b> page readings from the sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. {READER_NOTICE}
+            </>
+          ) : (
+            <>
+              <b>{pairing.app.name}</b> at <b>{host(pairing.app.origin)}</b> wants to be read by <b>{agent.name}</b>. Its tools and data come from {pairing.app.origin}.
+            </>
+          )
+        }
+        {...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {})}
+        code={!!pairing.code}
+        inFlight={inFlight(pairing)}
+        approving={!!pairing.approving}
+        error={codeErrors.get(pairing.id) ?? null}
+        decide={(action, code) => decide(pairing.id, action, code)}
+      />
     </section>
-    ),
-  );
+  ));
 
   const floatRequests: FloatRequest[] = pending.map(({ agent, pairing }) => ({
     id: pairing.id,
@@ -443,6 +469,7 @@ export function HubDock() {
     agentId: agent.id,
     inFlight: inFlight(pairing),
     approving: !!pairing.approving,
+    ...(pairing.code ? { code: true } : {}),
     ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
   }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
@@ -492,7 +519,7 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
-          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, inFlight: inFlight(p), approving: !!p.approving }))}
+          requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, inFlight: inFlight(p), approving: !!p.approving, code: !!p.code, error: codeErrors.get(p.id) ?? null }))}
           decide={decide}
           refresh={refresh}
           back={back}
@@ -691,6 +718,8 @@ interface FloatRequest {
   inFlight?: InFlight;
   /** The hub is still introducing itself to the app: Approve is off, Deny stays on (Fix check 1 on #120). */
   approving?: boolean;
+  /** The app sent a pairing code (APC 0.9): approved in the dock only, where the code is typed. */
+  code?: boolean;
 }
 
 /** What the person answers a request with; "approve_unverified" is only the warning's Approve (TIN-581). */
@@ -1035,40 +1064,41 @@ function FloatAgents(props: {
       </div>
     );
   }
+  // A request with a pairing code (APC 0.9) shows no Allow here: Float shrinks as an answer leaves, which would hide a
+  // wrong code and its retry, so the code is typed in the dock. Requests without one keep their buttons.
   if (props.requests.length > 0)
     return (
       <div className="float float-requests">
         {props.refusal}
-        {props.requests.map((r) =>
-          r.unverified ? (
-            // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
-            <div key={r.id} className="float-request unverified" tabIndex={-1}>
-              <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
-            </div>
-          ) : (
-          <div key={r.id} className="float-request" tabIndex={-1} autoFocus={props.notice?.focus && r === props.requests[0]}>
-            <p>
-              {r.kind === "reader" ? (
-                <>
-                  <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings. {READER_NOTICE}
-                </>
-              ) : (
-                <>
-                  <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
-                </>
-              )}
-            </p>
-            <div className="row">
-              <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
-                Allow
-              </button>
-              <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
-                Deny
-              </button>
-            </div>
+        {props.requests.map((r) => (
+          // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
+          <div key={r.id} className={`float-request${r.unverified ? " unverified" : ""}`} tabIndex={-1} autoFocus={!r.unverified && props.notice?.focus && r === props.requests[0]}>
+            <PairingRequest
+              entry="dock"
+              kind={r.kind}
+              app={r.app}
+              host={r.host}
+              agent={r.agent}
+              says={
+                r.kind === "reader" ? (
+                  <>
+                    <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings. {READER_NOTICE}
+                  </>
+                ) : (
+                  <>
+                    <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+                  </>
+                )
+              }
+              {...(r.unverified ? { unverified: r.unverified } : {})}
+              code={!!r.code}
+              inFlight={r.inFlight}
+              approving={!!r.approving}
+              decide={(action) => props.decide(r.id, action)}
+              compact
+            />
           </div>
-          ),
-        )}
+        ))}
       </div>
     );
   if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;

@@ -8,7 +8,7 @@ The contract an app and an agent share in Agent Pointed Context: wire types, the
 npm i @tineira/apc-protocol@next
 ```
 
-Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.8.x ships APC 0.8).
+Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.9.x ships APC 0.9).
 
 ```ts
 import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@tineira/apc-protocol";
@@ -41,7 +41,7 @@ What every APC app implements, whichever way agents reach it ([`src/core.ts`](sr
 What belongs to a profile, not to the core:
 
 - **Direct** (the agent connects to the app's own MCP URL): a grant per agent, its secret URL, the list where the person makes and names agents.
-- **Dock** (the agent connects once, to a hub): the drop (`application/x-apc-agent`, the handle and the ticket), consent in the app (checked by the app's server, never its page alone: 0.7, `DockConsent` in `@tineira/apc-server`), `POST {hub}/apc/pair` (the hub reads the app's `apc.json` first), `POST {hub}/apc/confirm` on every drop, and `POST {app}/apc/revoke`, the hub giving a grant back.
+- **Dock** (the agent connects once, to a hub): the drop (`application/x-apc-agent`, the handle and the ticket), consent in the app (checked by the app's server, never its page alone: 0.7, `DockConsent` in `@tineira/apc-server`), with a pairing code the dock's Allow requires (0.9, `PAIRING_CODE_LENGTH`), `POST {hub}/apc/pair` (the hub reads the app's `apc.json` first; the app keeps its grant only on the hub's acknowledgement of the code, `pairWithHub`), `POST {hub}/apc/confirm` on every drop, and `POST {app}/apc/revoke`, the hub giving a grant back.
 
 Whatever it offers, an app publishes `apc.json` (below).
 

@@ -47,6 +47,8 @@ export interface FakeApp {
 /** A valid apc.json for an app on `origin` that offers the Dock profile. */
 export const manifestOf = (origin: string, name: string, over: Json = {}): Json => ({ name, standard: "0.5.0", origin, profiles: ["dock"], mcp: { path: "/mcp/" }, ...over });
 
+/** The hub's answer as its Worker gives it (index.ts): HTTP 400 on a refusal, which the apps read as the hub's own (APC 0.9). */
+export const answerAs = (r: { ok: boolean }) => Response.json(r, { status: r.ok ? 200 : 400 });
 export const rpcAnswer = (result: unknown) => Response.json({ jsonrpc: "2.0", id: 1, result });
 export const asResult = (data: Json) => ({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
 
@@ -109,8 +111,8 @@ export async function world(t: TestContext, env: Json = {}) {
       const r = await pulse.revokeHubGrant(secret);
       return Response.json(r, { status: r.ok ? 200 : 404 });
     }
-    if (url.origin === DOCK && url.pathname === "/apc/pair") return Response.json(await hub.pair(await request.json()));
-    if (url.origin === DOCK && url.pathname === "/apc/confirm") return Response.json(await hub.confirm(await request.json()));
+    if (url.origin === DOCK && url.pathname === "/apc/pair") return answerAs(await hub.pair(await request.json()));
+    if (url.origin === DOCK && url.pathname === "/apc/confirm") return answerAs(await hub.confirm(await request.json()));
     const app = apps.get(url.origin);
     if (app) return serve(app, request);
     throw new TypeError(`no network in this test: ${url}`);
@@ -139,7 +141,8 @@ export async function world(t: TestContext, env: Json = {}) {
     const drop = { hub: DOCK, ...drag, target: { kind: "customer", id: customers[0]!.id } };
     const asked = await pulse.pairHub(SID, PULSE, drop);
     assert.equal(asked.error, "consent_required");
-    return pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent });
+    // The code Pulse's consent showed (APC 0.9), for the person to type in the dock.
+    return { ...(await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent })), code: asked.pairing_code as string };
   };
   /** The person drops the agent on Pulse, allows it there and in the dock. */
   const pairPulse = async () => {
@@ -148,7 +151,8 @@ export async function world(t: TestContext, env: Json = {}) {
     assert.equal(paired.ok, true, `pairing Pulse: ${paired.error}`);
     const pending = (await agent()).pairings.find((p: Json) => p.status === "pending" && (p.app as Json).origin === PULSE);
     assert.equal(pending.warning, undefined, "a verified app's request carries no warning");
-    assert.equal((await hub.decide(pending.id, "approve")).ok, true);
+    assert.equal(pending.code, true, "Pulse sent the hub its pairing code");
+    assert.equal((await hub.decide(pending.id, "approve", paired.code)).ok, true);
   };
 
   /** A hostile app asks to pair (POST /apc/pair, with a ticket from a drag), and optionally the person approves the warning in the dock (TIN-581). */

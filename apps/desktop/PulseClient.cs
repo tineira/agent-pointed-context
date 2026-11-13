@@ -9,6 +9,9 @@ using System.Text.Json;
 
 namespace PulseDesktop;
 
+/// <summary>What a dock agent's drop answers (apps/demo/src/worker/sandbox.ts, PairHubAnswer).</summary>
+public sealed record HubPairResult(bool Ok, string? Error, string? GrantId, string? Status, string? Consent, string? PairingCode, DockPairing? Pairing);
+
 public sealed class PulseClient : IDisposable
 {
     public static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -72,9 +75,25 @@ public sealed class PulseClient : IDisposable
         return (ok || (res.IsSuccessStatusCode && error is null), error, grant);
     }
 
-    /// <summary>A dock agent dropped here: pair it (first time, after consent) or pin it, checked with its dock (TIN-389).</summary>
-    public Task<(bool Ok, string? Error, string? GrantId)> HubPairAsync(AgentDrag drag, Target target, string? region) =>
-        PostAsync("/hub/pair", new { hub = drag.Hub, agent = drag.Agent, ticket = drag.Ticket, region, target = target.ToJson() });
+    /// <summary>
+    /// A dock agent dropped here: every drop goes to Pulse, which decides (TIN-606). An agent Pulse holds no grant for
+    /// comes back consent_required with the nonce and the pairing code to show (APC 0.9); the Allow sends the nonce
+    /// back (`consent`). A paired agent is pinned once its dock confirms (TIN-389); one still waiting for its code in
+    /// the dock comes back with `pairing`.
+    /// </summary>
+    public async Task<HubPairResult> HubPairAsync(AgentDrag drag, Target target, string? region, string? consent)
+    {
+        var res = await http.PostAsJsonAsync($"{Base}/hub/pair", new { hub = drag.Hub, agent = drag.Agent, ticket = drag.Ticket, region, target = target.ToJson(), consent });
+        var json = await res.Content.ReadFromJsonAsync<JsonElement>();
+        string? Str(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var ok = json.ValueKind == JsonValueKind.Object && json.TryGetProperty("ok", out var o) && o.ValueKind == JsonValueKind.True;
+        DockPairing? pairing = null;
+        if (json.ValueKind == JsonValueKind.Object && json.TryGetProperty("pairing", out var p) && Str(p, "code") is { } code && Str(p, "expires_at") is { } until) pairing = new DockPairing(code, until);
+        return new HubPairResult(ok, Str(json, "error"), Str(json, "grant_id"), Str(json, "status"), Str(json, "consent"), Str(json, "pairing_code"), pairing);
+    }
+
+    /// <summary>Revoke from the app (APC 0.2): also Cancel on a grant still waiting for its pairing code (APC 0.9).</summary>
+    public Task<(bool Ok, string? Error, string? GrantId)> RevokeAsync(string grantId) => PostAsync($"/grants/{grantId}/revoke", new { });
 
     public Task<(bool Ok, string? Error, string? GrantId)> UnpinAsync(string grantId) => PostAsync("/unpin", new { grant_id = grantId });
 

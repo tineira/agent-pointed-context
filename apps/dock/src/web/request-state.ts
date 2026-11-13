@@ -1,3 +1,5 @@
+import { normalizePairingCode } from "@tineira/apc-protocol";
+
 /**
  * Which answers a pairing request takes while one is on its way (TIN-581, Fix check 2 on #120). Pure,
  * so the tests run it; the dock, an agent's page, Float, the strip and the pets all use it.
@@ -74,6 +76,16 @@ export function decisionNotice(error: unknown): string {
       return "The app took the access back while it was being approved, so it was not paired.";
     case "invalid_action":
       return "That answer no longer applies to this request.";
+    // The pairing code (APC 0.9, TIN-859). The three a person can try again after are said on the request's own card
+    // (codeErrorText); these are for any surface that shows them as a notice.
+    case "pairing_code_refused":
+      return "Too many wrong codes, so the request was removed. Drop the agent on the app again.";
+    case "wrong_pairing_code":
+      return "Wrong code. Type the code the app shows, where you allowed the agent.";
+    case "invalid_pairing_code":
+      return "That is not a pairing code: it is 6 letters and digits, like K7M-4P2, shown by the app.";
+    case "pairing_code_required":
+      return "This request needs the code the app shows: type it on the request in your dock.";
     default:
       return `That did not go through (${typeof error === "string" ? error.slice(0, 40) : "error"}). Try again.`;
   }
@@ -83,3 +95,41 @@ export function decisionNotice(error: unknown): string {
 export function mergeInFlight(a: InFlight | undefined, b: InFlight | undefined): InFlight | undefined {
   return a === "deny" || b === "deny" ? "deny" : (a ?? b);
 }
+
+/**
+ * The pairing code (APC 0.9, TIN-859). A request whose app sent a code is approved only with it: Allow is on once
+ * what was typed is a code (6 characters, after case, spaces and dashes are ignored), and what goes to the hub is
+ * that code, raw. Null while it is not one.
+ */
+export function typedCode(value: string): string | null {
+  return normalizePairingCode(value);
+}
+
+/** The refusals a person can try again after on the same card; every other refusal goes to the dock's notice. */
+export const CODE_RETRY_ERRORS = ["wrong_pairing_code", "invalid_pairing_code", "pairing_code_required"] as const;
+export type CodeRetryError = (typeof CODE_RETRY_ERRORS)[number];
+export const isCodeRetryError = (error: unknown): error is CodeRetryError => (CODE_RETRY_ERRORS as readonly unknown[]).includes(error);
+
+/** A card's own error: which, the tries left after a wrong code, and when (so the same error twice is seen twice). */
+export interface CodeError {
+  error: CodeRetryError;
+  attempts_left?: number;
+  at: number;
+}
+
+/** What a card says under its code field. */
+export function codeErrorText(e: Pick<CodeError, "error" | "attempts_left">): string {
+  switch (e.error) {
+    case "wrong_pairing_code": {
+      const n = e.attempts_left;
+      return typeof n === "number" ? `Wrong code. ${n} ${n === 1 ? "try" : "tries"} left.` : "Wrong code.";
+    }
+    case "invalid_pairing_code":
+      return "That is not a pairing code: it is 6 letters and digits, like K7M-4P2.";
+    case "pairing_code_required":
+      return "Type the code the app shows.";
+  }
+}
+
+/** What Float, the strip and the pets show in Allow's place for a request with a code: it is typed in the dock. */
+export const CODE_IN_DOCK = "Allow it in your dock: it needs the code.";

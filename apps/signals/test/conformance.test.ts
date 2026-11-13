@@ -1,14 +1,14 @@
 /**
  * Signals against the APC conformance suite (APC 0.2, TIN-577). Signals offers the Dock profile only:
  * every grant is one it handed a dock's hub at pairing. Its Durable Object runs for real on Node's
- * SQLite (@tineira/apc-conformance/workers); the hub's side of pairing is a stand-in, so nothing leaves the
- * process.
+ * SQLite (@tineira/apc-conformance/workers); the hub's side of pairing is the suite's stand-in (`standInHub`, one
+ * per feed under test, on its own origin), which checks the pairing code (APC 0.9), so nothing leaves the process.
  */
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
-import { apcConformance, type ApcAppAdapter } from "@tineira/apc-conformance";
+import { test } from "node:test";
+import { apcConformance, standInHub, type ApcAppAdapter, type StandInHub } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { APC_JSON_PATH, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { APC_JSON_PATH, formatPairingCode, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { demoMarket } from "../../demo/src/model/demo-world.ts";
 
@@ -20,26 +20,38 @@ const ORIGIN = "https://signals.test";
 const HUB = "https://dock.test";
 const SID = "7".repeat(32);
 
-function standInHub(t: TestContext | null): { calls: string[] } {
-  const calls: string[] = [];
-  const fake = async (input: string | URL | Request) => {
-    const url = String(input instanceof Request ? input.url : input);
-    calls.push(url);
-    if (url === `${HUB}/apc/pair`) return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null } });
-    throw new Error(`no network in this test: ${url}`);
-  };
-  if (t) t.mock.method(globalThis, "fetch", fake);
-  else globalThis.fetch = fake as typeof fetch;
-  return { calls };
-}
+/** The stand-in hubs, by origin: one per feed under test, reached by Signals' server through fetch; nothing else leaves the process. */
+const hubs = new Map<string, { hub: StandInHub; calls: string[] }>();
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = new URL(String(input instanceof Request ? input.url : input));
+  const h = hubs.get(url.origin);
+  if (!h) throw new Error(`no network in this test: ${url}`);
+  h.calls.push(url.href);
+  return h.hub.fetch(input, init);
+}) as typeof fetch;
+let hubCount = 0;
 
 /** Signals' deploy (wrangler.jsonc): both profiles. */
 const DEPLOY = { HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
 
 async function signals(profile: "direct" | "dock" = "dock", options: { link?: boolean; env?: Record<string, string> } = {}) {
   const room = durableObjectRoom();
-  const feed = new Feed(room.ctx, options.env ?? DEPLOY);
+  // A hub of its own, on its own origin: Signals pairs with it, and it calls Signals back (a give-back, its introduction).
+  const hubOrigin = `https://dock-${++hubCount}.test`;
+  const env = options.env ?? DEPLOY;
+  const feed = new Feed(room.ctx, env.HUB_ORIGINS ? { ...env, HUB_ORIGINS: `${env.HUB_ORIGINS},${hubOrigin}` } : env);
   await feed.init();
+  const hub = standInHub({
+    origin: hubOrigin,
+    app: async (request) => {
+      if (new URL(request.url).pathname !== "/apc/revoke") return feed.fetch(request);
+      const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
+      const r = await feed.revoke(secret);
+      return Response.json(r, { status: r.ok ? 200 : 404 });
+    },
+  });
+  const calls: string[] = [];
+  hubs.set(hubOrigin, { hub, calls });
   const posts = demoMarket().posts;
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "post", id: posts[0]!.id, part: null, params: null },
@@ -58,7 +70,8 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       return { grantId: made.grant_id as string, mcpUrl: urlOf(made.grant_id) };
     }
     agents++;
-    const drop = { hub: HUB, agent: `ag_${agents}`, ticket: `${"d".repeat(32)}.${agents.toString().padStart(16, "0")}`, target: targets[0] };
+    const agent = `ag_${agents}`;
+    const drop = { hub: hubOrigin, agent, ticket: hub.ticket(agent), target: targets[0] };
     // Signals asks the person on its page first (TIN-606); their Allow brings the nonce back.
     const asked = await feed.pairHub(SID, ORIGIN, drop);
     assert.equal(asked.error, "consent_required");
@@ -73,6 +86,26 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
     // The MCP endpoint is the feed's; apc.json is the Worker's, for the whole origin (APC 0.5).
     fetch: (request) => (new URL(request.url).pathname === APC_JSON_PATH ? worker.fetch(request, options.env ?? DEPLOY) : feed.fetch(request)),
     connect: () => connectOn(profile),
+    // The pairing code (APC 0.9): what Signals' consent shows (formatted, as app.tsx shows it), and the Allow on it.
+    ...(profile === "dock"
+      ? {
+          dock: {
+            hub,
+            async drop(agent: string, ticket: string) {
+              const drop = { hub: hubOrigin, agent, ticket, target: targets[0] };
+              const asked = await feed.pairHub(SID, ORIGIN, drop);
+              assert.equal(asked.error, "consent_required");
+              return {
+                shown: formatPairingCode(asked.pairing_code),
+                allow: async () => {
+                  const r = await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+                  return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
+                },
+              };
+            },
+          },
+        }
+      : {}),
     ...(options.link
       ? {
           link: {
@@ -121,10 +154,9 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       },
     },
   };
-  return { app, feed, room };
+  return { app, feed, room, hub, calls };
 }
 
-standInHub(null);
 for (const profile of ["direct", "dock"] as const) {
   // Both profiles (TIN-578).
   const { app } = await signals(profile);
@@ -205,39 +237,39 @@ test("a Direct agent names itself on initialize, the person can rename it, and r
 });
 
 test("revoking an agent in Signals calls nobody; the URL answers revoked with Signals' host, and the dock link goes", async (t) => {
-  const { app, feed } = await signals();
-  const hub = standInHub(t);
+  const { app, feed, calls: hubCalls } = await signals();
   const { grantId, mcpUrl } = await app.connect();
-  const before = hub.calls.length;
+  const before = hubCalls.length;
   t.mock.method(globalThis, "fetch", async () => {
     throw new Error("the hub is down");
   });
   assert.deepEqual(await feed.revokeGrant(grantId), { ok: true });
-  assert.equal(hub.calls.length, before, "no call to the hub");
+  assert.equal(hubCalls.length, before, "no call to the hub");
   assert.equal((await feed.state()).grants.length, 0);
   const response = await feed.fetch(new Request(mcpUrl, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
   assert.equal(response.status, 403);
   assert.equal((await response.json()).revoked_by, "signals.test");
 });
 
-test("Signals makes a grant for a dock agent only with the nonce its consent was shown with, even when the page thinks it is linked (TIN-606)", async (t) => {
-  const { app, feed } = await signals();
-  const hub = standInHub(t);
+test("Signals makes a grant for a dock agent only with the nonce its consent was shown with, even when the page thinks it is linked (TIN-606)", async () => {
+  const { app, feed, hub, calls: hubCalls } = await signals();
   const { grantId } = await app.connect();
   assert.deepEqual(await feed.revokeGrant(grantId), { ok: true });
   // The page missed the revoke and sends the drop as a pin: the server asks for consent; nothing reaches the dock.
-  const calls = hub.calls.length;
-  const drop = { hub: HUB, agent: "ag_1", ticket: `${"d".repeat(32)}.${"1".repeat(16)}`, target: { kind: "post", id: demoMarket().posts[0]!.id } };
+  const calls = hubCalls.length;
+  const drop = { hub: hub.origin, agent: "ag_1", ticket: hub.ticket("ag_1"), target: { kind: "post", id: demoMarket().posts[0]!.id } };
   const asked = await feed.pairHub(SID, ORIGIN, drop);
   assert.equal(asked.error, "consent_required");
   assert.match(asked.consent, /^cn_[0-9a-f]{32}$/);
-  assert.equal(hub.calls.length, calls);
+  assert.equal(formatPairingCode(asked.pairing_code).length, 7, "and the pairing code its consent shows (APC 0.9)");
+  assert.equal(hubCalls.length, calls);
   assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: `cn_${"0".repeat(32)}` })).error, "consent_required");
   assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, agent: "ag_2", consent: asked.consent })).error, "consent_required", "another agent's drop");
-  assert.equal(hub.calls.length, calls);
+  assert.equal(hubCalls.length, calls);
   const again = await feed.pairHub(SID, ORIGIN, drop);
   assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: again.consent })).ok, true);
-  assert.deepEqual(hub.calls.slice(calls), [`${HUB}/apc/pair`]);
+  assert.deepEqual(hubCalls.slice(calls), [`${hub.origin}/apc/pair`]);
+  assert.equal(hub.received.at(-1)!.pairing_code, again.pairing_code, "the code the consent showed went to the hub");
 });
 
 test("a double-clicked Allow in Signals pairs once: the second request changes nothing, and the grant the first made stays (Grok on #123)", async (t) => {
@@ -254,10 +286,10 @@ test("a double-clicked Allow in Signals pairs once: the second request changes n
       pairAsked();
       // The hub takes its time (it reads the app's apc.json first).
       await held;
-      return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null } });
+      return Response.json({ ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" });
     }
     // Were the second request to ask the hub, it would hear the pairing does not exist yet.
-    if (url === `${HUB}/apc/confirm`) return Response.json({ ok: false, error: "not_paired" });
+    if (url === `${HUB}/apc/confirm`) return Response.json({ ok: false, error: "not_paired" }, { status: 400 });
     throw new Error(`no network in this test: ${url}`);
   });
   const drop = { hub: HUB, agent: "ag_7", ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: demoMarket().posts[0]!.id } };

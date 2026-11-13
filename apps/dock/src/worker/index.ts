@@ -220,8 +220,9 @@ app.post("/api/d/:did/agents/:aid/readings/clear", async (c) => {
   return c.json(result, result.ok ? 200 : 404);
 });
 app.post("/api/d/:did/pairings/:pid", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
-  const result = await stub(c).decide(c.req.param("pid"), body.action);
+  const body = (await c.req.json().catch(() => ({}))) as { action?: unknown; code?: unknown };
+  // The pairing code (APC 0.9): what the dock owner typed, compared in the hub and then dropped.
+  const result = await stub(c).decide(c.req.param("pid"), body.action, body.code);
   return c.json(result, result.ok ? 200 : 400);
 });
 app.get("/api/d/:did/ws", async (c) => {

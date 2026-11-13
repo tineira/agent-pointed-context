@@ -1,12 +1,12 @@
 /**
  * Orders against the conformance suite: the adapter the guide at apc.tineira.com/docs/conformance shows.
  * Everything runs in one process: the app's `fetch` is called directly, the person's page is the app's own
- * event stream, and on the Dock profile a stand-in hub answers pairing. `apps/dock/test/docs-examples.test.ts`
- * runs it under `node --test`.
+ * event stream, and on the Dock profile the suite's stand-in hub (`standInHub`) answers pairing and checks the
+ * pairing code. `apps/dock/test/docs-examples.test.ts` runs it under `node --test`.
  */
 // #region imports
-import { apcConformance, runConformance, type AgentConnection, type ApcAppAdapter } from "@tineira/apc-conformance";
-import type { ApcProfile, FocusTarget, PresenceEvent } from "@tineira/apc-protocol";
+import { apcConformance, runConformance, standInHub, type AgentConnection, type ApcAppAdapter } from "@tineira/apc-conformance";
+import { formatPairingCode, type ApcProfile, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { OrdersApp } from "./orders-app.ts";
 // #endregion
@@ -14,33 +14,17 @@ import { OrdersApp } from "./orders-app.ts";
 const ORIGIN = "https://orders.test";
 const HUB = "https://dock.test";
 
-// #region hub
-/**
- * A dock's hub, reduced to what the Dock profile needs from it: it takes every pairing (`/apc/pair`),
- * confirms every pairing it took (`/apc/confirm`), and remembers each grant's MCP URL, which the real hub
- * keeps to itself.
- */
-function standInHub(): { fetch: typeof fetch; urls: Map<string, string> } {
-  const urls = new Map<string, string>(); // agent handle -> MCP URL
-  const answer = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = String(input instanceof Request ? input.url : input);
-    const body = JSON.parse(String(init?.body ?? "{}")) as { agent: string; mcp_url: string };
-    if (url === `${HUB}/apc/pair`) {
-      urls.set(body.agent, body.mcp_url);
-      return Response.json({ ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Agent via dock", icon: null } });
-    }
-    if (url === `${HUB}/apc/confirm`) return Response.json(urls.get(body.agent) === body.mcp_url ? { ok: true, status: "paired" } : { ok: false, error: "not_paired" });
-    return Response.json({ ok: false, error: "not_found" }, { status: 404 });
-  };
-  return { fetch: answer as typeof fetch, urls };
-}
-// #endregion
-
 /** Orders and its adapter. `link` runs the apc_link checks too (an app with both profiles). */
 export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean } = {}): { app: OrdersApp; adapter: ApcAppAdapter } {
-  const hub = standInHub();
+  // #region hub
+  /**
+   * A dock's hub, from the suite: it takes pairings (`/apc/pair`) and keeps their pairing codes, confirms them
+   * (`/apc/confirm`), and calls the app back (`/apc/revoke`, and `initialize` once approved) through `app`.
+   */
+  const hub = standInHub({ origin: HUB, app: (request) => app.fetch(request) });
+  // #endregion
   let skew = 0; // expireCodes moves the app's clock past a link code's two minutes
-  const app = new OrdersApp({ origin: ORIGIN, profiles: ["direct", "dock"], hubs: [HUB], fetch: hub.fetch, now: () => Date.now() + skew });
+  const app: OrdersApp = new OrdersApp({ origin: ORIGIN, profiles: ["direct", "dock"], hubs: [HUB], fetch: hub.fetch, now: () => Date.now() + skew });
   const call = async (path: string, body: unknown = {}) => (await app.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
 
   // #region connect
@@ -54,14 +38,32 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     }
     // The person drops an agent from a dock: the app asks first, and the Allow brings the nonce back.
     drops++;
-    const drop = { hub: HUB, agent: `ag_${drops}`, ticket: `${"t".repeat(32)}.${String(drops).padStart(16, "0")}`, target: { kind: "order", id: "ord_1001" } };
+    const agent = `ag_${drops}`;
+    const drop = { hub: HUB, agent, ticket: hub.ticket(agent), target: { kind: "order", id: "ord_1001" } };
     const asked = await call("/api/drop", drop);
     if (asked.error !== "consent_required") throw new Error(`expected consent_required, got ${JSON.stringify(asked)}`);
     const paired = await call("/api/drop", { ...drop, consent: asked.consent });
     if (!paired.ok) throw new Error(`pairing failed: ${JSON.stringify(paired)}`);
     const grantId = paired.grant_id as string;
     await call(`/api/agents/${grantId}/unpin`); // the suite starts from no pin
-    return { grantId, mcpUrl: hub.urls.get(drop.agent)! };
+    return { grantId, mcpUrl: hub.urlOf(agent)! };
+  }
+  // #endregion
+
+  // #region dock
+  /** The pairing code (APC 0.9): what the consent shows, and the person's Allow on it. */
+  async function dropOnPage(agent: string, ticket: string) {
+    const drop = { hub: HUB, agent, ticket, target: { kind: "order", id: "ord_1001" } };
+    const asked = await call("/api/drop", drop);
+    if (asked.error !== "consent_required" || typeof asked.pairing_code !== "string") throw new Error(`expected consent_required with a pairing code, got ${JSON.stringify(asked)}`);
+    return {
+      // orders-page.ts shows it formatted, K7M-4P2.
+      shown: formatPairingCode(asked.pairing_code),
+      allow: async () => {
+        const r = await call("/api/drop", { ...drop, consent: asked.consent });
+        return { ok: r.ok === true, ...(typeof r.error === "string" ? { error: r.error } : {}) };
+      },
+    };
   }
   // #endregion
 
@@ -131,6 +133,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
         unpinByTouch: async (grantId) => (await call(`/api/agents/${grantId}/unpin`)).ok === true,
       },
     },
+    ...(profile === "dock" ? { dock: { hub, drop: dropOnPage } } : {}),
     ...(options.link
       ? {
           link: {
