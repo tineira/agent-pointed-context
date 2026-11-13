@@ -297,10 +297,10 @@ export function normalizePairingCode(input: unknown): string | null {
   return code;
 }
 
-/** How a code is shown to a person: `K7M4P2` as `K7M-4P2`. For display only; the wire and storage keep it raw. */
+/** How a code is shown to a person: `K7M4P2` as `K7M-4P2`. For display only; the wire and storage keep it raw. Anything that is not a code is returned untouched, never shaped like one. */
 export function formatPairingCode(code: string): string {
-  const raw = normalizePairingCode(code) ?? code;
-  return `${raw.slice(0, 3)}-${raw.slice(3)}`;
+  const raw = normalizePairingCode(code);
+  return raw ? `${raw.slice(0, 3)}-${raw.slice(3)}` : code;
 }
 
 /** Whether two normalized codes are the same, in time that does not depend on where they differ. */

@@ -14,6 +14,7 @@ test("a typed code is normalized: case, spaces and dashes ignored, O as 0 and I 
 test("a code is shown in two halves, and the alphabet is Crockford base32", () => {
   assert.equal(formatPairingCode("K7M4P2"), "K7M-4P2");
   assert.equal(formatPairingCode("k7m4p2"), "K7M-4P2");
+  assert.equal(formatPairingCode("K7M4P"), "K7M4P", "a malformed code is shown as it is, never shaped like one");
   assert.equal(PAIRING_CODE_ALPHABET.length, 32);
   for (const c of "ILOU") assert.equal(PAIRING_CODE_ALPHABET.includes(c), false, c);
 });

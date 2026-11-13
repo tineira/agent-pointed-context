@@ -72,3 +72,17 @@ test("the pairing-code checks fail an app that keeps a grant the hub did not ack
   }) as typeof fetch);
   await assert.rejects(named(checks, "holds no grant").run(), /the Allow says it paired/);
 });
+
+test("Orders: a drop that pairs but cannot pin its target answers ok with the waiting code and pin_error, which its page shows", async () => {
+  const { app, adapter } = ordersUnderTest("dock");
+  const hub = adapter.dock!.hub;
+  const call = async (body: unknown) => (await app.fetch(new Request("https://orders.test/api/drop", { method: "POST", body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
+  const drop = { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target: { kind: "order", id: "ord_9999" } };
+  const asked = await call(drop);
+  const paired = await call({ ...drop, consent: asked.consent });
+  assert.equal(paired.ok, true);
+  assert.equal(paired.status, "pending");
+  assert.equal((paired.pairing as { code: string }).code, asked.pairing_code);
+  assert.equal(paired.pin_error, "invalid_target");
+  assert.deepEqual(app.agents().find((a) => a.id === paired.grant_id)?.pairing, paired.pairing, "the page's waiting row has the code");
+});

@@ -402,12 +402,15 @@ public sealed class MainWindow : Window
         {
             var r = await client.HubPairAsync(drag, target, null, null);
             if (r.Error == "consent_required" && r.Consent is not null && r.PairingCode is not null) await ConsentAsync(drag, target, r.Consent, r.PairingCode);
-            else if (r.Ok && r.Status == "pending" && r.Pairing is not null) Say($"Waiting for your dock: type {PairingCodes.FormatCode(r.Pairing.code)} there to allow it.");
+            else if (r.Ok && r.Status == "pending" && r.Pairing is not null) Say($"Waiting for your dock: type {PairingCodes.FormatCode(r.Pairing.code)} there to allow it.{PinNote(r.PinError)}");
             else if (r.Ok) Say($"Pinned {state?.grants.FirstOrDefault(g => g.id == r.GrantId)?.Name ?? "your agent"}. Now ask it about \"this\".");
             else Say($"Not pinned: {Describe(r.Error)}");
         });
         await RefreshAsync();
     }
+
+    /// <summary>A pairing that went through while the pin on the drop's target failed (pin_error): said, not dropped.</summary>
+    static string PinNote(string? pinError) => pinError is null ? "" : $" Not pinned where you dropped it ({pinError}): drop the agent there again once your dock connects.";
 
     /// <summary>A refusal in words, as the page says it (hub-consent.tsx).</summary>
     static string Describe(string? error) => error switch
@@ -463,7 +466,7 @@ public sealed class MainWindow : Window
         string? scope = region.SelectedIndex switch { 1 => "latam", 2 => "na", 3 => "emea", _ => null };
         var r = await client.HubPairAsync(drag, target, scope, consent);
         // Paired: the waiting banner shows the code until the dock connects.
-        Say(r.Ok ? $"Paired with the dock at {host}. Type {code} there to allow it, then ask your agent about \"this\"." : $"Not paired: {Describe(r.Error)}");
+        Say(r.Ok ? $"Paired with the dock at {host}. Type {code} there to allow it, then ask your agent about \"this\".{PinNote(r.PinError)}" : $"Not paired: {Describe(r.Error)}");
     }
 
     /// <summary>

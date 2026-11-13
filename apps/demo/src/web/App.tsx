@@ -9,7 +9,7 @@ import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { usePulseStrings } from "./apc-strings.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
-import { DockWaiting, HubConsent, hubError, type PendingDrop } from "./hub-consent.tsx";
+import { DockWaiting, HubConsent, hubError, type PendingDrop, type PinError } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
@@ -112,6 +112,11 @@ function Sandbox({ sid }: { sid: string }) {
   const hubMode = !!state?.v2;
   const v2 = hubMode;
   const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
+  /** A dock grant that paired but could not pin where it was dropped (pin_error, APC 0.9): its waiting card says so. */
+  const [pinErrors, setPinErrors] = useState<ReadonlyMap<string, string>>(new Map());
+  const notePinError = (e: PinError | undefined) => {
+    if (e) setPinErrors((m) => new Map(m).set(e.grantId, e.error));
+  };
 
   const refresh = useCallback(() => api.state().then(setState), [api]);
   useEffect(() => {
@@ -218,6 +223,7 @@ function Sandbox({ sid }: { sid: string }) {
               }
               // Still waiting for the code in the dock (APC 0.9): the waiting card shows it again.
               if (r.ok && r.status === "pending" && r.pairing) {
+                notePinError(r.grant_id && r.pin_error ? { grantId: r.grant_id, error: r.pin_error } : undefined);
                 void refresh();
                 return;
               }
@@ -430,6 +436,7 @@ function Sandbox({ sid }: { sid: string }) {
                 key={l.grant_id}
                 hub={l.hub}
                 pairing={l.pairing}
+                {...(pinErrors.has(l.grant_id) ? { pinError: pinErrors.get(l.grant_id)! } : {})}
                 onCancel={() =>
                   void api
                     .revoke(l.grant_id)
@@ -457,8 +464,9 @@ function Sandbox({ sid }: { sid: string }) {
           key={pendingDrop.consent}
           api={api}
           drop={pendingDrop}
-          onDone={(message) => {
+          onDone={(message, pinError) => {
             setPendingDrop(null);
+            notePinError(pinError);
             if (message) {
               setNotice(message);
               setTimeout(() => setNotice(null), 8000);

@@ -409,3 +409,19 @@ test("Pulse waits for the dock with the code: on a reload, on a new drop, until 
   assert.deepEqual(await sandbox.revokeGrant(waiting.grant_id!), { ok: true });
   assert.equal((await sandbox.state()).hub_links.some((l: { grant_id: string }) => l.grant_id === waiting.grant_id), false);
 });
+
+test("a drop that pairs but cannot pin its target says so: ok with the waiting code, and pin_error (APC 0.9)", async () => {
+  const { sandbox, hub } = await pulse("dock");
+  const drop = { hub: hub.origin, agent: "ag_p", ticket: hub.ticket("ag_p"), target: { kind: "customer", id: "c_nobody" } };
+  const asked = await sandbox.pairHub(SID, ORIGIN, drop);
+  const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+  assert.equal(paired.ok, true, "the pairing went through");
+  assert.equal(paired.status, "pending");
+  assert.equal(paired.pairing?.code, asked.pairing_code);
+  assert.equal(typeof paired.pin_error, "string", "the failed pin is said apart");
+  // A new drop while waiting, on a target it still cannot pin: the same.
+  const again = await sandbox.pairHub(SID, ORIGIN, { ...drop, ticket: hub.ticket("ag_p") });
+  assert.equal(again.ok, true);
+  assert.deepEqual(again.pairing, paired.pairing);
+  assert.equal(typeof again.pin_error, "string");
+});

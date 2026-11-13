@@ -10,7 +10,7 @@ using System.Text.Json;
 namespace PulseDesktop;
 
 /// <summary>What a dock agent's drop answers (apps/demo/src/worker/sandbox.ts, PairHubAnswer).</summary>
-public sealed record HubPairResult(bool Ok, string? Error, string? GrantId, string? Status, string? Consent, string? PairingCode, DockPairing? Pairing);
+public sealed record HubPairResult(bool Ok, string? Error, string? GrantId, string? Status, string? Consent, string? PairingCode, DockPairing? Pairing, string? PinError);
 
 public sealed class PulseClient : IDisposable
 {
@@ -89,7 +89,7 @@ public sealed class PulseClient : IDisposable
         var ok = json.ValueKind == JsonValueKind.Object && json.TryGetProperty("ok", out var o) && o.ValueKind == JsonValueKind.True;
         DockPairing? pairing = null;
         if (json.ValueKind == JsonValueKind.Object && json.TryGetProperty("pairing", out var p) && Str(p, "code") is { } code && Str(p, "expires_at") is { } until) pairing = new DockPairing(code, until);
-        return new HubPairResult(ok, Str(json, "error"), Str(json, "grant_id"), Str(json, "status"), Str(json, "consent"), Str(json, "pairing_code"), pairing);
+        return new HubPairResult(ok, Str(json, "error"), Str(json, "grant_id"), Str(json, "status"), Str(json, "consent"), Str(json, "pairing_code"), pairing, Str(json, "pin_error"));
     }
 
     /// <summary>Revoke from the app (APC 0.2): also Cancel on a grant still waiting for its pairing code (APC 0.9).</summary>

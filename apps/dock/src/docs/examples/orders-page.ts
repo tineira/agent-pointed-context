@@ -73,12 +73,15 @@ async function refresh(): Promise<void> {
  * someone else's.
  */
 const waiting = document.querySelector<HTMLElement>("#waiting") ?? document.body.appendChild(document.createElement("div"));
+/** A drop that paired but could not pin its target (the server's `pin_error`), by grant: its row says so. */
+const pinErrors = new Map<string, string>();
 function showWaiting(rows: AgentRow[]): void {
   waiting.replaceChildren(
     ...rows.flatMap((a) => {
       if (!a.pairing) return [];
       const line = document.createElement("p");
-      line.textContent = `Waiting for your dock — code ${formatPairingCode(a.pairing.code)}. If your dock doesn't ask for this code, the agent wasn't yours: Cancel. `;
+      const pinError = pinErrors.get(a.id);
+      line.textContent = `Waiting for your dock — code ${formatPairingCode(a.pairing.code)}. If your dock doesn't ask for this code, the agent wasn't yours: Cancel. ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
       const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Cancel" });
       cancel.addEventListener("click", () => void post(`/api/agents/${a.id}/revoke`).then(refresh));
       line.append(cancel);
@@ -131,6 +134,8 @@ async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, t
     if (confirm(`Let your agent from the dock at ${host} read Orders? After OK, your dock asks for this code: ${formatPairingCode(answer.pairing_code)}. Type it only in your own dock; never give it to anyone.`)) await dropFromDock(drag, target, answer.consent);
     return;
   }
+  // Paired, but the pin on the drop's target failed: the waiting row says so.
+  if (answer.ok === true && typeof answer.grant_id === "string" && typeof answer.pin_error === "string") pinErrors.set(answer.grant_id, answer.pin_error);
   await refresh();
 }
 // #endregion

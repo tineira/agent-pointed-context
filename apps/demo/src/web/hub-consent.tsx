@@ -40,7 +40,13 @@ export function hubError(error: string | undefined): string {
   return ERRORS[error ?? ""] ?? error ?? "it did not go through";
 }
 
-export function HubConsent(props: { api: Api; drop: PendingDrop; onDone: (notice: string | null) => void }) {
+/** A drop that paired but could not pin its target (the server's `pin_error`): the waiting card says so. */
+export interface PinError {
+  grantId: string;
+  error: string;
+}
+
+export function HubConsent(props: { api: Api; drop: PendingDrop; onDone: (notice: string | null, pinError?: PinError) => void }) {
   const [region, setRegion] = useState<Region | "">("");
   const [busy, setBusy] = useState(false);
   // One Allow, one request: the ref holds before the re-render that turns the buttons off (a double click, Grok on #123).
@@ -53,7 +59,8 @@ export function HubConsent(props: { api: Api; drop: PendingDrop; onDone: (notice
     try {
       const r = await props.api.hubPair({ hub: props.drop.drag.hub, agent: props.drop.drag.agent, ticket: props.drop.drag.ticket, region: region || null, target: props.drop.target, consent: props.drop.consent });
       // Paired: the waiting card takes over, with the code (it comes from Pulse's state).
-      props.onDone(r.ok ? null : `Not paired: ${hubError(r.error)}`);
+      // A pin that failed while the pairing went through (pin_error) is said on the waiting card.
+      props.onDone(r.ok ? null : `Not paired: ${hubError(r.error)}`, r.ok && r.grant_id && r.pin_error ? { grantId: r.grant_id, error: r.pin_error } : undefined);
     } catch (error) {
       props.onDone(`Not paired: ${String(error)}`);
     }
@@ -97,7 +104,7 @@ export function HubConsent(props: { api: Api; drop: PendingDrop; onDone: (notice
  * state, so it comes back on a reload or a new drop, and goes once the dock connects or the grant goes.
  * Cancel takes the access back while the dock has not connected.
  */
-export function DockWaiting(props: { hub: string; pairing: { code: string; expires_at: string }; onCancel: () => void }) {
+export function DockWaiting(props: { hub: string; pairing: { code: string; expires_at: string }; onCancel: () => void; pinError?: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -126,6 +133,7 @@ export function DockWaiting(props: { hub: string; pairing: { code: string; expir
         <button type="button" className="tour-skip" onClick={props.onCancel}>
           Cancel
         </button>
+        {props.pinError && <span className="basis-full text-muted">Not pinned where you dropped it ({props.pinError}). Once your dock connects, drop the agent there again.</span>}
       </div>
     </div>
   );

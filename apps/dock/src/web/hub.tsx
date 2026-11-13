@@ -5,7 +5,7 @@
  *
  * Each agent's drag carries its public handle, this hub's origin and a single-use ticket (240 s since
  * APC 0.9), never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once,
- * with at least three minutes left, so the app's two-minute consent fits in it.
+ * refreshed below 180 s left on a 10 s check (so about three minutes), and the app's two-minute consent fits in it.
  *
  * A request whose app sent a pairing code (APC 0.9, TIN-859) is approved with that code: typed on the dock's
  * page or an agent's page (pairing-request.tsx); Float, the strip and the pets send the person to the dock.
@@ -285,7 +285,7 @@ export function HubDock() {
     const top = () => {
       for (const id of ticketed.split(",")) {
         const t = tickets.current.get(id);
-        // A ticket lives 240 s (APC 0.9): a drag always carries one with three minutes left, more than the app's consent takes.
+        // A ticket lives 240 s (APC 0.9): refreshed below 180 s left, so a drag carries about three minutes, more than the app's consent takes.
         if (!t || t.expires_at - Date.now() < 180_000) void fetchTicket(id);
       }
     };

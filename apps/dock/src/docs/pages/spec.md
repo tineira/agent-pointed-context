@@ -103,7 +103,7 @@ The agent connects once, to a hub. The person drags it from the dock onto any ap
 
 ### The drop
 
-The dock puts the agent on a drag with the type `application/x-apc-agent` and the payload `{ v: 1, agent, hub, ticket }`: a public handle, the hub's bare origin, and a ticket. The payload **MUST NOT** hold a secret or an MCP URL: any page the agent is dropped on can read it. The **ticket** is single use, lives 240 seconds (since 0.9; 60 before), is bound to that agent, and opens a pairing request or a confirmation and nothing else. The reference dock puts a ticket with at least three minutes left on a drag, so the app's two-minute consent fits in it.
+The dock puts the agent on a drag with the type `application/x-apc-agent` and the payload `{ v: 1, agent, hub, ticket }`: a public handle, the hub's bare origin, and a ticket. The payload **MUST NOT** hold a secret or an MCP URL: any page the agent is dropped on can read it. The **ticket** is single use, lives 240 seconds (since 0.9; 60 before), is bound to that agent, and opens a pairing request or a confirmation and nothing else. The reference dock refreshes a ticket once it has less than 180 seconds left (it checks every 10), so a drag carries one with about three minutes left, and the app's two-minute consent fits in it.
 
 ### Consent in the app
 
