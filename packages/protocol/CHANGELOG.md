@@ -4,6 +4,10 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor (or, from 1.0, a major) version. A patch (0.7.0 to 0.7.1) never changes the contract; it fixes the packages or the wording, so an app that implements 0.7.0 implements every 0.7.x.
 
+## 0.11.0 (draft, unreleased)
+
+Wave 2 of the APC 1.0 track (TIN-880): the agent in the page (TIN-878), a presence kind for waits (TIN-886) and several MCP endpoints in `apc.json` (TIN-888). Each change adds its own subsection below.
+
 ## 0.10.0 (draft, 2026-11-13)
 
 The Dock profile as built (TIN-882): a dock grant has states, each state answers in a fixed way, and the hub and the app have MUSTs around the hub call. Before, the profile said how a pairing starts and not what a grant answers between the Allow and the hub's first `initialize`: one app served data in that window, two had no gate at all. In `packages/protocol/src/dock.ts` and `core.ts`, the spec's Dock profile and DESIGN.md section 22. The binding stays the secret MCP URL; other bindings are left open for future versions.
