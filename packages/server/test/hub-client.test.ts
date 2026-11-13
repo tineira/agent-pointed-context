@@ -119,8 +119,14 @@ test("M9: the call goes to the parsed origin, never the raw string; a hub that i
   assert.equal((await pairWithHub(new URL(HUB), BODY, { fetch: asUrl.fetch })).ok, true);
   assert.equal(asUrl.sent[0]!.url, `${HUB}/apc/pair`);
   const port = hubAnswering(() => Response.json(ACK));
-  await pairWithHub("https://dock.test:443", BODY, { fetch: port.fetch });
-  assert.equal(port.sent[0]!.url, `${HUB}/apc/pair`, "the default port is the origin's");
+  assert.equal((await pairWithHub("https://dock.test:8443", BODY, { fetch: port.fetch })).ok, true);
+  assert.equal(port.sent[0]!.url, "https://dock.test:8443/apc/pair", "a port of its own is part of the origin");
+  // Anything new URL would normalize away is refused, as parseDockDrop refuses it (the bare-origin rule).
+  for (const hub of ["https://dock.test/.", "https://dock.test/..", "https://dock.test/./", "https://dock.test/%2e", "https://dock.\x00test", "https://dock.test\x00", "https://dock.test\t", "https://dock.test:443", "HTTPS://DOCK.TEST", "https://dock.test//"]) {
+    const hubFor = hubAnswering(() => Response.json(ACK));
+    assert.deepEqual(await pairWithHub(hub, BODY, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, JSON.stringify(hub));
+    assert.equal(hubFor.sent.length, 0);
+  }
   for (const hub of ["https://dock.test/x", "https://dock.test/apc", "https://u:p@dock.test", "https://@dock.test", "https://dock.test?x=1", "https://dock.test#f", "https:\\\\dock.test", "dock.test", "not a url", "", "ftp://dock.test", "javascript:alert(1)", "https://dock.test/ "]) {
     const hubFor = hubAnswering(() => Response.json(ACK));
     assert.deepEqual(await pairWithHub(hub, BODY, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, hub);
