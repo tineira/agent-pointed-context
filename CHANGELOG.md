@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Surplus (PFA) is a verified app in the dock (2026-11-12, TIN-850)
+
+- **Surplus (PFA, https://pfa.tineira.com) is a verified app in the dock, so its tools keep their annotations and its results are not marked untrusted.** It pairs without the unverified-app warning and is named by its own name, not its host. (`apps/dock/wrangler.jsonc`)
+
 ### The landing lists apps that use APC (2026-11-13, TIN-804)
 
 - **The landing at apc.tineira.com gains an "In use" section listing apps that serve APC in production and pass `apc-conformance` live; the first is Autio, a used-car marketplace in Chile (APC 0.8, Direct, 0 failures on both its hosts).** (`apps/dock/src/web/landing.tsx`, `apps/dock/src/web/dock.css`, `apps/dock/test/landing.test.ts`)
