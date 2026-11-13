@@ -800,7 +800,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     }),
 
     // The owner's endpoints.
-    check("M6: the drop, the Allow, the heartbeat and Cancel refuse a foreign Origin (one matching the request's host included), Sec-Fetch-Site cross-site and same-site, a non-JSON media type and no session; a request with neither header is taken on the session", async (life) => {
+    check("M6: the drop, the Allow, the heartbeat and Cancel refuse a foreign Origin (one matching the request's host included), Sec-Fetch-Site cross-site and same-site, a non-JSON media type and no session; a request with neither header is taken on the session", async (life, d) => {
       const { origin, session } = life.owner;
       const own = new URL(origin);
       const endpoints: Array<[string, ApcDockOwnerEndpoint | { websocket: string } | undefined]> = [
@@ -858,6 +858,33 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         for (const [what, base, headers] of refused) {
           const got = await post(base, headers);
           expect(got >= 400 && got < 500, `${name}: a request with ${what} is refused (4xx), got HTTP ${got}`);
+        }
+        // Every state change is a POST: a GET with the session and the body's fields as a query may answer
+        // anything, and must change nothing (no hub call, Cancel's grant still in handoff, a dormant grant still asleep).
+        const received = d.hub.received.length;
+        const fields = (await ep.body()) as Record<string, unknown> | null;
+        const made = d.hub.received.slice(received).map((b) => b.mcp_url).filter((u): u is string => typeof u === "string");
+        let asleep: string | undefined;
+        if (name === "the heartbeat" && life.idleMs) {
+          const g = await liveGrant(life, d);
+          await app.page.setOpen(false);
+          await life.advance(life.idleMs + 1000);
+          await expectState(g.mcpUrl, "idle", "the heartbeat's GET probe: T_idle after going live");
+          asleep = g.mcpUrl;
+        }
+        const url = new URL(ep.path, origin);
+        for (const [k, v] of Object.entries(fields ?? {})) url.searchParams.set(k, typeof v === "string" ? v : JSON.stringify(v));
+        const calls = d.hub.requests.length;
+        await status(url, { method: "GET", headers: { ...session } });
+        const where = `${name}: after a GET with the owner's session and the body's fields as a query (every state change is a POST)`;
+        expect(d.hub.requests.length === calls, `${where}, the app called ${d.hub.requests.slice(calls).join(", ")}`);
+        if (name === "Cancel") {
+          expect(made.length > 0, "Cancel: owner.cancel.body() made no grant in handoff through the hub, so the suite cannot see what a Cancel does");
+          for (const u of made) await expectState(u, "pairing", where);
+        }
+        if (asleep) {
+          await expectState(asleep, "idle", where);
+          await life.heartbeat();
         }
       }
     }),
