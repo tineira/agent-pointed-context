@@ -89,17 +89,26 @@ export const THEN_PIN_WINDOW_MIN = 30;
  * the read whole. A failure that concerns the grant itself (its auth, an expired session) still fails it
  * closed.
  */
-export interface CurrentViewResult {
+export type CurrentViewResult = CurrentViewAnswer | IdleCurrentView;
+/** `get_current_view` of a grant that is not dormant: the view and the focus, or nothing with a `note`. */
+export interface CurrentViewAnswer {
   view: ViewPayload | null;
   focus: FocusPayload | null;
   /** Why the result is empty, when the app could not answer it just now (APC 0.8). */
   note?: string;
-  /**
-   * The grant is dormant (Dock profile, APC 0.10, `idleCurrentView`): the person is away from the app, which
-   * answers no data until they come back. Distinct from unavailable, page closed and revoked. An answer
-   * without it (an app before 0.10) reads as unavailable, as before.
-   */
-  idle?: true;
+  /** Never set here: only `IdleCurrentView` carries `idle`. */
+  idle?: undefined;
+}
+/**
+ * `get_current_view` of a dormant dock grant (Dock profile, APC 0.10, `idleCurrentView`): the person is away
+ * from the app, which answers no data until they come back. Distinct from unavailable, page closed and
+ * revoked. An answer without `idle` (an app before 0.10) reads as unavailable, as before.
+ */
+export interface IdleCurrentView {
+  view: null;
+  focus: null;
+  idle: true;
+  note: string;
 }
 
 /**
@@ -130,10 +139,12 @@ export interface CurrentViewResult {
  * pin is marked seen. A hub that relays a wait holds the pin it was handed: it keeps it unread until its
  * own agent gets it.
  */
-export type WaitForFocusResult = WaitGotFocus | WaitNoFocus;
+export type WaitForFocusResult = WaitGotFocus | WaitNoFocus | IdleWaitForFocus;
 export interface WaitGotFocus {
   focus: FocusPayload;
   timed_out: false;
+  /** Never set here: only `IdleWaitForFocus` carries `idle`. */
+  idle?: undefined;
 }
 export interface WaitNoFocus {
   focus: null;
@@ -141,12 +152,20 @@ export interface WaitNoFocus {
   page_open?: boolean;
   /** On a wait refused because another wait of the grant started just before it (APC 0.8): when to try again. */
   retry_after_s?: number;
-  /**
-   * The grant is dormant (Dock profile, APC 0.10, `idleWaitForFocus`): answered at once with `timed_out: false,
-   * page_open: false`. A hub never reads it as page closed and never ends its own wait on it. An answer
-   * without it (an app before 0.10) reads as page closed or unavailable, as before.
-   */
-  idle?: true;
+  /** Never set here: only `IdleWaitForFocus` carries `idle`. */
+  idle?: undefined;
+  note: string;
+}
+/**
+ * `wait_for_focus` of a dormant dock grant (Dock profile, APC 0.10, `idleWaitForFocus`), answered at once. A hub
+ * never reads it as page closed and never ends its own wait on it. An answer without `idle` (an app before
+ * 0.10) reads as page closed or unavailable, as before.
+ */
+export interface IdleWaitForFocus {
+  focus: null;
+  timed_out: false;
+  page_open: false;
+  idle: true;
   note: string;
 }
 
