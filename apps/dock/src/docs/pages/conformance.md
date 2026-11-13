@@ -21,9 +21,17 @@ With an adapter (the [code](#run-it-from-code) way), on the profile under test, 
 An adapter whose app authenticates agents with a bearer token (OAuth) gives the token in each connection's `headers` (`{ authorization: "Bearer …" }`); the grant's URL may then be `mcp.path` itself.
 - **Mobile** (0.6 and later): every agent is shown in the page, the bar cannot be collapsed, a finger pins and the agent reads the pin, and unpin works by touch.
 - **The pairing code** (Dock, 0.9 and later; the adapter gives `dock`): the consent shows a well-formed code and the app sends that code, raw, to the hub; every consent shows a new code; a hub that does not acknowledge the code, redirects, or says yes with HTTP 500 holds no grant (its MCP URL answers 404); five wrong codes, or the code's time running out, give the grant back; the right code pairs.
+- **The Dock profile as built** (Dock, 0.10 and later; the adapter gives `dock.lifecycle`, see [below](#the-dock-profile-as-built-010)):
+  - **The answer table**: in each state the adapter can put a grant into (in flight, handoff, live, dormant for an app that sleeps, ended, revoked), the exact answer to `initialize`, `ping`, `tools/list`, `get_current_view`, `wait_for_focus`, one of the app's own tools, another method (`resources/list`) and a notification, as `dockGrantAnswer` in `@tineira/apc-protocol` says. The `pairing` and `idle` tool errors carry `{ error, message }` in `structuredContent` and in `content[0].text`; the idle shapes carry `idle: true` (and `wait_for_focus` answers at once); no answer in handoff or dormant carries `attention`, `then`, `apc_link` or a presence event; a 404 in flight leaves the state unchanged.
+  - **The transitions**: `initialize` commits the move out of handoff, and fails closed (HTTP 500 or JSON-RPC -32603, no result, still in handoff) when its commit cannot persist; `initialize` racing Cancel ends by the state that won, and Cancel never revokes a live grant; a give-back or `T_ack` while in flight ends the grant for good, even if the acknowledgement comes after; `T_ack` (30 s) ends a grant whose Allow never heard back, across a restart of the app; `T_connect` (10 minutes) ends a grant never connected, and a late introduction does not bring it back; `T_idle` sleeps a live grant and the page's heartbeat wakes it; agent traffic never wakes a grant or extends it.
+  - **The hub call**: M1, tricky hubs (a longer host, userinfo, a path, a query, a fragment, `http:`, another port, a trailing dot, a backslash, unparsable) answer `hub_not_allowed` with no consent and no request, on the drop and on an Allow sent with another hub; M2, a redirect, a 3xx, an `opaqueredirect` or a redirected answer holds no grant; M3, a hub whose body stalls trips the deadline; M4, a `content-length` over the cap or not digits only, and a body over the cap, hold no grant, while a `content-length` other than the decoded body's (gzip) is taken; M5, a probe: with the hub's answer held, another agent's drop and Allow answer at once and a second Allow of the same agent gets `pairing_in_progress` (the check's note says what a new drop of that agent answered; serialization across instances cannot be seen from one process); M9, a drop whose hub ends in `/` calls `{hub}/apc/pair`, not `//apc/pair`.
+  - **M6**, on the owner endpoints the adapter lists: a foreign `Origin` (or `null`, or another scheme), `Sec-Fetch-Site: cross-site` or `same-site`, a media type other than `application/json`, a `GET` and no session are refused (4xx); its own `Origin`, and neither header, are taken on the session.
+  - **M7**: `/apc/revoke` answers the same 200 and the same body to any input (not JSON, a foreign URL, an unknown grant, 1 MiB), ends a matching grant in handoff or live (which then answers 404), and leaves a revoked grant revoked and an ended one ended.
+  - **M8**: `apc.json` lists `dock` while the app can pair and not with pairing disabled, with a `max-age` of 60 or less.
+  - **One pending pairing**: a second drop on a pending pairing shows the same code, with no new consent or `/apc/pair`; `not_paired` ends the grant and starts a fresh consent; `paired` before `initialize` says it is connecting and stays in handoff until `initialize`; before the acknowledgement a new drop replaces the consent and the stale Allow gets `consent_expired`.
 - **`apc_link`** (an app with both profiles): the same client on the other path is offered a code once per session and the code links them; a code is refused on the connection that got it, on the same path, on another client, once used, and once expired; another client is offered nothing; Revoke on a linked agent cuts both grants; Unlink gives two agents again.
 
-It does not check how the page draws presence, the agent bar's two-click Revoke in a real browser, or the hub's own rules.
+It does not check how the page draws presence, the agent bar's two-click Revoke in a real browser, or the hub's own rules (H1 to H7: the reference hub is the only hub until after 1.0).
 
 ## Run it from the command line
 
@@ -88,6 +96,24 @@ The adapter: the app's name and profile, its `fetch`, two targets a full-access 
 Then run it, under `node --test` (`for (const c of apcConformance(adapter)) test(c.name, c.run)`) or as a script:
 
 <!-- include orders-conformance.ts#run -->
+
+### The Dock profile as built (0.10)
+
+An app that claims 0.10.0 or later on the Dock profile also gives `dock.lifecycle` (`ApcDockLifecycleAdapter`), so the suite can put a grant into each state and reach the owner's endpoints. Without it, every 0.10 check fails and says so.
+
+| Member | |
+|---|---|
+| `dropAgent({ agent, ticket, hub })` | the person drops an agent, with the drag's `hub` string as the page read it: what the page shows (`consent` with its code and the Allow, `waiting` with the code, `connecting`, `pinned`, or `refused` with the error). The Allow returns the grant's id, and `allow({ hub })` sends it with another hub, as a tampered page would |
+| `cancel(grantId)` | Cancel on the waiting card |
+| `heartbeat()` | the page's heartbeat, a wake action |
+| `advance(ms)` | the time seam: the app's clock moves forward, for `T_ack`, `T_connect` and `T_idle` |
+| `failCommits(fail)` | while true, the app's storage fails every write |
+| `restart()` (optional) | the app's process dies with its calls open and comes back on the same storage; without it, `T_ack` is checked through the time seam only |
+| `idleMs` (optional) | the app's `T_idle`; left out, the app does not sleep and the dormant checks say so |
+| `owner` | the configured public origin, the headers of the owner's session, and the owner endpoints (the drop, the Allow, the heartbeat, Cancel), each with a fresh body the app takes with a 2xx |
+| `pairingDisabled()` | the same app with its dock configuration missing: its `fetch`, for `apc.json` |
+
+The stand-in hub plays the hub's side: it can hold `/apc/pair` (the grant is in flight), break the answer (redirects, a stalled body, the byte cap), forget a pairing (`/apc/confirm` then says `not_paired`), and approve without introducing itself.
 
 ### Apps on Cloudflare Durable Objects
 

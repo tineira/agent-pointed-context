@@ -12,7 +12,9 @@
  * an app on the Dock profile gives `dock` too: the suite pairs it with a stand-in hub (`standInHub`) and checks
  * the pairing code (the consent shows one, new each time, and sends that one to the hub; the app keeps no grant
  * when the hub does not acknowledge the code; wrong codes and the code's time running out give the grant back;
- * the right code pairs).
+ * the right code pairs). Since 0.10 an app on the Dock profile also gives `dock.lifecycle`, and the suite checks
+ * the Dock profile as built (`dock-lifecycle.ts`): what a grant answers in each state, the transitions and their
+ * time limits, the app's rules on the hub call (M1 to M9) and one pending pairing.
  *
  * Framework-free: `apcConformance(app)` returns named checks that throw `ConformanceError`, for any
  * test runner (`for (const c of apcConformance(app)) test(c.name, c.run)` under `node --test`), and
@@ -51,9 +53,10 @@ import {
 } from "@tineira/apc-protocol";
 import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHub } from "./hub.ts";
+import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
 export { ConformanceError } from "./shared.ts";
-export { standInHub, type StandInHub, type StandInHubMode, type StandInHubOptions, type StandInPairing } from "./hub.ts";
+export { standInHub, type StandInHold, type StandInHub, type StandInHubMode, type StandInHubOptions, type StandInPairing } from "./hub.ts";
 export {
   HttpConformanceUsageError,
   IN_PROCESS_ONLY,
@@ -129,6 +132,70 @@ export interface ApcDockAdapter {
    * the app answered the page.
    */
   drop(agent: string, ticket: string): Promise<{ shown: string; allow(): Promise<{ ok: boolean; error?: string }> }>;
+  /** The Dock profile as built (APC 0.10): required of an app that claims 0.10.0 or later on the Dock profile. */
+  lifecycle?: ApcDockLifecycleAdapter;
+}
+
+/** What the app answered the person's Allow (APC 0.10): `grantId` is the grant it made, when it made one. */
+export interface ApcDockAllowAnswer {
+  ok: boolean;
+  error?: string;
+  grantId?: string;
+}
+
+/**
+ * What the app's page shows on a drop (APC 0.10):
+ *
+ * - `consent`: the consent with its pairing code (as the person sees it, formatted or not), and the Allow on it.
+ *   `allow({ hub })` sends the Allow with another `hub` than the drop's, as a tampered page would (M1).
+ * - `waiting`: the grant is pending at the hub, and the page shows the waiting card with this code.
+ * - `connecting`: the hub says paired but the app has not seen `initialize`: no code.
+ * - `pinned`: a live grant, and the drop pinned it.
+ * - `refused`: the app answered `error` (`hub_not_allowed`, `pairing_in_progress`, …), with no consent.
+ */
+export type ApcDockDropOutcome =
+  | { page: "consent"; code: string; allow(over?: { hub?: string }): Promise<ApcDockAllowAnswer> }
+  | { page: "waiting"; code: string }
+  | { page: "connecting" }
+  | { page: "pinned" }
+  | { page: "refused"; error: string };
+
+/**
+ * The owner-session endpoints (M6, APC 0.10): the drop, the consent and its Allow, the heartbeat, Cancel. The suite
+ * sends each to the app's `fetch` with the headers it checks; `body()` makes a body the app takes with a 2xx (a
+ * fresh one each time: a drop with a new ticket, an Allow with a new consent, a Cancel on a new grant in handoff).
+ */
+export interface ApcDockOwnerEndpoints {
+  /** The app's configured public origin: the only `Origin` its owner endpoints take. */
+  origin: string;
+  /** The headers that carry the owner's authenticated session (a cookie, say). */
+  session: Record<string, string>;
+  endpoints: Array<{ name: string; path: string; body(): unknown | Promise<unknown> }>;
+}
+
+/**
+ * The Dock profile as built (APC 0.10), from an app that claims 0.10.0 or later on the Dock profile: what the suite
+ * needs to put a grant into each state, and to reach the owner's endpoints. The app pairs with the `hub` of
+ * `ApcDockAdapter`; its `apc.json` is read at `owner.origin`.
+ */
+export interface ApcDockLifecycleAdapter {
+  /** The person drops `agent` from the dock at `hub` (the drag's `hub` string, as the page read it), with `ticket`: what the page shows. */
+  dropAgent(drop: { agent: string; ticket: string; hub: string }): Promise<ApcDockDropOutcome>;
+  /** The person's Cancel on the waiting card; false when the app refuses it. */
+  cancel(grantId: string): Promise<boolean>;
+  /** The page's heartbeat: a wake action of the owner. */
+  heartbeat(): Promise<void>;
+  /** The time seam: the app's clock moves `ms` forward, for every limit it keeps (T_ack, T_connect, T_idle). */
+  advance(ms: number): Promise<void>;
+  /** While true, the app's storage fails every write: the commit out of handoff cannot persist. */
+  failCommits(fail: boolean): void | Promise<void>;
+  /** The app's process dies, with whatever calls it had open, and comes back on the same storage. Optional: T_ack is then checked through the time seam only. */
+  restart?(): Promise<void>;
+  /** The app's T_idle in ms. Left out: the app does not sleep (dormant is a SHOULD), and the dormant checks say so. */
+  idleMs?: number;
+  owner: ApcDockOwnerEndpoints;
+  /** The same app with pairing disabled (its dock configuration missing): its `fetch`, for `apc.json` (M8). */
+  pairingDisabled(): Promise<(request: Request) => Promise<Response>>;
 }
 
 /** What the suite needs from an app. */
@@ -528,6 +595,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     ),
     ...mobileChecks(app, app.page.mobile),
     ...(app.profile === "dock" ? dockChecks(app, app.dock) : []),
+    ...(app.profile === "dock" ? dockLifecycleChecks(app, app.dock) : []),
     ...(app.link ? linkChecks(app, app.link) : []),
   ];
 }

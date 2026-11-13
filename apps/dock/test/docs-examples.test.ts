@@ -9,8 +9,43 @@ import { OrdersApp } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
 import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
+/**
+ * The suite's Dock checks of APC 0.10 (TIN-884) that the Orders example does not meet yet: they run, as todo, until
+ * TIN-883 moves Orders onto the 0.10 helpers of @tineira/apc-server and removes this list. Only these.
+ */
+const PENDING_TIN_883 = [
+  "the lifecycle adapter is given (required of an app that claims 0.10.0 or later on the Dock profile)",
+  "the answer table: in flight (from the Allow to the hub's acknowledgement), and a 404 leaves the state unchanged",
+  "the answer table: handoff (the pairing error, no attention, then or apc_link), and initialize commits it",
+  "the answer table: live",
+  "the answer table: dormant (the idle shapes and the idle error, no attention, then or apc_link)",
+  "the answer table: ended (a give-back on a grant in handoff)",
+  "the answer table: revoked (Cancel on a grant in handoff)",
+  "initialize fails closed: a commit that cannot persist returns no result, and the grant stays in handoff",
+  "a commit racing Cancel ends by the state that won, and Cancel never revokes a live grant",
+  "the acknowledgement's move is conditional: a give-back or T_ack while in flight ends the grant for good",
+  "T_ack: a grant whose Allow never heard back ends within 30 s, across a restart of the app",
+  "T_connect: a grant with no committed initialize ends within 10 minutes of the acknowledgement",
+  "T_idle: a live grant with no wake action sleeps, and a wake action (the page's heartbeat) wakes it",
+  "agent traffic (initialize, ping, tools/list, tools/call) never wakes a grant or extends it",
+  "M1: the drop's hub is parsed and compared by origin with the allowlist, on the drop and again on the Allow",
+  "M2: a hub that redirects, answers a 3xx, an opaqueredirect or a redirected answer holds no grant",
+  "M3: a hub whose body stalls trips the one deadline (10 s at most, headers and body)",
+  "M4: the byte cap and the content-length rules",
+  "M5: no lock across the hub call: owner requests answer while it is held, and a second Allow of the same agent gets pairing_in_progress",
+  "M9: hub requests go to the parsed origin, never to the raw hub string",
+  "M6: the owner endpoints refuse a foreign Origin, Sec-Fetch-Site cross-site and same-site, a non-JSON media type, a GET and no session; a request with neither header is taken on the session",
+  "M7: /apc/revoke answers the same 200 to any input, ends a matching grant (then 404), and leaves revoked and ended grants as they are",
+  "M8: apc.json lists dock only while the app can pair, cached 60 s at most",
+  "one pending pairing: a second drop on a pending pairing shows the same code, with no new consent and no new /apc/pair",
+  "one pending pairing: not_paired from /apc/confirm ends the grant and starts a fresh consent",
+  "one pending pairing: paired before the app saw initialize stays in handoff, and only initialize makes it live",
+  "one pending pairing: before the acknowledgement a new drop replaces the consent, and the stale Allow gets consent_expired",
+];
+const pending = (name: string) => PENDING_TIN_883.some((p) => name.endsWith(`(dock): 0.10: ${p}`));
+
 for (const profile of ["direct", "dock"] as const) {
-  for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, check.run);
+  for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, pending(check.name) ? { todo: "TIN-883: Orders meets APC 0.10" } : {}, check.run);
 }
 
 test("a page whose stream died is dropped, and the tool call that published to it still answers", async () => {
