@@ -88,6 +88,7 @@ export type FixtureBreak =
   | "raw_hub_on_confirm"
   // The owner's endpoints, the give-back, apc.json, the code.
   | "no_origin_check"
+  | "get_changes_state"
   | "origin_from_request_url"
   | "heartbeat_no_origin_check"
   | "ws_no_origin_check"
@@ -113,6 +114,8 @@ export interface FixtureOptions {
   hubBoundToConsent?: boolean;
   /** A second drop of an agent whose Allow waits on the hub waits for it, instead of answering pairing_in_progress. */
   dropWaits?: boolean;
+  /** The hub call's deadline is `AbortSignal.timeout` on the fetch, with plain reads (as with a real fetch, an abort fails the body too). */
+  abortSignalDeadline?: boolean;
   /** The heartbeat is a WebSocket. */
   wsHeartbeat?: boolean;
 }
@@ -161,6 +164,7 @@ interface Config {
   idle: boolean;
   hubBoundToConsent: boolean;
   dropWaits: boolean;
+  abortSignalDeadline: boolean;
 }
 
 const random = (n: number, alphabet = "abcdefghijklmnopqrstuvwxyz0123456789") => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => alphabet[b % alphabet.length]).join("");
@@ -238,6 +242,11 @@ class Fixture {
     if (url.pathname === "/.well-known/apc.json") return url.origin === ORIGIN || this.has("owner_origin_elsewhere") ? this.apcJson(url.origin) : json({ error: "not_found" }, 404);
     if (url.pathname === "/apc/revoke" && request.method === "POST") return this.giveBack(request);
     if (url.pathname.startsWith("/mcp/")) return this.mcp(request, url.pathname.slice("/mcp/".length));
+    if (this.has("get_changes_state") && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie) {
+      // A state change on a GET, parameters from the query: what M6's "every state change is a POST" forbids.
+      if (url.pathname === "/api/cancel") return json({ ok: await this.cancel(url.searchParams.get("grant_id") ?? "") });
+      if (url.pathname === "/api/heartbeat") return json(this.heartbeat());
+    }
     if (url.pathname === "/api/drop") return this.owner(request, (b) => this.drop(b));
     if (url.pathname === "/api/heartbeat/ws") return this.wsHeartbeat(request);
     if (url.pathname === "/api/heartbeat") return this.owner(request, async () => this.heartbeat());
@@ -413,14 +422,14 @@ class Fixture {
     const whole = deadline(DEADLINE_MS);
     let perPart: ReturnType<typeof deadline> | null = null;
     try {
-      const request = this.hub.fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "error" });
-      const response = await Promise.race([request, this.has("no_deadline_on_headers") ? never : whole.promise]);
+      const request = this.hub.fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "error", ...(this.config.abortSignalDeadline ? { signal: AbortSignal.timeout(DEADLINE_MS) } : {}) });
+      const response = await Promise.race([request, this.has("no_deadline_on_headers") || this.config.abortSignalDeadline ? never : whole.promise]);
       // (deadline_per_part: a fresh timer for the body once the headers came, as a careless app has.)
       if (this.has("deadline_per_part")) {
         whole.clear();
         perPart = deadline(DEADLINE_MS);
       }
-      const bodyDeadline = this.has("no_deadline_on_body") ? never : perPart ? perPart.promise : whole.promise;
+      const bodyDeadline = this.has("no_deadline_on_body") || this.config.abortSignalDeadline ? never : perPart ? perPart.promise : whole.promise;
       if (checksRedirects) {
         if (response.type === "opaqueredirect" && !this.has("ignores_opaqueredirect")) return { status: 0 };
         if (response.redirected && !this.has("ignores_redirected_flag")) return { status: 0 };
@@ -642,7 +651,7 @@ class Fixture {
 /** The fixture and its adapter: `break` makes it (or its adapter) wrong in one way; the other options are designs the spec allows. */
 export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdapter; hub: StandInHub } {
   const brk = new Set<FixtureBreak>(options.break ? [options.break] : []);
-  const config: Config = { brk, pairing: true, idle: options.idle ?? true, hubBoundToConsent: options.hubBoundToConsent ?? false, dropWaits: options.dropWaits ?? false };
+  const config: Config = { brk, pairing: true, idle: options.idle ?? true, hubBoundToConsent: options.hubBoundToConsent ?? false, dropWaits: options.dropWaits ?? false, abortSignalDeadline: options.abortSignalDeadline ?? false };
   const fresh = (): Storage => ({ grants: [], consents: new Map(), failWrites: false, page: { open: false, presence: [] } });
   const storage = fresh();
   const clock = { skew: 0 };

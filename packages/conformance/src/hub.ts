@@ -128,6 +128,25 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const bodies: Array<{ url: string; text: string }> = [];
   const pause = (ms: number) => new Promise<void>((resolve) => { const t = setTimeout(() => { timers.delete(t); resolve(); }, ms); timers.add(t); stalledHeaders.add(resolve); });
+  /** Rejects with the signal's reason once the app's request is aborted, as a real fetch does. */
+  const onAbort = (signal: AbortSignal) => {
+    const aborted = new Promise<never>((_, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+    aborted.catch(() => {});
+    return aborted;
+  };
+  /** A stalled body fails its pending reads once the app's request is aborted, as a real fetch's body does. */
+  const errorOnAbort = (controller: ReadableStreamDefaultController<Uint8Array>, signal: AbortSignal) =>
+    onAbort(signal).catch((reason: unknown) => {
+      stalls.delete(controller);
+      try {
+        controller.error(reason);
+      } catch {
+        // closed already
+      }
+    });
   const json = (body: unknown, status = 200) => Response.json(body, { status });
 
   const callApp = async (url: string, body: unknown) => {
@@ -159,7 +178,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   };
 
   /** What `/apc/pair` answers in `mode`. */
-  const answerPair = async (body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined): Promise<Response> => {
+  const answerPair = async (body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined, signal: AbortSignal): Promise<Response> => {
     const yes = { ok: true, pairing_id: "pr_elsewhere", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: PAIRING_CODE_ACK };
     if (mode === "redirect") {
       // A fetch that refuses redirects (as an app's must) fails; one that follows lands on another host that says yes.
@@ -203,6 +222,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
             // Half of the yes, then nothing: the body never ends until the check releases it.
             controller.enqueue(bytes.slice(0, Math.floor(bytes.length / 2)));
             stalls.add(controller);
+            void errorOnAbort(controller, signal);
           },
         });
         return new Response(stream, { status: answer.status, headers: headers() });
@@ -220,19 +240,24 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
         return new Response(text, { status: answer.status, headers: headers({ "content-length": "20" }) });
       case "slow_headers":
         // No headers until the check releases the stall: an app's deadline must cover the fetch itself.
-        await new Promise<void>((resolve) => stalledHeaders.add(resolve));
+        await Promise.race([new Promise<void>((resolve) => stalledHeaders.add(resolve)), onAbort(signal)]);
         return new Response(text, { status: answer.status, headers: headers() });
       case "slow_headers_then_body": {
         // Headers after delayMs, then half the body, then the rest after delayMs more: each part is under the
         // app's deadline, the two together over it. Only one deadline over both refuses it.
-        await pause(hub.delayMs);
+        await Promise.race([pause(hub.delayMs), onAbort(signal)]);
         const bytes = new TextEncoder().encode(text);
         const half = Math.floor(bytes.length / 2);
         const stream = new ReadableStream<Uint8Array>({
           async start(controller) {
             controller.enqueue(bytes.slice(0, half));
             stalls.add(controller);
-            await pause(hub.delayMs);
+            void errorOnAbort(controller, signal);
+            try {
+              await Promise.race([pause(hub.delayMs), onAbort(signal)]);
+            } catch {
+              return; // aborted: the stream has failed already
+            }
             try {
               controller.enqueue(bytes.slice(half));
               controller.close();
@@ -284,9 +309,9 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
         if (held) {
           held.taken = true;
           held.resolve(body);
-          mode = (await held.gate) ?? hub.mode;
+          mode = (await Promise.race([held.gate, onAbort(init?.signal ?? request.signal)])) ?? hub.mode;
         }
-        return answerPair(body, mode, init?.redirect ?? request.redirect);
+        return answerPair(body, mode, init?.redirect ?? request.redirect, init?.signal ?? request.signal);
       }
       if (url.pathname === "/apc/confirm") {
         if (!live(body.ticket, body.agent)) return json({ ok: false, error: "ticket_expired" }, 400);

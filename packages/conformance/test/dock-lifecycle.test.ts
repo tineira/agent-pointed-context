@@ -41,6 +41,7 @@ const allowed: Array<[string, FixtureOptions, string[], RegExp?]> = [
   ["an app whose Allow carries no hub (bound to the consent on the server)", { hubBoundToConsent: true }, ["M1:", "M5:", "M6:", "the stale Allow"]],
   ["an app that makes a second drop of the same agent wait for the first Allow", { dropWaits: true }, ["M5:"], /waited for the first, then answered: waiting/],
   ["an app whose heartbeat is a WebSocket", { wsHeartbeat: true }, ["M6:"]],
+  ["an app that keeps the hub call's deadline with AbortSignal.timeout on the fetch", { abortSignalDeadline: true }, ["M3:"]],
 ];
 for (const [what, options, parts, note] of allowed) {
   test(`${what} passes`, async () => {
@@ -145,6 +146,7 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["origin_from_request_url", "M6:", /Origin https:\/\/apc-conformance-internal\.example, the request's own host/],
   ["heartbeat_no_origin_check", "M6:", /the heartbeat: a request with a foreign Origin is refused/],
   ["ws_no_origin_check", "M6:", /the heartbeat: a WebSocket handshake with a foreign Origin is refused/, { wsHeartbeat: true }],
+  ["get_changes_state", "M6:", /after a GET with the owner.s session and the body.s fields as a query \(every state change is a POST\)/],
   ["no_cancel_endpoint", "M6:", /give dock\.lifecycle\.owner\.cancel/],
   ["revoke_404_unknown", "M7:", /expected 200/],
   ["revoke_reads_all", "M7:", /never ends/],
