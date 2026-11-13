@@ -122,7 +122,7 @@ export interface DockGiveBackOptions {
    * throw is still caught and answered with the same 200, so it cannot become an oracle.
    */
   secretOf?: (url: URL) => string | null;
-  /** Milliseconds to wait for the body: `DOCK_GIVE_BACK_BODY_DEADLINE_MS` (5 s) by default. */
+  /** Milliseconds to wait for the body: `DOCK_GIVE_BACK_BODY_DEADLINE_MS` (5 s) by default, and when not a finite positive number of at most 2^31 - 1. */
   bodyDeadlineMs?: number;
 }
 
@@ -154,6 +154,11 @@ async function requestText(request: Request, cap: number, deadlineMs: number): P
   }
 }
 
+/** The give-back's body deadline: `ms` when it is a finite positive number of at most 2^31 - 1 (what a timer takes), else the default. */
+function bodyDeadline(ms: number | undefined): number {
+  return typeof ms === "number" && Number.isFinite(ms) && ms > 0 && ms <= 2 ** 31 - 1 ? ms : DOCK_GIVE_BACK_BODY_DEADLINE_MS;
+}
+
 /** What `/apc/revoke` answers, to any input (M7). */
 function givenBack(): Response {
   return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
@@ -177,7 +182,7 @@ export async function handleDockGiveBack(request: Request, options: DockGiveBack
   const own = bareOrigin(options.origin);
   if (!own) throw new TypeError(`handleDockGiveBack: origin must be a bare origin, not ${JSON.stringify(options.origin)}`);
   if (request.method !== "POST") return givenBack();
-  const text = await requestText(request, DOCK_GIVE_BACK_MAX_BYTES, options.bodyDeadlineMs ?? DOCK_GIVE_BACK_BODY_DEADLINE_MS);
+  const text = await requestText(request, DOCK_GIVE_BACK_MAX_BYTES, bodyDeadline(options.bodyDeadlineMs));
   if (text === null) return givenBack();
   let mcpUrl: unknown;
   try {
@@ -270,9 +275,9 @@ function errorMessage(error: DockGrantError, options: { pairingMessage?: string;
  *
  * **Return a non-null answer as is, before any wrapper code**: no activity stamp, no grant extension, no
  * presence or broadcast, no `attention`, `then` or `apc_link` (design § 1: agent traffic never wakes or
- * extends a grant, and no answer in handoff or dormant carries those). `attachAttention`, `attachThen` and
- * `attachApcLink` already leave such an answer unchanged (`isDockGrantAnswer`), but the stamps and events are
- * the app's own: skip them for it. Prefer `dockGrantGate`, which answers before the app's code runs.
+ * extends a grant, and no answer in handoff or dormant carries those). The `attach*` helpers do not check for
+ * it: the app gates first and returns the answer without passing it through its wrapper. Prefer
+ * `dockGrantGate`, which answers before the app's code runs.
  */
 export function dockGrantToolResult(state: DockGrantState, tool: string, options: { pairingMessage?: string; idleMessage?: string } = {}): ToolResult | null {
   const answer = dockGrantAnswer(state, dockGrantCallOf({ method: "tools/call", id: 0, params: { name: tool } }));
