@@ -7,7 +7,8 @@
  * - **`appTag`**: a fixed lowercase tag for the app, without `|` (letters, digits, `.`, `_` and `-`). It is
  *   immutable: changing it is the same as rotating K.
  * - **salt**: 16 random bytes, base64url without padding (22 characters; `newDockSalt`), new for each grant.
- * - **grantId**: the app's id for the grant, without `|`.
+ * - **grantId**: the app's id for the grant: 1 to 80 of letters, digits, `_`, `.`, `:` and `-` (so no `|`, and
+ *   the same bytes in every encoding).
  * - **The secret** is `base64url_unpadded(HMAC-SHA256(K, "<appTag>-dock-v1|<grantId>|<salt>")[0..16])`: 22
  *   characters, 128 bits (`deriveDockSecret`).
  * - **Storage**: `dockSecretHash(secret)`, SHA-256 of the secret's ASCII bytes as lowercase hex (the same as
@@ -26,7 +27,8 @@ export const DOCK_SECRET_SALT_BYTES = 16;
 const APP_TAG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 /** 16 bytes as unpadded base64url: 21 free characters and a last one whose low 4 bits are zero. */
 const SALT = /^[A-Za-z0-9_-]{21}[AQgw]$/;
-const GRANT_ID = /^[^|]{1,256}$/;
+/** The target-id charset: printable ASCII, no `|`, so every implementation encodes the message the same way. */
+const GRANT_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 
 function base64url(bytes: Uint8Array): string {
   let binary = "";
@@ -41,14 +43,14 @@ export function newDockSalt(): string {
 
 /**
  * A grant's secret, derived (the recipe above): `base64url_unpadded(HMAC-SHA256(key, "<appTag>-dock-v1|<grantId>|<salt>")[0..16])`.
- * Throws on a key under 32 bytes, an `appTag` that is not lowercase or holds `|`, a `grantId` with `|`, or
+ * Throws on a key under 32 bytes, an `appTag` that is not lowercase or holds `|`, a `grantId` outside its charset, or
  * a salt that is not 16 bytes of unpadded base64url: a recipe that runs on bad inputs is not the recipe.
  */
 export async function deriveDockSecret(key: Uint8Array | ArrayBuffer, appTag: string, grantId: string, salt: string): Promise<string> {
   const raw = key instanceof Uint8Array ? key : new Uint8Array(key);
   if (raw.byteLength < DOCK_SECRET_KEY_MIN_BYTES) throw new RangeError(`deriveDockSecret: the key needs at least ${DOCK_SECRET_KEY_MIN_BYTES} bytes`);
   if (!APP_TAG.test(appTag)) throw new TypeError("deriveDockSecret: appTag is a fixed lowercase tag of letters, digits, '.', '_' and '-'");
-  if (!GRANT_ID.test(grantId)) throw new TypeError("deriveDockSecret: grantId is 1 to 256 characters without '|'");
+  if (!GRANT_ID.test(grantId)) throw new TypeError("deriveDockSecret: grantId is 1 to 80 of letters, digits, '_', '.', ':' and '-'");
   if (!SALT.test(salt)) throw new TypeError("deriveDockSecret: salt is 16 bytes as unpadded base64url (22 characters)");
   const hmacKey = await crypto.subtle.importKey("raw", raw.slice(), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = await crypto.subtle.sign("HMAC", hmacKey, new TextEncoder().encode(`${appTag}-dock-v1|${grantId}|${salt}`));

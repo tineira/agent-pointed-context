@@ -1,4 +1,4 @@
-import { APC_LINK_KEY, type ApcLinkOffer, type Attention, type FocusPayload, type FocusRow } from "@tineira/apc-protocol";
+import { APC_LINK_KEY, isIdleAnswer, isPairingAnswer, type ApcLinkOffer, type Attention, type FocusPayload, type FocusRow } from "@tineira/apc-protocol";
 
 export const ATTENTION_NOTE = "The person pinned you to something on their screen. Call get_current_view to read it and mark it seen.";
 
@@ -20,6 +20,13 @@ export function toolResult(data: Record<string, unknown>): ToolResult {
 /**
  * A tool error: `{ error, message }` in both `structuredContent` and `content[0].text` (the same JSON), with
  * `isError: true` (APC 0.10; before 0.10 the text only). The dock grant's `pairing` and `idle` errors use it.
+ *
+ * **A tool that declares an `outputSchema` must admit `{ error, message }`**, or declare none: MCP SDK clients
+ * validate `structuredContent` against the tool's `outputSchema` even when `isError` is true (the SDK's server
+ * does not), so a schema that rejects the error shape turns every error of that tool into a client-side protocol
+ * error instead of `{ error, message }`. Spread `TOOL_ERROR_OUTPUT_SHAPE` into a raw zod shape whose own fields
+ * are optional, or union `TOOL_ERROR_JSON_SCHEMA` into a JSON Schema. The same holds for `get_current_view` and
+ * `wait_for_focus`, whose dormant answers are the idle shapes (`view: null`, `idle: true`).
  */
 export function toolError(code: string, message: string): ToolResult {
   const data = { error: code, message };
@@ -41,7 +48,7 @@ export function attentionFor(focus: FocusPayload): Attention {
  * clients that pass only the text content, the same key in the text.
  */
 export function attachAttention(result: ToolResult, attention: Attention): ToolResult {
-  return attachKey(result, "attention", attention);
+  return isDockGrantAnswer(result) ? result : attachKey(result, "attention", attention);
 }
 
 /**
@@ -51,12 +58,32 @@ export function attachAttention(result: ToolResult, attention: Attention): ToolR
  * unchanged, so an agent is not told to wait after every answer.
  */
 export function attachThen(result: ToolResult, applies: boolean): ToolResult {
-  return applies ? attachKey(result, "then", THEN_NOTE) : result;
+  return applies && !isDockGrantAnswer(result) ? attachKey(result, "then", THEN_NOTE) : result;
 }
 
 /** An `apc_link` offer (APC 0.4), placed like the envelope: a top-level key of the structured result and of the text. */
 export function attachApcLink(result: ToolResult, offer: ApcLinkOffer): ToolResult {
-  return attachKey(result, APC_LINK_KEY, offer);
+  return isDockGrantAnswer(result) ? result : attachKey(result, APC_LINK_KEY, offer);
+}
+
+/**
+ * Whether a tool result is a dock grant's answer in handoff or dormant (APC 0.10): the `pairing` or `idle` tool
+ * error, or a core tool's idle shape (`isPairingAnswer`, `isIdleAnswer` on its `structuredContent`, or on its
+ * text when it has none). Such an answer is final: `attachAttention`, `attachThen` and `attachApcLink` return it
+ * unchanged, and an app's wrapper must not stamp activity, extend the grant or emit a presence event for it.
+ */
+export function isDockGrantAnswer(result: ToolResult): boolean {
+  let body: unknown = result.structuredContent;
+  if (body === undefined) {
+    const first = result.content[0];
+    if (!first || first.type !== "text") return false;
+    try {
+      body = JSON.parse(first.text) as unknown;
+    } catch {
+      return false;
+    }
+  }
+  return isPairingAnswer(body) || isIdleAnswer(body);
 }
 
 function attachKey(result: ToolResult, key: string, value: unknown): ToolResult {
