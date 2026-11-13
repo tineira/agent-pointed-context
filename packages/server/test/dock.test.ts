@@ -331,6 +331,47 @@ test("the gate never serves a batch or junk from a grant that is not live, and n
   }
 });
 
+test("P1 on the rebased base: the message as received drives the gate, and serve never wakes", async () => {
+  // dockGrantToolResult: handoff is the pairing error, dormant the idle view or the idle error; never null, never a throw.
+  assert.deepEqual(dockGrantToolResult("handoff", "list_orders")?.structuredContent, { error: "pairing", message: PAIRING_MESSAGE });
+  assert.equal(dockGrantToolResult("handoff", "list_orders")?.isError, true);
+  assert.deepEqual(dockGrantToolResult("dormant", "get_current_view")?.structuredContent, { view: null, focus: null, idle: true, note: IDLE_MESSAGE });
+  assert.deepEqual(dockGrantToolResult("dormant", "list_orders")?.structuredContent, { error: "idle", message: IDLE_MESSAGE });
+  // A tools/call with an id in handoff is the pairing tool error, not a 202.
+  const handoffCall = dockGrantGate("handoff", { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_orders" } }, GATE);
+  assert.equal(handoffCall.serve, false);
+  assert.deepEqual(handoffCall.answer, { kind: "tool_error", error: "pairing" });
+  if (!handoffCall.serve) {
+    assert.equal(handoffCall.response.status, 200);
+    const body = (await handoffCall.response.json()) as { id: number; result: { isError: boolean; structuredContent: unknown } };
+    assert.equal(body.id, 1);
+    assert.deepEqual(body.result.structuredContent, { error: "pairing", message: PAIRING_MESSAGE });
+  }
+  // A notifications/* method is a notification even with an id: 202 in handoff.
+  const cancelled = dockGrantGate("handoff", { jsonrpc: "2.0", id: 9, method: "notifications/cancelled", params: { requestId: 1 } }, GATE);
+  assert.equal(cancelled.serve, false);
+  assert.deepEqual(cancelled.answer, { kind: "ignored" });
+  if (!cancelled.serve) assert.equal(cancelled.response.status, 202);
+  // Serve carries the base's shape: commits only for initialize in handoff, wakes always false.
+  assert.deepEqual(dockGrantGate("dormant", rpc("initialize", {}), GATE).answer, { kind: "serve", commits: false, wakes: false });
+  assert.deepEqual(dockGrantGate("handoff", rpc("initialize", {}), GATE).answer, { kind: "serve", commits: true, wakes: false });
+});
+
+test("junk objects are never a notification: no string method means another method, in handoff and dormant", async () => {
+  for (const state of ["handoff", "dormant"] as const) {
+    for (const junk of [{}, { id: 1 }, { id: 1, method: 123 }, { jsonrpc: "2.0", method: null }, { method: ["tools/call"] }]) {
+      const gate = dockGrantGate(state, junk, GATE);
+      assert.equal(gate.serve, false, `${state} ${JSON.stringify(junk)}`);
+      assert.deepEqual(gate.answer, { kind: "rpc_error", code: -32000, error: state === "handoff" ? "pairing" : "idle" }, `${state} ${JSON.stringify(junk)}`);
+      if (!gate.serve) assert.equal(((await gate.response.json()) as { id: unknown }).id, null);
+    }
+    // A genuine client response (an id and a result or an error, no method) passes as a notification.
+    for (const response of [{ jsonrpc: "2.0", id: 1, result: {} }, { jsonrpc: "2.0", id: 2, error: { code: -1, message: "x" } }]) {
+      assert.deepEqual(dockGrantGate(state, response, GATE).answer, state === "handoff" ? { kind: "ignored" } : { kind: "serve", commits: false, wakes: false });
+    }
+  }
+});
+
 test("dockGrantToolResult: the same answers inside a tool handler, and a throw for states answered before the transport", () => {
   assert.equal(dockGrantToolResult("live", "list_orders"), null);
   assert.deepEqual(dockGrantToolResult("handoff", "get_current_view")?.structuredContent, { error: "pairing", message: PAIRING_MESSAGE });

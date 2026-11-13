@@ -1,3 +1,4 @@
+import { badContentLength, bareOrigin, readCapped, utf8 } from "./util.ts";
 import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type DockPairRequest, type HubCallError } from "@tineira/apc-protocol";
 
 /**
@@ -59,22 +60,13 @@ const agentOf = (raw: unknown): HubAgent => {
 type Answer = { status: number; body: Record<string, unknown> | null } | { error: Exclude<HubCallError, "hub_ignores_pairing_code"> };
 
 /**
- * The origin a hub call goes to (M9): `hub` parsed with `new URL`, an http(s) origin with no userinfo, no
- * path but `/`, no query and no fragment; null otherwise. Whether it is https and on the app's allowlist is
- * `parseDockDrop`'s question (M1), asked before the call.
+ * The origin a hub call goes to (M9): `hub` as a bare http(s) origin (`bareOrigin`: printable ASCII, no
+ * userinfo, path but `/`, dot segment, query or fragment, written exactly as its origin); null otherwise.
+ * Whether it is https and on the app's allowlist is `parseDockDrop`'s question (M1), asked before the call.
  */
 export function hubCallOrigin(hub: string | URL): string | null {
-  const raw = String(hub);
-  if (/[@\\\s?#]/.test(raw)) return null;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
-  return url.origin;
+  const url = bareOrigin(String(hub));
+  return url && (url.protocol === "https:" || url.protocol === "http:") ? url.origin : null;
 }
 
 /** The one deadline of a call (M3): `timeoutMs` when it is a positive number, never more than `HUB_CALL_DEADLINE_MS`. */
@@ -85,41 +77,7 @@ function deadlineMs(timeoutMs: number | undefined): number {
 /** The deadline passed (M3). */
 class Expired extends Error {}
 
-/** A body as bytes, at most `cap` of them (the decoded stream, M4), or null past it: the rest is never read. */
-async function readCapped(response: Response, cap: number, expired: Promise<never>): Promise<Uint8Array | null> {
-  if (!response.body) return new Uint8Array(0);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await Promise.race([reader.read(), expired]);
-      if (done) break;
-      size += value.byteLength;
-      if (size > cap) {
-        void reader.cancel().catch(() => {});
-        return null;
-      }
-      chunks.push(value);
-    }
-  } catch (error) {
-    void reader.cancel().catch(() => {});
-    throw error;
-  }
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return bytes;
-}
-
-/** A present `content-length` that is not digits only, or is over the cap (M4). An absent one is fine. */
-export function badContentLength(headers: Headers, cap: number): boolean {
-  const declared = headers.get("content-length");
-  return declared !== null && (!/^\d+$/.test(declared) || Number(declared) > cap);
-}
+export { badContentLength };
 
 async function post(hub: string | URL, path: string, body: unknown, options: HubCallOptions): Promise<Answer> {
   const origin = hubCallOrigin(hub);
@@ -168,13 +126,15 @@ async function post(hub: string | URL, path: string, body: unknown, options: Hub
     }
     let bytes: Uint8Array | null;
     try {
-      bytes = await readCapped(response, HUB_ANSWER_MAX_BYTES, expired);
+      bytes = await readCapped(response.body, HUB_ANSWER_MAX_BYTES, expired);
     } catch (error) {
       return { error: error instanceof Expired || controller.signal.aborted ? "hub_unreachable" : "hub_refused" };
     }
     if (!bytes) return { error: "hub_refused" };
+    const text = utf8(bytes);
+    if (text === null) return { status: response.status, body: null };
     try {
-      const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)) as unknown;
+      const parsed = JSON.parse(text) as unknown;
       return { status: response.status, body: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null };
     } catch {
       return { status: response.status, body: null };

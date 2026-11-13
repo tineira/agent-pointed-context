@@ -14,7 +14,7 @@ import {
   type DockGrantState,
 } from "@tineira/apc-protocol";
 import { toolError, toolResult, type ToolResult } from "./envelope.ts";
-import { badContentLength } from "./hub-client.ts";
+import { badContentLength, bareOrigin, readCapped, utf8 } from "./util.ts";
 import { revokedResponse, secretHash } from "./revoke.ts";
 
 /**
@@ -44,21 +44,6 @@ export interface DockDropOptions {
 
 const LOOPBACK = /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1|\[::1\])$/;
 
-/** A bare origin as written: printable ASCII with no userinfo, backslash, query or fragment, and no path but `/`. */
-function bareOrigin(raw: string): URL | null {
-  if (raw.length > 200 || !/^[\x21-\x7e]+$/.test(raw) || /[@\\?#]/.test(raw)) return null;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
-  // Written exactly as its origin (an optional "/" after it): no default port, case, dot segment or trailing dot to normalize away.
-  if (raw !== url.origin && raw !== `${url.origin}/`) return null;
-  return url;
-}
-
 function allowlist(options: DockDropOptions): Set<string> {
   const allowed = new Set<string>();
   for (const entry of options.hubs) {
@@ -80,7 +65,7 @@ function allowlist(options: DockDropOptions): Set<string> {
  *
  * - `https:`, but for an origin listed in `localDevHubs`;
  * - with no userinfo, a path of `/` or none, no query and no fragment, written as its own origin (no default
- *   port, upper case, dot segment or trailing dot), in printable ASCII (an IDN hub is written in punycode, as
+ *   port, upper case, dot segment or control character; a trailing dot is its own origin, refused by the allowlist), in printable ASCII (an IDN hub is written in punycode, as
  *   `location.origin` gives it);
  * - and its `origin` exactly equal to one on the allowlist: never a prefix or a suffix match.
  *
@@ -121,6 +106,10 @@ export interface DockGiveBackOptions {
    * is in any state but revoked or ended (in flight included): that grant then answers 404. On a revoked or
    * ended grant, or no grant, it does nothing (revoked stays revoked). It must do the check and the end in one
    * atomic step. `url` is the parsed MCP URL, for an app that routes by it (to a sandbox, a tenant): never log it.
+   *
+   * It **MUST NOT throw for an unknown grant** (or a revoked or ended one): it returns normally, so the answer
+   * stays the same 200. Only a genuine failure of the app's store may throw; that answers 500, which depends
+   * on the store, never on the input.
    */
   endGrantBySecretHash: (hash: string, url: URL) => void | Promise<void>;
   /**
@@ -137,38 +126,15 @@ function defaultSecretOf(url: URL): string | null {
   return SECRET_SEGMENT.test(last) ? last : null;
 }
 
-/** A request's body as text, at most `cap` bytes, or null past it or on a bad `content-length`; the rest is never read. */
+/** A request's body as text, at most `cap` bytes, or null past it, on a bad `content-length`, a stream error or bad UTF-8. */
 async function requestText(request: Request, cap: number): Promise<string | null> {
   if (badContentLength(request.headers, cap)) {
     void request.body?.cancel().catch(() => {});
     return null;
   }
-  if (!request.body) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > cap) {
-        void reader.cancel().catch(() => {});
-        return null;
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return null;
-  }
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+    const bytes = await readCapped(request.body, cap);
+    return bytes ? utf8(bytes) : null;
   } catch {
     return null;
   }
@@ -186,8 +152,10 @@ function givenBack(): Response {
  * `mcp_url` on the app's origin has its secret hashed (`secretHash`), and `endGrantBySecretHash` ends that
  * grant unless it is revoked or ended. The URL and the secret are never logged or echoed.
  *
- * Only a failure of the app's own store answers otherwise: HTTP 500, so the hub can try again (a grant
- * that was not ended is not reported as given back).
+ * Only a failure of the app's own store answers otherwise: HTTP 500 `{ ok: false }`, so the hub can try again
+ * (a grant that was not ended is not reported as given back). That answer is input-independent: it holds only
+ * because `endGrantBySecretHash` MUST NOT throw for an unknown, revoked or ended grant (it returns normally);
+ * a store that threw on "no such grant" would turn the 500 into an oracle for which URLs are live.
  */
 export async function handleDockGiveBack(request: Request, options: DockGiveBackOptions): Promise<Response> {
   if (request.method !== "POST") return givenBack();
@@ -242,13 +210,18 @@ export interface DockGrantGateOptions {
 
 type RpcId = string | number | null;
 
-/** The call a JSON-RPC message is, for the table, and its id. A batch or junk is an "other method" with id null: it never gets data. */
+/** The call a JSON-RPC message is, for the table, and its id. A batch or junk (no string `method`, unless a client's response) is an "other method" with id null: it never gets data. */
 function callOf(message: unknown): { call: DockGrantCall; id: RpcId; tool?: string } {
   if (!message || typeof message !== "object" || Array.isArray(message)) return { call: "other_method", id: null };
   const m = message as { id?: unknown; method?: unknown; params?: unknown };
   const id: RpcId = typeof m.id === "string" || typeof m.id === "number" ? m.id : null;
-  // A message without an id (a notification) or without a method (a client's response) needs no answer.
-  if (m.id === undefined || typeof m.method !== "string") return { call: "notification", id: null };
+  if (typeof m.method !== "string") {
+    // No method: only a genuine client response (an id and a result or an error) passes as a notification; anything else is junk.
+    const response = m.id !== undefined && ("result" in m || "error" in m);
+    return { call: response ? "notification" : "other_method", id: null };
+  }
+  // No id, or any notifications/* method (even with an id), is a notification (dockGrantCallOf).
+  if (m.id === undefined) return { call: dockGrantCallOf({ method: m.method, params: m.params }), id: null };
   const tool = m.method === "tools/call" && m.params && typeof m.params === "object" ? (m.params as { name?: unknown }).name : undefined;
   return { call: dockGrantCallOf({ method: m.method, id, params: m.params }), id, ...(typeof tool === "string" ? { tool } : {}) };
 }
