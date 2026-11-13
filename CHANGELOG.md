@@ -9,6 +9,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 ### The reference hub requires the pairing code (2026-11-13, TIN-885)
 
 - **The dock at apc.tineira.com now refuses a pairing without a pairing code (an app from before APC 0.9), at `/apc/pair` and at approval, and the hub fails closed: unless `PAIRING_CODE` is `when_sent`, it requires the code.** Every verified app (Pulse, Signals, Surplus) sends one; a request left from an older app tells the person in the dock that the app uses an older APC version with no pairing code and to ask its maker to update it. (`apps/dock/wrangler.jsonc`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/web/request-state.ts`, `apps/dock/test/`)
+- **Pairings already made without a code keep working; unpair them by hand to end them, and a codeless request approved in the last moments before the deploy still completes.** A refused codeless attempt is counted as `pair_codeless_refused` in `apc_mcp_sessions` (its claimed host, marked unvalidated), so the operator sees which older apps still try. (`apps/dock/src/worker/hub.ts`, `DESIGN.md`)
 
 ### Docs catch-up (2026-11-13, TIN-881)
 

@@ -6,9 +6,11 @@
  * simulated apps (hostile-world.ts) whose every request is counted.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test, type TestContext } from "node:test";
 import { PAIRING_CODE_ACK, TICKET_TTL_MS } from "@tineira/apc-protocol";
 import { LIMITS } from "../src/worker/trust.ts";
+import { decisionNotice, isCodeRetryError } from "../src/web/request-state.ts";
 import { fakeApp, PULSE, world, type FakeApp, type Json } from "./hostile-world.ts";
 
 const SHOP = "https://shop.example";
@@ -210,23 +212,56 @@ test("deny needs no code", async (t) => {
   assert.deepEqual(w.shop.calls, ["/apc/revoke"]);
 });
 
-test("once PAIRING_CODE is required, a request from before (no code) is no longer approved", async (t) => {
-  const w = await shopWorld(t, { PAIRING_CODE: "when_sent" });
-  const id = (await w.ask({ pairing_code: undefined })).answer.pairing_id!;
-  w.hubEnv.PAIRING_CODE = "required";
-  assert.deepEqual(await w.hub.decide(id, "approve"), { ok: false, error: "pairing_code_required" });
-  assert.deepEqual(await w.hub.decide(id, "deny"), { ok: true });
+/** The settings that refuse a pairing without a code (TIN-885): "required", and, failing closed, unset or misspelled. */
+const REFUSING = [["required", "required"], ["unset (fails closed)", undefined], ["misspelled (fails closed)", "requred"]] as const;
+/** Sets PAIRING_CODE in a running world's hub, as a deploy would: undefined removes it. */
+function setPairingCode(env: Json, value: string | undefined) {
+  if (value === undefined) delete env.PAIRING_CODE;
+  else env.PAIRING_CODE = value;
+}
+
+for (const [label, value] of REFUSING) {
+  test(`PAIRING_CODE ${label}: a request from before the deploy (no code) is no longer approved, and can be denied`, async (t) => {
+    const w = await shopWorld(t, { PAIRING_CODE: "when_sent" });
+    const id = (await w.ask({ pairing_code: undefined })).answer.pairing_id!;
+    setPairingCode(w.hubEnv, value);
+    assert.deepEqual(await w.hub.decide(id, "approve"), { ok: false, error: "pairing_code_required" });
+    assert.equal((await w.line(id)).status, "pending");
+    assert.deepEqual(w.shop.calls, [], "nothing reached the app");
+    assert.deepEqual(await w.hub.decide(id, "deny"), { ok: true });
+  });
+}
+
+test("an unverified app's request from before the deploy (no code): its warning's Approve is refused under the default, and the dock says why in words", async (t) => {
+  const w = await world(t); // PAIRING_CODE when_sent, as before the deploy
+  const shop = fakeApp(SHOP, "Shop");
+  w.apps.set(SHOP, shop);
+  const who = await w.agent();
+  const { ticket } = await w.hub.ticket(who.id);
+  const answer = await w.hub.pair({ ticket, agent: who.id, app: { name: "Shop", origin: SHOP }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}` });
+  assert.equal(answer.ok, true, answer.error);
+  assert.equal((await w.pairingOf(SHOP)).warning, true);
+  assert.equal((await w.pairingOf(SHOP)).code, undefined);
+  setPairingCode(w.hubEnv, undefined); // deployed: the default
+  const refused = await w.hub.decide(answer.pairing_id!, "approve_unverified");
+  assert.deepEqual(refused, { ok: false, error: "pairing_code_required" });
+  assert.equal(w.hubRoom.db.prepare("select count(*) as n from unverified_ok").get()!.n, 0, "no approval of the domain");
+  assert.equal((await w.pairingOf(SHOP)).status, "pending");
+  // A codeless card has no code field, so the dock shows this as its notice (hub.tsx), in words, never the raw error.
+  assert.equal(isCodeRetryError(refused.error), true);
+  assert.equal((await w.pairingOf(SHOP)).code, undefined, "no code field on its card, so the notice says it");
+  assert.equal(decisionNotice(refused.error), "This app uses an older APC version that has no pairing code, so it was not paired. Ask its maker to update it, and Deny this request.");
 });
 
-for (const [label, env] of [["required", { PAIRING_CODE: "required" }], ["unset (fails closed)", { PAIRING_CODE: undefined }], ["misspelled (fails closed)", { PAIRING_CODE: "requred" }]] as const) {
-  test(`PAIRING_CODE ${label}: a pairing without a code is refused with nothing reached or counted, and the same ticket pairs with a code`, async (t) => {
+for (const [label, value] of REFUSING) {
+  test(`PAIRING_CODE ${label}: a pairing without a code is refused, reaching nothing and counted as refused, and the same ticket pairs with a code`, async (t) => {
     const points: Json[] = [];
-    const w = await shopWorld(t, { ...env, MCP_SESSIONS: { writeDataPoint: (p: Json) => points.push(p) }, ANALYTICS_SALT: "salt" });
+    const w = await shopWorld(t, { PAIRING_CODE: value, MCP_SESSIONS: { writeDataPoint: (p: Json) => points.push(p) }, ANALYTICS_SALT: "salt" });
     const { body, answer } = await w.ask({ pairing_code: undefined });
     assert.deepEqual(answer, { ok: false, error: "pairing_code_required" });
     assert.deepEqual((await w.agent()).pairings, [], "no request in the dock");
     assert.deepEqual(w.shop.calls, [], "nothing reached the app");
-    assert.deepEqual(points, [], "not counted as a codeless pairing");
+    assert.deepEqual(points, [{ indexes: ["pair_codeless_refused"], blobs: ["pair_codeless_refused", "shop.example", "unvalidated", "dock"], doubles: [1] }], "counted as a refused codeless pairing");
     const coded = (await w.hub.pair({ ...body, pairing_code: CODE })) as { ok: boolean; pairing_id?: string; pairing_code?: string };
     assert.equal(coded.ok, true);
     assert.equal(coded.pairing_code, PAIRING_CODE_ACK);
@@ -235,3 +270,10 @@ for (const [label, env] of [["required", { PAIRING_CODE: "required" }], ["unset 
     assert.equal((await w.line(coded.pairing_id!)).status, "paired");
   });
 }
+
+test("the reference hub's deploy requires the code: apps/dock/wrangler.jsonc sets PAIRING_CODE to required (TIN-885)", () => {
+  // Whole-line // comments and trailing commas stripped: JSONC to JSON. (A // inside a string, like https://, stays.)
+  const jsonc = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  const config = JSON.parse(jsonc.replace(/^\s*\/\/.*$/gm, "").replace(/,(\s*[}\]])/g, "$1")) as { vars?: Record<string, unknown> };
+  assert.equal(config.vars?.PAIRING_CODE, "required");
+});
