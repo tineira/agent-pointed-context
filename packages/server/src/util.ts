@@ -22,6 +22,12 @@ export function bareOrigin(raw: string): URL | null {
   return url;
 }
 
+/**
+ * A loopback host, the only hosts a hub may be reached on over `http:` (local development): `localhost`,
+ * `*.localhost` and `127.0.0.1`. No IPv6 `[::1]`: the page's drag grammar (`parseAgentDrag`) carries no IPv6 hub.
+ */
+export const LOOPBACK_HOST = /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1)$/;
+
 /** A present `content-length` that is not digits only, or is over the cap (M4). An absent one is fine. */
 export function badContentLength(headers: Headers, cap: number): boolean {
   const declared = headers.get("content-length");

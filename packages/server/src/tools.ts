@@ -2,6 +2,20 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WAIT_CLAIM_GAP_S, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
 import { z } from "zod";
 import { toolResult } from "./envelope.ts";
+
+/**
+ * The tool error's fields as a raw zod shape (APC 0.10), to spread into a tool's `outputSchema` whose own fields
+ * are optional: MCP SDK clients validate `structuredContent` against `outputSchema` even on `isError`, so a
+ * schema that does not admit `{ error, message }` turns the tool's errors into protocol errors (`toolError`).
+ */
+export const TOOL_ERROR_OUTPUT_SHAPE = { error: z.string().optional(), message: z.string().optional() };
+
+/** The tool error `{ error, message }` as a JSON Schema, to union (`anyOf`) into a tool's JSON `outputSchema`. */
+export const TOOL_ERROR_JSON_SCHEMA = {
+  type: "object",
+  properties: { error: { type: "string" }, message: { type: "string" } },
+  required: ["error", "message"],
+} as const;
 import type { WaitSlot } from "./waits.ts";
 
 /** What the host gives the APC tools, already trimmed to the calling grant. */

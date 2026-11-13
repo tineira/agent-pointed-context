@@ -46,6 +46,23 @@ app.get("/.well-known/apc.json", (c) =>
 );
 ```
 
+## Dock helpers (APC 0.10)
+
+For an app on the Dock profile, the helpers that carry pairing and grant security. They fail closed.
+
+- **`parseDockDrop(body, { hubs, localDevHubs })`** checks a drop's `hub` against your constant allowlist of bare `https:` origins (M1). It also checks the agent and ticket. It answers `{ ok, hub, agent, ticket }`, or `hub_not_allowed` / `invalid_drop`. Call it **on the drop and again on the Allow**. Send hub requests to the `hub` it returns, never to the raw string.
+- **`pairWithHub` / `confirmWithHub`** call the hub with these guarantees:
+  - they send only to the hub's parsed origin (`https:`, or `http:` on a loopback host);
+  - they never follow a redirect;
+  - one deadline of at most 10 s covers the headers and the body;
+  - they read at most 8 KiB, with a strict `content-length` rule.
+
+  Anything else is `hub_not_allowed`, `hub_unreachable`, `hub_refused` or `hub_ignores_pairing_code`.
+- **`handleDockGiveBack(request, { origin, endGrantBySecretHash })`** serves `POST /apc/revoke` (M7). It answers the same 200 to any input, reads at most 4 KiB within 5 s, and never logs the URL. Your `endGrantBySecretHash(hash)` ends the grant unless it is revoked or ended. It must return normally for an unknown grant, and must never create state for an unknown tenant.
+- **`dockGrantGate(state, message, { host })`** answers a JSON-RPC message by the grant's state before your MCP transport sees it: 404, `RevokedAnswer`, 202, the `pairing` / `idle` tool error, an idle shape, -32000, or `{ serve: true, commits }`. `dockGrantToolResult(state, tool)` gives the same answers inside a tool handler. **Return those answers as is**: no activity stamp, presence event, `attention`, `then` or `apc_link`. The `attach*` helpers already leave them unchanged (`isDockGrantAnswer`).
+- **`toolError` fills `structuredContent`** with `{ error, message }`. MCP SDK clients check `structuredContent` against a tool's `outputSchema` even on errors. So a tool that declares an `outputSchema` must admit that shape, or the client rejects the error: spread `TOOL_ERROR_OUTPUT_SHAPE` into a raw shape whose fields are optional, or union `TOOL_ERROR_JSON_SCHEMA`. The same goes for the core tools' idle shapes.
+- **The derived-secret recipe** (optional): `deriveDockSecret(key, appTag, grantId, salt)`, `newDockSalt()` and `dockSecretHash(secret)`. Store only the hash and the salt.
+
 Then check it with [`@tineira/apc-conformance`](https://www.npmjs.com/package/@tineira/apc-conformance): `npx @tineira/apc-conformance@next https://your.app`.
 
 Source, the worked examples (Pulse and Signals) and the changelog: https://github.com/tineira/agent-pointed-context. MIT.

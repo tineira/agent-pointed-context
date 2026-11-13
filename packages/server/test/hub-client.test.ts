@@ -127,6 +127,17 @@ test("M9: the call goes to the parsed origin, never the raw string; a hub that i
     assert.deepEqual(await pairWithHub(hub, BODY, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, JSON.stringify(hub));
     assert.equal(hubFor.sent.length, 0);
   }
+  // http: only on a loopback host (local development): the secret URL and the code never go out in clear text.
+  for (const hub of ["http://dock.test", "http://apc.tineira.com", "http://10.0.0.1:8787", "http://[::1]:8787", "http://localhost.evil.example"]) {
+    const hubFor = hubAnswering(() => Response.json(ACK));
+    assert.deepEqual(await pairWithHub(hub, BODY, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, hub);
+    assert.equal(hubFor.sent.length, 0, `nothing sent in clear text to ${hub}`);
+  }
+  for (const hub of ["http://localhost:8787", "http://127.0.0.1:8787", "http://dock.localhost:8787"]) {
+    const hubFor = hubAnswering(() => Response.json(ACK));
+    assert.equal((await pairWithHub(hub, BODY, { fetch: hubFor.fetch })).ok, true, hub);
+    assert.equal(hubFor.sent[0]!.url, `${hub}/apc/pair`);
+  }
   for (const hub of ["https://dock.test/x", "https://dock.test/apc", "https://u:p@dock.test", "https://@dock.test", "https://dock.test?x=1", "https://dock.test#f", "https:\\\\dock.test", "dock.test", "not a url", "", "ftp://dock.test", "javascript:alert(1)", "https://dock.test/ "]) {
     const hubFor = hubAnswering(() => Response.json(ACK));
     assert.deepEqual(await pairWithHub(hub, BODY, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, hub);

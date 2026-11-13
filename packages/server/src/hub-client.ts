@@ -1,4 +1,4 @@
-import { badContentLength, bareOrigin, readCapped, utf8 } from "./util.ts";
+import { badContentLength, bareOrigin, LOOPBACK_HOST, readCapped, utf8 } from "./util.ts";
 import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type DockPairRequest, type HubCallError } from "@tineira/apc-protocol";
 
 /**
@@ -7,8 +7,9 @@ import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type Dock
  * the app's MUSTs on the hub call (APC 0.10):
  *
  * - **M9.** The request goes to the parsed origin of `hub` (`new URL(hub).origin` and the path), never to
- *   the raw string. A `hub` that is not a bare http(s) origin (unparsable, userinfo, a path other than `/`,
- *   a query or a fragment) is `hub_not_allowed`, and nothing is sent. Check the hub against the app's
+ *   the raw string. A `hub` that is not a bare `https:` origin (or `http:` on a loopback host), or is
+ *   unparsable, or has userinfo, a path other than `/`, a query or a fragment, is `hub_not_allowed`, and
+ *   nothing is sent. Check the hub against the app's
  *   allowlist first (`parseDockDrop`, M1): this client does not know the allowlist.
  * - **M2.** `redirect: "error"`, and any 3xx, `opaqueredirect` or `response.redirected` is `hub_refused`:
  *   the app's hub list is its trust anchor, and a redirect would hand the grant and the pairing code to
@@ -60,13 +61,17 @@ const agentOf = (raw: unknown): HubAgent => {
 type Answer = { status: number; body: Record<string, unknown> | null } | { error: Exclude<HubCallError, "hub_ignores_pairing_code"> };
 
 /**
- * The origin a hub call goes to (M9): `hub` as a bare http(s) origin (`bareOrigin`: printable ASCII, no
- * userinfo, path but `/`, dot segment, query or fragment, written exactly as its origin); null otherwise.
- * Whether it is https and on the app's allowlist is `parseDockDrop`'s question (M1), asked before the call.
+ * The origin a hub call goes to (M9): `hub` as a bare origin (`bareOrigin`: printable ASCII, no userinfo, path
+ * but `/`, dot segment, query or fragment, written exactly as its origin), over `https:`, or over `http:` only on
+ * a loopback host (`localhost`, `*.localhost`, `127.0.0.1`: local development), so the secret MCP URL and the
+ * pairing code never go out in clear text; null otherwise. Whether it is on the app's allowlist is
+ * `parseDockDrop`'s question (M1), asked before the call.
  */
 export function hubCallOrigin(hub: string | URL): string | null {
   const url = bareOrigin(String(hub));
-  return url && (url.protocol === "https:" || url.protocol === "http:") ? url.origin : null;
+  if (!url) return null;
+  if (url.protocol === "https:") return url.origin;
+  return url.protocol === "http:" && LOOPBACK_HOST.test(url.hostname) ? url.origin : null;
 }
 
 /** The one deadline of a call (M3): `timeoutMs` when it is a positive number, never more than `HUB_CALL_DEADLINE_MS`. */

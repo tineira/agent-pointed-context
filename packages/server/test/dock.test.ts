@@ -84,7 +84,8 @@ test("M1: a local-dev origin is allowed over http only when listed, and only on 
   for (const entry of ["http://dock.example", "http://localhost.evil.example", "http://10.0.0.1"]) {
     assert.throws(() => parseDockDrop(DROP, { hubs: [], localDevHubs: [entry] }), TypeError, entry);
   }
-  assert.doesNotThrow(() => parseDockDrop(DROP, { hubs: [], localDevHubs: ["http://127.0.0.1:5200", "http://[::1]:5200", "http://dock.localhost:5200"] }));
+  assert.doesNotThrow(() => parseDockDrop(DROP, { hubs: [], localDevHubs: ["http://127.0.0.1:5200", "http://dock.localhost:5200"] }));
+  assert.throws(() => parseDockDrop(DROP, { hubs: [], localDevHubs: ["http://[::1]:5200"] }), TypeError, "no IPv6: the drag grammar cannot carry it");
 });
 
 test("M1: the allowlist itself must be bare https origins, or the parser throws", () => {
@@ -220,6 +221,38 @@ test("M7: an app's own way to find the secret, and a store failure is a 500 the 
   });
   assert.equal(failing.status, 500);
   assert.deepEqual(await failing.json(), { ok: false });
+});
+
+test("M7: a hostile secretOf, a trickling body and a bad origin config never change the same-200 rule", async () => {
+  const called: string[] = [];
+  const throwing = { origin: ORIGIN, secretOf: (url: URL) => url.pathname.split("/")[5]!.trim(), endGrantBySecretHash: (h: string) => void called.push(h) };
+  await same(await handleDockGiveBack(json({ mcp_url: `${ORIGIN}/mcp/` }), throwing));
+  const nonString = { origin: ORIGIN, secretOf: () => 42 as unknown as string, endGrantBySecretHash: (h: string) => void called.push(h) };
+  await same(await handleDockGiveBack(json({ mcp_url: `${ORIGIN}/mcp/${SECRET}` }), nonString));
+  assert.equal(called.length, 0);
+  // A body that never ends is dropped at the deadline, with the same 200.
+  let cancelled = false;
+  const trickle = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"mcp_url":"'));
+    },
+    pull() {
+      return new Promise(() => {});
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const started = Date.now();
+  await same(await handleDockGiveBack(new Request(`${ORIGIN}/apc/revoke`, { method: "POST", body: trickle, duplex: "half" } as RequestInit), { origin: ORIGIN, bodyDeadlineMs: 50, endGrantBySecretHash: (h: string) => void called.push(h) }));
+  assert.ok(Date.now() - started < 2000);
+  assert.equal(cancelled, true, "the body is cancelled");
+  assert.equal(called.length, 0);
+  // The app's own origin is configuration: a bad one throws whatever the request.
+  for (const origin of ["not a url", "https://orders.test/path", ""]) {
+    await assert.rejects(handleDockGiveBack(json({ mcp_url: `${ORIGIN}/mcp/${SECRET}` }), { origin, endGrantBySecretHash: () => {} }), TypeError, origin);
+    await assert.rejects(handleDockGiveBack(giveBack("junk"), { origin, endGrantBySecretHash: () => {} }), TypeError, origin);
+  }
 });
 
 test("M7: the URL and the secret are never logged or echoed", async () => {
@@ -372,6 +405,43 @@ test("junk objects are never a notification: no string method means another meth
   }
 });
 
+test("a request method without an id is another method, never a notification: a dormant grant never serves it", async () => {
+  for (const method of ["tools/call", "initialize", "resources/read", "prompts/get", "tools/list", "ping", "custom/thing"]) {
+    const message = { jsonrpc: "2.0", method, params: { name: "delete_order", arguments: {} } };
+    const dormant = dockGrantGate("dormant", message, GATE);
+    assert.equal(dormant.serve, false, method);
+    assert.deepEqual(dormant.answer, { kind: "rpc_error", code: -32000, error: "idle" }, method);
+    assert.deepEqual(dockGrantGate("handoff", message, GATE).answer, { kind: "rpc_error", code: -32000, error: "pairing" }, method);
+    assert.equal(dockGrantGate("live", message, GATE).serve, true, "a live grant serves as 0.8");
+  }
+  // A real notification without an id still passes in dormant, and is ignored in handoff.
+  assert.equal(dockGrantGate("dormant", notify("notifications/initialized"), GATE).serve, true);
+  assert.deepEqual(dockGrantGate("handoff", notify("notifications/cancelled"), GATE).answer, { kind: "ignored" });
+});
+
+test("a dock grant's answer is final: attention, then and apc_link leave it unchanged", async () => {
+  const { attachApcLink, attachAttention, attachThen, isDockGrantAnswer, toolError, toolResult } = await import("../src/index.ts");
+  const attention = { focus: { kind: "order", id: "o_1", part: null, params: null, app_url: "https://orders.test/o/1", pinned_at: "2026-11-13T10:00:00.000Z" }, note: "n" } as unknown as Parameters<typeof attachAttention>[1];
+  const offer = { url: "https://apc.tineira.com/link/x" } as unknown as Parameters<typeof attachApcLink>[1];
+  const answers = [
+    dockGrantToolResult("handoff", "list_orders")!,
+    dockGrantToolResult("dormant", "list_orders")!,
+    dockGrantToolResult("dormant", "get_current_view")!,
+    dockGrantToolResult("dormant", "wait_for_focus")!,
+    { content: [{ type: "text" as const, text: JSON.stringify({ error: "pairing", message: PAIRING_MESSAGE }) }], isError: true },
+  ];
+  for (const answer of answers) {
+    assert.equal(isDockGrantAnswer(answer), true);
+    assert.deepEqual(attachThen(attachApcLink(attachAttention(answer, attention), offer), true), answer);
+  }
+  // Ordinary results and errors still carry them.
+  for (const plain of [toolResult({ rows: [1] }), toolError("not_found", "no such order"), toolResult({ view: null, focus: null })]) {
+    assert.equal(isDockGrantAnswer(plain), false);
+    const decorated = attachThen(attachAttention(plain, attention), true);
+    assert.ok("attention" in decorated.structuredContent! && "then" in decorated.structuredContent!);
+  }
+});
+
 test("dockGrantToolResult: the same answers inside a tool handler, and a throw for states answered before the transport", () => {
   assert.equal(dockGrantToolResult("live", "list_orders"), null);
   assert.deepEqual(dockGrantToolResult("handoff", "get_current_view")?.structuredContent, { error: "pairing", message: PAIRING_MESSAGE });
@@ -417,7 +487,8 @@ test("the recipe: a new salt is 16 random bytes, base64url", () => {
 test("the recipe refuses inputs outside it", async () => {
   await assert.rejects(deriveDockSecret(new Uint8Array(31), "pulse", "g", SALT), RangeError, "K under 32 bytes");
   for (const tag of ["Pulse", "pu|lse", "", "pulse app", "x".repeat(65)]) await assert.rejects(deriveDockSecret(K, tag, "g", SALT), TypeError, tag);
-  for (const id of ["", "g|1", "x".repeat(257)]) await assert.rejects(deriveDockSecret(K, "pulse", id, SALT), TypeError, id);
+  for (const id of ["", "g|1", "x".repeat(81), "\ud800", "\ud801", "g\n1", "g 1", "é", "g/1"]) await assert.rejects(deriveDockSecret(K, "pulse", id, SALT), TypeError, JSON.stringify(id));
+  assert.match(await deriveDockSecret(K, "pulse", `${"a".repeat(76)}_.:-`, SALT), /^[A-Za-z0-9_-]{22}$/, "80 of the charset");
   for (const salt of ["", "oKGio6SlpqeoqaqrrK2urw==", "oKGio6SlpqeoqaqrrK2ur", "oKGio6SlpqeoqaqrrK2urx", "oKGio6Slpqeoqaqr+K2urw", "AAAAAAAAAAAAAAAAAAAAAAAA"]) {
     await assert.rejects(deriveDockSecret(K, "pulse", "g", salt), TypeError, salt);
   }
