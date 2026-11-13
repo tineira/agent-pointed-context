@@ -75,6 +75,16 @@ test("a clip that fails falls back: a failed WebM to the MP4, and no playable cl
   assert.match(video, /onError=\{\(e\) => e\.target === e\.currentTarget && fallBack\(\{ on: "video", currentSrc: e\.currentTarget\.currentSrc \}\)\}/);
 });
 
+test("In use lists only apps that pass conformance live, each with its public site", () => {
+  const start = landing.indexOf("const IN_USE = [");
+  assert.ok(start >= 0, "the landing has an IN_USE list");
+  const list = landing.slice(start, landing.indexOf("];", start));
+  assert.match(list, /name: "Autio",\s*url: "https:\/\/www\.autio\.cl",/);
+  for (const url of list.matchAll(/url: "([^"]+)"/g)) assert.match(url[1]!, /^https:\/\//, "an https link");
+  assert.match(landing, /<h2 className="landing-title">In use<\/h2>/);
+  assert.ok(landing.indexOf("In use</h2>") < landing.indexOf(">What your agent can and cannot see</h2>"), "In use comes before the closing section");
+});
+
 test("the clip's button follows the video and says what it does", () => {
   assert.match(video, /onPlay=\{\(\) => setPaused\(false\)\}/);
   assert.match(video, /onPause=\{\(\) => setPaused\(true\)\}/);
