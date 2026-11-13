@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The landing lists apps that use APC (2026-11-13, TIN-804)
+
+- **The landing at apc.tineira.com gains an "In use" section listing apps that serve APC in production and pass `apc-conformance` live; the first is Autio, a used-car marketplace in Chile (APC 0.8, Direct, 0 failures on both its hosts).** (`apps/dock/src/web/landing.tsx`, `apps/dock/src/web/dock.css`, `apps/dock/test/landing.test.ts`)
+
 ### APC standard 0.9: a pairing code on the app's consent, and the dock's Allow requires it (2026-11-12, TIN-859)
 
 - **When you allow a dock's agent in Pulse, Signals or Orders, the app shows a 6-character code, and your dock asks for it before the agent can read the app.** Someone who lured you into dropping their agent and clicking Allow could pair it from their own dock; now they would need the code only your screen shows. The hub keeps the code with the request, never shows it, takes five tries and removes the request (giving the grant back) after the last, and lets a request with a code wait two minutes. A malformed request no longer spends the drag's ticket, and a ticket lives 240 s instead of 60 s, so the consent fits in it; the dock tops up a ticket below three minutes left. The `PAIRING_CODE` setting (`when_sent` by default) lets apps from before 0.9 pair without a code, counted as `pair_codeless` in `apc_mcp_sessions`; `required` refuses them. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/worker/trust.ts`, `apps/dock/wrangler.jsonc`)
