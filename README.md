@@ -125,7 +125,7 @@ The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) 
 
 ## Using the packages
 
-`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together, as 0.x pre-releases. A release publishes on the `next` dist-tag; while the standard is 0.x, `latest` is then moved to the same version by hand (`npm dist-tag add @tineira/apc-<pkg>@<version> latest`, with a maintainer's login: trusted publishing covers only `npm publish`), since npm keeps a `latest` and it would otherwise stay on the first publish. Their version follows the standard's: 0.9.x ships APC 0.9 (`APC_STANDARD_VERSION`).
+`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together, as 0.x pre-releases. A release publishes on the `next` dist-tag; while the standard is 0.x, `latest` is then moved to the same version by hand (`npm dist-tag add @tineira/apc-<pkg>@<version> latest`, with a maintainer's login: trusted publishing covers only `npm publish`), since npm keeps a `latest` and it would otherwise stay on the first publish. Their version follows the standard's: 0.10.x ships APC 0.10 (`APC_STANDARD_VERSION`).
 
 ```sh
 npm i @tineira/apc-protocol@next @tineira/apc-web@next                                # the page

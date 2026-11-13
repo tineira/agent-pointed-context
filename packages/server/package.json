@@ -1,6 +1,6 @@
 {
   "name": "@tineira/apc-server",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Agent Pointed Context (APC) for an app's server: the MCP tools of the core, the attention envelope, presence, revoke, apc.json, Direct grants, Dock consent and apc_link.",
   "keywords": ["apc", "agent-pointed-context", "mcp", "model-context-protocol", "ai-agents", "mcp-server"],
   "homepage": "https://apc.tineira.com/docs",

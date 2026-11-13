@@ -8,7 +8,7 @@ The contract an app and an agent share in Agent Pointed Context: wire types, the
 npm i @tineira/apc-protocol@next
 ```
 
-Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.9.x ships APC 0.9).
+Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.10.x ships APC 0.10).
 
 ```ts
 import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@tineira/apc-protocol";

@@ -18,7 +18,9 @@
  *   app's page just now (the reference apps: a single-use nonce the page shows its consent with,
  *   `DockConsent` in `@tineira/apc-server`), whatever the page last loaded. A page that missed a revoke must not
  *   pair without asking. Since APC 0.9 the consent shows a pairing code, and the dock's Allow requires it
- *   (`PAIRING_CODE_LENGTH`, below).
+ *   (`PAIRING_CODE_LENGTH`, below). Since APC 0.10 a dock grant has states (in flight, handoff, live,
+ *   dormant, ended, revoked) that say what it answers, and the hub and the app have MUSTs around the hub
+ *   call (`dock.ts`).
  *
  * The core is the same on both, and per grant: the hub is one more holder of a grant.
  *
@@ -92,6 +94,12 @@ export interface CurrentViewResult {
   focus: FocusPayload | null;
   /** Why the result is empty, when the app could not answer it just now (APC 0.8). */
   note?: string;
+  /**
+   * The grant is dormant (Dock profile, APC 0.10, `idleCurrentView`): the person is away from the app, which
+   * answers no data until they come back. Distinct from unavailable, page closed and revoked. An answer
+   * without it (an app before 0.10) reads as unavailable, as before.
+   */
+  idle?: true;
 }
 
 /**
@@ -133,6 +141,12 @@ export interface WaitNoFocus {
   page_open?: boolean;
   /** On a wait refused because another wait of the grant started just before it (APC 0.8): when to try again. */
   retry_after_s?: number;
+  /**
+   * The grant is dormant (Dock profile, APC 0.10, `idleWaitForFocus`): answered at once with `timed_out: false,
+   * page_open: false`. A hub never reads it as page closed and never ends its own wait on it. An answer
+   * without it (an app before 0.10) reads as page closed or unavailable, as before.
+   */
+  idle?: true;
   note: string;
 }
 
