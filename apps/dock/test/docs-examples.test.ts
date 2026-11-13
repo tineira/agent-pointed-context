@@ -11,9 +11,9 @@ import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-confo
 
 /**
  * The suite's Dock checks of APC 0.10 (TIN-884) that the Orders example does not meet yet: they run, as todo, until
- * TIN-883 moves Orders onto the 0.10 helpers of @tineira/apc-server and removes this list. Only these.
+ * TIN-892 brings Orders to 0.10 and removes this list. Only these.
  */
-const PENDING_TIN_883 = [
+const PENDING_TIN_892_ORDERS = [
   "the lifecycle adapter is given (required of an app that claims 0.10.0 or later on the Dock profile)",
   "the answer table: in flight (from the Allow to the hub's acknowledgement), and a 404 leaves the state unchanged",
   "the answer table: handoff (the pairing error, no attention, then or apc_link), and initialize commits it",
@@ -42,10 +42,10 @@ const PENDING_TIN_883 = [
   "one pending pairing: paired before the app saw initialize stays in handoff, and only initialize makes it live",
   "one pending pairing: before the acknowledgement a new drop replaces the consent, and the stale Allow gets consent_expired",
 ];
-const pending = (name: string) => PENDING_TIN_883.some((p) => name.endsWith(`(dock): 0.10: ${p}`));
+const pending = (name: string) => PENDING_TIN_892_ORDERS.some((p) => name.endsWith(`(dock): 0.10: ${p}`));
 
 for (const profile of ["direct", "dock"] as const) {
-  for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, pending(check.name) ? { todo: "TIN-883: Orders meets APC 0.10" } : {}, check.run);
+  for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, pending(check.name) ? { todo: "TIN-892: Orders meets APC 0.10" } : {}, check.run);
 }
 
 test("a page whose stream died is dropped, and the tool call that published to it still answers", async () => {

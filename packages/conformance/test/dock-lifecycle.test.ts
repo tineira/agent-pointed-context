@@ -62,6 +62,9 @@ test("an app that claims a standard before 0.10 passes the 0.10 checks with a no
 /** Each broken app, and the check that must fail it, with what the failure says. */
 const broken: Array<[FixtureBreak, string, RegExp]> = [
   ["in_flight_serves", "the answer table: in flight", /in in_flight answers HTTP 404/],
+  ["any_request_405", "the answer table: in flight", /a GET in in_flight answers HTTP 404/],
+  ["any_request_405", "the answer table: ended", /a GET in ended answers HTTP 404/],
+  ["notification_by_id_only", "the answer table: handoff", /notifications\/cancelled \(with an id\) in handoff is ignored with HTTP 202/],
   ["handoff_serves_data", "the answer table: handoff", /tool error/],
   ["attention_in_handoff", "the answer table: handoff", /carries attention/],
   ["tool_error_text_only", "the answer table: handoff", /structuredContent too/],
