@@ -161,16 +161,29 @@ export type ApcDockDropOutcome =
   | { page: "refused"; error: string };
 
 /**
- * The owner-session endpoints (M6, APC 0.10): the drop, the consent and its Allow, the heartbeat, Cancel. The suite
- * sends each to the app's `fetch` with the headers it checks; `body()` makes a body the app takes with a 2xx (a
- * fresh one each time: a drop with a new ticket, an Allow with a new consent, a Cancel on a new grant in handoff).
+ * One owner-session endpoint (M6, APC 0.10): its path on the app's origin, and `body()`, a fresh body the app takes
+ * with a 2xx each time (a drop with a new ticket, an Allow with a new consent, a Cancel on a new grant in handoff).
+ */
+export interface ApcDockOwnerEndpoint {
+  path: string;
+  body(): unknown | Promise<unknown>;
+}
+
+/**
+ * The owner-session endpoints (M6, APC 0.10), all four required: the drop, the Allow, the heartbeat and Cancel. The
+ * suite sends each to the app's `fetch` with the headers it checks. A heartbeat over a WebSocket is
+ * `{ websocket: path }`: the suite sends its handshake (a GET with `Upgrade: websocket`), which the app takes with
+ * 101 (or a 2xx in process) or refuses with a 4xx.
  */
 export interface ApcDockOwnerEndpoints {
-  /** The app's configured public origin: the only `Origin` its owner endpoints take. */
+  /** The app's configured public origin, bare (`https://host[:port]`): the only `Origin` its owner endpoints take, and where its `apc.json` is read. */
   origin: string;
   /** The headers that carry the owner's authenticated session (a cookie, say). */
   session: Record<string, string>;
-  endpoints: Array<{ name: string; path: string; body(): unknown | Promise<unknown> }>;
+  drop: ApcDockOwnerEndpoint;
+  allow: ApcDockOwnerEndpoint;
+  heartbeat: ApcDockOwnerEndpoint | { websocket: string };
+  cancel: ApcDockOwnerEndpoint;
 }
 
 /**
@@ -179,18 +192,29 @@ export interface ApcDockOwnerEndpoints {
  * `ApcDockAdapter`; its `apc.json` is read at `owner.origin`.
  */
 export interface ApcDockLifecycleAdapter {
-  /** The person drops `agent` from the dock at `hub` (the drag's `hub` string, as the page read it), with `ticket`: what the page shows. */
-  dropAgent(drop: { agent: string; ticket: string; hub: string }): Promise<ApcDockDropOutcome>;
+  /**
+   * The person drops `agent` from the dock at `hub` (the drag's `hub` string, as the page read it), with `ticket`, on
+   * `target` (one of the adapter's `targets` when left out): what the page shows.
+   */
+  dropAgent(drop: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome>;
+  /**
+   * Whether the page's Allow carries the hub (true: the app re-checks it against the allowlist, M1), or the server
+   * binds the hub to the consent (false: `allow({ hub })` is ignored, and the suite checks the Allow calls only the
+   * drop's hub).
+   */
+  allowCarriesHub: boolean;
+  /** The app's deadline on a hub call (M3), in ms of real time: at most 10 000, the default. The time seam does not move it. */
+  hubDeadlineMs?: number;
   /** The person's Cancel on the waiting card; false when the app refuses it. */
   cancel(grantId: string): Promise<boolean>;
   /** The page's heartbeat: a wake action of the owner. */
   heartbeat(): Promise<void>;
-  /** The time seam: the app's clock moves `ms` forward, for every limit it keeps (T_ack, T_connect, T_idle). */
+  /** The time seam: the app's clock moves `ms` forward, for every limit it keeps (T_ack, T_connect, T_idle, the stored expiry); not the hub call's deadline. */
   advance(ms: number): Promise<void>;
   /** While true, the app's storage fails every write: the commit out of handoff cannot persist. */
   failCommits(fail: boolean): void | Promise<void>;
-  /** The app's process dies, with whatever calls it had open, and comes back on the same storage. Optional: T_ack is then checked through the time seam only. */
-  restart?(): Promise<void>;
+  /** The app's process dies, with whatever calls it had open, and comes back on the same storage (T_ack across a restart). */
+  restart(): Promise<void>;
   /** The app's T_idle in ms. Left out: the app does not sleep (dormant is a SHOULD), and the dormant checks say so. */
   idleMs?: number;
   owner: ApcDockOwnerEndpoints;
