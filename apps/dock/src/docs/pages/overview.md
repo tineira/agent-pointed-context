@@ -29,7 +29,7 @@ You can try both at [apc.tineira.com](/): open your [dock](/dock), or connect di
 
 ## Who it is for
 
-- **App makers** who want people to bring their own agent to their product, without building a chat or shipping their data to a model. The [integration guide](/docs/integrate) gets an app working in an afternoon with three small packages, and the [conformance suite](/docs/conformance) checks it.
+- **App makers** who want people to bring their own agent to their product, without building a chat or shipping their data to a model. The [integration guide](/docs/integrate) gets an app working in an afternoon with four small packages, and the [conformance suite](/docs/conformance) checks it.
 - **Agent and client makers**: an APC app is an ordinary remote MCP server with two extra tools and a few keys on results. [For agents](/docs/agents) says what an agent sees.
 - **People who use agents**: you keep your agent, your subscription and your context; each app gives it only what you point at, and you can cut it off from the app at any time.
 
