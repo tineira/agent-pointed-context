@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { buttonsOff, cardInFlight, decisionNotice, inFlightOf, kindOf, landed, mayAnswer, mergeInFlight, sentOut, type Sent } from "../src/web/request-state.ts";
+import { buttonsOff, CODE_IN_DOCK, codeErrorText, cardInFlight, decisionNotice, inFlightOf, isCodeRetryError, kindOf, landed, mayAnswer, mergeInFlight, sentOut, typedCode, type Sent } from "../src/web/request-state.ts";
 
 test("the rules: a Deny goes while an Approve is on its way or the hub is approving; a second yes never does", () => {
   assert.deepEqual(buttonsOff({}), { deny: false, approve: false });
@@ -72,16 +72,20 @@ before(async () => {
     server: { middlewareMode: true, hmr: false, ws: false },
     oxc: { jsx: { runtime: "automatic" } },
   } as Parameters<typeof createServer>[0])) as unknown as Vite;
-  const [{ UnverifiedRequest, DecisionNotice }, { createElement }, { renderToStaticMarkup }] = await Promise.all([
+  const [{ UnverifiedRequest, DecisionNotice }, { PairingRequest }, { createElement }, { renderToStaticMarkup }] = await Promise.all([
     vite.ssrLoadModule("/src/web/unverified.tsx") as Promise<{ UnverifiedRequest: unknown; DecisionNotice: unknown }>,
+    vite.ssrLoadModule("/src/web/pairing-request.tsx") as Promise<{ PairingRequest: unknown }>,
     import("react"),
     import("react-dom/server"),
   ]);
+  renderRequest = (props) =>
+    renderToStaticMarkup(createElement(PairingRequest as never, { entry: "field", kind: "app", app: "Orders", host: "orders.example", agent: "Claude", says: "Orders at orders.example wants to be read by Claude.", decide: () => {}, ...props } as never));
   render = (props) =>
     renderToStaticMarkup(createElement(UnverifiedRequest as never, { domain: "pulse.apc.tineira.com.evil.example", declared: "Pulse", agent: "Claude", decide: () => {}, ...props } as never));
   renderNotice = (notice) => renderToStaticMarkup(createElement(DecisionNotice as never, { notice, dismiss: () => {} } as never));
 });
 let renderNotice: (notice: string | null) => string;
+let renderRequest: (props: Record<string, unknown>) => string;
 
 test("a refused answer is said, not dropped: the hub's 400 becomes a visible notice (Fix check 4 on #120)", () => {
   const html = renderNotice(decisionNotice("approval_withdrawn"));
@@ -118,4 +122,68 @@ test("rendered: the warning keeps its words and its order, Deny first, and the h
   assert.match(html, /<span class="host-head">pulse\.apc\.tineira\.com<\/span><span class="host-site">\.evil\.example<\/span>/);
   assert.match(html, /title="pulse\.apc\.tineira\.com\.evil\.example"/);
   assert.match(html, /Not verified/);
+});
+
+// ---- The pairing code (APC 0.9, TIN-859) ----
+
+test("the code as typed: forgiving to read, raw to send; only a wrong, malformed or missing code is said on the card", () => {
+  assert.equal(typedCode("k7m-4p2"), "K7M4P2", "a pasted code, as written anywhere");
+  assert.equal(typedCode(" K7M 4P2 "), "K7M4P2");
+  assert.equal(typedCode("K7M-4P"), null, "Allow waits for six characters");
+  assert.equal(typedCode(""), null);
+  for (const e of ["wrong_pairing_code", "invalid_pairing_code", "pairing_code_required"]) assert.equal(isCodeRetryError(e), true, e);
+  for (const e of ["pairing_code_refused", "unknown_pairing", "approval_withdrawn", undefined]) assert.equal(isCodeRetryError(e), false, String(e));
+  assert.equal(codeErrorText({ error: "wrong_pairing_code", attempts_left: 3 }), "Wrong code. 3 tries left.");
+  assert.equal(codeErrorText({ error: "wrong_pairing_code", attempts_left: 1 }), "Wrong code. 1 try left.");
+  assert.match(decisionNotice("pairing_code_refused"), /^Too many wrong codes, so the request was removed\. Drop the agent on the app again\.$/);
+  for (const e of ["wrong_pairing_code", "invalid_pairing_code", "pairing_code_required"]) assert.doesNotMatch(decisionNotice(e), /That did not go through/, e);
+});
+
+test("rendered: a request with a code on the dock's page asks for it in one labelled field; Deny first, Allow off until a code is typed, neither the default", () => {
+  const html = renderRequest({ code: true });
+  assert.equal((html.match(/<input/g) ?? []).length, 1, "one field, not six");
+  const label = html.match(/<label for="([^"]+)">Code from Orders<\/label>/);
+  assert.ok(label && html.includes(`<input id="${label[1]}"`), "the field has its label");
+  assert.match(html, /maxLength="9"/);
+  assert.match(html, /autoComplete="off"/);
+  assert.match(html, /spellCheck="false"/);
+  assert.match(html, /aria-describedby="[^"]+-hint [^"]+-error"/);
+  assert.match(html, /aria-live="polite"/);
+  assert.match(html, /Type the code shown in Orders\./);
+  assert.match(html, /It is on Orders&#x27; screen, where you allowed the agent\. If you didn&#x27;t just do that, Deny\./);
+  assert.doesNotMatch(html, /<form/);
+  assert.doesNotMatch(html, /class="primary"/, "no default answer on a card with a code");
+  assert.ok(html.indexOf(">Deny<") < html.indexOf(">Allow<"), "Deny first");
+  assert.deepEqual(buttons(html), { Deny: false, Allow: true }, "Allow waits for the code");
+  assert.deepEqual(buttons(renderRequest({ code: true, inFlight: "deny" })), { Deny: true, Allow: true });
+  // The card's own error: said under the field, for the person to try again.
+  assert.match(renderRequest({ code: true, error: { error: "wrong_pairing_code", attempts_left: 2, at: 1 } }), /aria-live="polite">Wrong code\. 2 tries left\.</);
+});
+
+test("rendered: Float, the strip and the pets show no field and no Allow for a request with a code, and today's buttons without one", () => {
+  const coded = renderRequest({ entry: "dock", code: true });
+  assert.doesNotMatch(coded, /<input/);
+  assert.equal(buttons(coded).Allow, undefined, "no Allow");
+  assert.deepEqual(buttons(coded), { Deny: false });
+  assert.ok(coded.includes(CODE_IN_DOCK), "where to type it");
+  assert.match(renderRequest({ entry: "dock", code: true, openDock: () => {} }), />Open the dock</, "the pets open the dock");
+  const legacy = renderRequest({ entry: "dock" });
+  assert.deepEqual(buttons(legacy), { Allow: false, Deny: false }, "a request without a code keeps its buttons");
+  assert.match(legacy, /class="primary"[^>]*>Allow</);
+  assert.equal(renderRequest({ entry: "field" }), legacy, "the same on every surface");
+  // A reader never has a code.
+  assert.doesNotMatch(renderRequest({ kind: "reader", code: true }), /<input/);
+});
+
+test("rendered: an unverified app's warning keeps Deny first, then the field; on Float its Approve gives way to the note", () => {
+  const unverified = { declared: "Pulse", warning: true };
+  const field = renderRequest({ code: true, unverified, host: "evil.example", app: "evil.example" });
+  assert.ok(field.indexOf("<input") > field.indexOf("Not verified"), "the warning first");
+  assert.deepEqual(buttons(field), { Deny: false, Approve: true }, "Approve waits for the code");
+  assert.match(field, /class="primary"[^>]*>Deny</, "Deny stays the default");
+  const dock = renderRequest({ entry: "dock", code: true, unverified, host: "evil.example", app: "evil.example" });
+  assert.deepEqual(buttons(dock), { Deny: false });
+  assert.ok(dock.includes(CODE_IN_DOCK));
+  // Approved before in this dock: the short card, with the field.
+  assert.deepEqual(buttons(renderRequest({ code: true, unverified: { declared: null, warning: false }, host: "evil.example", app: "evil.example" })), { Deny: false, Allow: true });
 });

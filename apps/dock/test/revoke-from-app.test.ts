@@ -18,6 +18,8 @@ const { default: pulseWorker } = await import(new URL("../../demo/src/worker/ind
 
 const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
+/** The hub's answer as its Worker gives it (index.ts): HTTP 400 on a refusal, which the apps read as the hub's own (APC 0.9). */
+const answerAs = (r: { ok: boolean }) => Response.json(r, { status: r.ok ? 200 : 400 });
 const DID = "a".repeat(32);
 const SID = "b".repeat(32);
 
@@ -49,8 +51,8 @@ async function world(t: TestContext) {
       net.toHub++;
       if (net.hubDown) throw new TypeError("fetch failed: the hub is down");
       const body = await request.json();
-      if (url.pathname === "/apc/pair") return Response.json(await hub.pair(body));
-      if (url.pathname === "/apc/confirm") return Response.json(await hub.confirm(body));
+      if (url.pathname === "/apc/pair") return answerAs(await hub.pair(body));
+      if (url.pathname === "/apc/confirm") return answerAs(await hub.confirm(body));
     }
     throw new TypeError(`no network in this test: ${url}`);
   });
@@ -87,7 +89,8 @@ async function world(t: TestContext) {
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     assert.equal(paired.status, "pending", "the dock still has to say yes");
     const pending = (await agent()).pairings.find((p: { status: string }) => p.status === "pending");
-    assert.equal((await hub.decide(pending.id, "approve")).ok, true);
+    // The person types the code Pulse showed (APC 0.9).
+    assert.equal((await hub.decide(pending.id, "approve", asked.pairing_code)).ok, true);
     return paired.grant_id as string;
   };
 

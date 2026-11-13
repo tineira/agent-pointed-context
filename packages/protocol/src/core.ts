@@ -17,7 +17,8 @@
  *   a grant for a dock agent it holds none for only on a request that proves the person allowed it on the
  *   app's page just now (the reference apps: a single-use nonce the page shows its consent with,
  *   `DockConsent` in `@tineira/apc-server`), whatever the page last loaded. A page that missed a revoke must not
- *   pair without asking.
+ *   pair without asking. Since APC 0.9 the consent shows a pairing code, and the dock's Allow requires it
+ *   (`PAIRING_CODE_LENGTH`, below).
  *
  * The core is the same on both, and per grant: the hub is one more holder of a grant.
  *
@@ -237,6 +238,93 @@ export function isRevokedAnswer(body: unknown): body is RevokedAnswer {
  */
 export const APC_MOBILE_MEDIA = "(pointer: coarse), (max-width: 640px)";
 export const APC_MOBILE_VIEWPORT = { width: 375, height: 812 } as const;
+
+/**
+ * The pairing code (Dock profile, APC 0.9). A drag can be put on a page by anyone: whoever runs a dock can
+ * mint tickets for their own agent and lure the app's owner into a drop and an Allow. So a pairing is
+ * approved in the dock only with a code that only the app's owner sees.
+ *
+ * - **The app makes it** with its consent nonce: `PAIRING_CODE_LENGTH` characters of `PAIRING_CODE_ALPHABET`
+ *   (Crockford base32, 30 bits), new for every consent (`newPairingCode` and `DockConsent` in
+ *   `@tineira/apc-server`), and shows it on its consent card, formatted `K7M-4P2` (`formatPairingCode`). After
+ *   the Allow, the app sends it raw (`K7M4P2`) in `pairing_code` of `POST {hub}/apc/pair` (`DockPairRequest`).
+ *   An app that implements 0.9 **must** send it. It never goes anywhere else: not over MCP, not in a URL,
+ *   not to `/apc/confirm`.
+ * - **The hub keeps it** with the pending pairing, never shows it (not in the dock's state, not in a
+ *   broadcast, not in any answer) and answers a pairing that carries one with `pairing_code: "required"`
+ *   (`PAIRING_CODE_ACK`, `DockPairAnswer`). It checks the body before it spends the ticket: a `pairing_code`
+ *   that is present but does not normalize (`null`, `""`, a number) is `invalid_pairing_code`. Only an absent
+ *   key is a pairing without a code (an app from before 0.9); a hub may refuse those too
+ *   (`pairing_code_required`).
+ * - **The dock owner types it** to approve: the hub compares it, in constant time, with the one the app sent.
+ *   A wrong one counts; after `PAIRING_CODE_MAX_ATTEMPTS` the request goes and the grant is given back
+ *   (`pairing_code_refused`). A request with a code that nobody approves goes after `PAIRING_CODE_TTL_MS`, its
+ *   grant given back. A match clears the code. Deny and unpair need no code.
+ * - **The app keeps a grant only on the acknowledgement**: a non-redirected HTTP 200 with `ok: true`,
+ *   `pairing_code: "required"` and a string `pairing_id` (`pairWithHub` in `@tineira/apc-server`). Anything
+ *   else (another status, a redirect, a missing acknowledgement, no answer) and the app deletes the grant
+ *   before it answers its page: a hub that does not check codes never holds a grant (`hub_ignores_pairing_code`).
+ *
+ * The drag's ticket lives `TICKET_TTL_MS` (240 s since 0.9; 60 s before), longer than the app's consent, so
+ * the person has the time to read the card.
+ */
+export const PAIRING_CODE_LENGTH = 6;
+/** Crockford base32: no I, L, O or U, so a code reads out loud without doubt. */
+export const PAIRING_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/** How long a pending pairing with a code waits for the dock owner, from `/apc/pair`. */
+export const PAIRING_CODE_TTL_MS = 120_000;
+/** Wrong codes a hub takes for one pairing; the last one removes it. */
+export const PAIRING_CODE_MAX_ATTEMPTS = 5;
+/** What a hub that keeps the code answers in `pairing_code`. */
+export const PAIRING_CODE_ACK = "required";
+/** How long a drag's ticket works (APC 0.9: 240 s). */
+export const TICKET_TTL_MS = 240_000;
+
+/** Why a hub refuses a pairing or an approval over its code. */
+export type PairingCodeError = "invalid_pairing_code" | "pairing_code_required" | "wrong_pairing_code" | "pairing_code_refused";
+/** Why an app did not keep a grant after asking a hub to pair (`pairWithHub`), when the hub gave no reason of its own. */
+export type HubCallError = "hub_unreachable" | "hub_refused" | "hub_ignores_pairing_code";
+
+/**
+ * A code as typed or sent, made canonical: case, spaces and dashes are ignored, O reads as 0 and I or L as 1.
+ * Null unless the result is `PAIRING_CODE_LENGTH` characters of `PAIRING_CODE_ALPHABET`.
+ */
+export function normalizePairingCode(input: unknown): string | null {
+  if (typeof input !== "string" || input.length > 32) return null;
+  const code = input.toUpperCase().replace(/[\s-]/g, "").replace(/O/g, "0").replace(/[IL]/g, "1");
+  if (code.length !== PAIRING_CODE_LENGTH) return null;
+  for (const c of code) if (!PAIRING_CODE_ALPHABET.includes(c)) return null;
+  return code;
+}
+
+/** How a code is shown to a person: `K7M4P2` as `K7M-4P2`. For display only; the wire and storage keep it raw. Anything that is not a code is returned untouched, never shaped like one. */
+export function formatPairingCode(code: string): string {
+  const raw = normalizePairingCode(code);
+  return raw ? `${raw.slice(0, 3)}-${raw.slice(3)}` : code;
+}
+
+/** Whether two normalized codes are the same, in time that does not depend on where they differ. */
+export function pairingCodesMatch(expected: string, given: string): boolean {
+  if (expected.length !== PAIRING_CODE_LENGTH || given.length !== PAIRING_CODE_LENGTH) return false;
+  let diff = 0;
+  for (let i = 0; i < PAIRING_CODE_LENGTH; i++) diff |= expected.charCodeAt(i) ^ given.charCodeAt(i);
+  return diff === 0;
+}
+
+/** `POST {hub}/apc/pair`: what an app sends after the person's Allow (Dock profile). `pairing_code` is raw, 6 characters. */
+export interface DockPairRequest {
+  ticket: string;
+  agent: string;
+  app: { name: string; origin: string };
+  mcp_url: string;
+  /** Required of an app that implements 0.9; absent only from an app before it. */
+  pairing_code?: string;
+}
+
+/** The hub's answer to `/apc/pair`: HTTP 200 with the acknowledgement, or HTTP 400 with the reason. */
+export type DockPairAnswer =
+  | { ok: true; pairing_id: string; status: "pending"; agent: { name: string; icon: string | null }; pairing_code: typeof PAIRING_CODE_ACK }
+  | { ok: false; error: string };
 
 /** The other path: Direct for Dock and Dock for Direct. */
 export function oppositePath(path: ApcProfile): ApcProfile {

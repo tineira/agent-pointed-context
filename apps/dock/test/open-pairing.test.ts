@@ -17,9 +17,10 @@ const SHOP = "https://shop.example";
 
 /** A pending pairing nobody decides goes after `ms` in this test. */
 function quickPending(t: TestContext, ms: number) {
-  const saved = LIMITS.pendingMs;
-  LIMITS.pendingMs = ms;
-  t.after(() => (LIMITS.pendingMs = saved));
+  const saved = { pendingMs: LIMITS.pendingMs, pairingCodeMs: LIMITS.pairingCodeMs };
+  // A request with a pairing code (Pulse's, APC 0.9) has its own, shorter, lifetime: the same here.
+  Object.assign(LIMITS, { pendingMs: ms, pairingCodeMs: ms });
+  t.after(() => Object.assign(LIMITS, saved));
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

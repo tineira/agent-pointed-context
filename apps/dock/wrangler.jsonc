@@ -26,7 +26,9 @@
   // UNVERIFIED_PAIRING (TIN-581): "open" lets any other APC app pair, as unverified, once the person approves the warning in the dock.
   // The kill switch, for emergencies: set it to "closed" and deploy. No new unverified app pairs, and every unverified pairing is held
   // as blocked (never called) until it is "open" again. Unset means open.
-  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com,https://signals.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj", "BLOCKED_APPS": "", "UNVERIFIED_PAIRING": "open" },
+  // PAIRING_CODE (APC 0.9, TIN-859): "when_sent" approves a pairing that carries a pairing code only with that code, and lets one
+  // without (an app from before 0.9) through as before, counted in MCP_SESSIONS as "pair_codeless". "required" refuses those.
+  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com,https://signals.apc.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj", "BLOCKED_APPS": "", "UNVERIFIED_PAIRING": "open", "PAIRING_CODE": "when_sent" },
   // Agent sessions, in Pulse v1's dataset and shape, marked "dock" (TIN-416). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
   "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],

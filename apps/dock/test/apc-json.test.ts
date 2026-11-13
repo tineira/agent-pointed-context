@@ -17,6 +17,8 @@ const { default: pulseWorker } = await import(new URL("../../demo/src/worker/ind
 const { default: dockWorker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
 const { default: signalsWorker } = await import(new URL("../../signals/src/worker/index.ts", import.meta.url).href);
 
+/** The hub's answer as its Worker gives it (index.ts): HTTP 400 on a refusal, which the apps read as the hub's own (APC 0.9). */
+const answerAs = (r: { ok: boolean }) => Response.json(r, { status: r.ok ? 200 : 400 });
 const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
 const SHOP = "https://shop.example";
@@ -55,7 +57,7 @@ async function world(t: TestContext, env: Json = {}) {
       const r = await pulse.revokeHubGrant(secret);
       return Response.json(r, { status: r.ok ? 200 : 404 });
     }
-    if (url.origin === DOCK && url.pathname === "/apc/pair") return Response.json(await hub.pair(await request.json()));
+    if (url.origin === DOCK && url.pathname === "/apc/pair") return answerAs(await hub.pair(await request.json()));
     if (url.origin === SHOP) return Response.json({ jsonrpc: "2.0", id: 1, result: { tools: [] } });
     throw new TypeError(`no network in this test: ${url}`);
   });

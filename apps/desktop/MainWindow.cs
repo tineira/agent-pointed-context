@@ -2,7 +2,8 @@
 // month, the customer list) drawn with native controls, each a target an agent dragged from the dock
 // can be dropped on. MCP stays on Pulse's server: a drop pins through Pulse's own API, exactly as the
 // page does (consent here, then in the dock; later drops confirmed with the dock), and the agent reads
-// with Pulse's tools. Pins show the agent's mark (TIN-388), with a ring until it reads them.
+// with Pulse's tools. Pins show the agent's mark (TIN-388), with a ring until it reads them. The consent
+// shows a pairing code (APC 0.9), and until the dock connects a banner shows it again, with Cancel.
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
@@ -35,6 +36,9 @@ public sealed class MainWindow : Window
     readonly ComboBox months = new() { MinWidth = 140 };
     readonly ContentControl body = new();
     readonly TextBlock status = new() { Margin = new Thickness(16, 6), Foreground = Muted, TextWrapping = TextWrapping.Wrap };
+    /// <summary>The dock grants waiting for their pairing code (APC 0.9): the code, the time left, and Cancel.</summary>
+    readonly StackPanel waiting = new() { Spacing = 6, Margin = new Thickness(16, 8, 16, 0) };
+    readonly DispatcherTimer waitingClock = new() { Interval = TimeSpan.FromSeconds(1) };
 
     public MainWindow(string[] args)
     {
@@ -86,11 +90,17 @@ public sealed class MainWindow : Window
             },
         };
         DockPanel.SetDock(header, Dock.Top);
+        DockPanel.SetDock(waiting, Dock.Top);
         DockPanel.SetDock(status, Dock.Bottom);
-        Content = new DockPanel { Children = { header, status, new ScrollViewer { Content = body, Padding = new Thickness(16) } } };
+        Content = new DockPanel { Children = { header, waiting, status, new ScrollViewer { Content = body, Padding = new Thickness(16) } } };
+        waitingClock.Tick += (_, _) => DrawWaiting();
 
         Opened += async (_, _) => await OpenAsync();
-        Closed += (_, _) => client.Dispose();
+        Closed += (_, _) =>
+        {
+            waitingClock.Stop();
+            client.Dispose();
+        };
     }
 
     static string? Arg(string[] args, string name)
@@ -130,7 +140,47 @@ public sealed class MainWindow : Window
         {
             state = await client.StateAsync();
             Render();
+            DrawWaiting();
         });
+    }
+
+    /// <summary>
+    /// After the Allow (APC 0.9): each dock grant still waiting for its pairing code, with the code, the time left and
+    /// Cancel (the app's revoke), until the dock connects or the grant goes. If the person's own dock never asks for
+    /// that code, the agent was someone else's.
+    /// </summary>
+    void DrawWaiting()
+    {
+        waiting.Children.Clear();
+        var links = state?.hub_links?.Where(l => l.pairing is not null).ToList() ?? new List<HubLink>();
+        if (links.Count == 0)
+        {
+            waitingClock.Stop();
+            return;
+        }
+        if (!waitingClock.IsEnabled) waitingClock.Start();
+        foreach (var l in links)
+        {
+            var code = PairingCodes.FormatCode(l.pairing!.code);
+            var left = DateTimeOffset.TryParse(l.pairing.expires_at, out var until) ? (int)Math.Ceiling((until - DateTimeOffset.UtcNow).TotalSeconds) : 0;
+            var host = Uri.TryCreate(l.hub, UriKind.Absolute, out var hub) ? hub.Host : l.hub;
+            var text = left > 0
+                ? $"Waiting for your dock at {host}: type {code} there ({left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel."
+                : $"Your dock didn't finish in time. If it never asked for {code}, Cancel.";
+            var cancel = new Button { Content = "Cancel", VerticalAlignment = VerticalAlignment.Center };
+            var grantId = l.grant_id;
+            cancel.Click += async (_, _) => await Try(async () =>
+            {
+                var r = await client.RevokeAsync(grantId);
+                Say(r.Ok ? "Cancelled: Pulse took that dock's access back." : $"Not cancelled: {r.Error}");
+                await RefreshAsync();
+            });
+            var line = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(cancel, Dock.Right);
+            line.Children.Add(cancel);
+            line.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) });
+            waiting.Children.Add(new Border { Padding = new Thickness(12, 8), CornerRadius = new CornerRadius(8), BorderBrush = Accent, BorderThickness = new Thickness(1), Child = line });
+        }
     }
 
     // ---- drawing ----
@@ -346,24 +396,46 @@ public sealed class MainWindow : Window
             Say("This agent came without a pairing ticket. Drag it again from your agent dock.");
             return;
         }
-        var linked = state?.hub_links?.Any(l => l.hub == drag.Hub && l.agent == drag.Agent) == true;
-        if (linked)
+        // Every drop goes to Pulse, which decides (TIN-606): one it holds no grant for asks first, with the nonce and the
+        // pairing code to show (APC 0.9); one still waiting for its code in the dock comes back with it.
+        await Try(async () =>
         {
-            var r = await client.HubPairAsync(drag, target, null);
-            if (r.Ok) Say($"Pinned {state?.grants.FirstOrDefault(g => g.id == r.GrantId)?.Name ?? "your agent"}. Now ask it about \"this\".");
-            else if (r.Error == "not_paired") await ConsentAsync(drag, target);
-            else Say($"Not pinned: {r.Error}");
-        }
-        else await ConsentAsync(drag, target);
+            var r = await client.HubPairAsync(drag, target, null, null);
+            if (r.Error == "consent_required" && r.Consent is not null && r.PairingCode is not null) await ConsentAsync(drag, target, r.Consent, r.PairingCode);
+            else if (r.Ok && r.Status == "pending" && r.Pairing is not null) Say($"Waiting for your dock: type {PairingCodes.FormatCode(r.Pairing.code)} there to allow it.{PinNote(r.PinError)}");
+            else if (r.Ok) Say($"Pinned {state?.grants.FirstOrDefault(g => g.id == r.GrantId)?.Name ?? "your agent"}. Now ask it about \"this\".");
+            else Say($"Not pinned: {Describe(r.Error)}");
+        });
         await RefreshAsync();
     }
 
-    /// <summary>The first drop of a dock agent: ask the person here (all of Pulse, or one region), then the dock asks too.</summary>
-    async Task ConsentAsync(AgentDrag drag, Target target)
+    /// <summary>A pairing that went through while the pin on the drop's target failed (pin_error): said, not dropped.</summary>
+    static string PinNote(string? pinError) => pinError is null ? "" : $" Not pinned where you dropped it ({pinError}): drop the agent there again once your dock connects.";
+
+    /// <summary>A refusal in words, as the page says it (hub-consent.tsx).</summary>
+    static string Describe(string? error) => error switch
+    {
+        "ticket_expired" => "the drag is too old. Drag the agent from the dock again.",
+        "consent_required" => "this question is too old. Drag the agent from the dock again.",
+        "hub_not_allowed" => "Pulse does not pair with that dock.",
+        "hub_unreachable" => "the dock did not answer. Try again in a moment.",
+        "hub_refused" => "the dock did not answer as a dock should, so Pulse didn't pair.",
+        "hub_ignores_pairing_code" => "this dock can't check pairing codes, so Pulse didn't pair.",
+        "invalid_pairing_code" or "pairing_code_required" => "the dock refused the pairing code. Drag the agent from the dock again.",
+        null => "it did not go through.",
+        _ => error,
+    };
+
+    /// <summary>
+    /// The first drop of a dock agent: ask the person here (all of Pulse, or one region), with the pairing code their
+    /// dock will ask for (APC 0.9); then the dock asks too, and needs that code. Allow is not the default: Enter does not allow.
+    /// </summary>
+    async Task ConsentAsync(AgentDrag drag, Target target, string consent, string pairingCode)
     {
         var host = new Uri(drag.Hub!).Host;
+        var code = PairingCodes.FormatCode(pairingCode);
         var region = new ComboBox { ItemsSource = new[] { "All of Pulse", "LATAM only", "NA only", "EMEA only" }, SelectedIndex = 0, MinWidth = 160 };
-        var allow = new Button { Content = "Allow", Classes = { "accent" }, IsDefault = true };
+        var allow = new Button { Content = "Allow", Classes = { "accent" } };
         var cancel = new Button { Content = "Not now", IsCancel = true };
         var dialog = new Window
         {
@@ -378,8 +450,11 @@ public sealed class MainWindow : Window
                 Spacing = 12,
                 Children =
                 {
-                    new TextBlock { Text = "Let an agent from your dock read Pulse?", FontSize = 17, FontWeight = FontWeight.Bold },
-                    new TextBlock { Text = $"You dropped an agent from the dock at {host}. If you allow it, Pulse gives that dock its own access, the dock asks you once more, and from then on that agent reads Pulse when you point it here.", TextWrapping = TextWrapping.Wrap, Foreground = Muted },
+                    new TextBlock { Text = $"Let your agent from the dock at {host} read Pulse?", FontSize = 17, FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap },
+                    new TextBlock { Text = "If you allow it, Pulse gives that dock its own access, the dock asks you once more, and from then on that agent reads Pulse when you point it here.", TextWrapping = TextWrapping.Wrap, Foreground = Muted },
+                    new TextBlock { Text = "After Allow, your dock asks for this code:", TextWrapping = TextWrapping.Wrap },
+                    new TextBlock { Text = code, FontSize = 22, FontWeight = FontWeight.Bold, FontFamily = new FontFamily("Consolas, Menlo, monospace") },
+                    new TextBlock { Text = "Type it only in your own dock; never give it to anyone. Whoever types it gets this access.", TextWrapping = TextWrapping.Wrap },
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { new TextBlock { Text = "Access", VerticalAlignment = VerticalAlignment.Center }, region } },
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { allow, cancel } },
                 },
@@ -389,8 +464,9 @@ public sealed class MainWindow : Window
         cancel.Click += (_, _) => dialog.Close(false);
         if (await dialog.ShowDialog<bool>(this) != true) return;
         string? scope = region.SelectedIndex switch { 1 => "latam", 2 => "na", 3 => "emea", _ => null };
-        var r = await client.HubPairAsync(drag, target, scope);
-        Say(r.Ok ? $"Paired with the dock at {host}. Allow it there too, then ask your agent about \"this\"." : r.Error == "ticket_expired" ? "The drag is too old (a pairing ticket lasts 60 seconds). Drag the agent from the dock again." : $"Not paired: {r.Error}");
+        var r = await client.HubPairAsync(drag, target, scope, consent);
+        // Paired: the waiting banner shows the code until the dock connects.
+        Say(r.Ok ? $"Paired with the dock at {host}. Type {code} there to allow it, then ask your agent about \"this\".{PinNote(r.PinError)}" : $"Not paired: {Describe(r.Error)}");
     }
 
     /// <summary>

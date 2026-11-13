@@ -3,7 +3,7 @@
  * it fits any framework: React, Vue or none. It talks to the server in orders-app.ts (`/api/*`, `/api/events`).
  */
 // #region imports
-import { focusAttrs, type FocusTarget } from "@tineira/apc-protocol";
+import { focusAttrs, formatPairingCode, type FocusTarget } from "@tineira/apc-protocol";
 import {
   createViewReporter,
   defineAgentBar,
@@ -62,6 +62,32 @@ async function refresh(): Promise<void> {
   for (const row of rows) marks.set(row.id, initials(row.name, new Set(marks.values())));
   bar.agents = rows.map((a) => ({ id: a.id, name: a.name, state: "idle", paths: a.paths, pin: a.pin ? { ...a.pin, here: true } : null }));
   direct.agents = rows.filter((a) => a.url).map((a) => ({ id: a.id, name: a.name, url: a.url!, connected: a.client !== null, client: a.client, linked: a.paths.length === 2 }));
+  showWaiting(rows);
+}
+// #endregion
+
+// #region waiting
+/**
+ * Dock (APC 0.9): an agent the person allowed here waits until they type its pairing code in their dock. Its row
+ * shows the code and Cancel, which takes the access back; if their dock never asks for that code, the agent was
+ * someone else's.
+ */
+const waiting = document.querySelector<HTMLElement>("#waiting") ?? document.body.appendChild(document.createElement("div"));
+/** A drop that paired but could not pin its target (the server's `pin_error`), by grant: its row says so. */
+const pinErrors = new Map<string, string>();
+function showWaiting(rows: AgentRow[]): void {
+  waiting.replaceChildren(
+    ...rows.flatMap((a) => {
+      if (!a.pairing) return [];
+      const line = document.createElement("p");
+      const pinError = pinErrors.get(a.id);
+      line.textContent = `Waiting for your dock — code ${formatPairingCode(a.pairing.code)}. If your dock doesn't ask for this code, the agent wasn't yours: Cancel. ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
+      const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Cancel" });
+      cancel.addEventListener("click", () => void post(`/api/agents/${a.id}/revoke`).then(refresh));
+      line.append(cancel);
+      return [line];
+    }),
+  );
 }
 // #endregion
 
@@ -97,13 +123,19 @@ enablePinning({
   direct: { name: "Orders", connect: `${location.origin}/agents` },
 });
 
-/** The server asks for the person's yes first (consent_required with a nonce); their Allow sends it back. */
+/**
+ * The server asks for the person's yes first (consent_required with a nonce and a pairing code); their Allow sends
+ * the nonce back, and their dock then asks for the code (APC 0.9).
+ */
 async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget, consent?: string): Promise<void> {
   const answer = await post("/api/drop", { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target, consent });
-  if (answer.error === "consent_required" && typeof answer.consent === "string") {
-    if (confirm(`Let your agent from the dock at ${new URL(drag.hub).host} read Orders?`)) await dropFromDock(drag, target, answer.consent);
+  if (answer.error === "consent_required" && typeof answer.consent === "string" && typeof answer.pairing_code === "string") {
+    const host = new URL(drag.hub).host;
+    if (confirm(`Let your agent from the dock at ${host} read Orders? After OK, your dock asks for this code: ${formatPairingCode(answer.pairing_code)}. Type it only in your own dock; never give it to anyone.`)) await dropFromDock(drag, target, answer.consent);
     return;
   }
+  // Paired, but the pin on the drop's target failed: the waiting row says so.
+  if (answer.ok === true && typeof answer.grant_id === "string" && typeof answer.pin_error === "string") pinErrors.set(answer.grant_id, answer.pin_error);
   await refresh();
 }
 // #endregion

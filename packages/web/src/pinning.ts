@@ -616,7 +616,7 @@ export function enablePinning(options: PinningOptions): () => void {
     // Profiles that could not be read are asked again on this drop, when the app gave a loader.
     if (fromDock && unread() && typeof given === "function") load(given());
     // A dock agent dropped before the app's profiles are known: held until they are, within the
-    // loader's own time limit (loadApcProfiles: 3 s; the ticket lives 60 s).
+    // loader's own time limit (loadApcProfiles: 3 s; the ticket lives 240 s).
     if (fromDock && loading) {
       void ready.then(() => deliver(drag, hit));
       return;

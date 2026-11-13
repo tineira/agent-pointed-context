@@ -11,12 +11,14 @@
  * `apps/dock/test/docs-examples.test.ts` runs the conformance suite against this file, on both profiles.
  */
 // #region imports
-import { parseParams, parseTarget, type ApcProfile, type FocusPayload, type FocusRow, type PresenceEvent, type ViewPayload } from "@tineira/apc-protocol";
+import { PAIRING_CODE_TTL_MS, parseParams, parseTarget, type ApcProfile, type FocusPayload, type FocusRow, type PresenceEvent, type ViewPayload } from "@tineira/apc-protocol";
 import {
   APC_INSTRUCTIONS,
   ApcLinks,
   CONSENT_REQUIRED,
   DockConsent,
+  confirmWithHub,
+  pairWithHub,
   InflightCalls,
   MemoryWaitSlots,
   apcJsonResponse,
@@ -76,6 +78,8 @@ interface Grant {
   /** Dock: the hub's origin, and the agent's public handle there once the hub took the pairing. */
   hub: string | null;
   agent: string | null;
+  /** Dock: the pairing code the person types in their dock, until the hub connects (APC 0.9). Shown only on the person's page. */
+  pairing: { code: string; expires_at: string } | null;
 }
 // #endregion
 
@@ -91,6 +95,8 @@ export interface AgentRow {
   url: string | null;
   client: string | null;
   pin: { label: string; seen: boolean } | null;
+  /** Dock: waiting for the person to type this code in their dock (APC 0.9); null once the hub connected. */
+  pairing: { code: string; expires_at: string } | null;
 }
 
 export interface OrdersAppOptions {
@@ -107,6 +113,21 @@ export interface OrdersAppOptions {
 }
 
 type PageMessage = { type: "presence"; event: PresenceEvent } | { type: "agents" };
+
+/**
+ * What a drop from a dock answers the page: `consent_required` with the nonce and the pairing code to show, or
+ * the grant, and while the dock has not connected, the code to wait on (`status: "pending"`, `pairing`).
+ */
+export interface DropAnswer {
+  ok: boolean;
+  error?: string;
+  consent?: string;
+  pairing_code?: string;
+  grant_id?: string;
+  status?: string;
+  pairing?: { code: string; expires_at: string };
+  pin_error?: string;
+}
 
 export class OrdersApp {
   readonly origin: string;
@@ -132,6 +153,7 @@ export class OrdersApp {
   private readonly kv = memoryKv();
   private readonly consent: DockConsent;
   private readonly links: ApcLinks;
+  private readonly now: () => number;
 
   constructor(options: OrdersAppOptions) {
     this.origin = options.origin;
@@ -140,6 +162,7 @@ export class OrdersApp {
     this.hubs = options.hubs ?? [];
     this.send = options.fetch ?? ((...args) => fetch(...args));
     const now = options.now ?? Date.now;
+    this.now = now;
     this.consent = new DockConsent(this.kv, { now });
     // apc_link sees the grants that are live and, on the Dock path, already taken by the hub.
     this.links = new ApcLinks(this.kv, { appName: "Orders", now, grants: () => this.live().filter((g) => g.path === "direct" || g.agent).map((g) => ({ id: g.id, path: g.path })) });
@@ -204,7 +227,7 @@ export class OrdersApp {
   addAgent(): { ok: boolean; id?: string; url?: string; error?: string } {
     if (!this.profiles.includes("direct")) return { ok: false, error: "direct_not_offered" };
     const { id, secret } = newDirectGrant();
-    this.grants.set(secret, { id, secret, path: "direct", name: "New agent", client: null, hub: null, agent: null });
+    this.grants.set(secret, { id, secret, path: "direct", name: "New agent", client: null, hub: null, agent: null, pairing: null });
     this.publish({ type: "agents" });
     return { ok: true, id, url: this.mcpUrl(secret) };
   }
@@ -275,6 +298,8 @@ export class OrdersApp {
     const arriving = initializeOf(body);
     if (arriving) {
       grant.client = linkClient(arriving, grant.path);
+      // Dock: the hub introduces itself once the person typed the code in their dock: no more code to show.
+      grant.pairing = null;
       if (grant.path === "direct" && grant.name === "New agent" && arriving.name) grant.name = arriving.name;
       this.links.arrived(grant.id, grant.client);
       this.publish({ type: "agents" });
@@ -404,9 +429,10 @@ export class OrdersApp {
   /**
    * Dock: the person dropped an agent from a dock on the page. Every such drop comes here, whatever the
    * page thinks it knows: an agent with no grant gets one only with the person's yes on this page, proven by
-   * the nonce the page showed its consent with.
+   * the nonce the page showed its consent with. The consent shows a pairing code too (APC 0.9): the hub gets it
+   * with the grant, and the person types it in their dock to approve there.
    */
-  async drop(raw: Record<string, unknown> | null): Promise<{ ok: boolean; error?: string; consent?: string; grant_id?: string }> {
+  async drop(raw: Record<string, unknown> | null): Promise<DropAnswer> {
     if (!this.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
     const hub = raw?.hub;
     const agent = raw?.agent;
@@ -424,33 +450,46 @@ export class OrdersApp {
     }
   }
 
-  private async dropOnce(hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; consent?: string; grant_id?: string }> {
-    const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
+  private async dropOnce(hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<DropAnswer> {
+    const askFirst = (): DropAnswer => {
+      const asked = this.consent.ask(hub, agent);
+      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
+    };
     const held = this.live().find((g) => g.hub === hub && g.agent === agent);
     if (held) {
       // Paired before: the hub must still say so, on every drop.
-      const check = await this.hubCall(hub, "/apc/confirm", { ticket, agent, mcp_url: this.mcpUrl(held.secret) });
-      if (check.ok) return { ...this.pin(held.id, target), grant_id: held.id };
-      if (check.error !== "not_paired") return { ok: false, error: check.error ?? "hub_refused" };
+      const check = await confirmWithHub(hub, { ticket, agent, mcp_url: this.mcpUrl(held.secret) }, { fetch: this.send });
+      if (check.ok) {
+        if (check.status === "paired") held.pairing = null;
+        const pinned = this.pin(held.id, target);
+        // Still waiting for the code in the dock: the page shows it again.
+        if (check.status === "pending" && held.pairing) return { ok: true, grant_id: held.id, status: "pending", pairing: held.pairing, ...(pinned.ok ? {} : { pin_error: pinned.error }) };
+        return { ...pinned, grant_id: held.id, status: check.status };
+      }
+      if (check.error !== "not_paired") return { ok: false, error: check.error };
       // The dock no longer pairs it: the grant goes, and the person is asked again (the ticket still works).
       this.forget(held);
       return askFirst();
     }
-    if (!this.consent.take(consent, hub, agent)) return askFirst();
+    const taken = this.consent.takeConsent(consent, hub, agent);
+    if (!taken.ok) return askFirst();
     // A grant for the hub to hold (newDirectGrant makes any grant's id and secret).
     const { id, secret } = newDirectGrant();
-    const grant: Grant = { id, secret, path: "dock", name: "Agent via dock", client: null, hub, agent: null };
+    const grant: Grant = { id, secret, path: "dock", name: "Agent via dock", client: null, hub, agent: null, pairing: null };
     this.grants.set(secret, grant);
-    const answer = await this.hubCall(hub, "/apc/pair", { ticket, agent, app: { name: "Orders", origin: this.origin }, mcp_url: this.mcpUrl(secret) });
+    // The hub must say it keeps the code: on any other answer (or a redirect, or none) the grant goes, now.
+    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Orders", origin: this.origin }, mcp_url: this.mcpUrl(secret), pairing_code: taken.pairing_code }, { fetch: this.send });
     if (!answer.ok) {
       this.grants.delete(secret);
-      return { ok: false, error: answer.error ?? "hub_refused" };
+      return { ok: false, error: answer.error };
     }
     // Linked to the agent only once the hub took it: until then no drop finds it half made.
     grant.agent = agent;
-    if (typeof answer.agent?.name === "string") grant.name = answer.agent.name.replace(/[\p{C}]/gu, "").slice(0, 60);
+    grant.pairing = { code: taken.pairing_code, expires_at: new Date(this.now() + PAIRING_CODE_TTL_MS).toISOString() };
+    if (answer.agent.name) grant.name = answer.agent.name.replace(/[\p{C}]/gu, "").slice(0, 60);
     this.publish({ type: "agents" });
-    return { ...this.pin(id, target), grant_id: id };
+    const pinned = this.pin(id, target);
+    return { ok: true, grant_id: id, status: "pending", pairing: grant.pairing, ...(pinned.ok ? {} : { pin_error: pinned.error }) };
   }
 
   /** The hub gives a grant back (the person unpaired it in the dock): it goes. Not "revoked": its URL then answers 404. */
@@ -461,15 +500,6 @@ export class OrdersApp {
     this.forget(grant);
     this.publish({ type: "agents" });
     return Response.json({ ok: true });
-  }
-
-  private async hubCall(hub: string, path: string, body: unknown): Promise<{ ok?: boolean; error?: string; agent?: { name?: unknown } }> {
-    try {
-      const response = await this.send(`${hub}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(10_000) });
-      return (await response.json()) as { ok?: boolean; error?: string; agent?: { name?: unknown } };
-    } catch {
-      return { ok: false, error: "hub_unreachable" };
-    }
   }
   // #endregion
 
@@ -490,6 +520,7 @@ export class OrdersApp {
         url: g.path === "direct" ? this.mcpUrl(g.secret) : null,
         client: g.client,
         pin: pin ? { label: `order ${pin.id}`, seen: !isUnread(pin) } : null,
+        pairing: g.pairing,
       });
     }
     return rows;

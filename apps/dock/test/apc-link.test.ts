@@ -16,6 +16,8 @@ const { Sandbox } = await import(new URL("../../demo/src/worker/sandbox.ts", imp
 /** Pulse's Worker, for the apc.json it serves at /.well-known/apc.json (APC 0.5): the hub reads it when Pulse pairs. */
 const { default: pulseWorker } = await import(new URL("../../demo/src/worker/index.ts", import.meta.url).href);
 
+/** The hub's answer as its Worker gives it (index.ts): HTTP 400 on a refusal, which the apps read as the hub's own (APC 0.9). */
+const answerAs = (r: { ok: boolean }) => Response.json(r, { status: r.ok ? 200 : 400 });
 const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
 const DID = "c".repeat(32);
@@ -41,8 +43,8 @@ async function world(t: TestContext) {
     const url = new URL(request.url);
     if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
-    if (url.origin === DOCK && url.pathname === "/apc/pair") return Response.json(await hub.pair(await request.json()));
-    if (url.origin === DOCK && url.pathname === "/apc/confirm") return Response.json(await hub.confirm(await request.json()));
+    if (url.origin === DOCK && url.pathname === "/apc/pair") return answerAs(await hub.pair(await request.json()));
+    if (url.origin === DOCK && url.pathname === "/apc/confirm") return answerAs(await hub.confirm(await request.json()));
     throw new TypeError(`no network in this test: ${url}`);
   });
 
@@ -66,7 +68,7 @@ async function world(t: TestContext) {
     const paired = await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent });
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     const pending = (await hub.state(DOCK)).agents[0].pairings.find((p: { status: string }) => p.status === "pending");
-    assert.equal((await hub.decide(pending.id, "approve")).ok, true);
+    assert.equal((await hub.decide(pending.id, "approve", asked.pairing_code)).ok, true);
     return paired.grant_id as string;
   };
   return { hub, pulse, customers, direct, directUrl, callHub, callDirect, connectDirect, dropAndAllow };

@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ApcProfile, FocusRow } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, CONSENT_REQUIRED, DockConsent, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, pairWithHub, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -32,16 +32,6 @@ export interface Env {
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-
-/** One call to a dock's hub, server to server. Any failure is an answer, never a throw. */
-async function hubCall(hub: string, path: string, body: unknown): Promise<{ ok?: boolean; error?: string; agent?: { name?: unknown; icon?: unknown } }> {
-  try {
-    const response = await fetch(`${hub}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
-    return (await response.json().catch(() => ({ ok: false, error: "hub_refused" }))) as Awaited<ReturnType<typeof hubCall>>;
-  } catch {
-    return { ok: false, error: "hub_unreachable" };
-  }
-}
 
 const pathOf = (g: { hub: string | null }): ApcProfile => (g.hub ? "dock" : "direct");
 
@@ -288,8 +278,10 @@ export class Feed extends DurableObject<Env> {
    * handed to the dock's hub server to server with the drag's ticket, and the pin. An agent Signals holds
    * no grant for gets one only with the person's yes on this page, checked here (APC 0.7, TIN-606): the
    * answer is `consent_required` with a nonce, and only a request that brings the nonce back pairs.
+   * Since APC 0.9 (TIN-859) the answer carries a pairing code too: the page shows it, the hub gets it with the
+   * grant (`pairWithHub`, which keeps the grant only if the hub says it keeps the code), and the dock's Allow needs it.
    */
-  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string }> {
+  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string; pairing_code?: string }> {
     if (!this.offers("dock")) return { ok: false, error: "not_available" };
     const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; target?: unknown; consent?: unknown } | null;
     const hub = typeof b?.hub === "string" ? b.hub : "";
@@ -309,36 +301,41 @@ export class Feed extends DurableObject<Env> {
     }
   }
 
-  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string }> {
-    /** The person has not said yes here for this agent: the page asks, with this nonce. */
-    const askFirst = () => ({ ok: false, error: CONSENT_REQUIRED, consent: this.consent.ask(hub, agent) });
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string; pairing_code?: string }> {
+    /** The person has not said yes here for this agent: the page asks, with this nonce and the pairing code (APC 0.9). */
+    const askFirst = () => {
+      const asked = this.consent.ask(hub, agent);
+      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
+    };
     const linked = this.grants().find((g) => g.hub === hub && g.agent === agent);
     if (linked) {
       // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
-      const check = await hubCall(hub, "/apc/confirm", { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
+      const check = await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
       if (!check.ok) {
-        if (check.error !== "not_paired") return { ok: false, error: check.error ?? "hub_refused" };
+        if (check.error !== "not_paired") return { ok: false, error: check.error };
         // The ticket is still good: the person can say yes here and pair at once.
         await this.revoke(linked.secret);
         return askFirst();
       }
-      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent?.icon }]), linked.id);
+      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent.icon }]), linked.id);
       return { ...(await this.pin(linked.id, target)), grant_id: linked.id };
     }
     // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
-    if (!this.consent.take(consent, hub, agent)) return askFirst();
+    const taken = this.consent.takeConsent(consent, hub, agent);
+    if (!taken.ok) return askFirst();
     const { id, secret, created_at } = newDirectGrant();
     // The grant exists (its MCP URL answers), but it is linked to the agent only once the hub took it, as Pulse writes
     // its hub link after /apc/pair: until then no drop finds it as this agent's.
     this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, null, ?)", id, secret, hub, created_at);
-    const answer = await hubCall(hub, "/apc/pair", { ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}` });
+    // The hub must say it keeps the code (APC 0.9): on any other answer the grant goes before the page hears back.
+    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}`, pairing_code: taken.pairing_code });
     if (!answer.ok) {
       this.sql.exec("delete from grants where id = ?", id);
-      return { ok: false, error: answer.error ?? "hub_refused" };
+      return { ok: false, error: answer.error };
     }
     // The agent's mark from the hub, so its first pin already shows its logo.
-    const name = typeof answer.agent?.name === "string" ? answer.agent.name.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null : null;
-    this.sql.exec("update grants set agent = ?, client_title = ?, client_icon = ? where id = ?", agent, name, pickClientIcon([{ src: answer.agent?.icon }]), id);
+    const name = answer.agent.name ? answer.agent.name.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null : null;
+    this.sql.exec("update grants set agent = ?, client_title = ?, client_icon = ? where id = ?", agent, name, pickClientIcon([{ src: answer.agent.icon }]), id);
     this.broadcast();
     return { ...(await this.pin(id, target)), grant_id: id };
   }

@@ -107,6 +107,14 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .decision-notice { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid #c0392b; border-radius: 10px; background: var(--card); }
 .decision-notice p { margin: 0; color: var(--fg); flex: 1; }
 .decision-notice button { flex: none; }
+/* The pairing code (APC 0.9, TIN-859): one field on the request's card, its hint and its error; elsewhere, where to type it. */
+.code-entry { display: flex; flex-direction: column; gap: 4px; }
+.code-entry label { font-size: 12px; font-weight: 600; color: var(--fg); }
+.code-input { width: 9.5em; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); font: 600 16px ui-monospace, monospace; letter-spacing: 0.12em; text-transform: uppercase; }
+.code-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.code-entry p { margin: 0; font-size: 12px; }
+.code-error { color: #c0392b; min-height: 0; }
+.code-elsewhere { font-size: 12px; color: var(--muted); }
 .unverified-warning { display: flex; flex-direction: column; gap: 8px; }
 .unverified-warning p { margin: 0; color: var(--fg); }
 .unverified-warning .unverified-domain { font-size: 22px; font-weight: 700; line-height: 1.2; min-width: 0; }

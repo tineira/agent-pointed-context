@@ -18,7 +18,17 @@ public sealed record Grant(string id, string label, string? client_name, string?
     public string Name => owner_name ?? agent_name ?? client_title ?? client_name ?? label;
 }
 
-public sealed record HubLink(string hub, string agent, string grant_id);
+/// <summary>A dock grant waiting for the person to type its pairing code in their dock (APC 0.9): the raw code, and until when.</summary>
+public sealed record DockPairing(string code, string expires_at);
+
+/// <summary>A dock agent's grant; `pairing` while the dock has not connected yet (APC 0.9), null after.</summary>
+public sealed record HubLink(string hub, string agent, string grant_id, DockPairing? pairing = null);
+
+/// <summary>The pairing code as a person reads it: K7M4P2 as K7M-4P2. Display only; Pulse keeps and sends it raw.</summary>
+public static class PairingCodes
+{
+    public static string FormatCode(string code) => code.Length == 6 ? $"{code[..3]}-{code[3..]}" : code;
+}
 
 public sealed record SandboxState(List<Grant> grants, bool? v2, List<HubLink>? hub_links);
 

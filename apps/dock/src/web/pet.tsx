@@ -13,8 +13,9 @@ import type { DockAgent } from "./agent-page.tsx";
 import type { Marks } from "./float-marks.ts";
 import { AgentPet } from "./apc-pet.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
-import { UnverifiedRequest, type UnverifiedAction } from "./unverified.tsx";
-import { buttonsOff, type InFlight } from "./request-state.ts";
+import type { UnverifiedAction } from "./unverified.tsx";
+import type { InFlight } from "./request-state.ts";
+import { PairingRequest } from "./pairing-request.tsx";
 
 const params = new URLSearchParams(location.search);
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -67,6 +68,8 @@ export interface PetRequest {
   inFlight?: InFlight;
   /** The hub is still introducing itself to the app: Approve is off, Deny stays on. */
   approving?: boolean;
+  /** The app sent a pairing code (APC 0.9): the bubble has Deny and sends the person to the dock to type it. */
+  code?: boolean;
 }
 
 /** One agent's pet, and the bubble of its pairing requests while any waits. */
@@ -98,36 +101,37 @@ export function PetView(props: {
   const requests = asking ? (
     <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
       {props.refusal}
-      {props.requests.map((r) =>
-        r.unverified ? (
-          // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
-          <div key={r.id} className="pet-request unverified">
-            <UnverifiedRequest domain={r.host} declared={r.unverified.declared} agent={r.agent} warning={r.unverified.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} compact />
-          </div>
-        ) : (
-        <div key={r.id} className="pet-request">
-          <p>
-            {r.kind === "reader" ? (
-              <>
-                <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings. {READER_NOTICE}
-              </>
-            ) : (
-              <>
-                <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
-              </>
-            )}
-          </p>
-          <div className="row">
-            <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
-              Allow
-            </button>
-            <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
-              Deny
-            </button>
-          </div>
+      {props.requests.map((r) => (
+        // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused. A request with a pairing
+        // code (APC 0.9): Deny, and the code is typed in the dock, which the bubble opens; its content is fixed per request.
+        <div key={r.id} className={`pet-request${r.unverified ? " unverified" : ""}`}>
+          <PairingRequest
+            entry="dock"
+            kind={r.kind}
+            app={r.app}
+            host={r.host}
+            agent={r.agent}
+            says={
+              r.kind === "reader" ? (
+                <>
+                  <b>{r.app}</b> wants to send <b>{r.agent}</b> page readings. {READER_NOTICE}
+                </>
+              ) : (
+                <>
+                  <b>{r.app}</b> <span className="muted">({r.host})</span> wants to be read by <b>{r.agent}</b>.
+                </>
+              )
+            }
+            {...(r.unverified ? { unverified: r.unverified } : {})}
+            code={!!r.code}
+            inFlight={r.inFlight}
+            approving={!!r.approving}
+            decide={(action) => props.decide(r.id, action)}
+            openDock={petApp.openDock}
+            compact
+          />
         </div>
-        ),
-      )}
+      ))}
     </div>
   ) : null;
   return (

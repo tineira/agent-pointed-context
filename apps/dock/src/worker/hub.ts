@@ -10,7 +10,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
+import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, normalizePairingCode, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
 import { attachAttention, attachThen, InflightCalls, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
@@ -24,7 +24,6 @@ import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJo
 import type { JoinCodes } from "./join-codes.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
-const TICKET_TTL_MS = 60_000;
 const WAIT_CEILING_S = 50;
 const WAIT_DEFAULT_S = 25;
 /** The calls kept per agent (TIN-419). */
@@ -54,6 +53,12 @@ export interface Env {
   MCP_SESSIONS?: AnalyticsEngineDataset;
   /** Secret (wrangler secret put ANALYTICS_SALT): the HMAC key for session keys and IP hashes. */
   ANALYTICS_SALT?: string;
+  /**
+   * The pairing code (APC 0.9, TIN-859). "when_sent" (the default): a pairing that carries a code needs it to be
+   * approved, and one without (an app from before 0.9) keeps the old path, counted in MCP_SESSIONS as
+   * "pair_codeless". "required": a pairing without a code is refused.
+   */
+  PAIRING_CODE?: string;
 }
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
@@ -98,6 +103,11 @@ interface Pairing {
   status: "pending" | "approving" | "paired" | "revoked" | "blocked";
   /** In APP_ORIGINS when it paired (TIN-580). An unverified app is named by its host and held to trust.ts's limits. */
   verified: boolean;
+  /**
+   * The app sent a pairing code that nobody typed yet (APC 0.9): the request needs it to be approved. The code
+   * itself is never read into a Pairing; only decide() reads it, to compare it.
+   */
+  coded: boolean;
   /** The name an unverified app gave itself, shown only as secondary text; null for a verified app. */
   declared_name: string | null;
   created_at: string;
@@ -261,7 +271,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -314,6 +324,7 @@ export class Hub extends DurableObject<Env> {
         status: (r.status !== "revoked" && ((blocked.length && isBlocked(r.app_origin as string, blocked)) || (!open && r.verified === 0)) ? "blocked" : r.status) as Pairing["status"],
         // Rows from before TIN-580 could only pair from APP_ORIGINS.
         verified: r.verified !== 0,
+        coded: r.pairing_code !== null && r.pairing_code !== undefined,
         declared_name: (r.declared_name as string | null) ?? null,
         created_at: r.created_at as string,
         approved_at: (r.approved_at as string | null) ?? null,
@@ -427,12 +438,14 @@ export class Hub extends DurableObject<Env> {
     if (dev()) return;
     const expiresAt = Number(this.meta("expires_at") ?? 0);
     const oldest = this.sql.exec<{ at: string | null }>("select min(reading_at) as at from readers").toArray()[0]?.at;
-    const pending = this.sql.exec<{ at: string | null }>("select min(created_at) as at from pairings where status = 'pending'").toArray()[0]?.at;
+    // A pending request with a pairing code ends at its own code_expires_at (APC 0.9); one without, LIMITS.pendingMs after it came.
+    const coded = this.sql.exec<{ at: string | null }>("select min(code_expires_at) as at from pairings where status = 'pending' and code_expires_at is not null").toArray()[0]?.at;
+    const pending = this.sql.exec<{ at: string | null }>("select min(created_at) as at from pairings where status = 'pending' and code_expires_at is null").toArray()[0]?.at;
     const approving = this.sql.exec<{ at: string | null }>("select min(approved_at) as at from pairings where status = 'approving'").toArray()[0]?.at;
     // A join's end (TIN-838): the open code's, or the claimed one's answer_by, so the dock drops a request nobody answered.
     const joinEnd = this.sql.exec<{ at: number | null }>("select min(case when status = 'open' then expires_at else answer_by end) as at from joins").toArray()[0]?.at;
     await this.ctx.storage.setAlarm(
-      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, joinEnd ?? Infinity),
+      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, coded ? Date.parse(coded) : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, joinEnd ?? Infinity),
     );
   }
   /** What storage says of a pairing, under the blocked overlay pairings() reads: "approving" while held is still approving here. */
@@ -483,8 +496,13 @@ export class Hub extends DurableObject<Env> {
       if (settled && settled !== "paired") giveBack.push(settled);
     }
     const cutoff = new Date(Date.now() - LIMITS.pendingMs).toISOString();
+    const nowIso = new Date().toISOString();
     // Every row still pending in storage, a blocked domain's too (it reads as blocked, and is never called), so the alarm never rings for one that stays.
-    const ids = new Set(this.sql.exec<{ id: string }>("select id from pairings where status = 'pending' and created_at <= ?", cutoff).toArray().map((r) => r.id));
+    // Two lifetimes (APC 0.9): a request with a pairing code ends at its code_expires_at, one without LIMITS.pendingMs after it came.
+    const ids = new Set([
+      ...this.sql.exec<{ id: string }>("select id from pairings where status = 'pending' and code_expires_at is not null and code_expires_at <= ?", nowIso).toArray().map((r) => r.id),
+      ...this.sql.exec<{ id: string }>("select id from pairings where status = 'pending' and code_expires_at is null and created_at <= ?", cutoff).toArray().map((r) => r.id),
+    ]);
     const stale = this.pairings().filter((p) => ids.has(p.id));
     for (const p of stale) {
       this.sql.exec("delete from pairings where id = ? and status = 'pending'", p.id);
@@ -869,6 +887,8 @@ export class Hub extends DurableObject<Env> {
               page_open: p.page_open,
               error: p.error,
               ...((p.status === "pending" || p.status === "approving") && !p.verified ? { warning: !this.warned(p.app_origin) } : {}),
+              // The request needs the pairing code the app showed (APC 0.9): only that it does, never the code.
+              ...(p.status === "pending" && p.coded ? { code: true } : {}),
               ...(p.status === "blocked" ? { blocked_by: isBlocked(p.app_origin, blocked) ? ("blocklist" as const) : ("closed" as const) } : {}),
               ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}),
             })),
@@ -898,7 +918,7 @@ export class Hub extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** A single-use pairing ticket for one agent, valid 60 s: what the dock puts on a drag. */
+  /** A single-use pairing ticket for one agent, valid TICKET_TTL_MS (240 s since APC 0.9): what the dock puts on a drag. */
   async ticket(agentId: string): Promise<{ ticket: string; expires_at: number } | null> {
     if (!this.agent(agentId)) return null;
     this.sql.exec("delete from tickets where expires_at < ?", Date.now());
@@ -911,8 +931,14 @@ export class Hub extends DurableObject<Env> {
   /**
    * The person's answer in the dock: approve or deny a pending pairing, or unpair a paired app. An
    * unverified app's first request in this dock takes "approve_unverified", the warning's Approve (TIN-581).
+   *
+   * A request whose app sent a pairing code (APC 0.9, TIN-859) is approved only with that code in `code`. Its
+   * check, the count of wrong codes, the removal after the last one and the move to approving all happen
+   * before this call's first await (I3), so parallel calls cannot try more codes than PAIRING_CODE_MAX_ATTEMPTS.
+   * A missing or malformed code is refused without counting (it could not match). What was typed is compared,
+   * then dropped: it is never stored or returned. Deny and unpair need no code.
    */
-  async decide(pairingId: string, action: unknown): Promise<{ ok: boolean; error?: string }> {
+  async decide(pairingId: string, action: unknown, code?: unknown): Promise<{ ok: boolean; error?: string; attempts_left?: number }> {
     const r = this.readers().find((x) => x.id === pairingId);
     if (r) {
       if (action === "approve" && r.status === "pending") {
@@ -935,20 +961,25 @@ export class Hub extends DurableObject<Env> {
     // Our blocklist, and the kill switch for unverified apps, win over the person's yes (TIN-580, TIN-581).
     if (approving && p.status === "blocked") return { ok: false, error: "app_blocked" };
     if (approving && p.status === "pending") {
+      // An unverified app pairs only once the person approved the warning (TIN-581): "approve_unverified", sent
+      // only by the warning's Approve. A plain "approve" (an older dock page, a verified app's card) is refused while
+      // the domain has no approval in this dock; once it has, the warning is not shown again, and the usual yes pairs it.
+      if (!p.verified && action === "approve" && !this.warned(p.app_origin)) return { ok: false, error: "warning_required" };
+      if (p.verified && action === "approve_unverified") return { ok: false, error: "invalid_action" };
+      // The pairing code (APC 0.9), after every refusal that changes nothing and before anything changes: synchronous.
+      const checked = this.checkCode(p, code);
+      if (checked) {
+        if (checked.error !== "pairing_code_refused") return checked;
+        // The last wrong code: the request went (checkCode removed it); the app gets its grant back.
+        if (givesBack(p)) await revokeGrant(p.mcp_url, transport(p));
+        return checked;
+      }
       // The approval this call inserts, if it inserts one (Fix check 4 on #120): when the call ends without a settled
       // pairing, it takes back what it added, and only that (an approval that stood before the call stays).
       let inserted: string | null = null;
-      if (!p.verified) {
-        // An unverified app pairs only once the person approved the warning (TIN-581): "approve_unverified", sent
-        // only by the warning's Approve. A plain "approve" (an older dock page, a verified app's card) is refused while
-        // the domain has no approval in this dock; once it has, the warning is not shown again, and the usual yes pairs it.
-        if (action === "approve" && !this.warned(p.app_origin)) return { ok: false, error: "warning_required" };
-        if (!this.warned(p.app_origin)) {
-          inserted = randomHex(8);
-          this.sql.exec("insert into unverified_ok (origin, approved_at, nonce) values (?, ?, ?)", p.app_origin, new Date().toISOString(), inserted);
-        }
-      } else if (action === "approve_unverified") {
-        return { ok: false, error: "invalid_action" };
+      if (!p.verified && !this.warned(p.app_origin)) {
+        inserted = randomHex(8);
+        this.sql.exec("insert into unverified_ok (origin, approved_at, nonce) values (?, ?, ?)", p.app_origin, new Date().toISOString(), inserted);
       }
       const takeBack = (error: string) => {
         if (inserted) this.sql.exec("delete from unverified_ok where origin = ? and nonce = ?", p.app_origin, inserted);
@@ -998,6 +1029,37 @@ export class Hub extends DurableObject<Env> {
       return { ok: true };
     }
     return { ok: false, error: "invalid_action" };
+  }
+
+  /**
+   * The pairing code of a pending request, checked against what the dock owner typed (APC 0.9, TIN-859).
+   * Synchronous throughout. Null: the request has no code (an app from before 0.9), or the code matched and is
+   * cleared, so the request may be approved. Otherwise the refusal: `pairing_code_required` or
+   * `invalid_pairing_code` (not counted), `wrong_pairing_code` with the tries left, or, at the last wrong
+   * code, `pairing_code_refused` with the request removed as a deny would (the caller gives the grant back).
+   */
+  private checkCode(p: Pairing, typed: unknown): { ok: false; error: string; attempts_left?: number } | null {
+    const row = this.sql.exec<{ pairing_code: string | null; code_attempts: number | null }>("select pairing_code, code_attempts from pairings where id = ? and status = 'pending'", p.id).toArray()[0];
+    // No code: an app from before 0.9, approved as before while PAIRING_CODE is when_sent; never once it is required.
+    if (!row?.pairing_code) return this.env.PAIRING_CODE === "required" ? { ok: false, error: "pairing_code_required" } : null;
+    if (typed === undefined || typed === null || typed === "") return { ok: false, error: "pairing_code_required" };
+    const given = normalizePairingCode(typed);
+    if (!given) return { ok: false, error: "invalid_pairing_code" };
+    if (pairingCodesMatch(row.pairing_code, given)) {
+      this.sql.exec("update pairings set pairing_code = null where id = ? and status = 'pending'", p.id);
+      return null;
+    }
+    const attempts = (row.code_attempts ?? 0) + 1;
+    if (attempts < PAIRING_CODE_MAX_ATTEMPTS) {
+      this.sql.exec("update pairings set code_attempts = ? where id = ?", attempts, p.id);
+      return { ok: false, error: "wrong_pairing_code", attempts_left: PAIRING_CODE_MAX_ATTEMPTS - attempts };
+    }
+    // As a deny would: the request goes, its pin, and an unverified domain's approval with it.
+    this.sql.exec("delete from pairings where id = ?", p.id);
+    this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+    if (!p.verified) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
+    this.broadcast();
+    return { ok: false, error: "pairing_code_refused" };
   }
 
   /**
@@ -1153,17 +1215,28 @@ export class Hub extends DurableObject<Env> {
    * on its page, and it sends the grant it made (its MCP URL). The pairing waits for the person's
    * yes in the dock: for an app outside APP_ORIGINS, their Approve on the warning, the first time
    * its domain asks in this dock (TIN-581). Undecided, it goes after LIMITS.pendingMs.
+   *
+   * The pairing code (APC 0.9, TIN-859): an app that implements 0.9 sends the code it showed its owner; the
+   * hub keeps it with the request, never shows it, and answers `pairing_code: "required"`. The person's yes in
+   * the dock then needs it (decide). The body is checked whole before the ticket is read or spent (I6): a
+   * malformed request leaves the ticket good for a correct one.
    */
-  async pair(body: unknown): Promise<{ ok: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name: string; icon: string | null } }> {
+  async pair(body: unknown): Promise<{ ok: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name: string; icon: string | null }; pairing_code?: typeof PAIRING_CODE_ACK }> {
     if (!(await this.alive())) return { ok: false, error: "dock_expired" };
-    const b = body as { ticket?: unknown; agent?: unknown; app?: { name?: unknown; origin?: unknown }; mcp_url?: unknown } | null;
+    const b = body as { ticket?: unknown; agent?: unknown; app?: { name?: unknown; origin?: unknown }; mcp_url?: unknown; pairing_code?: unknown } | null;
     if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
     const name = typeof b.app?.name === "string" ? b.app.name.slice(0, 40).trim() : "";
     const origin = typeof b.app?.origin === "string" ? b.app.origin : "";
+    if (!name) return { ok: false, error: "app_not_allowed" };
+    // Only an absent key is a pairing without a code (an app from before 0.9); present, it must be a code.
+    const codeless = b.pairing_code === undefined;
+    if (codeless && this.env.PAIRING_CODE === "required") return { ok: false, error: "pairing_code_required" };
+    const code = codeless ? null : normalizePairingCode(b.pairing_code);
+    if (!codeless && !code) return { ok: false, error: "invalid_pairing_code" };
+    // Only now is the ticket read, and spent: synchronously, before anything is awaited.
     const t = this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray()[0];
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
-    if (!name) return { ok: false, error: "app_not_allowed" };
     // Verified (APP_ORIGINS), unverified (HTTPS, a domain; refused while the kill switch is closed), blocked or refused (TIN-580, TIN-581).
     const verdict = appVerdict(origin, b.mcp_url, { allowed: envList(this.env.APP_ORIGINS), blocked: this.blocked(), open: this.unverifiedOpen(), dev: dev() });
     if (!verdict.ok) return { ok: false, error: verdict.error };
@@ -1204,15 +1277,29 @@ export class Hub extends DurableObject<Env> {
     const declared = verdict.verified ? null : declaredName(name) || null;
     const id = `pr_${randomHex(6)}`;
     this.sql.exec(
-      "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at, verified, declared_name) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+      "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at, verified, declared_name, pairing_code, code_attempts, code_expires_at) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
       id, t.agent_id, appId, verdict.verified ? name : host(origin), origin, b.mcp_url, new Date().toISOString(), verdict.verified ? 1 : 0, declared,
+      code, code ? new Date(Date.now() + LIMITS.pairingCodeMs).toISOString() : null,
     );
     this.broadcast();
+    // An app that sent no code, counted for the operator's switch to "required" (TIN-859): no ticket, no URL.
+    if (!code) this.countCodeless(origin, verdict.verified);
     // The agent's mark, so the app's first pin already shows who it is.
     const agent = this.agent(t.agent_id)!;
     // The alarm ends the request on time if nobody decides it (TIN-581).
     await this.arm();
-    return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge } };
+    return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}) };
+  }
+
+  /** One Analytics Engine point per pairing without a code (APC 0.9): the app's host and whether it is verified. A failure here never fails the pairing. */
+  private countCodeless(origin: string, verified: boolean): void {
+    const { MCP_SESSIONS, ANALYTICS_SALT } = this.env;
+    if (!MCP_SESSIONS || !ANALYTICS_SALT) return;
+    try {
+      MCP_SESSIONS.writeDataPoint({ indexes: ["pair_codeless"], blobs: ["pair_codeless", host(origin), verified ? "verified" : "unverified", "dock"], doubles: [1] });
+    } catch {
+      // analytics only
+    }
   }
 
   /**

@@ -103,11 +103,22 @@ The agent connects once, to a hub. The person drags it from the dock onto any ap
 
 ### The drop
 
-The dock puts the agent on a drag with the type `application/x-apc-agent` and the payload `{ v: 1, agent, hub, ticket }`: a public handle, the hub's bare origin, and a ticket. The payload **MUST NOT** hold a secret or an MCP URL: any page the agent is dropped on can read it. The **ticket** is single use, lives 60 seconds, is bound to that agent, and opens a pairing request or a confirmation and nothing else.
+The dock puts the agent on a drag with the type `application/x-apc-agent` and the payload `{ v: 1, agent, hub, ticket }`: a public handle, the hub's bare origin, and a ticket. The payload **MUST NOT** hold a secret or an MCP URL: any page the agent is dropped on can read it. The **ticket** is single use, lives 240 seconds (since 0.9; 60 before), is bound to that agent, and opens a pairing request or a confirmation and nothing else. The reference dock refreshes a ticket once it has less than 180 seconds left (it checks every 10), so a drag carries one with about three minutes left, and the app's two-minute consent fits in it.
 
 ### Consent in the app
 
 Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent ("Let your agent from the dock at … read Orders?") with that nonce, and the Allow sends it back. The server makes a grant only for a request that brings the nonce back. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress`.
+
+Since 0.9 the consent shows a [pairing code](#the-pairing-code), and the server answers `consent_required` with both: `{ consent, pairing_code }`. The page shows the code formatted (`K7M-4P2`): "After Allow, your dock asks for this code: **K7M-4P2**. Type it only in your own dock; never give it to anyone. Whoever types it gets this access."
+
+### The pairing code
+
+A drag can be put on any page, and anyone who runs a dock can make tickets for their own agent. Without a code, someone could lure an app's owner into dropping their agent and clicking Allow, and approve the pairing in their own dock. The code closes that: only the app's owner sees it, and the dock's Allow needs it.
+
+- The app **MUST** make a new code with every consent: 6 characters of Crockford base32 (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, 30 bits; `newPairingCode` in `@tineira/apc-server`), shown only on the app owner's page. After the Allow it sends the code, raw (`K7M4P2`), in `pairing_code` of `/apc/pair`, and nowhere else: not over MCP, not in a URL, not to `/apc/confirm`.
+- The hub keeps it with the pending pairing and **MUST NOT** show it: not in the dock's state, not in what it sends the dock's pages, not in any answer. The dock owner types it to approve; the hub compares it in constant time with what the app sent, ignoring case, spaces and dashes (O reads as 0, I and L as 1). A missing or malformed code is refused and not counted. A wrong one counts (`wrong_pairing_code`, with `attempts_left`); the fifth removes the request and gives the grant back (`pairing_code_refused`). A request with a code that nobody approves goes after two minutes, its grant given back. A match clears the code. Deny and unpair need no code.
+- The app **MUST** keep the grant only when the hub acknowledges the code (below), and delete it, before it answers its page, on any other answer: a hub that does not check codes never holds a grant.
+- After the Allow the reference apps show the code again, with the time left and Cancel (the app's revoke), until the hub connects (its first `initialize` on the grant) or the grant goes, and say: "If your dock doesn't ask for this code, the agent wasn't yours: Cancel."
 
 ### Pairing: `POST {hub}/apc/pair`
 
@@ -115,18 +126,20 @@ With the person's yes, the app's server makes a grant and hands it to the hub, s
 
 ```json
 POST https://apc.tineira.com/apc/pair
-{ "ticket": "…", "agent": "ag_…", "app": { "name": "Orders", "origin": "https://orders.example" }, "mcp_url": "https://orders.example/mcp/…" }
+{ "ticket": "…", "agent": "ag_…", "app": { "name": "Orders", "origin": "https://orders.example" }, "mcp_url": "https://orders.example/mcp/…", "pairing_code": "K7M4P2" }
 ```
 
-The hub checks the ticket, the app's origin and its [`apc.json`](#apcjson) (it **MUST** refuse the pairing when the file is missing, redirected, invalid, names another origin, does not list `"dock"`, or does not cover `mcp_url`), and answers `{ ok: true, status: "pending", agent: { name, icon } }`, or `{ ok: false, error }`. The pairing counts only when the person has also said yes in the dock. The app links the grant to the agent only once the hub took it, and pins it.
+The hub checks the body first, before it reads or spends the ticket: a `pairing_code` that is present but not a code (`null`, `""`, a number) is `invalid_pairing_code`, so a malformed request leaves the ticket good. Then it checks the ticket, the app's origin and its [`apc.json`](#apcjson) (it **MUST** refuse the pairing when the file is missing, redirected, invalid, names another origin, does not list `"dock"`, or does not cover `mcp_url`), and answers HTTP 200 with `{ ok: true, pairing_id, status: "pending", agent: { name, icon }, pairing_code: "required" }`, or HTTP 400 with `{ ok: false, error }`. `pairing_code: "required"` is the acknowledgement: the hub keeps the code and will ask for it. The pairing counts only when the person has also said yes in the dock, with the code. The app links the grant to the agent only once the hub took it, and pins it.
+
+The app **MUST** treat any other answer as a refusal and delete the grant: a redirect (it calls the hub with `redirect: "error"`), any status but 200 and 400, a 200 without the acknowledgement (`hub_ignores_pairing_code`), no answer within its time limit. `pairWithHub` in `@tineira/apc-server` does exactly that. Only an absent `pairing_code` is a pairing without a code, from an app before 0.9: the reference hub lets it through as before while its `PAIRING_CODE` setting is `when_sent` (the default), and refuses it with `pairing_code_required` once it is `required`.
 
 ### Every drop: `POST {hub}/apc/confirm`
 
-On a drop of an agent it already holds a grant for, the app asks the hub whether that pairing still stands: `{ ticket, agent, mcp_url }`. `{ ok: true }` pins it. `{ ok: false, error: "not_paired" }` means the dock no longer pairs it: the app drops the grant and asks the person again (the ticket is still good). A hub never confirms a revoked or blocked pairing.
+On a drop of an agent it already holds a grant for, the app asks the hub whether that pairing still stands: `{ ticket, agent, mcp_url }`. HTTP 200 with `{ ok: true, status }` (`"pending"` or `"paired"`) pins it; while it is pending the reference apps show the pairing code again. The answer never carries the code. `{ ok: false, error: "not_paired" }` means the dock no longer pairs it: the app drops the grant and asks the person again (the ticket is still good). A hub never confirms a revoked or blocked pairing.
 
 ### The hub gives a grant back: `POST {app}/apc/revoke`
 
-When the person unpairs an app in the dock, the hub sends `{ mcp_url }` to the app's `/apc/revoke`, and the app deletes that grant and its pin. This is the hub's side; the app's own Revoke is core and needs no hub.
+When the person unpairs an app in the dock, denies its request, types the fifth wrong code, or lets the request expire, the hub sends `{ mcp_url }` to the app's `/apc/revoke`, and the app deletes that grant and its pin. This is the hub's side; the app's own Revoke is core and needs no hub.
 
 ### The hub's tools
 
@@ -147,7 +160,7 @@ An app that offers both profiles shows the same agent on both paths as one.
 Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`, from that origin, as JSON of at most 16 KiB:
 
 ```json
-{ "name": "Orders", "standard": "0.8.0", "origin": "https://orders.example",
+{ "name": "Orders", "standard": "0.9.0", "origin": "https://orders.example",
   "profiles": ["direct", "dock"], "mcp": { "path": "/mcp/" },
   "direct": { "connect": "https://orders.example/agents" } }
 ```

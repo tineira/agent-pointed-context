@@ -4,11 +4,18 @@
  * warning lives here, in the dock, never in the app's page; its words come from trust.ts, so the tests
  * read what the person reads. Deny is first and has the focus: the safe answer is the default.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NOT_VERIFIED, splitHost, unverifiedWarning } from "../worker/trust.ts";
 import { buttonsOff, cardInFlight, kindOf, mayAnswer, type InFlight } from "./request-state.ts";
 
 export type UnverifiedAction = "approve" | "approve_unverified" | "deny";
+
+/**
+ * A request whose app sent a pairing code (APC 0.9, TIN-859), as a surface takes it: the field to type it in, and
+ * whether what is typed is a code yet (Approve waits for it); or, on Float, the strip and the pets, no field and no
+ * Approve, but a note in its place that it is answered in the dock.
+ */
+export type CodeEntry = { kind: "field"; field: ReactNode; ready: boolean } | { kind: "dock"; note: ReactNode };
 
 /** The badge on an unverified app's request, its line in an agent's apps, and where an agent points. */
 export function NotVerified() {
@@ -74,6 +81,8 @@ export function UnverifiedRequest(props: {
   decide: (action: UnverifiedAction) => void;
   /** Float and the pets: smaller type, same words. */
   compact?: boolean;
+  /** The request needs the pairing code its app showed (APC 0.9): where it is typed, or that it is typed in the dock. */
+  code?: CodeEntry;
 }) {
   // An Approve this card sent, at once on a click, before the page re-renders: never two yeses. A Deny is the
   // page's alone (its in-flight map), so a Deny that fails is on again as soon as the page clears it (Fix check 3 on #120).
@@ -84,8 +93,11 @@ export function UnverifiedRequest(props: {
   }, [props.inFlight, props.approving]);
   const state = { inFlight: cardInFlight(props.inFlight, approveClicked), approving: props.approving };
   const off = buttonsOff(state);
+  // With a code, Approve also waits for what is typed to be one; on a surface without the field there is no Approve.
+  const approveOff = off.approve || (props.code?.kind === "field" && !props.code.ready);
   const answer = (action: UnverifiedAction) => {
     if (!mayAnswer(action, state)) return;
+    if (kindOf(action) === "approve" && (props.code?.kind === "dock" || approveOff)) return;
     if (kindOf(action) === "approve") setApproveClicked(true);
     props.decide(action);
   };
@@ -98,14 +110,20 @@ export function UnverifiedRequest(props: {
             <HostName host={w.domain} />
           </b>{" "}
           <NotVerified /> wants to be read by <b>{props.agent}</b>. You approved this domain before in this dock; its tools and data still come marked untrusted.
+          {props.code?.kind === "field" ? <> Type the code shown in {w.domain}.</> : null}
         </p>
+        {props.code?.kind === "field" ? props.code.field : null}
         <div className="row">
           <button type="button" disabled={off.deny} onClick={() => answer("deny")}>
             Deny
           </button>
-          <button type="button" disabled={off.approve} onClick={() => answer("approve")}>
-            Allow
-          </button>
+          {props.code?.kind === "dock" ? (
+            props.code.note
+          ) : (
+            <button type="button" disabled={approveOff} onClick={() => answer("approve")}>
+              Allow
+            </button>
+          )}
         </div>
       </>
     );
@@ -120,12 +138,17 @@ export function UnverifiedRequest(props: {
       {w.declared && <p className="muted unverified-declared">{w.declared}</p>}
       <p>{w.ask}</p>
       <p className="unverified-risk">{w.risk}</p>
+      {props.code?.kind === "field" ? props.code.field : null}
       <div className="row">
-        {w.actions.map((a) => (
-          <button key={a.action} type="button" className={a.default ? "primary" : undefined} autoFocus={a.default} disabled={a.action === "deny" ? off.deny : off.approve} onClick={() => answer(a.action)}>
-            {a.label}
-          </button>
-        ))}
+        {w.actions.map((a) =>
+          a.action !== "deny" && props.code?.kind === "dock" ? (
+            <span key={a.action}>{props.code.note}</span>
+          ) : (
+            <button key={a.action} type="button" className={a.default ? "primary" : undefined} autoFocus={a.default} disabled={a.action === "deny" ? off.deny : approveOff} onClick={() => answer(a.action)}>
+              {a.label}
+            </button>
+          ),
+        )}
       </div>
     </div>
   );

@@ -6,7 +6,7 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are 0.x pre-releases on npm (`next`, and `latest` follows it), and their version follows the standard's: 0.8.x ships APC 0.8.
+The packages are 0.x pre-releases on npm (`next`, and `latest` follows it), and their version follows the standard's: 0.9.x ships APC 0.9.
 
 ```sh
 npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
@@ -127,9 +127,14 @@ Add `"dock"` to the profiles and list the hubs you pair with. A dock's agent arr
 
 <!-- include orders-app.ts#dock -->
 
-- **No grant for that agent yet:** the server answers `consent_required` with a nonce, the page asks the person, and only the Allow that brings the nonce back makes a grant and pairs it with the hub (`POST {hub}/apc/pair`). The person then allows it in their dock too.
-- **A grant already:** the server asks the hub whether the pairing still stands (`POST {hub}/apc/confirm`) and pins it, or asks the person again.
-- **The person unpairs in the dock:** the hub calls your `POST /apc/revoke` with the grant's MCP URL, and the grant goes.
+- **No grant for that agent yet:** the server answers `consent_required` with a nonce and a [pairing code](/docs/spec#the-pairing-code); the page asks the person and shows the code; only the Allow that brings the nonce back makes a grant and pairs it with the hub (`POST {hub}/apc/pair`, with the code). The person then allows it in their dock too, typing the code. `pairWithHub` keeps the grant only if the hub acknowledges the code (`pairing_code: "required"` on a plain 200), and the server deletes it otherwise, before it answers the page.
+- **Waiting for the dock:** until the hub connects, the page shows the code again with Cancel (Revoke): if the person's own dock never asks for that code, the agent was someone else's.
+- **A grant already:** the server asks the hub whether the pairing still stands (`confirmWithHub`, `POST {hub}/apc/confirm`) and pins it (still pending: it shows the code again), or asks the person again.
+- **The person unpairs in the dock** (or denies, types five wrong codes, or lets the request expire): the hub calls your `POST /apc/revoke` with the grant's MCP URL, and the grant goes.
+
+The page shows the code in its consent, and the agents waiting for their dock:
+
+<!-- include orders-page.ts#waiting -->
 
 The hub reads your `apc.json` before it pairs: it must list `"dock"`, name your origin, and cover the MCP URL you send. The reference dock at `apc.tineira.com` pairs with any app that passes its checks, as **Not verified** until it is on its list: the person sees a warning with your domain first ([the hub's trust model](/docs/spec#the-hubs-trust-model)), and your results reach the agent marked untrusted.
 
@@ -163,5 +168,5 @@ Localizing changes no protocol text, the tools or conformance: [Conformance](/do
 - The agent bar is on every page, with Revoke; on a phone it stays in the page.
 - Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token); an unknown grant 404.
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
-- Dock: every drop goes to the server; consent is the server's nonce.
+- Dock: every drop goes to the server; consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
 - The conformance suite passes, on each profile you offer.

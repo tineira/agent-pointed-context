@@ -9,8 +9,9 @@ import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { ConnectAgent, CopyRow } from "./setup.tsx";
 import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } from "../worker/reading.ts";
-import { NotVerified, UnverifiedRequest } from "./unverified.tsx";
-import { buttonsOff, type InFlight } from "./request-state.ts";
+import { NotVerified } from "./unverified.tsx";
+import { PairingRequest } from "./pairing-request.tsx";
+import type { CodeError, InFlight } from "./request-state.ts";
 
 export interface AppRef {
   id: string;
@@ -44,7 +45,8 @@ export interface DockAgent {
   /** revoked: the app revoked the grant itself (APC 0.2); revoked_by is the app's host. */
   /** warning: a pending unverified app whose domain the person has not approved in this dock asks with the warning (TIN-581). */
   /** blocked_by: our blocklist, or the kill switch that closes the dock to unverified apps. */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed" }>;
+  /** code: a pending request whose app sent a pairing code (APC 0.9), approved only with it; never the code itself. */
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed"; code?: boolean }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 /** A computer on this dock (TIN-838); `current` is the one this page runs on. */
@@ -200,8 +202,9 @@ export function AgentPage(props: {
   agent: DockAgent;
   base: string;
   /** inFlight: what is on its way (an Approve turns Approve off, a Deny both); approving: the hub is introducing itself to the app (Approve off, Deny on). */
-  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; inFlight?: InFlight; approving?: boolean }>;
-  decide: (pairingId: string, action: "approve" | "approve_unverified" | "deny" | "unpair") => void;
+  requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; inFlight?: InFlight; approving?: boolean; code?: boolean; error?: CodeError | null }>;
+  /** An approval of a request with a pairing code carries the code (APC 0.9). */
+  decide: (pairingId: string, action: "approve" | "approve_unverified" | "deny" | "unpair", code?: string) => void;
   refresh: () => void;
   back: () => void;
   dragProps: Record<string, unknown>;
@@ -315,35 +318,35 @@ export function AgentPage(props: {
       <section className="agent-section">
         <h2>Its apps</h2>
         {props.refusal}
-        {props.requests.map((r) =>
-          r.app.unverified ? (
-            <div key={r.id} className="request unverified">
-              <UnverifiedRequest domain={host(r.app.origin)} declared={r.app.declared_name ?? null} agent={a.name} warning={!!r.warning} inFlight={r.inFlight} approving={!!r.approving} decide={(action) => props.decide(r.id, action)} />
-            </div>
-          ) : (
-          <div key={r.id} className="request">
-            <p>
-              {r.kind === "reader" ? (
-                <>
-                  <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings from the sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. {READER_NOTICE}
-                </>
-              ) : (
-                <>
-                  <b>{r.app.name}</b> at <b>{host(r.app.origin)}</b> wants to be read by <b>{a.name}</b>.
-                </>
-              )}
-            </p>
-            <div className="row">
-              <button type="button" className="primary" disabled={buttonsOff(r).approve} onClick={() => props.decide(r.id, "approve")}>
-                Allow
-              </button>
-              <button type="button" disabled={buttonsOff(r).deny} onClick={() => props.decide(r.id, "deny")}>
-                Deny
-              </button>
-            </div>
+        {props.requests.map((r) => (
+          // The code is typed here too (APC 0.9); an unverified app shows its warning (TIN-581).
+          <div key={r.id} className={`request${r.app.unverified ? " unverified" : ""}`}>
+            <PairingRequest
+              entry="field"
+              kind={r.kind}
+              app={r.app.unverified ? host(r.app.origin) : r.app.name}
+              host={host(r.app.origin)}
+              agent={a.name}
+              says={
+                r.kind === "reader" ? (
+                  <>
+                    <b>{r.app.name}</b> wants to send <b>{a.name}</b> page readings from the sites you allow in the <a href="/extension" target="_blank" rel="noreferrer">APC extension</a>. {READER_NOTICE}
+                  </>
+                ) : (
+                  <>
+                    <b>{r.app.name}</b> at <b>{host(r.app.origin)}</b> wants to be read by <b>{a.name}</b>.
+                  </>
+                )
+              }
+              {...(r.app.unverified ? { unverified: { declared: r.app.declared_name ?? null, warning: !!r.warning } } : {})}
+              code={!!r.code}
+              inFlight={r.inFlight}
+              approving={!!r.approving}
+              error={r.error ?? null}
+              decide={(action, code) => props.decide(r.id, action, code)}
+            />
           </div>
-          ),
-        )}
+        ))}
         {paired.length === 0 && revoked.length === 0 && blocked.length === 0 && props.requests.length === 0 ? (
           <p className="muted">None yet. Drag {a.name} onto an app to pair it.</p>
         ) : (

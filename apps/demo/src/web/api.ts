@@ -30,7 +30,8 @@ export interface SandboxState {
   tour: { step: TourStep; grant_id: string | null };
   /** Pulse's APC v2 deploy (TIN-382), and which dock agents are which grants. */
   v2?: boolean;
-  hub_links?: Array<{ hub: string; agent: string; grant_id: string }>;
+  /** `pairing`: the grant waits for the person to type this code in their dock (APC 0.9); null once the dock connected. */
+  hub_links?: Array<{ hub: string; agent: string; grant_id: string; pairing?: { code: string; expires_at: string } | null }>;
   /** On Pulse's v2 deploy, the docks it pairs with, by host (TIN-402). */
   hubs?: string[];
   /** The profiles Pulse offers (APC 0.4), and the agents linked across both: [direct grant, dock grant]. */
@@ -70,7 +71,8 @@ export function createApi(sid: string) {
     reset: () => post<{ ok: boolean }>("/reset", {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
     /** A dock agent's drop (TIN-382). Without `consent` the server pairs only an agent it holds a grant for; otherwise it answers consent_required with the nonce the consent sends back (TIN-606). */
-    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget; consent?: string }) => post<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string }>("/hub/pair", body),
+    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget; consent?: string }) =>
+      post<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pairing?: { code: string; expires_at: string }; pin_error?: string }>("/hub/pair", body),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
