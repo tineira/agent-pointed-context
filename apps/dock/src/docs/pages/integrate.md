@@ -230,7 +230,7 @@ The reference examples send presence on a page event stream. Without a long-live
 - **Owner-only, private.** One topic per person (`apc-user:{user_id}` in Autio, `agents:{user_id}` in Surplus): a private channel, a policy that lets only that person read it, and no client may write to it. An agent token never listens. Surplus sends the event from the server through Realtime's broadcast endpoint, as private only. Autio sends it from a database function that runs for the agent's own grant (`apc_publish_presence`), which publishes nothing unless the person's page heartbeat is fresh (Autio TIN-670).
 - **Send after a successful call, and never let it fail one.** A missing function, an error or a read over 3 s leaves the tool's body as it is. Hold the send like the rest of the deferred work (see above).
 - **The same channel carries the revoke.** Both apps broadcast an event when a grant ends, so every tab and device drops the agent's mark without a reload. Autio wraps only the send in its revoke triggers, so a failed broadcast can never fail a revoke (Autio TIN-815, Surplus TIN-847).
-- **A page can infer "waiting".** It cannot read the wait row. Both apps show an agent as waiting when its last call was heard in the last 75 s (a wait lasts at most 60 s, and the slot a little longer) (Autio TIN-795, Surplus TIN-877).
+- **Do not infer "waiting".** A page cannot read the wait row, so it should not guess a waiting state from recent calls. Both apps did guess it (a call heard in the last 75 s, or the last call being a wait), and that shows "waiting" when no wait is running. Show no waiting state until the app sends the presence `wait` event that APC 0.11 adds (Autio TIN-795, Surplus TIN-877, TIN-886).
 
 ## Checklist
 
