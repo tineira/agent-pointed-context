@@ -14,6 +14,7 @@ import { APC_JSON_PATH, APC_STANDARD_VERSION, formatPairingCode, type FocusTarge
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { LAST_MONTH } from "../src/model/seed.ts";
 import { demoDataset } from "../src/model/demo-world.ts";
+import { dockLifecycle, inProcessHandshake, isHandshake } from "./dock-conformance.ts";
 
 installWorkersStandIn();
 const { Sandbox } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);
@@ -38,7 +39,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 let hubCount = 0;
 
 /** Pulse's deploy (wrangler.jsonc): the standard's, with both profiles. */
-const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
+const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
 /** Pulse as the suite sees it: its MCP endpoint, and the page through the sandbox's own methods. */
 async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response> } = {}) {
@@ -46,16 +47,16 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   // A hub of its own, on its own origin: Pulse pairs with it, and it calls Pulse back (a give-back, its introduction).
   const hubOrigin = `https://dock-${++hubCount}.test`;
   const env = options.env ?? DEPLOY;
-  const sandbox = new Sandbox(room.ctx, env.HUB_ORIGINS ? { ...env, HUB_ORIGINS: `${env.HUB_ORIGINS},${hubOrigin}` } : env);
-  await sandbox.init();
+  const sandboxEnv = env.HUB_ORIGINS ? { ...env, HUB_ORIGINS: `${env.HUB_ORIGINS},${hubOrigin}` } : env;
+  // `let`: a restart (APC 0.10, T_ack across one) puts a new object on the same storage, and everything below follows it.
+  let sandbox = new Sandbox(room.ctx, sandboxEnv);
+  const { owner } = await sandbox.init();
+  // The Worker's own routes (the owner's endpoints, /apc/revoke), with this sandbox as the one its namespace holds.
+  const workerEnv = { ...sandboxEnv, SANDBOX: { idFromName: (name: string) => name, get: (id: string) => (id === SID ? sandbox : new Sandbox(durableObjectRoom().ctx, sandboxEnv)) } };
   const hub = standInHub({
     origin: hubOrigin,
-    app: async (request) => {
-      if (new URL(request.url).pathname !== "/apc/revoke") return sandbox.fetch(request);
-      const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
-      const r = await sandbox.revokeHubGrant(secret);
-      return Response.json(r, { status: r.ok ? 200 : 404 });
-    },
+    // The hub reaches Pulse as it does in production: the grant's MCP URL, and the public /apc/revoke (M7, APC 0.10).
+    app: async (request) => (new URL(request.url).pathname === "/apc/revoke" ? worker.fetch(request, workerEnv) : sandbox.fetch(request)),
   });
   const calls: string[] = [];
   hubs.set(hubOrigin, { hub, calls });
@@ -70,6 +71,7 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
     let grantId: string;
     if (path === "direct") {
       grantId = (await sandbox.addAgentGrant()).id;
+      return { grantId, mcpUrl: `${ORIGIN}/mcp/${SID}/${await secretOf(grantId)}` };
     } else {
       // A dock agent dropped on Pulse, the person said yes: Pulse makes the grant and hands it to the hub.
       agents++;
@@ -81,15 +83,26 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
       assert.equal(paired.ok, true, `pairing: ${paired.error}`);
       grantId = paired.grant_id!;
+      // The dock owner types the code, and the hub introduces itself (APC 0.10): only then does the grant serve calls.
+      const approved = await hub.decide(hub.pairings.find((p) => p.agent === agent)!.id, "approve", asked.pairing_code);
+      assert.equal(approved.ok, true, `the dock's Allow: ${approved.error}`);
       await sandbox.unpin(grantId);
+      // A dock grant's MCP URL is its hub's alone (I4): the page's state never carries its secret.
+      assert.equal(await secretOf(grantId), "");
+      return { grantId, mcpUrl: hub.urlOf(agent)! };
     }
-    return { grantId, mcpUrl: `${ORIGIN}/mcp/${SID}/${await secretOf(grantId)}` };
   };
   const app: ApcAppAdapter = {
     name: "Pulse",
     profile,
     // The MCP endpoint is the sandbox's; apc.json is the Worker's, for the whole origin (APC 0.5).
-    fetch: (request) => (new URL(request.url).pathname === APC_JSON_PATH ? options.apcJson?.(request) ?? worker.fetch(request, options.env ?? DEPLOY) : sandbox.fetch(request)),
+    // The owner's endpoints and the give-back are the Worker's too (M6, M7, APC 0.10).
+    fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === APC_JSON_PATH) return options.apcJson?.(request) ?? worker.fetch(request, options.env ?? DEPLOY);
+      if (isHandshake(request)) return inProcessHandshake(worker, workerEnv, request);
+      return path.startsWith("/api/") || path.startsWith("/apc/") ? worker.fetch(request, workerEnv) : sandbox.fetch(request);
+    },
     connect: () => connectOn(profile),
     // The pairing code (APC 0.9): what Pulse's consent shows (hub-consent.tsx formats it), and the Allow on it.
     ...(profile === "dock"
@@ -108,6 +121,21 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
                 },
               };
             },
+            // The Dock profile as built (APC 0.10). Pulse does not sleep (dormant is a SHOULD): no idleMs.
+            lifecycle: dockLifecycle({
+              worker,
+              workerEnv: () => workerEnv,
+              disabledEnv: { APC_V2: "1", APC_PROFILES: "direct,dock" },
+              origin: ORIGIN,
+              sid: SID,
+              cookie: `apc_session=${SID}.${owner}`,
+              hub,
+              target: targets[0],
+              view: { screen: "customer", params: { month: LAST_MONTH }, selection: { kind: "customer", id: targets[0].id } },
+              room,
+              object: () => sandbox,
+              restart: () => void (sandbox = new Sandbox(room.ctx, sandboxEnv)),
+            }),
           },
         }
       : {}),
@@ -161,52 +189,13 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       },
     },
   };
-  return { app, sandbox, room, hub, calls };
+  return { app, sandbox, room, hub, calls, workerEnv };
 }
-
-/**
- * The suite's Dock checks of APC 0.10 (TIN-884) that Pulse does not meet yet: they run, as todo, until TIN-892 brings
- * Pulse to 0.10 and removes this list. Only these: every other check must pass.
- */
-const PENDING_TIN_892 = [
-  "the lifecycle adapter is given, and its owner origin is the app's (required of an app that claims 0.10.0 or later on the Dock profile)",
-  "the answer table: in flight (from the Allow to the hub's acknowledgement), and a 404 leaves the state unchanged",
-  "the answer table: handoff (the pairing error, no attention, then or apc_link), and initialize commits it",
-  "the answer table: live",
-  "the answer table: dormant (the idle shapes and the idle error, no attention, then or apc_link)",
-  "the answer table: ended (a give-back on a grant in handoff)",
-  "the answer table: revoked (Cancel on a grant in handoff)",
-  "initialize fails closed: a commit that cannot persist returns no result, and the grant stays in handoff",
-  "a commit racing Cancel or a give-back ends by the state that won",
-  "Cancel revokes only in handoff before any served call: never a live grant (served or not) or an ended one",
-  "the acknowledgement's move is conditional: a give-back or T_ack while in flight ends the grant for good",
-  "T_ack: a grant whose Allow never heard back ends within 30 s across a restart of the app, and a late acknowledgement does not bring it back",
-  "T_connect: a grant with no committed initialize ends within 10 minutes of the acknowledgement",
-  "T_idle: a live grant with no wake action sleeps, and the wake actions (the page's heartbeat, a confirmed drop) wake it",
-  "agent traffic (initialize, ping, tools/list, tools/call) never wakes a grant or extends it",
-  "precedence: handoff, revoked and ended each win over dormant",
-  "M1: the drop's hub is parsed and compared by origin with the allowlist, on the drop and again on an Allow that carries a hub",
-  "M2: a hub that redirects, answers a 3xx, an opaqueredirect or a redirected answer holds no grant, and the app's request never reaches the redirect's target",
-  "M3: one deadline (10 s at most) covers the headers and the body: stalled headers, a stalled body, and slow headers then a slow body each trip it",
-  "M4: the byte cap and the content-length rules",
-  "M5: no lock across the hub call: other owner requests answer while it is held, a second Allow gets pairing_in_progress, and a second drop waits or is refused",
-  "M9: hub requests (/apc/pair and /apc/confirm) go to the parsed origin, never to the raw hub string",
-  "M6: the drop, the Allow, the heartbeat and Cancel refuse a foreign Origin (one matching the request's host included), Sec-Fetch-Site cross-site and same-site, a non-JSON media type and no session; a request with neither header is taken on the session",
-  "M7: /apc/revoke answers the same 200 to any input with its body capped, ends a matching grant (then 404), and leaves revoked and ended grants as they are",
-  "M8: apc.json lists dock only while the app can pair, cached 60 s at most",
-  "the pairing code goes only in /apc/pair: never in /apc/confirm, a hub URL or an MCP answer",
-  "one pending pairing: a second drop on a pending pairing shows the same code with no new consent or /apc/pair, and its target replaces the pending pin",
-  "one pending pairing: not_paired from /apc/confirm ends the grant and starts a fresh consent",
-  "one pending pairing: once the app's stored expiry has passed, a drop shows no code, ends the grant and starts a fresh consent",
-  "one pending pairing: paired before the app saw initialize stays in handoff, and only initialize makes it live",
-  "one pending pairing: before the acknowledgement a new drop replaces the consent, and the stale Allow gets consent_expired",
-];
-const pending = (name: string) => PENDING_TIN_892.some((p) => name.endsWith(`(dock): 0.10: ${p}`));
 
 for (const profile of ["direct", "dock"] as const) {
   // The apc_link checks once, with the Direct run: they make agents on both paths themselves.
   const { app } = await pulse(profile, { link: profile === "direct" });
-  for (const check of apcConformance(app)) test(check.name, pending(check.name) ? { todo: "TIN-892: Pulse meets APC 0.10" } : {}, check.run);
+  for (const check of apcConformance(app)) test(check.name, check.run);
 }
 // The direct-only setup (no dock, the agent of its own at start) still passes the core.
 {
@@ -218,7 +207,7 @@ test("a Pulse that offers one profile refuses the other", async () => {
   const dockOnly = await pulse("dock", { env: { ...DEPLOY, APC_PROFILES: "dock" } });
   assert.equal((await dockOnly.sandbox.resolveConflict("g_nobody", "split")).ok, false);
   assert.deepEqual((await dockOnly.sandbox.state()).profiles, ["dock"]);
-  const directOnly = await pulse("direct", { env: { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct" } });
+  const directOnly = await pulse("direct", { env: { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct" } });
   assert.deepEqual(await directOnly.sandbox.pairHub(SID, ORIGIN, { hub: HUB, agent: "ag_1", ticket: "d".repeat(32), target: null }), { ok: false, error: "not_available" });
 });
 
@@ -258,7 +247,7 @@ test("the suite catches an apc.json that leaves out a profile the app serves, na
 });
 
 test("Pulse's page, its own checks and its apc.json agree on the profiles it serves, from one source", async () => {
-  for (const env of [DEPLOY, { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "direct" }, { APC_V2: "1", HUB_ORIGINS: HUB, APC_PROFILES: "dock" }, { APC_PROFILES: "direct,dock" }, { APC_PROFILES: "direct" }]) {
+  for (const env of [DEPLOY, { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct" }, { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "dock" }, { APC_PROFILES: "direct,dock" }, { APC_PROFILES: "direct" }]) {
     const { sandbox } = await pulse("direct", { env });
     const file = await (await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), env)).json();
     assert.deepEqual((await sandbox.state()).profiles, file.profiles, JSON.stringify(env));

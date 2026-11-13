@@ -10,7 +10,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { APC_DEFAULT_MCP_PATH, declaresMcpUrl, isRevokedAnswer, normalizePairingCode, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
+import { APC_LINK_KEY, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
 import { attachAttention, attachThen, InflightCalls, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
@@ -100,8 +100,11 @@ interface Pairing {
    * blocked: the app's domain is on BLOCKED_APPS (TIN-580); never stored, read as such while it is listed.
    * approving: the person said yes and the hub is introducing itself to the app; nothing is relayed yet, and a
    * Deny still wins (TIN-581). The dock shows it as its request, with the buttons off.
+   * ended: the app answered 404 on a grant the hub was introducing itself to, or had paired (H5, APC 0.10): the
+   * grant ended there. Kept as a tombstone, like revoked: never called, never given back, outside the cap, and
+   * replaced by the next pairing of the same agent and app.
    */
-  status: "pending" | "approving" | "paired" | "revoked" | "blocked";
+  status: "pending" | "approving" | "paired" | "revoked" | "ended" | "blocked";
   /** In APP_ORIGINS when it paired (TIN-580). An unverified app is named by its host and held to trust.ts's limits. */
   verified: boolean;
   /**
@@ -115,6 +118,20 @@ interface Pairing {
   approved_at: string | null;
   /** When the hub learned that the app revoked the grant. */
   revoked_at: string | null;
+  /** When the app's 404 ended the pairing (H5). */
+  ended_at: string | null;
+  /**
+   * When the app answered the hub's `initialize` (H1, APC 0.10): the app's grant is live from then. Until then the
+   * hub sends this pairing nothing but `initialize`: an app in handoff would answer the `pairing` error anyway.
+   */
+  introduced_at: string | null;
+  /** How many times the hub tried again, on its own, to introduce itself to this paired app (LIMITS.introRetryMs). */
+  intro_attempts: number;
+  /**
+   * The app's last answer said it is asleep (H4, APC 0.10: `idle: true`, or the `idle` tool error): the person is
+   * away from it. Cleared by its next answer without it. Verified apps and unverified ones alike.
+   */
+  idle: boolean;
   tools: AppTool[] | null;
   page_open: boolean | null;
   view: ViewPayload | null;
@@ -185,8 +202,15 @@ const PAGE_APP = { id: "page", name: "This browser" };
 const appRef = (p: Pairing): AppRef => ({ id: p.app_id, name: p.app_name, origin: p.app_origin, ...(p.verified ? {} : { unverified: true as const, declared_name: p.declared_name }) });
 /** How the hub talks to a pairing's app: a verified app's limits, or the strict ones (TIN-580). */
 const transport = (p: Pairing): AppTransport => ({ verified: p.verified });
-/** A grant the hub gives back when it lets go: not one the app revoked itself, and never to a blocked domain, which the hub does not call. */
-const givesBack = (p: Pairing) => p.status !== "revoked" && p.status !== "blocked";
+/** A grant the hub gives back when it lets go: not one the app revoked or ended itself, and never to a blocked domain, which the hub does not call. */
+const givesBack = (p: Pairing) => p.status !== "revoked" && p.status !== "ended" && p.status !== "blocked";
+
+/** The hub was about to call a pairing that may not be called (H1): pending, ended, revoked, blocked or gone. Nothing was sent. */
+class NotCallable extends Error {
+  constructor() {
+    super("the pairing may not be called");
+  }
+}
 
 /** How long an agent shows as calling tools after its last call ended: long enough for the dock to see it (TIN-483). */
 const BUSY_TAIL_MS = 1500;
@@ -272,13 +296,15 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
         // already there
       }
     }
+    // A pairing from before APC 0.10 whose tools the hub read was introduced then (initialize comes before tools/list).
+    this.sql.exec("update pairings set introduced_at = coalesce(approved_at, created_at) where introduced_at is null and status = 'paired' and tools is not null");
   }
 
   // ---- storage helpers ----
@@ -326,7 +352,7 @@ export class Hub extends DurableObject<Env> {
         mcp_url: r.mcp_url as string,
         // A blocked domain's pairing reads as blocked while the domain is listed, so every "paired" query skips it (TIN-580);
         // so does every unverified pairing while the kill switch is closed (TIN-581).
-        status: (r.status !== "revoked" && ((blocked.length && isBlocked(r.app_origin as string, blocked)) || (!open && r.verified === 0)) ? "blocked" : r.status) as Pairing["status"],
+        status: (r.status !== "revoked" && r.status !== "ended" && ((blocked.length && isBlocked(r.app_origin as string, blocked)) || (!open && r.verified === 0)) ? "blocked" : r.status) as Pairing["status"],
         // Rows from before TIN-580 could only pair from APP_ORIGINS.
         verified: r.verified !== 0,
         coded: r.pairing_code !== null && r.pairing_code !== undefined,
@@ -334,6 +360,10 @@ export class Hub extends DurableObject<Env> {
         created_at: r.created_at as string,
         approved_at: (r.approved_at as string | null) ?? null,
         revoked_at: (r.revoked_at as string | null) ?? null,
+        ended_at: (r.ended_at as string | null) ?? null,
+        introduced_at: (r.introduced_at as string | null) ?? null,
+        intro_attempts: Number(r.intro_attempts ?? 0),
+        idle: r.idle === 1,
         tools: r.tools ? (JSON.parse(r.tools as string) as AppTool[]) : null,
         page_open: r.page_open === null ? null : r.page_open === 1,
         view: r.view ? (JSON.parse(r.view as string) as ViewPayload) : null,
@@ -425,9 +455,10 @@ export class Hub extends DurableObject<Env> {
    * Whether the person is on a paired app's page, as the verified apps say (TIN-580). An unverified app's
    * then or page_open never counts: one that claimed the person was always there would keep the agent in
    * the wait loop, each round a wait the app can hold. Its pins still reach the agent; only its say on presence is ignored.
+   * Nor does an app that is asleep (H4): idle is not "the page is closed".
    */
   private presence(agentId: string): boolean | null {
-    return combineAttendance(this.pairings(agentId, "paired").filter((p) => p.verified).map((p) => p.page_open));
+    return combineAttendance(this.pairings(agentId, "paired").filter((p) => p.verified && !p.idle).map((p) => p.page_open));
   }
   private async touch(): Promise<void> {
     this.setMeta("expires_at", String(Date.now() + DOCK_TTL_MS));
@@ -447,11 +478,46 @@ export class Hub extends DurableObject<Env> {
     const coded = this.sql.exec<{ at: string | null }>("select min(code_expires_at) as at from pairings where status = 'pending' and code_expires_at is not null").toArray()[0]?.at;
     const pending = this.sql.exec<{ at: string | null }>("select min(created_at) as at from pairings where status = 'pending' and code_expires_at is null").toArray()[0]?.at;
     const approving = this.sql.exec<{ at: string | null }>("select min(approved_at) as at from pairings where status = 'approving'").toArray()[0]?.at;
+    // The next try at introducing the hub to a paired app that has not answered its initialize yet.
+    const intro = Math.min(Infinity, ...this.pairings(undefined, "paired").map((p) => this.introRetryAt(p) ?? Infinity));
     // A join's end (TIN-838): the open code's, or the claimed one's answer_by, so the dock drops a request nobody answered.
     const joinEnd = this.sql.exec<{ at: number | null }>("select min(case when status = 'open' then expires_at else answer_by end) as at from joins").toArray()[0]?.at;
     await this.ctx.storage.setAlarm(
-      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, coded ? Date.parse(coded) : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, joinEnd ?? Infinity),
+      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, coded ? Date.parse(coded) : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, intro, joinEnd ?? Infinity),
     );
+  }
+  /**
+   * When the hub next tries, on its own, to introduce itself to this pairing (ms), or null: it is paired, the app
+   * has not answered an `initialize` yet (its grant waits in handoff there, and ends at its T_connect), and tries
+   * are left (LIMITS.introRetryMs, counted from the approval).
+   */
+  private introRetryAt(p: Pairing): number | null {
+    if (p.status !== "paired" || p.introduced_at || !p.approved_at) return null;
+    const after = LIMITS.introRetryMs[p.intro_attempts];
+    return after === undefined ? null : Date.parse(p.approved_at) + after;
+  }
+  /**
+   * Whether the dock still shows this pairing as connecting: approved, but the app has not answered the hub's
+   * `initialize`, and the hub will try again by itself. The person is not told it is connected before it is.
+   */
+  private connecting(p: Pairing): boolean {
+    return this.introRetryAt(p) !== null;
+  }
+  /**
+   * The tries that are due (the alarm; under vite dev, and between alarms, the next state, pair, decide or confirm).
+   * Each is counted here, synchronously, before anything is sent, so one try is made once; then the introduction
+   * runs through the guarded wrappers (H1): `initialize` first, and `tools/list` only after the app answered it.
+   * A 404 ends the pairing, a revoked answer marks it, a Deny meanwhile stops it (introduce() re-reads the row).
+   */
+  private retryIntroductions(): Promise<unknown> {
+    const now = Date.now();
+    // Not one whose introduction is still out (the Approve's own, or an earlier try): its answer decides first.
+    const due = this.pairings(undefined, "paired").filter((p) => {
+      const at = this.introRetryAt(p);
+      return at !== null && at <= now && !this.introductions.has(p.id);
+    });
+    for (const p of due) this.sql.exec("update pairings set intro_attempts = ? where id = ?", p.intro_attempts + 1, p.id);
+    return due.length ? Promise.allSettled(due.map((p) => this.introduce(p))).then(() => this.arm()) : Promise.resolve();
   }
   /** What storage says of a pairing, under the blocked overlay pairings() reads: "approving" while held is still approving here. */
   private stored(id: string): string | null {
@@ -544,6 +610,8 @@ export class Hub extends DurableObject<Env> {
   private expireNow(): void {
     const giveBack = this.expirePending();
     if (giveBack.length) this.later(this.giveBack(giveBack));
+    // A paired app that has not answered the hub's initialize yet is tried again when its time came.
+    this.later(this.retryIntroductions());
   }
   private async alive(): Promise<boolean> {
     if (!this.meta("did")) return false;
@@ -565,6 +633,7 @@ export class Hub extends DurableObject<Env> {
     if (Number(this.meta("expires_at") ?? 0) <= Date.now()) return this.wipe();
     this.expireJoins();
     await this.giveBack(this.expirePending());
+    await this.retryIntroductions();
     this.broadcast();
     await this.arm();
   }
@@ -886,8 +955,10 @@ export class Hub extends DurableObject<Env> {
               app: appRef(p),
               verified: p.verified,
               // Approving shows as its request still, with the buttons off: the hub is introducing itself to the app.
-              status: p.status === "approving" ? ("pending" as const) : p.status,
-              ...(p.status === "approving" ? { approving: true } : {}),
+              // So does a pairing whose app has not answered the hub's initialize yet, while the hub keeps trying:
+              // the dock says "connecting", never "paired", before the app is connected.
+              status: p.status === "approving" || this.connecting(p) ? ("pending" as const) : p.status,
+              ...(p.status === "approving" || this.connecting(p) ? { approving: true } : {}),
               created_at: p.created_at,
               page_open: p.page_open,
               error: p.error,
@@ -896,6 +967,10 @@ export class Hub extends DurableObject<Env> {
               ...(p.status === "pending" && p.coded ? { code: true } : {}),
               ...(p.status === "blocked" ? { blocked_by: isBlocked(p.app_origin, blocked) ? ("blocklist" as const) : ("closed" as const) } : {}),
               ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}),
+              // The app ended the grant (H5): the line says so until the agent is dropped there again, or it is removed.
+              ...(p.status === "ended" ? { ended_by: host(p.app_origin), ended_at: p.ended_at } : {}),
+              // The app said it is asleep (H4): the person is away from it.
+              ...(p.status === "paired" && p.idle && !this.connecting(p) ? { idle: true } : {}),
             })),
             // A browser sending page readings (TIN-421) is listed with the apps, under its own label.
             ...this.readers(a.id).map((r) => ({ id: r.id, kind: "reader" as const, app: { id: PAGE_APP.id, name: r.label, origin: r.origin }, status: r.status, created_at: r.created_at, page_open: null, error: null })),
@@ -943,7 +1018,7 @@ export class Hub extends DurableObject<Env> {
    * A missing or malformed code is refused without counting (it could not match). What was typed is compared,
    * then dropped: it is never stored or returned. Deny and unpair need no code.
    */
-  async decide(pairingId: string, action: unknown, code?: unknown): Promise<{ ok: boolean; error?: string; attempts_left?: number }> {
+  async decide(pairingId: string, action: unknown, code?: unknown): Promise<{ ok: boolean; error?: string; attempts_left?: number; connecting?: true }> {
     const r = this.readers().find((x) => x.id === pairingId);
     if (r) {
       if (action === "approve" && r.status === "pending") {
@@ -965,6 +1040,11 @@ export class Hub extends DurableObject<Env> {
     const approving = action === "approve" || action === "approve_unverified";
     // Our blocklist, and the kill switch for unverified apps, win over the person's yes (TIN-580, TIN-581).
     if (approving && p.status === "blocked") return { ok: false, error: "app_blocked" };
+    // The app ended the grant (H5): there is nothing to approve; the person drops the agent on the app again.
+    if (approving && p.status === "ended") return { ok: false, error: PAIRING_ENDED_ERROR };
+    // The right code was accepted already and the hub is introducing itself (H1): the dock shows "connecting" and takes
+    // no code. One typed in this window is answered here, before anything is read or counted: never a wrong code.
+    if (approving && (this.stored(p.id) === "approving" || this.connecting(p))) return { ok: false, error: APPROVING_ERROR };
     if (approving && p.status === "pending") {
       // An unverified app pairs only once the person approved the warning (TIN-581): "approve_unverified", sent
       // only by the warning's Approve. A plain "approve" (an older dock page, a verified app's card) is refused while
@@ -1005,6 +1085,8 @@ export class Hub extends DurableObject<Env> {
       // Denied meanwhile (or the app answered 404 and the row went): nothing to pair.
       if (!now || this.stored(p.id) === null) return takeBack("unknown_pairing");
       if (now.status === "revoked") return takeBack(REVOKED_ERROR);
+      // The app answered 404 to the hub's introduction (H5): its grant ended (T_connect, a give-back, its data gone).
+      if (now.status === "ended") return takeBack(PAIRING_ENDED_ERROR);
       // Settled already (TIN-609): the alarm, or a state(), pair() or decide() meanwhile, found this approval past
       // LIMITS.approvingMs and paired it, with its approval standing. It is paired, so this Approve succeeded; its
       // approval stays. Held since (blocklist, kill switch), it is paired but not called: say so, take nothing back.
@@ -1013,7 +1095,16 @@ export class Hub extends DurableObject<Env> {
       // kill-switched row, or one whose domain lost its approval meanwhile, goes instead and is never stored paired.
       // Synchronous to the end: settleNow decides and writes, and only the give-back is awaited.
       const settled = this.settleNow(now);
-      if (settled === "paired") return { ok: true };
+      // Paired. When the app did not answer the introduction (and did not end the grant), the yes stands and the
+      // hub keeps trying by itself (retryIntroductions): the answer says so, and the dock shows "connecting".
+      if (settled === "paired") {
+        const after = this.pairings().find((x) => x.id === p.id);
+        if (after && this.connecting(after)) {
+          await this.arm();
+          return { ok: true, connecting: true };
+        }
+        return { ok: true };
+      }
       // Dropped. Held: app_blocked. Otherwise the domain's approval went while the hub introduced itself (a Deny,
       // Unpair or Remove of that domain elsewhere in the dock): the person asks again, with the warning.
       const result = takeBack(now.status === "blocked" ? "app_blocked" : "approval_withdrawn");
@@ -1133,9 +1224,68 @@ export class Hub extends DurableObject<Env> {
     return { ok: true };
   }
 
+  // ---- the only three ways the hub calls a pairing's MCP URL (H1, APC 0.10) ----
+
+  /**
+   * Whether the hub may send this pairing an MCP request now (H1): its row, read again from storage, is approving
+   * (the dock owner approved it, with the code when the app sent one) or paired, is not held (blocked), and still
+   * names this grant. A pending, ended, revoked or removed pairing is never called. Synchronous, and asked right
+   * before each request leaves.
+   */
+  private callable(p: Pairing, statuses: ReadonlyArray<Pairing["status"]> = ["approving", "paired"]): boolean {
+    const now = this.pairings().find((x) => x.id === p.id);
+    return !!now && statuses.includes(now.status) && now.mcp_url === p.mcp_url;
+  }
+
+  /** introduce() calls running, by pairing (memory only): the hub's own retry leaves a pairing alone while one is out. */
+  private introductions = new Map<string, number>();
+  /** Introductions running, by pairing (memory only): a pairing that was never introduced is introduced once, not once per caller. */
+  private introducing = new Map<string, Promise<void>>();
+
+  /**
+   * `initialize`: the hub's introduction, and the dock owner's yes to the app (H1): sent only to an approving or
+   * paired pairing. The app's answer commits its grant (it goes live there), which the hub records.
+   */
+  private async sendInitialize(p: Pairing): Promise<void> {
+    if (!this.callable(p)) throw new NotCallable();
+    const agent = this.agent(p.agent_id);
+    // The agent's own MCP client goes to a verified app only (apc_link, APC 0.4): an unverified one learns nothing of it.
+    await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null, transport(p), p.verified ? (agent?.client_name ?? null) : null);
+    this.sql.exec("update pairings set introduced_at = coalesce(introduced_at, ?) where id = ? and mcp_url = ? and status in ('approving', 'paired')", new Date().toISOString(), p.id, p.mcp_url);
+  }
+
+  /**
+   * No `tools/list` and no `tools/call` before the app answered the hub's `initialize` (H1): a pairing settled
+   * without its introduction (the object was evicted mid-way, or the app did not answer then) is introduced first.
+   */
+  private async introduced(p: Pairing): Promise<void> {
+    const row = this.sql.exec<{ introduced_at: string | null }>("select introduced_at from pairings where id = ?", p.id).toArray()[0];
+    if (!row) throw new NotCallable();
+    if (row.introduced_at) return;
+    let running = this.introducing.get(p.id);
+    if (!running) {
+      running = this.sendInitialize(p).finally(() => this.introducing.delete(p.id));
+      this.introducing.set(p.id, running);
+    }
+    await running;
+  }
+
+  /** `tools/list` on a pairing: introduced first, and only while it may be called. */
+  private async appTools(p: Pairing): Promise<AppTool[]> {
+    await this.introduced(p);
+    if (!this.callable(p)) throw new NotCallable();
+    return listAppTools(p.mcp_url, transport(p));
+  }
+
+  /** `tools/call` on a pairing: only a paired one (while approving, nothing is relayed), introduced first. */
+  private async appCall(p: Pairing, tool: string, args: Record<string, unknown>, timeoutMs: number): Promise<AppToolResult> {
+    await this.introduced(p);
+    if (!this.callable(p, ["paired"])) throw new NotCallable();
+    return callAppTool(p.mcp_url, tool, args, timeoutMs, transport(p));
+  }
+
   /** On approval: tell the app who reads it, and learn its tools. A failure is shown in the dock and retried on use. */
   private async introduce(p: Pairing): Promise<void> {
-    const agent = this.agent(p.agent_id);
     // Whether the row still stands as it did, after an await: a Deny or Unpair may have removed it, or a block
     // come, while the app was answering (Review round 1 on #120). Then the hub calls the app no more.
     const stands = () => {
@@ -1143,11 +1293,11 @@ export class Hub extends DurableObject<Env> {
       return !!now && (now.status === "approving" || now.status === "paired");
     };
     if (!stands()) return;
+    this.introductions.set(p.id, (this.introductions.get(p.id) ?? 0) + 1);
     try {
-      // The agent's own MCP client goes to a verified app only (apc_link, APC 0.4): an unverified one learns nothing of it.
-      await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null, transport(p), p.verified ? (agent?.client_name ?? null) : null);
+      await this.sendInitialize(p);
       if (!stands()) return;
-      const listed = (await listAppTools(p.mcp_url, transport(p))).filter((t) => !HIDDEN_TOOLS.has(t.name));
+      const listed = (await this.appTools(p)).filter((t) => !HIDDEN_TOOLS.has(t.name));
       if (!stands()) return;
       // An unverified app's tools are kept small and plain, with no annotations (TIN-580).
       const tools = p.verified ? listed : shapeUnverifiedTools(listed);
@@ -1155,6 +1305,10 @@ export class Hub extends DurableObject<Env> {
     } catch (error) {
       if (!stands()) return;
       this.failed(p, error);
+    } finally {
+      const left = (this.introductions.get(p.id) ?? 1) - 1;
+      if (left > 0) this.introductions.set(p.id, left);
+      else this.introductions.delete(p.id);
     }
     this.broadcast();
   }
@@ -1165,41 +1319,50 @@ export class Hub extends DurableObject<Env> {
    * Whether this dock has room for a new pairing with this app: under the cap on the apps one dock
    * pairs, every agent and app counted, pending or paired (TIN-580; a blocked domain's pairing reads as
    * blocked and holds no place), and, for an unverified app, a domain id of its own. Null when it has.
-   * A revoked line of the same app does not count: the new pairing replaces it.
+   * A revoked or ended line of the same app does not count: the new pairing replaces it. Nor does an unapproved
+   * pending request of the same agent and app (H3).
    */
   private pairingRoom(agentId: string, origin: string, verified: boolean): "too_many_apps" | "app_host_too_long" | "app_id_taken" | null {
-    const live = this.pairings().filter((p) => p.status === "pending" || p.status === "approving" || p.status === "paired");
+    // The request this one replaces (H3) holds no place: there is one pending request per agent and app.
+    const replaced = new Set(this.replaceable(agentId, origin));
+    const live = this.pairings().filter((p) => !replaced.has(p.id) && (p.status === "pending" || p.status === "approving" || p.status === "paired"));
     if (live.length >= LIMITS.pairings) return "too_many_apps";
     if (verified) return null;
-    const id = domainAppId(origin, this.pairings(agentId).filter((p) => !(p.status === "revoked" && p.app_origin === origin)));
+    const id = domainAppId(origin, this.pairings(agentId).filter((p) => !replaced.has(p.id) && !((p.status === "revoked" || p.status === "ended") && p.app_origin === origin)));
     return "error" in id ? id.error : null;
+  }
+
+  /**
+   * The unapproved pending requests of this agent with this app (H3, APC 0.10): the ones a new `/apc/pair`
+   * replaces. Unapproved means no correct code was accepted yet: the row is `pending` in storage (an accepted code
+   * moves it to `approving` in the same synchronous step, decide()). Never an approving or a paired one.
+   */
+  private replaceable(agentId: string, origin: string): string[] {
+    return this.sql.exec<{ id: string }>("select id from pairings where agent_id = ? and app_origin = ? and status = 'pending'", agentId, origin).toArray().map((r) => r.id);
   }
 
   /**
    * An app's apc.json (APC 0.5, DESIGN.md section 17), read from its own origin when it asks to pair,
    * after the ticket and the origin passed (so nobody can make the hub fetch an address it would not
-   * pair). The copy read is kept per origin: for 10 minutes it is used as is; after that the hub reads
-   * the file again. A definite answer (no file, a redirect, a file that is not one, another origin)
-   * refuses the pairing and forgets the copy, verified app or not: a redirect is the origin answering.
-   * Only when the file cannot be reached at all (no answer, a time limit, a 5xx) is an unverified app
-   * refused while a verified one keeps pairing: checked against the last copy the hub read, or, with
-   * none, on the operator's word (it is in APP_ORIGINS); then `manifest` is null, and pair() still holds
-   * the MCP URL to APC_DEFAULT_MCP_PATH.
+   * pair). The copy read is kept per origin and used as is for a minute at most (H7, APC 0.10:
+   * LIMITS.apcJsonFreshMs, APC_JSON_PAIRING_MAX_AGE_S); after that the hub reads the file again, so an app that
+   * stops offering `dock` stops being paired within the minute. Any answer but a valid file refuses the pairing
+   * and forgets the copy, verified app or not: no file, a redirect, a file that is not one, another origin,
+   * and also a file out of reach (no answer, a time limit, a 5xx). An unreachable apc.json never falls back to
+   * the copy the hub kept, nor to the operator's word (APP_ORIGINS): the pairing is refused, `apc_json_unreachable`.
    */
-  private async manifestFor(origin: string, verified: boolean): Promise<{ ok: true; manifest: ApcManifest | null } | { ok: false; error: ApcJsonRefusal }> {
+  private async manifestFor(origin: string, verified: boolean): Promise<{ ok: true; manifest: ApcManifest } | { ok: false; error: ApcJsonRefusal }> {
     const now = Date.now();
     this.sql.exec("delete from apc_json where read_at < ?", now - DOCK_TTL_MS);
     const row = this.sql.exec<{ body: string; read_at: number }>("select body, read_at from apc_json where origin = ?", origin).toArray()[0];
-    let kept: ApcManifest | null = null;
-    if (row) {
+    if (row && now - row.read_at < LIMITS.apcJsonFreshMs) {
       try {
         const parsed = parseApcManifest(JSON.parse(row.body), origin);
-        kept = parsed.ok ? parsed.manifest : null;
+        if (parsed.ok) return { ok: true, manifest: parsed.manifest };
       } catch {
-        kept = null;
+        // not a copy the hub can use: read the file
       }
     }
-    if (kept && row && now - row.read_at < LIMITS.apcJsonFreshMs) return { ok: true, manifest: kept };
     const read = await readApcJson(origin, { verified });
     if (read.ok) {
       const parsed = parseApcManifest(read.body, origin);
@@ -1210,7 +1373,6 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("insert into apc_json (origin, body, read_at) values (?, ?, ?) on conflict(origin) do update set body = excluded.body, read_at = excluded.read_at", origin, JSON.stringify(parsed.manifest), Date.now());
       return { ok: true, manifest: parsed.manifest };
     }
-    if (read.error === "apc_json_unreachable") return verified ? { ok: true, manifest: kept } : { ok: false, error: read.error };
     this.sql.exec("delete from apc_json where origin = ?", origin);
     return { ok: false, error: read.error };
   }
@@ -1264,18 +1426,29 @@ export class Hub extends DurableObject<Env> {
     // profile and declare where its MCP URLs live, so a URL the domain did not declare never pairs.
     const [read] = await Promise.all([this.manifestFor(origin, verdict.verified), ...stale.map((p) => this.lookAt(p))]);
     if (!read.ok) return { ok: false, error: read.error };
-    // With no file and no copy (a verified app whose file is out of reach), the path guard still holds:
-    // the MCP URL must lie under the default path, APC_DEFAULT_MCP_PATH, and pass the same checks. Only the
-    // profile check rests on the operator's word.
-    const manifest: Pick<ApcManifest, "origin" | "mcp"> & { profiles: ApcManifest["profiles"] | null } = read.manifest ?? { origin, profiles: null, mcp: { path: APC_DEFAULT_MCP_PATH } };
-    if (manifest.profiles && !manifest.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
+    const manifest = read.manifest;
+    if (!manifest.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
     if (!declaresMcpUrl(manifest, b.mcp_url)) return { ok: false, error: "mcp_url_not_declared" };
     // Everything below is synchronous: the agent may have gone while the file was read.
     if (!this.agent(t.agent_id)) return { ok: false, error: "ticket_expired" };
-    // The person pairs again after revoking in the app (APC 0.2): the new pairing replaces the revoked one's line, and its app id.
-    this.sql.exec("delete from pairings where agent_id = ? and app_origin = ? and status = 'revoked'", t.agent_id, origin);
+    // Refused first, replaced after: a request the dock has no room for leaves the "Revoked by" or "Ended by" line
+    // as it was (pairingRoom already leaves that line, and the request H3 replaces, out of its count).
     const refused = this.pairingRoom(t.agent_id, origin, verdict.verified);
     if (refused) return { ok: false, error: refused };
+    // The person pairs again after revoking in the app (APC 0.2), or after the app ended the grant (H5): the new
+    // pairing replaces that line, and its app id.
+    this.sql.exec("delete from pairings where agent_id = ? and app_origin = ? and status in ('revoked', 'ended')", t.agent_id, origin);
+    // One pending request per agent and app (H3): this one replaces an unapproved pending request of the same pair,
+    // here, in the same synchronous block as its own insert. Its pin goes with it; its wrong-code count does not
+    // carry over (the new request has a new code, from a fresh consent, and starts at 0). An approving or paired
+    // pairing is never replaced. An unverified domain's approval is left as it is: a replacement is not a Deny, and
+    // a pending request holds no approval of its own.
+    const replacedIds = new Set(this.replaceable(t.agent_id, origin));
+    const replaced = this.pairings(t.agent_id).filter((p) => replacedIds.has(p.id));
+    for (const old of replacedIds) {
+      this.sql.exec("delete from pairings where id = ? and status = 'pending'", old);
+      this.sql.exec("delete from pointer where pairing_id = ?", old);
+    }
     const others = this.pairings(t.agent_id);
     // A verified app's id comes from its name; an unverified app's from its domain, never from the name it declares,
     // which it keeps only as secondary text (TIN-580). Verified ids are [a-z0-9] and "page" (TIN-421); a domain id
@@ -1295,6 +1468,10 @@ export class Hub extends DurableObject<Env> {
     if (!code) this.countCodeless(origin, verdict.verified ? "verified" : "unverified", "pair_codeless");
     // The agent's mark, so the app's first pin already shows who it is.
     const agent = this.agent(t.agent_id)!;
+    // The replaced request's grant goes back to the app (H3), after this answer and never in its way (`later`), and
+    // only when it is another grant than the one this request carries.
+    const giveBack = replaced.filter((old) => old.mcp_url !== b.mcp_url && givesBack(old));
+    if (giveBack.length) this.later(this.giveBack(giveBack));
     // The alarm ends the request on time if nobody decides it (TIN-581).
     await this.arm();
     return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}) };
@@ -1327,8 +1504,10 @@ export class Hub extends DurableObject<Env> {
     if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
     const t = this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray()[0];
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
-    // A grant the app revoked never counts again (APC 0.2).
-    const p = this.pairings(t.agent_id).find((x) => x.mcp_url === b.mcp_url && x.status !== "revoked");
+    // Overdue pending requests go before the answer (H2, APC 0.10): an expired request answers not_paired, never pending.
+    this.expireNow();
+    // A grant the app revoked never counts again (APC 0.2), nor one the app ended (H5): its tombstone answers not_paired.
+    const p = this.pairings(t.agent_id).find((x) => x.mcp_url === b.mcp_url && x.status !== "revoked" && x.status !== "ended");
     // Not paired: the ticket stays good, so the app can ask the person and pair with it right away.
     if (!p) return { ok: false, error: "not_paired" };
     // A blocked domain's pairing is never confirmed; it could not pair again either (TIN-580).
@@ -1483,8 +1662,21 @@ export class Hub extends DurableObject<Env> {
       this.markRevoked(p);
       return false;
     }
+    // The app is asleep (H4, APC 0.10): the person is away from it. Flagged, with nothing said of its page (idle is
+    // not "the page is closed") and no view kept; the app's next answer without it clears the flag.
+    if (isIdleAnswer(s)) {
+      this.sql.exec("update pairings set idle = 1, page_open = null, error = null where id = ?", p.id);
+      if (from === "view") this.sql.exec("update pairings set view = null where id = ?", p.id);
+      this.broadcast();
+      return false;
+    }
+    // The app's grant is in handoff (its `pairing` error): not asleep, and nothing to take.
+    if (result.isError && isPairingAnswer(s)) {
+      this.sql.exec("update pairings set idle = 0, page_open = null where id = ?", p.id);
+      return false;
+    }
     const open = from === "wait" ? (typeof s.page_open === "boolean" ? s.page_open : s.focus ? true : p.page_open) : "then" in s;
-    this.sql.exec("update pairings set page_open = ?, error = null where id = ?", open === null ? null : open ? 1 : 0, p.id);
+    this.sql.exec("update pairings set page_open = ?, error = null, idle = 0 where id = ?", open === null ? null : open ? 1 : 0, p.id);
     // An unverified app's view is kept only when small, and its pin only when well formed and not dated ahead (TIN-580).
     const view = p.verified ? s.view : unverifiedView(s.view);
     if (from === "view") this.sql.exec("update pairings set view = ? where id = ?", view ? JSON.stringify(view) : null, p.id);
@@ -1509,20 +1701,30 @@ export class Hub extends DurableObject<Env> {
     this.broadcast();
   }
 
+  /** The app ended this grant (H5): a tombstone, like revoked. Only a pairing the hub was calling (approving or paired) and that still holds this grant. */
+  private markEnded(p: Pairing): void {
+    this.sql.exec(
+      "update pairings set status = 'ended', ended_at = coalesce(ended_at, ?), view = null, tools = null, page_open = null, error = null, idle = null, pairing_code = null where id = ? and mcp_url = ? and status in ('approving', 'paired')",
+      new Date().toISOString(), p.id, p.mcp_url,
+    );
+    if (this.stored(p.id) === "ended") this.sql.exec("delete from pointer where pairing_id = ?", p.id);
+    this.broadcast();
+  }
+
   private failed(p: Pairing, error: unknown): void {
+    // Nothing was sent (H1): the pairing was not one the hub may call. Nothing to record.
+    if (error instanceof NotCallable) return;
     // The person revoked the grant in the app itself (APC 0.2): the app answers 403 "revoked". The
     // pairing stays, to say so in the dock ("Revoked by <app host>"), but nothing is relayed to it
     // again: what the hub kept from the app (its view, its tools, the pin it took) goes now, and only a
     // new pairing, with both yeses, reads the app again.
     if (error instanceof AppCallError && error.status === REVOKED_HTTP_STATUS && error.code === REVOKED_ERROR) return this.markRevoked(p);
-    // 404 on the grant's own MCP URL: the app took the access back (the person removed the agent
-    // there, TIN-402, or its data expired). The pairing goes; a new drop there pairs again.
-    if (error instanceof AppCallError && error.status === 404) {
-      this.sql.exec("delete from pairings where id = ?", p.id);
-      this.sql.exec("delete from pointer where pairing_id = ?", p.id);
-      this.broadcast();
-      return;
-    }
+    // 404 on the grant's own MCP URL: the grant ended at the app (H5, APC 0.10): it waited too long for the hub
+    // (T_ack, T_connect), was given back, or its data expired or was removed there (TIN-402). The hub only calls
+    // a pairing it is introducing itself to or has paired, so the 404 is one of those. The pairing stays as an
+    // `ended` tombstone, to say "drop the agent on the app again" instead of "unknown app": nothing of the app's is
+    // kept, it is never called or given back, holds no place under the cap, and a new drop there replaces it.
+    if (error instanceof AppCallError && error.status === 404) return this.markEnded(p);
     // What the dock shows; for an unverified app, never the app's own words (TIN-580).
     this.sql.exec("update pairings set error = ? where id = ?", (p.verified ? String(error) : failureReason(error)).slice(0, 200), p.id);
   }
@@ -1536,7 +1738,7 @@ export class Hub extends DurableObject<Env> {
   /** The quick look at one paired app, within ms: what it answers is taken, a revoked or gone grant is marked (failed). */
   private async lookAt(p: Pairing, ms = LIMITS.lookMs): Promise<void> {
     try {
-      this.take(p, await callAppTool(p.mcp_url, "get_current_view", {}, ms, transport(p)), "view");
+      this.take(p, await this.appCall(p, "get_current_view", {}, ms), "view");
     } catch (error) {
       this.failed(p, error);
     }
@@ -1545,17 +1747,24 @@ export class Hub extends DurableObject<Env> {
   /**
    * One wait_for_focus on every paired app at once; the first pin ends the hub's wait. A wait that
    * finds the page closed comes back at once, and the hub does not ask that app again in this wait.
+   *
+   * An app that is asleep answers at once too (H4, APC 0.10: `idle: true`). That never ends the hub's wait while
+   * another app is still waiting (the wait ends when a pin comes or every app has answered), and it never reads
+   * as a closed page (presence() leaves idle apps out). `allIdle`: every app answered that it is asleep, so there
+   * is nothing left to wait on.
    */
-  private async waitApps(agentId: string, timeoutS: number): Promise<{ got: boolean; open: boolean | null }> {
+  private async waitApps(agentId: string, timeoutS: number): Promise<{ got: boolean; open: boolean | null; allIdle: boolean }> {
     const paired = this.pairings(agentId, "paired");
-    if (!paired.length) return { got: false, open: false };
+    if (!paired.length) return { got: false, open: false, allIdle: false };
     return new Promise((resolve) => {
       let left = paired.length;
       let done = false;
+      /** The apps that answered this wait with the idle shape. */
+      const idle = new Set<string>();
       const finish = (got: boolean) => {
         if (done) return;
         done = true;
-        resolve({ got, open: this.presence(agentId) });
+        resolve({ got, open: this.presence(agentId), allIdle: !got && idle.size === paired.length });
       };
       const deadline = Date.now() + timeoutS * 1000;
       // An app's refusal of a wait right after another on the same grant (APC 0.8: retry_after_s) is not an empty
@@ -1563,7 +1772,7 @@ export class Hub extends DurableObject<Env> {
       const ask = async (p: Pairing): Promise<AppToolResult> => {
         for (;;) {
           const left = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
-          const result = await callAppTool(p.mcp_url, "wait_for_focus", { timeout_s: left }, left * 1000 + LIMITS.waitGraceMs, transport(p));
+          const result = await this.appCall(p, "wait_for_focus", { timeout_s: left }, left * 1000 + LIMITS.waitGraceMs);
           const s = structured(result);
           const retryS = !result.isError && s.focus == null && typeof s.retry_after_s === "number" && s.retry_after_s > 0 ? s.retry_after_s : null;
           if (retryS === null || done || Date.now() + retryS * 1000 >= deadline) return result;
@@ -1574,6 +1783,7 @@ export class Hub extends DurableObject<Env> {
       for (const p of paired) {
         ask(p)
           .then((result) => {
+            if (isIdleAnswer(structured(result))) idle.add(p.id);
             // A pin that arrives after another app's ended the wait is still taken, unread, for next time.
             if (this.take(p, result, "wait")) finish(true);
           })
@@ -1792,7 +2002,8 @@ export class Hub extends DurableObject<Env> {
       await this.look(agentId);
       const row = this.pointer(agentId);
       const views = this.pairings(agentId, "paired")
-        .map((p) => ({ app: appRef(p), view: p.view, ...(p.verified ? {} : { untrusted: true }) }))
+        // An app that is asleep says so (H4): `idle: true`, and no view.
+        .map((p) => ({ app: appRef(p), view: p.view, ...(p.idle ? { idle: true as const } : {}), ...(p.verified ? {} : { untrusted: true }) }))
         .sort((a, b) => (b.view?.updated_at ?? "").localeCompare(a.view?.updated_at ?? ""));
       const result = toolResult({ focus: row ? this.render(agentId, row) : null, views });
       // Seen once delivered (APC 0.8): that exact pin, after the result is built, and not for a cancelled request.
@@ -1844,11 +2055,13 @@ export class Hub extends DurableObject<Env> {
           });
           let got = false;
           let open: boolean | null = null;
+          let allIdle = false;
           if (apps) {
             const fromApps = this.waitApps(agentId, timeoutS).then((r) => ({ from: "apps" as const, ...r }));
             const first = await Promise.race([fromApps, aborted, ...(reading ? [reading.then((g) => ({ from: "page" as const, got: g, open: null }))] : [])]);
             got = first.got;
             open = first.open;
+            allIdle = first.from === "apps" && first.allIdle;
             // The apps came back empty (their pages closed, or their waits ran out): a reading may still come.
             if (!got && first.from === "apps" && reading) got = (await Promise.race([reading, aborted])) === true;
           } else {
@@ -1858,10 +2071,21 @@ export class Hub extends DurableObject<Env> {
           if (await takenOver()) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
           if (cancelled()) return toolResult({ focus: null, timed_out: false, note: WAIT_CANCELLED_NOTE });
           if (got) return deliver() ?? toolResult({ focus: null, timed_out: false });
+          // The apps that are asleep now (H4): named in the answer, so the agent can tell the person.
+          const asleep = this.pairings(agentId, "paired").filter((p) => p.idle).map((p) => p.app_id);
+          const sleeping = asleep.length ? { asleep } : {};
+          const noted = (note: string) => (asleep.length ? `${note} ${asleepNote(asleep)}` : note);
           // The extension reports no presence (13.5): with a browser paired, whether the person left is unknown.
-          if (pages) return toolResult({ focus: null, timed_out: true, note: WAIT_TIMED_OUT_NOTE });
+          if (pages) return toolResult({ focus: null, timed_out: true, ...sleeping, note: noted(WAIT_TIMED_OUT_NOTE) });
+          // Every paired app is asleep (H4): exactly the idle shape. Not "the person left; do not wait again": the apps
+          // wake when the person opens them.
+          if (allIdle) return toolResult({ ...idleWaitForFocus(ALL_IDLE_NOTE) });
+          // Some apps are asleep and no other has the person on its page (H4): not "the person left; do not wait
+          // again", which is what a closed page says. An app that is asleep says nothing of the person's page, so
+          // page_open is left out, and the note names the apps asleep, which wake when the person opens them.
+          if (open === false && asleep.length) return toolResult({ focus: null, timed_out: false, ...sleeping, note: `${MIXED_ASLEEP_NOTE} ${asleepNote(asleep)}` });
           if (open === false) return toolResult({ focus: null, timed_out: false, page_open: false, note: WAIT_PAGE_CLOSED_NOTE });
-          return toolResult({ focus: null, timed_out: true, ...(open === null ? {} : { page_open: open }), note: WAIT_TIMED_OUT_NOTE });
+          return toolResult({ focus: null, timed_out: true, ...(open === null ? {} : { page_open: open }), ...sleeping, note: noted(WAIT_TIMED_OUT_NOTE) });
         } finally {
           // Counted, not a set: a wait that ends must not clear the newer one's state on the pet.
           const left = (this.waiting.get(agentId) ?? 1) - 1;
@@ -1923,13 +2147,18 @@ export class Hub extends DurableObject<Env> {
     // A blocked domain is never called (TIN-580).
     const blocked = p ? null : this.pairings(agentId, "blocked").find((x) => x.app_id === app);
     if (blocked) return toolError("app_blocked", `The dock blocks ${host(blocked.app_origin)}: its tools are not available.`);
+    // The app ended the grant (H5): said as such, never as an unknown app.
+    const ended = p ? null : this.pairings(agentId, "ended").find((x) => x.app_id === app);
+    if (ended) return endedError(ended);
     if (!p) return toolError("unknown_app", `No paired app "${app}". Paired: ${this.pairings(agentId, "paired").map((x) => x.app_id).join(", ") || "none"}.`);
     if (HIDDEN_TOOLS.has(tool)) return toolError("hub_tool", `Call the dock's own ${tool}: it covers every app.`);
     let result: AppToolResult;
     try {
-      result = await callAppTool(p.mcp_url, tool, args, LIMITS.callMs, transport(p));
+      result = await this.appCall(p, tool, args, LIMITS.callMs);
     } catch (error) {
       this.failed(p, error);
+      // The app answered 404: its grant ended (H5). `pairing_ended`, never `app_unreachable`.
+      if (this.stored(p.id) === "ended") return endedError(p);
       // An unverified app's failure is told in the hub's own words only: its JSON-RPC error text and its HTTP error
       // body are the app's, and would reach the agent unmarked in a tool error (TIN-580).
       return toolError("app_unreachable", `${p.app_name} did not answer: ${(p.verified ? String(error) : failureReason(error)).slice(0, 120)}`);
@@ -1938,9 +2167,27 @@ export class Hub extends DurableObject<Env> {
       this.markRevoked(p);
       return toolError(REVOKED_ERROR, `The person revoked your access in ${p.app_name} (${host(p.app_origin)}). You cannot read it until they pair you again, by dropping you on it.`);
     }
+    // The app's own `pairing` and `idle` tool errors (H4, APC 0.10) reach the agent as the tool errors they are:
+    // verbatim from a verified app, inside the untrusted envelope from an unverified one. Never rewritten into
+    // app_unreachable, and nothing is read from them about the person's page. `idle` sets the app's flag.
+    const said = structured(result);
+    if (result.isError && (isPairingAnswer(said) || (isIdleAnswer(said) && "error" in said))) {
+      if (isPairingAnswer(said)) this.sql.exec("update pairings set idle = 0 where id = ?", p.id);
+      else this.sql.exec("update pairings set idle = 1, page_open = null where id = ?", p.id);
+      // Verbatim, but for an `attention`, `then` or `apc_link` the app put on it: no answer of a grant in handoff or
+      // asleep carries one (APC 0.10), and the app's would point the agent at tools it cannot see. The hub's own
+      // attention and then are added to the result afterwards, as on every result.
+      const bare = withoutEnvelope(result);
+      if (!p.verified) return untrustedResult(bare, appRef(p));
+      return {
+        content: (bare.content ?? []).filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string"),
+        ...(bare.structuredContent ? { structuredContent: bare.structuredContent } : {}),
+        isError: true,
+      };
+    }
     const { result: clean, had } = detachKeys(result, ["attention", "then"]);
     if (had.has("attention")) await this.look(agentId);
-    this.sql.exec("update pairings set page_open = ? where id = ?", had.has("then") ? 1 : 0, p.id);
+    this.sql.exec("update pairings set page_open = ?, idle = 0 where id = ?", had.has("then") ? 1 : 0, p.id);
     // An unverified app's result reaches the agent inside an envelope marked untrusted, as page_text does (TIN-580).
     if (!p.verified) return untrustedResult(clean, appRef(p));
     return {
@@ -1952,6 +2199,33 @@ export class Hub extends DurableObject<Env> {
 }
 
 const prefixed = (app: string, tool: string) => `${app}__${tool}`;
+/** An app's result without the envelope keys an app may put on it (`attention`, `then`, `apc_link`): from the structured result and from every text block that is a JSON object; a block left empty goes. */
+function withoutEnvelope(result: AppToolResult): AppToolResult {
+  const keys = ["attention", "then", APC_LINK_KEY];
+  const { result: first } = detachKeys(result, keys);
+  const content = (first.content ?? []).flatMap((block, i) => {
+    if (i === 0 || block.type !== "text" || typeof block.text !== "string") return [block];
+    try {
+      const parsed = JSON.parse(block.text) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [block];
+      const kept = Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter(([k]) => !keys.includes(k)));
+      return Object.keys(kept).length ? [{ ...block, text: JSON.stringify(kept) }] : [];
+    } catch {
+      return [block];
+    }
+  });
+  return { ...first, ...(first.content ? { content } : {}) };
+}
+/** decide()'s answer to a yes (with or without a code) on a request the hub is already introducing itself for: the dock shows "connecting". Never counted as a wrong code. */
+export const APPROVING_ERROR = "approving";
+/** What the agent is told of a pairing whose grant ended at the app (H5, APC 0.10). */
+const endedError = (p: Pairing) => toolError(PAIRING_ENDED_ERROR, `${p.app_name} (${host(p.app_origin)}) ended this pairing. You cannot read it until the person drops you on it again: tell them.`);
+/** Every paired app is asleep (H4, APC 0.10): what the hub's wait_for_focus says, with the idle shape. */
+const ALL_IDLE_NOTE = "Every paired app is asleep: the person is away from them. They wake when the person opens them again. Tell the person, and do not retry now.";
+/** A wait that ended with some apps asleep and no page of the others open (H4): never the closed page's "do not wait again". */
+const MIXED_ASLEEP_NOTE = "Nothing new: the person is not on a paired app's page now. Go back to them.";
+/** The apps asleep in a wait that other apps kept open (H4). */
+const asleepNote = (apps: string[]) => `Asleep (the person is away from ${apps.length === 1 ? "it" : "them"}; ${apps.length === 1 ? "it wakes" : "they wake"} when opened again): ${apps.join(", ")}.`;
 /** A badge is a PNG data URI of at most 16 KB, as an app keeps from clientInfo.icons. */
 const isBadge = (v: unknown): v is string => typeof v === "string" && v.length <= 16_384 && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(v);
 const host = (origin: string) => {
@@ -1975,7 +2249,7 @@ const HUB_TOOLS = [
   {
     name: "wait_for_focus",
     title: "Wait until the person points you, in any app",
-    description: `Call this after you answer, only while your last results carried 'then'. Holds the request until the person points you at something in any paired app, or drops you on a web page through the APC browser extension, or timeout_s passes (1..${WAIT_CEILING_S}, default ${WAIT_DEFAULT_S}). Returns the focus (marked seen), or focus: null with timed_out, page_open and a note. When it returns no focus, go back to the person.`,
+    description: `Call this after you answer, only while your last results carried 'then'. Holds the request until the person points you at something in any paired app, or drops you on a web page through the APC browser extension, or timeout_s passes (1..${WAIT_CEILING_S}, default ${WAIT_DEFAULT_S}). Returns the focus (marked seen), or focus: null with timed_out, page_open and a note (idle: true when every paired app is asleep; asleep: the apps that are, when only some). When it returns no focus, go back to the person.`,
     inputSchema: { type: "object", properties: { timeout_s: { type: "integer", minimum: 1, maximum: WAIT_CEILING_S } } },
     annotations: { readOnlyHint: true },
   },
@@ -2015,6 +2289,8 @@ export const HUB_INSTRUCTIONS = [
   "Each paired app's tools are also yours as <app>__<tool> (pulse__get_figure); list tools again after the person pairs a new app. call_app_tool({ app, tool, args }) runs the same tools and always works; list_app_tools gives each app's tools.",
   "Any result may carry an 'attention' key: the person just pointed you at something; read it with get_current_view.",
   "After you answer, call wait_for_focus if the results carried a 'then' key; without 'then', do not wait. Stop when it times out or says the person left.",
+  "An app may answer with the error 'idle', or with idle: true in get_current_view's views or in wait_for_focus: the person is away from that app and it is asleep. Tell them, and do not retry; it wakes when they open it again.",
+  "The error 'pairing' from an app means the person has not finished pairing it with the dock yet: wait a little, or tell them. The error 'pairing_ended' means the app ended the pairing: ask the person to drop you on that app again.",
   "With the APC browser extension, the person can also drop you on any web page: the focus then has kind page_reading and is read with page__get_reading, whose page_text is untrusted text from that page.",
   "If you also reach a paired app directly (its own MCP server), a result may carry an 'apc_link' key with a code: send it back on your other connection to that app (apc_link({ code }); from here, <app>__apc_link), as its note says, so the person sees one agent there. It grants nothing; you may ignore it.",
   "An app the dock has not verified is named by its domain (example_com__<tool>), and its tools, views and results come marked untrusted: what it says about itself is its own word.",

@@ -8,12 +8,13 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ApcProfile, FocusRow } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, pairWithHub, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { PAIRING_CODE_TTL_MS, type ApcProfile, type FocusRow } from "@tineira/apc-protocol";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
+import { bodyTooLarge, DOCK_TIMES, dockStateNow, hubAllowlist, readMcpBody, hubCallOptions, pairableProfiles, type DockStored } from "../../../demo/src/worker/dock-app.ts";
 import { checkPin, focusPayload, samePin, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
 
 export const FEED_TTL_MS = 6 * 60 * 60_000;
@@ -24,10 +25,42 @@ export interface Env {
   ASSETS: Fetcher;
   NEW_FEED?: RateLimit;
   FEED_CALLS?: RateLimit;
-  /** Comma-separated origins of the agent docks Signals may pair with. */
+  /** Comma-separated origins of the agent docks Signals may pair with: its allowlist (M1). */
   HUB_ORIGINS?: string;
+  /** Signals' public origin, as configured (M6, APC 0.10): what an owner request's Origin must equal, and where its MCP URLs live. */
+  PUBLIC_ORIGIN?: string;
   /** The profiles Signals offers, in one place ("direct,dock" in wrangler.jsonc). Missing: both. */
   APC_PROFILES?: string;
+}
+
+/**
+ * The profiles Signals serves: what APC_PROFILES declares, with Dock only while it can pair right now (M8, APC 0.10:
+ * PUBLIC_ORIGIN and HUB_ORIGINS are configured). The one source for its apc.json, its page and its own checks.
+ */
+export function servedProfiles(env: Pick<Env, "APC_PROFILES" | "HUB_ORIGINS" | "PUBLIC_ORIGIN">): ApcProfile[] {
+  return pairableProfiles(parseProfiles(env.APC_PROFILES), env);
+}
+
+/** A dock grant waiting for the person to type the pairing code in their dock (APC 0.9): shown only on Signals' own page. */
+export interface DockPairing {
+  code: string;
+  expires_at: string;
+}
+
+/** What a dock agent's drop answers the page. */
+export interface PairHubAnswer {
+  ok: boolean;
+  error?: string;
+  grant_id?: string;
+  /** pending: the dock still wants the code; connecting: it took the code and has not connected yet (APC 0.10). */
+  status?: string;
+  /** consent_required: the nonce the Allow sends back, and the pairing code the consent shows (APC 0.9). */
+  consent?: string;
+  pairing_code?: string;
+  /** The grant waits for the dock owner's code: what the page's waiting card shows. */
+  pairing?: DockPairing;
+  /** The grant was handed to the hub, but the pin on the drop's target failed. */
+  pin_error?: string;
 }
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
@@ -50,6 +83,19 @@ interface Grant {
   client_icon: string | null;
   created_at: string;
   last_active_at: string | null;
+  /**
+   * A dock grant's lifecycle (APC 0.10): in_flight from the Allow, handoff from the hub's acknowledgement, live from
+   * the hub's first committed initialize. Null on a Direct grant and on a dock grant from before, which is live.
+   */
+  state: string | null;
+  /** SHA-256 of the secret: how a give-back and Cancel find a dock grant. */
+  secret_hash: string | null;
+  /** When the person allowed it, and when the hub acknowledged it: ms since the epoch. */
+  allowed_at: number | null;
+  acked_at: number | null;
+  /** The code the dock owner types, while the grant waits in handoff (APC 0.9), and until when the page shows it. */
+  pairing_code: string | null;
+  pairing_expires_at: string | null;
 }
 
 export class Feed extends DurableObject<Env> {
@@ -72,7 +118,15 @@ export class Feed extends DurableObject<Env> {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
-    ctx.blockConcurrencyWhile(async () => this.migrate());
+    ctx.blockConcurrencyWhile(async () => {
+      this.migrate();
+      await this.backfillSecretHashes();
+    });
+  }
+
+  /** A dock grant from before APC 0.10 has no secret hash: it gets one, so its hub can still give it back (M7). */
+  private async backfillSecretHashes(): Promise<void> {
+    for (const g of this.grants().filter((x) => x.hub && !x.secret_hash)) this.sql.exec("update grants set secret_hash = ? where id = ? and secret_hash is null", await secretHash(g.secret), g.id);
   }
 
   private migrate(): void {
@@ -102,21 +156,30 @@ export class Feed extends DurableObject<Env> {
         kind text not null, target_id text, part text, pinned_at text not null, seen_at text);
       create table if not exists revoked_grants (
         secret_hash text primary key, grant_id text not null, hub text not null, agent text not null, revoked_at text not null);
+      create table if not exists dock_consents (hub text not null, agent text not null, nonce text not null, primary key (hub, agent));
     `);
-    for (const column of ["client_icon", "client_name", "owner_name"]) {
+    // client_icon since TIN-388, the names since TIN-578; a dock grant's lifecycle, its secret's hash and the code it
+    // waits on since APC 0.10 (TIN-892). The two times are ms since the epoch.
+    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text"]) {
       try {
-        this.sql.exec(`alter table grants add column ${column} text`);
+        this.sql.exec(`alter table grants add column ${column}`);
       } catch {
-        // already there (client_icon since TIN-388, the names since TIN-578)
+        // already there
       }
     }
+    // A dock grant from a Signals before 0.10 has no state. One whose agent was never written is an Allow the hub
+    // never acknowledged (the agent was set only after /apc/pair answered): it has ended, and is not read as live.
+    // The others were handed to their hub; Signals stored no code then, so a row cannot say whether its hub had
+    // connected, and they stay live (a feed lives 6 hours, and the hub sends initialize before anything else, H1).
+    this.sql.exec("delete from agent_focus where grant_id in (select id from grants where hub is not null and agent is null and state is null)");
+    this.sql.exec("delete from grants where hub is not null and agent is null and state is null");
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Signals", grants: () => this.grants().map((g) => ({ id: g.id, path: pathOf(g) })) });
     this.consent = new DockConsent(sqlKv(this.sql));
   }
 
   /** Whether Signals offers this profile (APC_PROFILES). */
   private offers(profile: ApcProfile): boolean {
-    return parseProfiles(this.env.APC_PROFILES).includes(profile);
+    return servedProfiles(this.env).includes(profile);
   }
 
   private meta(key: string): string | null {
@@ -199,14 +262,20 @@ export class Feed extends DurableObject<Env> {
 
   async state() {
     let n = 0;
+    // A dock grant past its time has ended (APC 0.10): the page never lists it.
+    this.sweepDock();
     return {
-      profiles: parseProfiles(this.env.APC_PROFILES),
+      profiles: servedProfiles(this.env),
       grants: this.grants().map((g) => {
         const path = pathOf(g);
         const fallback = path === "dock" ? "Agent via dock" : `Agent ${++n}`;
         return {
           id: g.id,
           path,
+          // Where a dock grant stands (APC 0.10): in_flight (the Allow is being answered), handoff (the dock has it and
+          // has not connected: with `pairing` the code is still to be typed, without it the dock said it is
+          // connecting), live. The code is for this page only: never over MCP or to the hub.
+          ...(path === "dock" ? { state: (g.state ?? "live") as DockStored, pairing: g.state === "handoff" && g.pairing_code && g.pairing_expires_at ? { code: g.pairing_code, expires_at: g.pairing_expires_at } : null } : {}),
           hub: g.hub,
           agent: g.agent,
           name: g.owner_name ?? g.client_title ?? g.client_name ?? fallback,
@@ -214,7 +283,8 @@ export class Feed extends DurableObject<Env> {
           secret: path === "direct" ? g.secret : null,
           client: g.client_name,
           icon: g.client_icon,
-          connected: !!(g.client_title || g.client_name),
+          // A dock agent is connected once its hub introduced itself (live); a Direct one once its client did.
+          connected: path === "dock" ? (g.state ?? "live") === "live" : !!(g.client_title || g.client_name),
           waiting: this.waiting.has(g.id),
           pin: this.focusRow(g.id),
           linked_with: this.links.partnerOf(g.id),
@@ -281,82 +351,213 @@ export class Feed extends DurableObject<Env> {
    * Since APC 0.9 (TIN-859) the answer carries a pairing code too: the page shows it, the hub gets it with the
    * grant (`pairWithHub`, which keeps the grant only if the hub says it keeps the code), and the dock's Allow needs it.
    */
-  async pairHub(sid: string, origin: string, raw: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string; pairing_code?: string }> {
+  async pairHub(sid: string, origin: string, raw: unknown): Promise<PairHubAnswer> {
     if (!this.offers("dock")) return { ok: false, error: "not_available" };
-    const b = raw as { hub?: unknown; agent?: unknown; ticket?: unknown; target?: unknown; consent?: unknown } | null;
-    const hub = typeof b?.hub === "string" ? b.hub : "";
-    const allowed = (this.env.HUB_ORIGINS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
-    if (!allowed.includes(hub) && !(dev() && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(hub))) return { ok: false, error: "hub_not_allowed" };
-    if (typeof b?.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent) || typeof b.ticket !== "string" || !/^[\w.-]{16,200}$/.test(b.ticket)) return { ok: false, error: "invalid" };
-    const agent = b.agent;
-    // One drop of an agent at a time (Grok on #123): a second request while the first waits on the hub (a double-clicked
-    // Allow) changes nothing, so it can neither take the grant the first is making for a link nor revoke it.
+    // The hub allowlist (M1, APC 0.10), on the drop and again on the Allow: both are this request. The hub is parsed,
+    // must be a bare https origin on HUB_ORIGINS, and the hub calls below go to that parsed origin (M9).
+    const drop = parseDockDrop(raw, hubAllowlist(this.env));
+    if (!drop.ok) return { ok: false, error: drop.error === "hub_not_allowed" ? "hub_not_allowed" : "invalid" };
+    const b = raw as { target?: unknown; consent?: unknown };
+    const { hub, agent, ticket } = drop;
+    // One drop of an agent at a time (Grok on #123; M5): a second request while the first waits on the hub (a double-clicked
+    // Allow) changes nothing, so it can neither take the grant the first is making for a link nor revoke it. The
+    // grant's stored in_flight state says the same after a restart (pairHubOnce).
     const key = `${hub} ${agent}`;
     if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
     this.pairing.add(key);
     try {
-      return await this.pairHubOnce(sid, origin, hub, agent, b.ticket, b.target, b.consent);
+      return await this.pairHubOnce(sid, origin, hub, agent, ticket, b.target, b.consent);
     } finally {
       this.pairing.delete(key);
     }
   }
 
-  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<{ ok: boolean; error?: string; grant_id?: string; consent?: string; pairing_code?: string }> {
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<PairHubAnswer> {
     /** The person has not said yes here for this agent: the page asks, with this nonce and the pairing code (APC 0.9). */
-    const askFirst = () => {
+    const askFirst = (): PairHubAnswer => {
       const asked = this.consent.ask(hub, agent);
+      // This consent replaces any older one for the same dock and agent: only its nonce pairs from now on.
+      this.sql.exec("insert into dock_consents (hub, agent, nonce) values (?, ?, ?) on conflict(hub, agent) do update set nonce = excluded.nonce", hub, agent, asked.nonce);
       return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
     };
-    const linked = this.grants().find((g) => g.hub === hub && g.agent === agent);
+    const pinNote = (pinned: { ok: boolean; error?: string }) => (pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" });
+    this.sweepDock();
+    const linkOf = () => this.grants().find((g) => g.hub === hub && g.agent === agent) ?? null;
+    const linked = linkOf();
     if (linked) {
-      // Already paired here: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
-      const check = await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` });
+      // An Allow for this agent is still waiting on the hub (APC 0.10): one pairing at a time, also after a restart
+      // lost the in-memory lock. Past T_ack the sweep above ended it, and the drop asks again.
+      if (linked.state === "in_flight") return { ok: false, error: "pairing_in_progress" };
+      // Already handed to the dock: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
+      const check = await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` }, hubCallOptions(this.env));
+      // Everything below is synchronous: the grant is read again, since a Cancel, a Revoke, a give-back or its time
+      // running out may have taken it while the hub answered.
+      this.sweepDock();
+      const now = this.grants().find((g) => g.secret === linked.secret) ?? null;
       if (!check.ok) {
         if (check.error !== "not_paired") return { ok: false, error: check.error };
-        // The ticket is still good: the person can say yes here and pair at once.
-        await this.revoke(linked.secret);
+        // The dock no longer pairs them: the grant ends, and the ticket is still good, so the person can say yes here and pair at once.
+        if (now) this.endDockGrant(now.id);
         return askFirst();
       }
-      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent.icon }]), linked.id);
-      return { ...(await this.pin(linked.id, target)), grant_id: linked.id };
+      // Gone while the hub answered. The ticket is spent: the person drags the agent again.
+      if (!now) return { ok: false, error: "pairing_ended" };
+      this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent.icon }]), now.id);
+      if (now.state === "handoff") {
+        if (check.status === "paired") {
+          // The dock took the code and is connecting (APC 0.10): the grant stays in handoff, since only the hub's
+          // initialize makes it live. The page hides the code and says so; the pin waits for the grant to be live.
+          this.sql.exec("update grants set pairing_code = null, pairing_expires_at = null where id = ? and state = 'handoff'", now.id);
+          this.broadcast();
+          return { ok: true, grant_id: now.id, status: "connecting", ...pinNote(await this.pin(now.id, target)) };
+        }
+        // Still pending at the dock. With the stored expiry ahead, the page shows the same code and the time left: no
+        // new consent, no new code, and the drop's target replaces the pin. Past it, the grant ends and the person is asked again.
+        if (!now.pairing_code || !now.pairing_expires_at || Date.parse(now.pairing_expires_at) <= this.dockNow()) {
+          this.endDockGrant(now.id);
+          return askFirst();
+        }
+        const pairing: DockPairing = { code: now.pairing_code, expires_at: now.pairing_expires_at };
+        return { ok: true, grant_id: now.id, status: "pending", pairing, ...pinNote(await this.pin(now.id, target)) };
+      }
+      return { ...(await this.pin(now.id, target)), grant_id: now.id, status: check.status };
     }
     // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
-    const taken = this.consent.takeConsent(consent, hub, agent);
-    if (!taken.ok) return askFirst();
     const { id, secret, created_at } = newDirectGrant();
-    // The grant exists (its MCP URL answers), but it is linked to the agent only once the hub took it, as Pulse writes
-    // its hub link after /apc/pair: until then no drop finds it as this agent's.
-    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, ?, null, ?)", id, secret, hub, created_at);
-    // The hub must say it keeps the code (APC 0.9): on any other answer the grant goes before the page hears back.
-    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}`, pairing_code: taken.pairing_code });
+    // Before anything is written: the secret's hash, which the grant keeps for a give-back and for Cancel.
+    const hash = await secretHash(secret);
+    if (linkOf()) return { ok: false, error: "pairing_in_progress" };
+    // A drop (no nonce) is asked, and its consent replaces the one before. An Allow on a consent a newer drop
+    // replaced is refused before the nonce is looked at: one pending consent per dock and agent.
+    if (consent === undefined || consent === null) return askFirst();
+    // Used or not, a nonce that was sent goes: it works once.
+    if (this.latestConsent(hub, agent) !== consent) return (this.consent.takeConsent(consent, hub, agent), { ok: false, error: "consent_expired" });
+    const taken = this.consent.takeConsent(consent, hub, agent);
+    this.sql.exec("delete from dock_consents where hub = ? and agent = ?", hub, agent);
+    // A drop (no nonce) is asked. An Allow whose nonce does not take (used, timed out, another agent's) fails closed
+    // (APC 0.10, `consent_expired`): the person drags the agent again, and that drop is asked anew.
+    if (!taken.ok) return { ok: false, error: "consent_expired" };
+    // In flight (APC 0.10): the grant exists before the hub hears of it, and answers 404 to everything until the
+    // hub's acknowledgement. One synchronous step with the consent taken above.
+    this.sql.exec(
+      "insert into grants (id, secret, hub, agent, created_at, state, secret_hash, allowed_at, pairing_code) values (?, ?, ?, ?, ?, 'in_flight', ?, ?, ?)",
+      id, secret, hub, agent, created_at, hash, this.dockNow(), taken.pairing_code,
+    );
+    // No lock is held across the call (M5): the row above is the only thing that says a pairing is under way.
+    // The hub must say it keeps the code (APC 0.9): on any other answer the grant ends before the page hears back.
+    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}`, pairing_code: taken.pairing_code }, hubCallOptions(this.env));
+    // Synchronous from here to the answer.
     if (!answer.ok) {
-      this.sql.exec("delete from grants where id = ?", id);
+      if (this.holds(secret)) this.endDockGrant(id);
       return { ok: false, error: answer.error };
     }
+    // The acknowledgement moves the grant to handoff only if it is still in flight and within T_ack, in one statement
+    // (APC 0.10): a give-back or a Revoke that landed during the call, or T_ack, wins, and the grant stays as they left it.
+    const at = this.dockNow();
+    const pairing: DockPairing = { code: taken.pairing_code, expires_at: new Date(at + PAIRING_CODE_TTL_MS).toISOString() };
     // The agent's mark from the hub, so its first pin already shows its logo.
     const name = answer.agent.name ? answer.agent.name.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null : null;
-    this.sql.exec("update grants set agent = ?, client_title = ?, client_icon = ? where id = ?", agent, name, pickClientIcon([{ src: answer.agent.icon }]), id);
+    const moved = this.sql
+      .exec(
+        "update grants set state = 'handoff', acked_at = ?, pairing_expires_at = ?, client_title = ?, client_icon = ? where secret = ? and state = 'in_flight' and allowed_at > ? returning id",
+        at, pairing.expires_at, name, pickClientIcon([{ src: answer.agent.icon }]), secret, at - DOCK_TIMES.ackMs,
+      )
+      .toArray().length === 1;
+    if (!moved) {
+      if (this.holds(secret)) this.endDockGrant(id);
+      return { ok: false, error: "pairing_ended" };
+    }
     this.broadcast();
-    return { ...(await this.pin(id, target)), grant_id: id };
+    // Handed to the hub and waiting for the code in the dock, whatever the pin does: a pin that failed is said apart.
+    return { ok: true, grant_id: id, status: "pending", pairing, ...pinNote(await this.pin(id, target)) };
   }
 
-  /** A dock's hub gives back its grant (TIN-388): the grant and its pin go, and the next drop asks again. */
+  // ---- a dock grant's lifecycle (APC 0.10, TIN-892) ----
+
+  /**
+   * The clock of the dock grant's limits (T_ack, T_connect, the code's expiry): the wall clock, plus an offset
+   * that only a test moves (`advanceDockClock`, the conformance suite's time seam). No route of the Worker
+   * reaches that method, so in production the offset is always 0.
+   */
+  private dockSkewMs = 0;
+  private dockNow(): number {
+    return Date.now() + this.dockSkewMs;
+  }
+  /** The time seam, for tests only: the dock grant's clock moves `ms` forward. The Worker never calls it. */
+  async advanceDockClock(ms: number): Promise<void> {
+    this.dockSkewMs += Math.max(0, ms);
+  }
+  /**
+   * The consent that stands for a dock agent: the newest drop's (APC 0.10, "one pending pairing"). A newer drop
+   * replaces it, so the Allow on an older consent fails closed (`consent_expired`).
+   */
+  private latestConsent(hub: string, agent: string): string | null {
+    return this.sql.exec<{ nonce: string }>("select nonce from dock_consents where hub = ? and agent = ?", hub, agent).toArray()[0]?.nonce ?? null;
+  }
+
+  /**
+   * Ends every dock grant past its time (MUST, APC 0.10): still in flight T_ack after the Allow, or still in handoff
+   * T_connect after the hub's acknowledgement. Synchronous, and run before anything reads a dock grant, so an overdue
+   * grant is never served, listed or moved on.
+   */
+  private sweepDock(): void {
+    const now = this.dockNow();
+    for (const g of this.grants()) if (g.hub && dockStateNow(g, now) === "ended") this.endDockGrant(g.id);
+  }
+  /** A dock's grant ends: it goes with its pin, and its MCP URL answers 404. Synchronous. */
+  private endDockGrant(grantId: string): void {
+    this.links.forget(grantId);
+    this.waitSlots.forget(grantId);
+    this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
+    this.sql.exec("delete from grants where id = ?", grantId);
+    this.broadcast();
+  }
+  /**
+   * A give-back (M7, APC 0.10): ends the dock grant whose secret hashes to `hash`, in flight, in handoff or live.
+   * A revoked grant is gone from this table, so it stays revoked; an ended one is gone. One synchronous step. It
+   * never opens or extends a feed: it reads one table.
+   */
+  async endDockGrantBySecretHash(hash: string): Promise<boolean> {
+    const row = this.sql.exec<{ id: string }>("select id from grants where secret_hash = ? and hub is not null", hash).toArray()[0];
+    if (!row) return false;
+    this.endDockGrant(row.id);
+    return true;
+  }
+  /** A dock's hub gives back its grant (TIN-388), by the secret, for callers that hold it (tests); the Worker's /apc/revoke goes by its hash. */
   async revoke(secret: string): Promise<{ ok: boolean }> {
-    const grant = this.grants().find((g) => g.secret === secret);
-    if (!grant?.hub) return { ok: false };
+    return { ok: await this.endDockGrantBySecretHash(await secretHash(secret)) };
+  }
+  /**
+   * Cancel on the waiting card (APC 0.10): a revoke, allowed only in handoff, before the dock connected and so before
+   * any call was served. The state check and the revoke are one synchronous step (the grant's secret hash is on its
+   * row, so nothing is awaited between them): an `initialize` that committed first wins, and Cancel is refused; a
+   * Cancel that ran first wins, and that `initialize` gets the revoked answer.
+   */
+  async cancelDockGrant(grantId: string): Promise<{ ok: boolean; error?: string }> {
+    this.sweepDock();
+    const grant = this.grants().find((g) => g.id === grantId);
+    if (!grant) return { ok: false, error: "unknown_grant" };
+    if (!grant.hub || grant.state !== "handoff" || !grant.secret_hash) return { ok: false, error: "not_cancellable" };
+    this.revokeNow(grant, grant.secret_hash, new Date().toISOString());
+    this.broadcast();
+    return { ok: true };
+  }
+  /** One grant's revoke, synchronous: the revoked record by its secret's hash, then the grant and its pin go. */
+  private revokeNow(grant: Grant, hash: string, at: string): void {
+    // A Direct grant has no hub or agent; the table, older than Direct, wants text there.
+    this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub ?? "", grant.agent ?? "", at);
     this.links.forget(grant.id);
     this.waitSlots.forget(grant.id);
     this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
     this.sql.exec("delete from grants where id = ?", grant.id);
-    this.broadcast();
-    return { ok: true };
   }
 
   /**
    * Revoke from the app (APC 0.2, TIN-577): the person cuts an agent from Signals itself. It holds at
    * once and calls nobody, so it holds with the dock's hub down: the grant and its pin go, and its MCP
    * URL answers 403 "revoked" from then on, with a call already running ending the same way. The hub
-   * learns it on its next call and shows "Revoked by" this host; a new drop asks the person again.
+   * learns it on its next call and shows "Revoked by" this host; a new drop asks the person again. A dock
+   * grant in flight or in handoff is revoked the same way (APC 0.10: revoked comes before every other state).
    */
   async revokeGrant(grantId: string): Promise<{ ok: boolean; error?: string }> {
     // A linked agent (apc_link) is one agent with two grants: Revoke cuts both.
@@ -367,14 +568,8 @@ export class Feed extends DurableObject<Env> {
     // Everything below is synchronous storage work: nothing runs between the check and the deletes.
     if (!this.grants().some((g) => g.id === grantId)) return { ok: false, error: "unknown_grant" };
     const at = new Date().toISOString();
-    for (const [grant, hash] of hashes) {
-      // A Direct grant has no hub or agent; the table, older than Direct, wants text there.
-      this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, grant.id, grant.hub ?? "", grant.agent ?? "", at);
-      this.links.forget(grant.id);
-      this.waitSlots.forget(grant.id);
-      this.sql.exec("delete from agent_focus where grant_id = ?", grant.id);
-      this.sql.exec("delete from grants where id = ?", grant.id);
-    }
+    // By the secret, never the id alone: a grant that went and whose id a later one took is not this one.
+    for (const [grant, hash] of hashes) if (this.holds(grant.secret)) this.revokeNow(grant, hash, at);
     this.broadcast();
     return { ok: true };
   }
@@ -414,18 +609,56 @@ export class Feed extends DurableObject<Env> {
     if (!(await this.alive())) return Response.json({ error: "expired" }, { status: 404 });
     // The secret's hash, before the grant is looked up: what says whether this grant was revoked, now and during its calls.
     const hash = await secretHash(secret);
-    const grant = this.grants().find((g) => g.secret === secret);
-    if (!grant) {
-      // Revoked in the app (APC 0.2): 403 with the answer, whatever the method (checked before the
-      // method), so the dock's hub can say who revoked it.
+    // The body, before the grant is looked up: from that lookup to the gate's answer (and the commit of an
+    // initialize) nothing is awaited, so no Cancel, Revoke or give-back can run in between (APC 0.10).
+    // Read once and bounded (MCP_BODY_MAX_BYTES), whoever asks: a caller with no grant cannot make Signals read more.
+    let rpcBody: unknown = null;
+    if (request.method === "POST") {
+      const read = await readMcpBody(request);
+      if (!read) return bodyTooLarge();
+      rpcBody = read.json;
+      request = read.request;
+    }
+    const host = new URL(origin).host;
+    /** What this URL answers once its grant is gone: the revoked answer if the person revoked it (APC 0.2), 404 otherwise (never made, or ended). */
+    const gone = (): Response => {
       const revokedAt = this.revokedAt(hash);
-      if (revokedAt) return revokedResponse(new URL(origin).host, revokedAt);
-      return Response.json({ error: "unknown_grant" }, { status: 404 });
+      return revokedAt ? revokedResponse(host, revokedAt) : Response.json({ error: "unknown_grant" }, { status: 404 });
+    };
+    // A dock grant past T_ack or T_connect has ended (APC 0.10): it is gone before it is looked up.
+    this.sweepDock();
+    const grant = this.grants().find((g) => g.secret === secret);
+    // Revoked: 403 with the answer, whatever the method (checked before the method), so the dock's hub can say who revoked it.
+    if (!grant) return gone();
+    // Agent traffic on a grant that is not live yet extends nothing (APC 0.10): the feed's life is not touched by it.
+    let extendsLife = true;
+    // A dock grant answers by its state (APC 0.10, dockGrantGate): 404 in flight; in handoff only initialize, ping and
+    // tools/list are served, and a tools/call gets the `pairing` error; live, everything. A gated answer is built here,
+    // before the links, presence and the transport, so it carries no attention, then, apc_link or app data.
+    if (grant.hub) {
+      const gate = dockGrantGate((grant.state ?? "live") as DockStored, request.method === "POST" ? rpcBody : null, { host });
+      if (!gate.serve) return gate.response;
+      if (gate.commits) {
+        // The hub's first initialize (the dock owner's yes) makes the grant live: one conditional statement, and no
+        // result unless it committed. A storage failure answers HTTP 500, so the hub's introduction fails visibly.
+        let committed: boolean;
+        try {
+          committed = this.sql.exec("update grants set state = 'live', pairing_code = null, pairing_expires_at = null where secret = ? and state = 'handoff' returning id", secret).toArray().length === 1;
+        } catch {
+          return Response.json({ error: "internal_error" }, { status: 500, headers: { "cache-control": "no-store" } });
+        }
+        // Not committed: the state that won answers (a Cancel or Revoke: the revoked answer; an end: 404). Nothing runs
+        // between the lookup above and this statement, so this is the fail-closed branch, not a path that is taken.
+        if (!committed) return gone();
+        this.broadcast();
+      } else if ((grant.state ?? "live") !== "live") {
+        // Served in handoff (ping, tools/list): answered, and nothing else.
+        extendsLife = false;
+      }
     }
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
-    await this.touch();
+    if (extendsLife) await this.touch();
     // A notifications/cancelled in this POST aborts the call it names, running in another POST (APC 0.8).
-    const rpcBody = (await request.clone().json().catch(() => null)) as unknown;
     this.calls.cancel(grant.id, rpcBody);
     try {
       const arriving = initializeOf(rpcBody);

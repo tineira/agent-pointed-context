@@ -30,8 +30,12 @@ export interface SandboxState {
   tour: { step: TourStep; grant_id: string | null };
   /** Pulse's APC v2 deploy (TIN-382), and which dock agents are which grants. */
   v2?: boolean;
-  /** `pairing`: the grant waits for the person to type this code in their dock (APC 0.9); null once the dock connected. */
-  hub_links?: Array<{ hub: string; agent: string; grant_id: string; pairing?: { code: string; expires_at: string } | null }>;
+  /**
+   * `pairing`: the grant waits for the person to type this code in their dock (APC 0.9); null once the dock took it.
+   * `state` (APC 0.10): in_flight while the Allow is answered, handoff until the dock connects (with `pairing`, the
+   * code is still to be typed; without it, the dock is connecting), then live. A dock grant's `secret` is never sent.
+   */
+  hub_links?: Array<{ hub: string; agent: string; grant_id: string; state?: "in_flight" | "handoff" | "live"; pairing?: { code: string; expires_at: string } | null }>;
   /** On Pulse's v2 deploy, the docks it pairs with, by host (TIN-402). */
   hubs?: string[];
   /** The profiles Pulse offers (APC 0.4), and the agents linked across both: [direct grant, dock grant]. */
@@ -73,6 +77,8 @@ export function createApi(sid: string) {
     /** A dock agent's drop (TIN-382). Without `consent` the server pairs only an agent it holds a grant for; otherwise it answers consent_required with the nonce the consent sends back (TIN-606). */
     hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget; consent?: string }) =>
       post<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pairing?: { code: string; expires_at: string }; pin_error?: string }>("/hub/pair", body),
+    /** Cancel on the waiting card (APC 0.10): takes the dock's access back while the dock has not connected; refused once it has. */
+    hubCancel: (grantId: string) => post<{ ok: boolean; error?: string }>("/hub/cancel", { grant_id: grantId }),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),

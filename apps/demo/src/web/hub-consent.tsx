@@ -5,7 +5,8 @@
  *
  * The pairing code (APC 0.9, TIN-859): the consent shows a code, and the dock's Allow needs it. After the
  * Allow, Pulse waits for the person's dock (DockWaiting): the code again, the time left, and Cancel. If the
- * dock the person uses does not ask for that code, the agent was someone else's: Cancel.
+ * dock the person uses does not ask for that code, the agent was someone else's: Cancel. Cancel revokes, and
+ * only while the dock has not connected (APC 0.10); past the code's time the card stops showing the code.
  */
 import type { AgentDrag } from "@tineira/apc-web";
 import { formatPairingCode, type FocusTarget } from "@tineira/apc-protocol";
@@ -26,6 +27,7 @@ export interface PendingDrop {
 const ERRORS: Record<string, string> = {
   ticket_expired: "The drag is too old. Drag the agent from the dock again.",
   consent_required: "This question is too old. Drag the agent from the dock again.",
+  consent_expired: "This question is too old. Drag the agent from the dock again.",
   hub_not_allowed: "Pulse does not pair with that dock.",
   hub_unreachable: "The dock did not answer. Try again in a moment.",
   hub_refused: "The dock did not answer as a dock should, so Pulse didn't pair.",
@@ -33,6 +35,10 @@ const ERRORS: Record<string, string> = {
   invalid_pairing_code: "The dock refused the pairing code. Drag the agent from the dock again.",
   pairing_code_required: "The dock wants a pairing code. Drag the agent from the dock again.",
   app_not_allowed: "The dock does not pair with this Pulse.",
+  pairing_in_progress: "Pulse is still pairing this agent with the dock. Try again in a moment.",
+  pairing_ended: "That pairing ended before the dock connected. Drag the agent from the dock again.",
+  not_cancellable: "The dock has connected already. To take its access back, revoke the agent.",
+  not_available: "This Pulse does not pair with docks.",
 };
 
 /** A refusal in words, for the page's notices. */
@@ -104,13 +110,14 @@ export function HubConsent(props: { api: Api; drop: PendingDrop; onDone: (notice
  * state, so it comes back on a reload or a new drop, and goes once the dock connects or the grant goes.
  * Cancel takes the access back while the dock has not connected.
  */
-export function DockWaiting(props: { hub: string; pairing: { code: string; expires_at: string }; onCancel: () => void; pinError?: string }) {
+export function DockWaiting(props: { hub: string; pairing: { code: string; expires_at: string } | null; onCancel: () => void; pinError?: string }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const left = Math.max(0, Math.ceil((Date.parse(props.pairing.expires_at) - now) / 1000));
+  // Pulse's stored expiry is the truth (APC 0.10): the countdown stops at zero, and past it the code is no longer shown.
+  const left = props.pairing ? Math.max(0, Math.ceil((Date.parse(props.pairing.expires_at) - now) / 1000)) : 0;
   const host = (() => {
     try {
       return new URL(props.hub).host;
@@ -121,13 +128,17 @@ export function DockWaiting(props: { hub: string; pairing: { code: string; expir
   return (
     <div className="mx-auto mt-3 w-full max-w-7xl px-5" role="status">
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-filament/40 bg-filament-soft px-3 py-2 text-sm">
-        {left > 0 ? (
+        {!props.pairing ? (
+          <span>
+            Your dock at <b>{host}</b> took the code and is connecting. If you didn't type a code there, the agent wasn't yours: Cancel.
+          </span>
+        ) : left > 0 ? (
           <span>
             Waiting for your dock at <b>{host}</b>: type <b className="pairing-code">{formatPairingCode(props.pairing.code)}</b> there ({left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel.
           </span>
         ) : (
           <span>
-            Your dock didn't finish in time. If it never asked for <b className="pairing-code">{formatPairingCode(props.pairing.code)}</b>, Cancel.
+            Your dock at <b>{host}</b> didn't finish in time. Cancel, then drag the agent from the dock again.
           </span>
         )}
         <button type="button" className="tour-skip" onClick={props.onCancel}>

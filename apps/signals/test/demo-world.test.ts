@@ -12,7 +12,7 @@ installWorkersStandIn();
 const { Feed } = await import(new URL("../src/worker/feed.ts", import.meta.url).href);
 const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
 
-const DEPLOY = { HUB_ORIGINS: "https://dock.test", APC_PROFILES: "direct,dock" };
+const DEPLOY = { HUB_ORIGINS: "https://dock.test", PUBLIC_ORIGIN: "https://signals.test", APC_PROFILES: "direct,dock" };
 
 test("a feed made before TIN-621, with a seed of its own, shows the demo world's posts", async () => {
   const room = durableObjectRoom();

@@ -14,7 +14,7 @@ installWorkersStandIn();
 const { Sandbox } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);
 const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
 
-const DEPLOY = { APC_V2: "1", HUB_ORIGINS: "https://dock.test", APC_PROFILES: "direct,dock" };
+const DEPLOY = { APC_V2: "1", HUB_ORIGINS: "https://dock.test", PUBLIC_ORIGIN: "https://pulse.test", APC_PROFILES: "direct,dock" };
 const FULL: Grant = { id: "g", secret: "s", label: "Agent", client_name: null, regions: null, created_at: "", last_active_at: null };
 
 test("the demo world is DEMO_SEED's, built once, and the market is built from it", () => {

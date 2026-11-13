@@ -34,6 +34,12 @@ interface GrantState {
   waiting: boolean;
   pin: FocusRow | null;
   linked_with: string | null;
+  /**
+   * A dock grant only (APC 0.10): in_flight while the Allow is answered, handoff until the dock connects, then live.
+   * In handoff, `pairing` is the code still to be typed in the dock; without it the dock took the code and is connecting.
+   */
+  state?: "in_flight" | "handoff" | "live";
+  pairing?: { code: string; expires_at: string } | null;
 }
 interface FeedState {
   profiles: ApcProfile[];
@@ -48,11 +54,17 @@ type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: Focu
 const PAIR_ERRORS: Record<string, string> = {
   ticket_expired: "the drag is too old; drag the agent from the dock again",
   consent_required: "the drag is too old; drag the agent from the dock again",
+  consent_expired: "the question is too old; drag the agent from the dock again",
   hub_unreachable: "the dock did not answer; try again in a moment",
   hub_refused: "the dock did not answer as a dock should, so Signals didn't pair",
   hub_ignores_pairing_code: "this dock can't check pairing codes, so Signals didn't pair",
   invalid_pairing_code: "the dock refused the pairing code; drag the agent from the dock again",
   pairing_code_required: "the dock wants a pairing code; drag the agent from the dock again",
+  hub_not_allowed: "Signals does not pair with that dock",
+  pairing_in_progress: "Signals is still pairing this agent with the dock; try again in a moment",
+  pairing_ended: "that pairing ended before the dock connected; drag the agent from the dock again",
+  not_cancellable: "the dock has connected already; to take its access back, revoke the agent in the agent bar",
+  not_available: "this Signals does not pair with docks",
 };
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
@@ -139,8 +151,6 @@ function Feed({ sid }: { sid: string }) {
   const [selected, setSelected] = useState<string | null>(initial.post);
   const [pending, setPending] = useState<Pending | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  /** After an Allow (APC 0.9): the code to type in the dock, kept in this page only. */
-  const [codeNote, setCodeNote] = useState<{ host: string; code: string } | null>(null);
   // The Connect panel (Direct): open when the visitor came to connect (?connect, from the dock's landing page).
   const [connectOpen, setConnectOpen] = useState(() => new URLSearchParams(location.search).has("connect") || location.hash === "#connect");
   const stateRef = useRef<FeedState | null>(null);
@@ -210,9 +220,12 @@ function Feed({ sid }: { sid: string }) {
         // Every dock drop goes to the server, which decides (TIN-606): an agent with no grant here comes back
         // consent_required with a nonce, and the person is asked, never on this page's last-loaded state.
         onUnknownAgent: async (drag, target) => {
-          const r = await call<{ ok: boolean; error?: string; grant_id?: string; consent?: string; pairing_code?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
+          const r = await call<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pin_error?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
           if (r.error === "consent_required" && r.consent && r.pairing_code) setPending({ drag, target, consent: r.consent, pairing_code: r.pairing_code });
-          else if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
+          // Still waiting on the dock (APC 0.10): the waiting card, drawn from Signals' state, shows the same code again, or that the dock is connecting.
+          else if (r.ok && (r.status === "pending" || r.status === "connecting")) {
+            if (r.pin_error) say(`Not pinned where you dropped it (${r.pin_error}). Once your dock connects, drop the agent there again.`);
+          } else if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
           else say(`Not pinned: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`);
           refresh();
         },
@@ -314,6 +327,18 @@ function Feed({ sid }: { sid: string }) {
         refresh();
       });
   };
+  // Cancel on the waiting card (APC 0.10): takes the dock's access back, and only while the dock has not connected.
+  const cancel = (id: string) => {
+    void call<{ ok: boolean; error?: string }>(`${base}/hub/cancel`, { grant_id: id })
+      .then(
+        (r) => (r.ok ? "Cancelled: Signals took that dock's access back." : `Not cancelled: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`),
+        (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`,
+      )
+      .then((message) => {
+        say(message);
+        refresh();
+      });
+  };
   const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpinEntry} onRevoke={revoke} onUnlink={unlink} />;
   return (
     <Shell
@@ -354,14 +379,11 @@ function Feed({ sid }: { sid: string }) {
             ))}
           </div>
           {notice && <div className="notice">{notice}</div>}
-          {codeNote && (
-            <div className="notice" role="status">
-              Paired with the dock at <b>{codeNote.host}</b>. Allow it there with the code <b className="pairing-code">{formatPairingCode(codeNote.code)}</b>, then ask your agent about "this". If your dock doesn't ask for this code, the agent wasn't yours: revoke it in the agent bar.{" "}
-              <button type="button" className="notice-close" onClick={() => setCodeNote(null)} aria-label="Close">
-                ×
-              </button>
-            </div>
-          )}
+          {state.grants
+            .filter((g) => g.path === "dock" && g.state === "handoff")
+            .map((g) => (
+              <DockWaiting key={g.id} hub={g.hub ?? ""} pairing={g.pairing ?? null} onCancel={() => cancel(g.id)} />
+            ))}
           {connectPanel}
         </>
       }
@@ -519,14 +541,55 @@ function Feed({ sid }: { sid: string }) {
             const r = await call<{ ok: boolean; error?: string }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target, consent: pending.consent }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
             // A newer drop's consent, shown meanwhile, stays.
             setPending((p) => (p === pending ? null : p));
-            // The code stays in sight (this page only, until closed or reloaded) while the person types it in their dock.
-            if (r.ok) setCodeNote({ host: new URL(pending.drag.hub).host, code: pending.pairing_code });
-            else say(`Not paired: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`);
+            // Paired: the waiting card takes over, with the code, from Signals' own state (it comes back on a reload or a new drop).
+            if (!r.ok) say(`Not paired: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`);
             refresh();
           }}
         />
       )}
     </Shell>
+  );
+}
+
+/**
+ * After the Allow (APC 0.9, as Pulse's waiting card): Signals waits for the person's dock to ask for the code. Drawn
+ * from Signals' own state, so it comes back on a reload or a new drop, and goes once the dock connects or the grant
+ * goes. Signals' stored expiry is the truth (APC 0.10): the countdown stops at zero, and past it the code is no
+ * longer shown. Cancel takes the access back while the dock has not connected.
+ */
+function DockWaiting(props: { hub: string; pairing: { code: string; expires_at: string } | null; onCancel: () => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const left = props.pairing ? Math.max(0, Math.ceil((Date.parse(props.pairing.expires_at) - now) / 1000)) : 0;
+  const host = (() => {
+    try {
+      return new URL(props.hub).host;
+    } catch {
+      return props.hub;
+    }
+  })();
+  return (
+    <div className="notice" role="status">
+      {!props.pairing ? (
+        <>
+          Your dock at <b>{host}</b> took the code and is connecting. If you didn't type a code there, the agent wasn't yours: Cancel.
+        </>
+      ) : left > 0 ? (
+        <>
+          Waiting for your dock at <b>{host}</b>: type <b className="pairing-code">{formatPairingCode(props.pairing.code)}</b> there ({left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel.
+        </>
+      ) : (
+        <>
+          Your dock at <b>{host}</b> didn't finish in time. Cancel, then drag the agent from the dock again.
+        </>
+      )}{" "}
+      <button type="button" className="notice-close" onClick={props.onCancel}>
+        Cancel
+      </button>
+    </div>
   );
 }
 

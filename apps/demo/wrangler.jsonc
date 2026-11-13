@@ -14,7 +14,7 @@
   },
   // APC_PROFILES (APC 0.4, TIN-578) is the one place Pulse declares how agents reach it: Direct (its own MCP URL
   // per agent, made on the Agents screen) and Dock (dropped from a dock's hub). One of them alone works too.
-  "vars": { "APC_V2": "1", "HUB_ORIGINS": "https://apc.tineira.com", "APC_PROFILES": "direct,dock" },
+  "vars": { "APC_V2": "1", "HUB_ORIGINS": "https://apc.tineira.com", "PUBLIC_ORIGIN": "https://pulse.apc.tineira.com", "APC_PROFILES": "direct,dock" },
   "durable_objects": {
     "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }]
   },

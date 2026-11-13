@@ -46,7 +46,8 @@ export interface DockAgent {
   /** warning: a pending unverified app whose domain the person has not approved in this dock asks with the warning (TIN-581). */
   /** blocked_by: our blocklist, or the kill switch that closes the dock to unverified apps. */
   /** code: a pending request whose app sent a pairing code (APC 0.9), approved only with it; never the code itself. */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed"; code?: boolean }>;
+  /** ended: the app ended the grant (APC 0.10: it answered 404); ended_by is the app's host. idle: the app said it is asleep. */
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "ended" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; ended_by?: string; ended_at?: string | null; idle?: boolean; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed"; code?: boolean }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 /** A computer on this dock (TIN-838); `current` is the one this page runs on. */
@@ -218,6 +219,8 @@ export function AgentPage(props: {
   const connected = !!a.client_name;
   const paired = a.pairings.filter((p) => p.status === "paired");
   const revoked = a.pairings.filter((p) => p.status === "revoked");
+  // The app ended the grant (APC 0.10): the dock no longer reads it until the agent is dropped there again.
+  const ended = a.pairings.filter((p) => p.status === "ended");
   // On the blocklist the dock operates (TIN-580): never called, nothing relayed.
   const blocked = a.pairings.filter((p) => p.status === "blocked");
   const names = new Map(a.pairings.map((p) => [p.app.id, p.app.name]));
@@ -347,7 +350,7 @@ export function AgentPage(props: {
             />
           </div>
         ))}
-        {paired.length === 0 && revoked.length === 0 && blocked.length === 0 && props.requests.length === 0 ? (
+        {paired.length === 0 && revoked.length === 0 && ended.length === 0 && blocked.length === 0 && props.requests.length === 0 ? (
           <p className="muted">None yet. Drag {a.name} onto an app to pair it.</p>
         ) : (
           <ul className="apps">
@@ -367,7 +370,7 @@ export function AgentPage(props: {
                       {p.app.name} <span className="muted">· {p.kind === "reader" ? "page readings" : host(p.app.origin)} · since {when(p.created_at)}</span>
                     </>
                   )}
-                  {p.error ? <span className="warn"> · not answering</span> : p.page_open ? <span className="read"> · open now</span> : null}
+                  {p.error ? <span className="warn"> · not answering</span> : p.idle ? <span className="muted"> · asleep: open it to wake it</span> : p.page_open ? <span className="read"> · open now</span> : null}
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")}>
                   Unpair
@@ -381,6 +384,19 @@ export function AgentPage(props: {
                   {p.app.name} <span className="warn">· Revoked by {p.revoked_by ?? host(p.app.origin)}</span>
                   {p.revoked_at ? <span className="muted"> · {when(p.revoked_at)}</span> : null}
                   <span className="muted"> · drop {a.name} on it again to ask for access</span>
+                </span>
+                <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
+                  Remove
+                </button>
+              </li>
+            ))}
+            {/* Ended by the app (APC 0.10): it waited too long for the dock, or its data went. Pairing again takes a new drop there. */}
+            {ended.map((p) => (
+              <li key={p.id} className="revoked">
+                <span>
+                  {p.app.name} {p.app.unverified && <NotVerified />} <span className="warn">· Ended by {p.ended_by ?? host(p.app.origin)}</span>
+                  {p.ended_at ? <span className="muted"> · {when(p.ended_at)}</span> : null}
+                  <span className="muted"> · drop {a.name} on it again to pair</span>
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
                   Remove

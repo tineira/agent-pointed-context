@@ -310,7 +310,8 @@ test("error messages: an unverified app's JSON-RPC error text and HTTP error bod
     assert.equal(relayed.isError, true);
     const error = JSON.parse(relayed.content[0].text);
     assert.equal(error.error, "app_unreachable");
-    assert.match(error.message, m === "rpc" ? /^evil\.example did not answer: tools\/call: the app answered with an error$/ : /^evil\.example did not answer: tools\/call: HTTP 50[02]$/, m);
+    // The hub's own words only. The app never answered the hub's initialize (H1), so each call introduces first and fails there.
+    assert.match(error.message, m === "rpc" ? /^evil\.example did not answer: initialize: the app answered with an error$/ : /^evil\.example did not answer: initialize: HTTP 50[02]$/, m);
     seen.push(relayed, await w.callHub("evil_example__get_figure"), await w.callHub("get_current_view"), await w.callHub("list_app_tools"), await w.listHub(), await w.callHub("wait_for_focus", { timeout_s: 1 }));
     seen.push(await w.state());
   }

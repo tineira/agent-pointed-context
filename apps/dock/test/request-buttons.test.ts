@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { buttonsOff, CODE_IN_DOCK, codeErrorText, cardInFlight, decisionNotice, inFlightOf, isCodeRetryError, kindOf, landed, mayAnswer, mergeInFlight, sentOut, typedCode, type Sent } from "../src/web/request-state.ts";
+import { buttonsOff, CODE_IN_DOCK, codeErrorText, cardInFlight, decisionNotice, inFlightOf, isCodeRetryError, isConnectingAnswer, kindOf, landed, mayAnswer, mergeInFlight, sentOut, typedCode, type Sent } from "../src/web/request-state.ts";
 
 test("the rules: a Deny goes while an Approve is on its way or the hub is approving; a second yes never does", () => {
   assert.deepEqual(buttonsOff({}), { deny: false, approve: false });
@@ -161,6 +161,27 @@ test("rendered: a request with a code on the dock's page asks for it in one labe
   assert.deepEqual(buttons(renderRequest({ code: true, inFlight: "deny" })), { Deny: true, Allow: true });
   // The card's own error: said under the field, for the person to try again.
   assert.match(renderRequest({ code: true, error: { error: "wrong_pairing_code", attempts_left: 2, at: 1 } }), /aria-live="polite">Wrong code\. 2 tries left\.</);
+});
+
+test("rendered: while the hub is approving, every surface says connecting and takes no code: no field, no Allow, Deny on (APC 0.10)", () => {
+  const unverified = { declared: "Pulse", warning: false };
+  for (const props of [{ entry: "field" }, { entry: "field", code: true }, { entry: "dock", code: true }, { entry: "field", unverified, host: "evil.example", app: "evil.example" }]) {
+    const html = renderRequest({ ...props, approving: true });
+    assert.doesNotMatch(html, /<input/, "no field to type a code in");
+    assert.deepEqual(buttons(html), { Deny: false }, "Deny only, and on");
+    assert.match(html, /role="status"[^>]*>Connecting to (Orders|evil\.example)…</);
+    assert.doesNotMatch(html, /Type the code/);
+  }
+  assert.match(renderRequest({ approving: true, unverified, host: "evil.example", app: "evil.example" }), /Not verified/, "an unverified app keeps its badge");
+  assert.deepEqual(buttons(renderRequest({ code: true, approving: true, inFlight: "deny" })), { Deny: true });
+  // A reader has no introduction: its card is unchanged.
+  assert.deepEqual(buttons(renderRequest({ kind: "reader" })), { Allow: false, Deny: false });
+  // The hub's answer to a code typed in that window is not a wrong code and not a failure to show.
+  assert.equal(isCodeRetryError("approving"), false);
+  assert.equal(isConnectingAnswer("approving"), true);
+  assert.equal(isConnectingAnswer("wrong_pairing_code"), false);
+  assert.doesNotMatch(decisionNotice("approving"), /That did not go through|Wrong code/);
+  assert.match(decisionNotice("pairing_ended"), /Drop your agent on the app again\.$/);
 });
 
 test("rendered: Float, the strip and the pets show no field and no Allow for a request with a code, and today's buttons without one", () => {

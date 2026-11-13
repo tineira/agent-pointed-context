@@ -28,7 +28,7 @@ async function shopWorld(t: TestContext, env: Json = {}) {
     const body = { ticket, agent: who.id, app: { name: app.name, origin: app.origin }, mcp_url: `${app.origin}/mcp/${"c".repeat(32)}`, pairing_code: CODE, ...over };
     return { ticket, body, answer: (await w.hub.pair(body)) as { ok: boolean; error?: string; pairing_id?: string; pairing_code?: string } };
   };
-  const line = async (id: string) => (await w.agent()).pairings.find((p: Json) => p.id === id);
+  const line = async (id: string) => (await w.state()).agents.flatMap((a: Json) => a.pairings as Json[]).find((p: Json) => p.id === id);
   return { ...w, shop, ask, line };
 }
 
@@ -181,9 +181,11 @@ test("coded and older requests expire each at its own time, and the alarm rings 
   quick(t, "pairingCodeMs", 200);
   quick(t, "pendingMs", 600);
   const w = await shopWorld(t, { PAIRING_CODE: "when_sent" });
+  // Two agents: a second request of the same agent and app would replace the first (H3, APC 0.10).
+  await w.hub.addAgent();
   const legacy = (await w.ask({ pairing_code: undefined })).answer.pairing_id!;
   const before = Date.now();
-  const coded = (await w.ask()).answer.pairing_id!;
+  const coded = (await w.ask({}, w.shop, 1)).answer.pairing_id!;
   const alarm = w.hubRoom.alarm!;
   assert.ok(alarm >= before + 150 && alarm <= Date.now() + 210, `the alarm rings for the coded request: ${alarm - before} ms`);
   await sleep(260);

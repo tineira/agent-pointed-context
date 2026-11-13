@@ -22,12 +22,14 @@ const PULSE = "https://pulse.test";
 const answerAs = (r: { ok: boolean }) => Response.json(r, { status: r.ok ? 200 : 400 });
 const DID = "a".repeat(32);
 const SID = "b".repeat(32);
+/** Pulse as deployed for pairing (APC 0.10, M8): its public origin and its hub allowlist configured. */
+const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: PULSE };
 
 async function world(t: TestContext) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent" });
   await hub.init(DID);
   const pulseRoom = durableObjectRoom();
-  const pulse = new Sandbox(pulseRoom.ctx, { APC_V2: "1", HUB_ORIGINS: DOCK });
+  const pulse = new Sandbox(pulseRoom.ctx, PULSE_ENV);
   await pulse.init();
   const customers = demoDataset().customers;
 
@@ -35,7 +37,7 @@ async function world(t: TestContext) {
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
+    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, PULSE_ENV);
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) {
       net.toPulse++;
       // Pulse slow to answer, for one test.
@@ -43,9 +45,7 @@ async function world(t: TestContext) {
       return pulse.fetch(request);
     }
     if (url.origin === PULSE && url.pathname === "/apc/revoke") {
-      const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
-      const r = await pulse.revokeHubGrant(secret);
-      return Response.json(r, { status: r.ok ? 200 : 404 });
+      return pulseWorker.fetch(request, { ...PULSE_ENV, SANDBOX: { idFromName: (name: string) => name, get: () => pulse } });
     }
     if (url.origin === DOCK) {
       net.toHub++;
@@ -231,11 +231,13 @@ test("a page that missed the revoke cannot pair without asking: Pulse's server a
   assert.equal((await pulse.state()).grants.length, 0);
 
   // Only the nonce Pulse gave for this dock and agent pairs, once.
-  for (const consent of [undefined, `cn_${"0".repeat(32)}`, "not-a-nonce"]) {
-    assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent })).error, "consent_required", String(consent));
+  // No nonce is a drop: Pulse asks. A nonce that does not take is a stale Allow: consent_expired (APC 0.10), and no grant.
+  assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent: undefined })).error, "consent_required");
+  for (const consent of [`cn_${"0".repeat(32)}`, "not-a-nonce"]) {
+    assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent })).error, "consent_expired", String(consent));
   }
   const other = await pulse.pairHub(SID, PULSE, { ...body, agent: "ag_00000000" });
-  assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent: other.consent })).error, "consent_required", "another agent's nonce");
+  assert.equal((await pulse.pairHub(SID, PULSE, { ...body, consent: other.consent })).error, "consent_expired", "another agent's nonce");
   assert.equal(net.toHub, calls, "still nothing sent to the dock");
   const asked = await pulse.pairHub(SID, PULSE, body);
   const paired = await pulse.pairHub(SID, PULSE, { ...body, consent: asked.consent });

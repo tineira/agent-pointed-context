@@ -49,6 +49,10 @@ The app's routes: `apc.json`, the MCP URLs, the hub's give-back (Dock), and the 
 
 <!-- include orders-app.ts#routes -->
 
+The person's routes need their session, and every change is a JSON `POST` checked against the origin you configured, never one read from the request ([M6](/docs/spec#the-app-and-the-hub-call)): another site's page cannot drop, allow or cancel for them, and a client that is not a browser is taken on its session.
+
+<!-- include orders-app.ts#owner -->
+
 ## 4. Direct: an agent per grant
 
 The person makes an agent on the page, and copies its URL into their agent as a remote MCP server (Streamable HTTP, no OAuth: the access is in the URL).
@@ -127,10 +131,13 @@ Add `"dock"` to the profiles and list the hubs you pair with. A dock's agent arr
 
 <!-- include orders-app.ts#dock -->
 
-- **No grant for that agent yet:** the server answers `consent_required` with a nonce and a [pairing code](/docs/spec#the-pairing-code); the page asks the person and shows the code; only the Allow that brings the nonce back makes a grant and pairs it with the hub (`POST {hub}/apc/pair`, with the code). The person then allows it in their dock too, typing the code. `pairWithHub` keeps the grant only if the hub acknowledges the code (`pairing_code: "required"` on a plain 200), and the server deletes it otherwise, before it answers the page.
-- **Waiting for the dock:** until the hub connects, the page shows the code again with Cancel (Revoke): if the person's own dock never asks for that code, the agent was someone else's.
-- **A grant already:** the server asks the hub whether the pairing still stands (`confirmWithHub`, `POST {hub}/apc/confirm`) and pins it (still pending: it shows the code again), or asks the person again.
-- **The person unpairs in the dock** (or denies, types five wrong codes, or lets the request expire): the hub calls your `POST /apc/revoke` with the grant's MCP URL, and the grant goes.
+- **The hub is checked first, twice:** `parseDockDrop` takes the drag's hub only if it is exactly one of the origins on your allowlist, on the drop and again on the Allow (`hub_not_allowed` otherwise), and every hub call goes to the origin it returns.
+- **No grant for that agent yet:** the server answers `consent_required` with a nonce and a [pairing code](/docs/spec#the-pairing-code); the page asks the person and shows the code; only the Allow that brings the newest nonce back makes a grant (a newer drop replaces the consent, and the older Allow gets `consent_expired`). The grant is stored **in flight** and handed to the hub (`POST {hub}/apc/pair`, with the code). `pairWithHub` refuses redirects, ends at 10 s and reads 8 KiB at most; the grant is kept only if the hub acknowledges the code (`pairing_code: "required"` on a plain 200), and ends otherwise, before the server answers the page. No lock is held across that call; a second Allow meanwhile gets `pairing_in_progress`.
+- **Waiting for the dock (handoff):** the acknowledgement moves the grant to handoff, if nothing ended it meanwhile. The person then allows it in their dock too, typing the code, and the hub's first `initialize` makes the grant **live**. Until then the page shows the code with Cancel, which revokes the grant and works only before the dock connected: if the person's own dock never asks for that code, the agent was someone else's.
+- **A grant already:** the server asks the hub whether the pairing still stands (`confirmWithHub`, `POST {hub}/apc/confirm`). Still pending: the page shows the same code, never a new one. Paired but not connected yet: it says so. Live: the drop pins it. `not_paired`, or the code's time is up: the grant ends and the person is asked again.
+- **The person unpairs in the dock** (or denies, types five wrong codes, or lets the request expire): the hub calls your `POST /apc/revoke` with the grant's MCP URL, and the grant ends. `handleDockGiveBack` answers the same 200 whatever it was sent.
+
+What a dock grant answers follows its state, and `dockGrantGate` decides it before the MCP transport and the wrapper of step 8 (in `mcp` above): 404 in flight, the `pairing` error to a tool call in handoff, the app's data only once live. A grant with no acknowledgement 30 s after the Allow, or no `initialize` 10 minutes after the acknowledgement, ends (404). Orders also sleeps: 30 minutes after the person's last wake action (the page's heartbeat, a drop) a live grant goes **dormant** and returns no data, only `idle`, until they are back; agent traffic never wakes it.
 
 The page shows the code in its consent, and the agents waiting for their dock:
 
@@ -168,5 +175,6 @@ Localizing changes no protocol text, the tools or conformance: [Conformance](/do
 - The agent bar is on every page, with Revoke; on a phone it stays in the page.
 - Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token); an unknown grant 404.
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
-- Dock: every drop goes to the server; consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
+- Dock: every drop goes to the server; the hub is on your allowlist, checked on the drop and on the Allow (`parseDockDrop`); consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
+- Dock: a grant serves data only after the hub's `initialize` (`dockGrantGate`); `POST /apc/revoke` answers the same 200 to anything (`handleDockGiveBack`); the person's routes check `Origin`, `Sec-Fetch-Site` and the JSON media type; `apc.json` lists `dock` only while you can pair.
 - The conformance suite passes, on each profile you offer.

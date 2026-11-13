@@ -222,7 +222,8 @@ function Sandbox({ sid }: { sid: string }) {
                 return setPendingDrop({ drag, target, at: Date.now(), consent: r.consent, pairing_code: r.pairing_code });
               }
               // Still waiting for the code in the dock (APC 0.9): the waiting card shows it again.
-              if (r.ok && r.status === "pending" && r.pairing) {
+              // Or the dock took the code and is connecting (APC 0.10): the card says so, from Pulse's state.
+              if (r.ok && ((r.status === "pending" && r.pairing) || r.status === "connecting")) {
                 notePinError(r.grant_id && r.pin_error ? { grantId: r.grant_id, error: r.pin_error } : undefined);
                 void refresh();
                 return;
@@ -430,17 +431,18 @@ function Sandbox({ sid }: { sid: string }) {
         </div>
       )}
       {(state.hub_links ?? []).flatMap((l) =>
-        l.pairing
+        // Waiting on the dock (APC 0.10): in handoff, with the code still to be typed or the dock connecting.
+        l.state === "handoff"
           ? [
               <DockWaiting
                 key={l.grant_id}
                 hub={l.hub}
-                pairing={l.pairing}
+                pairing={l.pairing ?? null}
                 {...(pinErrors.has(l.grant_id) ? { pinError: pinErrors.get(l.grant_id)! } : {})}
                 onCancel={() =>
                   void api
-                    .revoke(l.grant_id)
-                    .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled: ${r.error}`), (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`)
+                    .hubCancel(l.grant_id)
+                    .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled: ${hubError(r.error)}`), (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`)
                     .then((message) => {
                       setNotice(message);
                       setTimeout(() => setNotice(null), 8000);

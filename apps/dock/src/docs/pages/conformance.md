@@ -117,6 +117,10 @@ An app that claims 0.10.0 or later on the Dock profile also gives `dock.lifecycl
 | `owner` | the configured public origin (bare), the headers of the owner's session, and the four owner endpoints `drop`, `allow`, `heartbeat` (or `{ websocket: path }`) and `cancel`, each with a fresh body the app takes with a 2xx |
 | `pairingDisabled()` | the same app with its dock configuration missing: its `fetch`, for `apc.json` |
 
+Orders gives it like this: its clock is the app's `now`, a restart is a new app on the same store, and its T_idle is the standard's 30 minutes.
+
+<!-- include orders-conformance.ts#lifecycle -->
+
 The stand-in hub plays the hub's side: it can hold `/apc/pair` (the grant is in flight), break the answer (redirects, a stalled body, the byte cap), forget a pairing (`/apc/confirm` then says `not_paired`), and approve without introducing itself.
 
 ### Apps on Cloudflare Durable Objects

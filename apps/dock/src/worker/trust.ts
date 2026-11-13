@@ -5,7 +5,7 @@
  * unverified, only after the person approves that warning in the dock, and not at all while the
  * operator's kill switch (UNVERIFIED_PAIRING=closed) is on. Pure, so the tests run it.
  */
-import { PAIRING_CODE_TTL_MS, parseTarget, type FocusPayload } from "@tineira/apc-protocol";
+import { APC_JSON_PAIRING_MAX_AGE_S, PAIRING_CODE_TTL_MS, parseTarget, type FocusPayload } from "@tineira/apc-protocol";
 import type { AppTool } from "./app-client.ts";
 
 /** The hub's limits on the apps it reads. Tests shorten the times; nothing else changes them. */
@@ -24,9 +24,12 @@ export const LIMITS = {
   /** The look a wait_for_focus takes at the app of an unread pin before it hands the pin over (TIN-606): short, since the pin is ready. */
   pinLookMs: 2_000,
   revokeMs: 10_000,
-  /** Reading an app's apc.json at pairing (APC 0.5), and how long the hub trusts the copy it read before it reads the file again. */
+  /**
+   * Reading an app's apc.json at pairing (APC 0.5), and how long the hub decides a pairing on the copy it read
+   * before it reads the file again: a minute at most (H7, APC 0.10: APC_JSON_PAIRING_MAX_AGE_S; ten minutes before).
+   */
   apcJsonMs: 5_000,
-  apcJsonFreshMs: 10 * 60_000,
+  apcJsonFreshMs: APC_JSON_PAIRING_MAX_AGE_S * 1000,
   /** A wait_for_focus on an app may run this much past its own timeout. */
   waitGraceMs: 15_000,
   /** The app pairings one dock holds at most, pending and paired, across its agents. */
@@ -37,6 +40,12 @@ export const LIMITS = {
   pairingCodeMs: PAIRING_CODE_TTL_MS,
   /** Past this, an approval whose introduction never finished (the object was evicted mid-way) counts as paired. Longer than introducing takes (initializeMs + listMs). */
   approvingMs: 60_000,
+  /**
+   * When the hub tries again to introduce itself to a paired app that has not answered its `initialize` yet, in ms
+   * after the approval. The app's grant waits in handoff meanwhile and ends at its T_connect (10 minutes at most,
+   * APC 0.10), so the last try comes well before that. After it the pairing shows its error, and the next use tries again.
+   */
+  introRetryMs: [15_000, 45_000, 2 * 60_000, 4 * 60_000, 8 * 60_000],
   /** What the hub keeps of an unverified app's tools and views. */
   unverifiedTools: 32,
   unverifiedDescription: 1_024,

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { APC_JSON_PATH, APC_STANDARD_VERSION, parseApcManifest } from "@tineira/apc-protocol";
+import { APC_JSON_PAIRING_MAX_AGE_S, APC_JSON_PATH, APC_STANDARD_VERSION, parseApcManifest } from "@tineira/apc-protocol";
 import { demoDataset } from "../../demo/src/model/demo-world.ts";
 import { LIMITS } from "../src/worker/trust.ts";
 
@@ -24,7 +24,8 @@ const PULSE = "https://pulse.test";
 const SHOP = "https://shop.example";
 const DID = "e".repeat(32);
 const SID = "f".repeat(32);
-const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock" };
+/** Pulse as deployed for pairing (APC 0.10, M8): it lists `dock` only with its public origin and its hub allowlist configured. */
+const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: PULSE };
 
 type Json = Record<string, unknown>;
 /** What an origin answers to GET /.well-known/apc.json: a Response, or a thrown network error. */
@@ -33,7 +34,7 @@ type Serve = (init?: RequestInit) => Response | Promise<Response>;
 async function world(t: TestContext, env: Json = {}) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent", ...env });
   await hub.init(DID);
-  const pulse = new Sandbox(durableObjectRoom().ctx, { ...PULSE_ENV, HUB_ORIGINS: DOCK });
+  const pulse = new Sandbox(durableObjectRoom().ctx, PULSE_ENV);
   await pulse.init();
   const customers = demoDataset().customers;
   /** Each origin's apc.json, when a test replaces what it serves; Pulse's Worker otherwise. */
@@ -53,9 +54,7 @@ async function world(t: TestContext, env: Json = {}) {
     }
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
     if (url.origin === PULSE && url.pathname === "/apc/revoke") {
-      const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
-      const r = await pulse.revokeHubGrant(secret);
-      return Response.json(r, { status: r.ok ? 200 : 404 });
+      return pulseWorker.fetch(request, { ...PULSE_ENV, SANDBOX: { idFromName: (name: string) => name, get: () => pulse } });
     }
     if (url.origin === DOCK && url.pathname === "/apc/pair") return answerAs(await hub.pair(await request.json()));
     if (url.origin === SHOP) return Response.json({ jsonrpc: "2.0", id: 1, result: { tools: [] } });
@@ -91,7 +90,7 @@ test("Pulse and Signals serve a valid apc.json; the dock serves one that says it
   assert.deepEqual(directOnly.profiles, ["direct"], "a Pulse that offers only Direct says so");
 
   const SIGNALS = "https://signals.test";
-  const signals = await (await signalsWorker.fetch(new Request(`${SIGNALS}${APC_JSON_PATH}`), { APC_PROFILES: "direct,dock" })).json();
+  const signals = await (await signalsWorker.fetch(new Request(`${SIGNALS}${APC_JSON_PATH}`), { APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: SIGNALS })).json();
   assert.equal(parseApcManifest(signals, SIGNALS).ok, true);
   assert.deepEqual(signals, { name: "Signals", standard: APC_STANDARD_VERSION, origin: SIGNALS, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${SIGNALS}/?connect` } });
 
@@ -155,31 +154,48 @@ test("the hub refuses an MCP URL outside the path the app's apc.json declares", 
   assert.deepEqual(await w.pairings(), []);
 });
 
-test("a verified app keeps pairing while its apc.json is briefly unreachable: against the copy read last, or on the operator's word", async (t) => {
+test("H7: an apc.json out of reach refuses the pairing, verified app or not: never the copy the hub kept, never the operator's word", async (t) => {
   const w = await world(t);
   const saved = { ...LIMITS };
   t.after(() => Object.assign(LIMITS, saved));
-  // No copy yet, the file times out: Pulse is in APP_ORIGINS, so it pairs.
+  // No copy yet, the file times out: Pulse is in APP_ORIGINS, and is refused all the same.
   LIMITS.apcJsonMs = 100;
   w.apcJson.set(PULSE, () => new Promise<Response>(() => {}));
-  assert.equal((await w.dropOnPulse()).ok, true, "a time limit on a verified app's file does not block it");
-  // A copy that says Direct only, read and then unreachable once it is old: the copy still counts.
+  assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "apc_json_unreachable" }, "a time limit on a verified app's file refuses it");
+  assert.deepEqual(await w.pairings(), []);
+  // A good copy that lists dock, read and then out of reach once it is old: the copy does not pair Pulse.
   const w2 = await world(t);
-  w2.apcJson.set(PULSE, () => Response.json(manifest(PULSE, { profiles: ["direct"] })));
-  assert.deepEqual(await w2.dropOnPulse(), { ok: false, error: "dock_not_offered" });
+  assert.equal((await w2.dropOnPulse()).ok, true, "Pulse's own file, kept as the copy");
+  await w2.hub.decide((await w2.pairings())[0]!.id, "deny");
   LIMITS.apcJsonFreshMs = 0;
   w2.apcJson.set(PULSE, () => {
     throw new TypeError("fetch failed");
   });
-  assert.deepEqual(await w2.dropOnPulse(), { ok: false, error: "dock_not_offered" }, "the last copy read is checked, not skipped");
+  assert.deepEqual(await w2.dropOnPulse(), { ok: false, error: "apc_json_unreachable" }, "no answer: refused, though the kept copy lists dock");
   w2.apcJson.set(PULSE, () => new Response("busy", { status: 503 }));
-  assert.deepEqual(await w2.dropOnPulse(), { ok: false, error: "dock_not_offered" }, "a 5xx is unreachable too");
-  // The app serves Dock again: read anew, it pairs.
+  assert.deepEqual(await w2.dropOnPulse(), { ok: false, error: "apc_json_unreachable" }, "a 5xx is unreachable too");
+  assert.deepEqual(await w2.pairings(), []);
+  // The file is back: read anew, it pairs.
   w2.apcJson.delete(PULSE);
   assert.equal((await w2.dropOnPulse()).ok, true);
 });
 
-test("the hub keeps a copy for ten minutes, then reads the file again", async (t) => {
+test("H7: the copy the hub decides a pairing on is a minute old at most", async (t) => {
+  assert.equal(LIMITS.apcJsonFreshMs, APC_JSON_PAIRING_MAX_AGE_S * 1000);
+  assert.ok(LIMITS.apcJsonFreshMs <= 60_000);
+  const w = await world(t);
+  const saved = LIMITS.apcJsonFreshMs;
+  t.after(() => (LIMITS.apcJsonFreshMs = saved));
+  assert.equal((await w.dropOnPulse()).ok, true);
+  await w.hub.decide((await w.pairings())[0]!.id, "deny");
+  // Pulse stops offering dock: within the copy's life the hub may still pair on it; past it, it reads the file and refuses.
+  w.apcJson.set(PULSE, () => Response.json(manifest(PULSE, { profiles: ["direct"] })));
+  LIMITS.apcJsonFreshMs = 40;
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "dock_not_offered" }, "a copy past its minute is not used");
+});
+
+test("the hub keeps a copy for a minute, then reads the file again", async (t) => {
   const w = await world(t);
   // The person says no in the dock: the hub gives Pulse its grant back, so the next drop pairs anew.
   const deny = async () => assert.equal((await w.hub.decide((await w.pairings())[0]!.id, "deny")).ok, true);
@@ -207,13 +223,12 @@ test("a verified app whose apc.json redirects is refused: a redirect is the orig
   // A status 0 (the opaque answer some runtimes give for a redirect) is refused the same way.
   w.apcJson.set(PULSE, () => Object.defineProperty(new Response(null), "status", { value: 0 }));
   assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "apc_json_redirected" });
-  // Nothing of the target was kept: with the file out of reach now, there is no copy to read Pulse from.
+  // A genuine network failure is refused too (H7, APC 0.10), as what it is.
   w.apcJson.set(PULSE, () => {
     throw new TypeError("fetch failed");
   });
-  assert.equal((await w.dropOnPulse()).ok, true, "a genuine network failure pairs on the operator's word");
+  assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "apc_json_unreachable" });
   // A redirect after a good copy refuses too, and forgets the copy.
-  await w.hub.decide((await w.pairings())[0]!.id, "deny");
   w.apcJson.delete(PULSE);
   assert.equal((await w.dropOnPulse()).ok, true, "Pulse's own file, kept as the copy");
   await w.hub.decide((await w.pairings())[0]!.id, "deny");
@@ -221,11 +236,8 @@ test("a verified app whose apc.json redirects is refused: a redirect is the orig
   assert.deepEqual(await w.dropOnPulse(), { ok: false, error: "apc_json_redirected" }, "the last copy does not excuse a redirect");
 });
 
-test("a verified app paired on the operator's word (its file out of reach, no copy) is still held to the default MCP path", async (t) => {
+test("a verified app is held to the MCP path its apc.json declares", async (t) => {
   const w = await world(t);
-  w.apcJson.set(PULSE, () => {
-    throw new TypeError("fetch failed");
-  });
   const pulsePairs = async (mcp_url: string) => {
     const { ticket } = await w.hub.ticket(w.agent.id);
     return (await w.hub.pair({ ticket, agent: w.agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url })) as { ok: boolean; error?: string };
