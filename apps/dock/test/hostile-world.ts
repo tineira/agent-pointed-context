@@ -87,7 +87,9 @@ async function serve(app: FakeApp, request: Request): Promise<Response> {
 
 /** Open to unverified apps by default (TIN-581); { UNVERIFIED_PAIRING: "closed" } is the operator's kill switch. */
 export async function world(t: TestContext, env: Json = {}) {
-  const hubEnv: Json = { APP_ORIGINS: PULSE, ...env };
+  // These worlds let a pairing without a code through (the pre-0.9 path most tests here use); the hub's own
+  // default is "required" (TIN-885), which pairing-code.test.ts checks with PAIRING_CODE unset.
+  const hubEnv: Json = { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent", ...env };
   const hubRoom = durableObjectRoom();
   const hub = new Hub(hubRoom.ctx, hubEnv);
   await hub.init(DID);

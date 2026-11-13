@@ -33,7 +33,7 @@ async function rpc(fetcher: (r: Request) => Promise<Response>, url: string, meth
 }
 
 async function world(t: TestContext) {
-  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE });
+  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent" });
   await hub.init(DID);
   const pulse = new Sandbox(durableObjectRoom().ctx, { APC_V2: "1", HUB_ORIGINS: DOCK, APC_PROFILES: "direct,dock" });
   await pulse.init();

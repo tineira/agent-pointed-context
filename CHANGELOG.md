@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The reference hub requires the pairing code (2026-11-13, TIN-885)
+
+- **The dock at apc.tineira.com now refuses a pairing without a pairing code (an app from before APC 0.9), at `/apc/pair` and at approval, and the hub fails closed: unless `PAIRING_CODE` is `when_sent`, it requires the code.** Every verified app (Pulse, Signals, Surplus) sends one; a request left from an older app tells the person in the dock that the app uses an older APC version with no pairing code and to ask its maker to update it. (`apps/dock/wrangler.jsonc`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/web/request-state.ts`, `apps/dock/test/`)
+
 ### Docs catch-up (2026-11-13, TIN-881)
 
 - **The docs no longer say the first npm publish is pending, and the overview counts four packages.** The integrate and conformance pages now say the packages are on npm with `next` on the newest release. (`apps/dock/src/docs/pages/integrate.md`, `overview.md`, `conformance.md`)

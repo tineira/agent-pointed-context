@@ -31,7 +31,7 @@ type Json = Record<string, unknown>;
 type Serve = (init?: RequestInit) => Response | Promise<Response>;
 
 async function world(t: TestContext, env: Json = {}) {
-  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, ...env });
+  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent", ...env });
   await hub.init(DID);
   const pulse = new Sandbox(durableObjectRoom().ctx, { ...PULSE_ENV, HUB_ORIGINS: DOCK });
   await pulse.init();

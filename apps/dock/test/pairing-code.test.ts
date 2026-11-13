@@ -156,7 +156,7 @@ test("a pairing without a code: when_sent pairs it the old way and counts it; re
   const points: Json[] = [];
   const analytics = { MCP_SESSIONS: { writeDataPoint: (p: Json) => points.push(p) }, ANALYTICS_SALT: "salt" };
   {
-    const w = await shopWorld(t, analytics);
+    const w = await shopWorld(t, { ...analytics, PAIRING_CODE: "when_sent" });
     const { answer } = await w.ask({ pairing_code: undefined });
     assert.equal(answer.ok, true, answer.error);
     assert.equal(answer.pairing_code, undefined, "no acknowledgement for a code it never got");
@@ -178,7 +178,7 @@ test("a pairing without a code: when_sent pairs it the old way and counts it; re
 test("coded and older requests expire each at its own time, and the alarm rings at the earlier", async (t) => {
   quick(t, "pairingCodeMs", 200);
   quick(t, "pendingMs", 600);
-  const w = await shopWorld(t);
+  const w = await shopWorld(t, { PAIRING_CODE: "when_sent" });
   const legacy = (await w.ask({ pairing_code: undefined })).answer.pairing_id!;
   const before = Date.now();
   const coded = (await w.ask()).answer.pairing_id!;
@@ -211,9 +211,27 @@ test("deny needs no code", async (t) => {
 });
 
 test("once PAIRING_CODE is required, a request from before (no code) is no longer approved", async (t) => {
-  const w = await shopWorld(t);
+  const w = await shopWorld(t, { PAIRING_CODE: "when_sent" });
   const id = (await w.ask({ pairing_code: undefined })).answer.pairing_id!;
   w.hubEnv.PAIRING_CODE = "required";
   assert.deepEqual(await w.hub.decide(id, "approve"), { ok: false, error: "pairing_code_required" });
   assert.deepEqual(await w.hub.decide(id, "deny"), { ok: true });
 });
+
+for (const [label, env] of [["required", { PAIRING_CODE: "required" }], ["unset (fails closed)", { PAIRING_CODE: undefined }], ["misspelled (fails closed)", { PAIRING_CODE: "requred" }]] as const) {
+  test(`PAIRING_CODE ${label}: a pairing without a code is refused with nothing reached or counted, and the same ticket pairs with a code`, async (t) => {
+    const points: Json[] = [];
+    const w = await shopWorld(t, { ...env, MCP_SESSIONS: { writeDataPoint: (p: Json) => points.push(p) }, ANALYTICS_SALT: "salt" });
+    const { body, answer } = await w.ask({ pairing_code: undefined });
+    assert.deepEqual(answer, { ok: false, error: "pairing_code_required" });
+    assert.deepEqual((await w.agent()).pairings, [], "no request in the dock");
+    assert.deepEqual(w.shop.calls, [], "nothing reached the app");
+    assert.deepEqual(points, [], "not counted as a codeless pairing");
+    const coded = (await w.hub.pair({ ...body, pairing_code: CODE })) as { ok: boolean; pairing_id?: string; pairing_code?: string };
+    assert.equal(coded.ok, true);
+    assert.equal(coded.pairing_code, PAIRING_CODE_ACK);
+    assert.deepEqual(await w.hub.decide(coded.pairing_id!, "approve"), { ok: false, error: "pairing_code_required" }, "approving still needs the code");
+    assert.deepEqual(await w.hub.decide(coded.pairing_id!, "approve", "k7m-4p2"), { ok: true });
+    assert.equal((await w.line(coded.pairing_id!)).status, "paired");
+  });
+}

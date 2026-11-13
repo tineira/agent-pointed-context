@@ -24,7 +24,7 @@ const DID = "a".repeat(32);
 const SID = "b".repeat(32);
 
 async function world(t: TestContext) {
-  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE });
+  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent" });
   await hub.init(DID);
   const pulseRoom = durableObjectRoom();
   const pulse = new Sandbox(pulseRoom.ctx, { APC_V2: "1", HUB_ORIGINS: DOCK });

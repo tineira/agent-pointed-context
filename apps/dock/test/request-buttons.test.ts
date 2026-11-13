@@ -137,6 +137,9 @@ test("the code as typed: forgiving to read, raw to send; only a wrong, malformed
   assert.equal(codeErrorText({ error: "wrong_pairing_code", attempts_left: 1 }), "Wrong code. 1 try left.");
   assert.match(decisionNotice("pairing_code_refused"), /^Too many wrong codes, so the request was removed\. Drop the agent on the app again\.$/);
   for (const e of ["wrong_pairing_code", "invalid_pairing_code", "pairing_code_required"]) assert.doesNotMatch(decisionNotice(e), /That did not go through/, e);
+  // Only a request without a code gets this as a notice (a coded one says it on its card): an app from before 0.9 (TIN-885).
+  assert.equal(decisionNotice("pairing_code_required"), "This app uses an older APC version that has no pairing code, so it was not paired. Ask its maker to update it, and Deny this request.");
+  assert.doesNotMatch(decisionNotice("pairing_code_required"), /pairing_code_required/, "never the raw code");
 });
 
 test("rendered: a request with a code on the dock's page asks for it in one labelled field; Deny first, Allow off until a code is typed, neither the default", () => {

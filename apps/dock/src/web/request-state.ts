@@ -84,8 +84,9 @@ export function decisionNotice(error: unknown): string {
       return "Wrong code. Type the code the app shows, where you allowed the agent.";
     case "invalid_pairing_code":
       return "That is not a pairing code: it is 6 letters and digits, like K7M-4P2, shown by the app.";
+    // Only a request without a code lands here (a coded one says it on its card): an app from before 0.9 (TIN-885).
     case "pairing_code_required":
-      return "This request needs the code the app shows: type it on the request in your dock.";
+      return "This app uses an older APC version that has no pairing code, so it was not paired. Ask its maker to update it, and Deny this request.";
     default:
       return `That did not go through (${typeof error === "string" ? error.slice(0, 40) : "error"}). Try again.`;
   }
