@@ -14,7 +14,7 @@ const { default: worker } = await import(new URL("../src/worker/index.ts", impor
 const ORIGIN = "https://signals.test";
 const HUB = "https://dock.test";
 const SID = "7".repeat(32);
-const DEPLOY = { HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
+const DEPLOY = { HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
 test("a typo in APC_PROFILES serves no agent path, and does not turn on both", async (t) => {
   const errors: string[] = [];
@@ -33,7 +33,12 @@ test("a typo in APC_PROFILES serves no agent path, and does not turn on both", a
   assert.equal(errors.length, 3, "each refusal is logged");
   assert.match(errors[0]!, /^Signals refuses its agent paths: APC_PROFILES has "dirct"/);
   assert.equal((await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), DEPLOY)).status, 200, "a right value still serves");
-  const unset = await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), {});
+  const unset = await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), { HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN });
   assert.equal(unset.status, 200, "unset still means both");
   assert.deepEqual(((await unset.json()) as { profiles: string[] }).profiles, ["direct", "dock"]);
+  // Dock only while Signals can pair (M8, APC 0.10): without its public origin or a hub, it is not listed.
+  for (const env of [{}, { HUB_ORIGINS: HUB }, { PUBLIC_ORIGIN: ORIGIN }, { HUB_ORIGINS: "dock.test", PUBLIC_ORIGIN: ORIGIN }]) {
+    const file = await worker.fetch(new Request(`${ORIGIN}${APC_JSON_PATH}`), env);
+    assert.deepEqual(((await file.json()) as { profiles: string[] }).profiles, ["direct"], JSON.stringify(env));
+  }
 });

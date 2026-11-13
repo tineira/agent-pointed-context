@@ -11,6 +11,7 @@ import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conforman
 import { APC_JSON_PATH, formatPairingCode, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { demoMarket } from "../../demo/src/model/demo-world.ts";
+import { dockLifecycle, inProcessHandshake, isHandshake } from "../../demo/test/dock-conformance.ts";
 
 installWorkersStandIn();
 const { Feed } = await import(new URL("../src/worker/feed.ts", import.meta.url).href);
@@ -32,23 +33,23 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 let hubCount = 0;
 
 /** Signals' deploy (wrangler.jsonc): both profiles. */
-const DEPLOY = { HUB_ORIGINS: HUB, APC_PROFILES: "direct,dock" };
+const DEPLOY = { HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
 async function signals(profile: "direct" | "dock" = "dock", options: { link?: boolean; env?: Record<string, string> } = {}) {
   const room = durableObjectRoom();
   // A hub of its own, on its own origin: Signals pairs with it, and it calls Signals back (a give-back, its introduction).
   const hubOrigin = `https://dock-${++hubCount}.test`;
   const env = options.env ?? DEPLOY;
-  const feed = new Feed(room.ctx, env.HUB_ORIGINS ? { ...env, HUB_ORIGINS: `${env.HUB_ORIGINS},${hubOrigin}` } : env);
-  await feed.init();
+  const feedEnv = env.HUB_ORIGINS ? { ...env, HUB_ORIGINS: `${env.HUB_ORIGINS},${hubOrigin}` } : env;
+  // `let`: a restart (APC 0.10, T_ack across one) puts a new object on the same storage, and everything below follows it.
+  let feed = new Feed(room.ctx, feedEnv);
+  const { owner } = await feed.init();
+  // The Worker's own routes (/apc/revoke, the give-back), with this feed as the one its namespace holds.
+  const workerEnv = { ...feedEnv, FEED: { idFromName: (name: string) => name, get: (id: string) => (id === SID ? feed : new Feed(durableObjectRoom().ctx, feedEnv)) } };
   const hub = standInHub({
     origin: hubOrigin,
-    app: async (request) => {
-      if (new URL(request.url).pathname !== "/apc/revoke") return feed.fetch(request);
-      const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
-      const r = await feed.revoke(secret);
-      return Response.json(r, { status: r.ok ? 200 : 404 });
-    },
+    // The hub reaches Signals as it does in production: the grant's MCP URL, and the public /apc/revoke (M7, APC 0.10).
+    app: async (request) => (new URL(request.url).pathname === "/apc/revoke" ? worker.fetch(request, workerEnv) : feed.fetch(request)),
   });
   const calls: string[] = [];
   hubs.set(hubOrigin, { hub, calls });
@@ -77,6 +78,9 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
     assert.equal(asked.error, "consent_required");
     const paired = await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
+    // The dock owner types the code, and the hub introduces itself (APC 0.10): only then does the grant serve calls.
+    const approved = await hub.decide(hub.pairings.find((p) => p.agent === agent)!.id, "approve", asked.pairing_code);
+    assert.equal(approved.ok, true, `the dock's Allow: ${approved.error}`);
     await feed.unpin(paired.grant_id);
     return { grantId: paired.grant_id as string, mcpUrl: urlOf(paired.grant_id) };
   };
@@ -84,7 +88,13 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
     name: "Signals",
     profile,
     // The MCP endpoint is the feed's; apc.json is the Worker's, for the whole origin (APC 0.5).
-    fetch: (request) => (new URL(request.url).pathname === APC_JSON_PATH ? worker.fetch(request, options.env ?? DEPLOY) : feed.fetch(request)),
+    // The owner's endpoints and the give-back are the Worker's too (M6, M7, APC 0.10).
+    fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === APC_JSON_PATH) return worker.fetch(request, options.env ?? DEPLOY);
+      if (isHandshake(request)) return inProcessHandshake(worker, workerEnv, request);
+      return path.startsWith("/api/") || path.startsWith("/apc/") ? worker.fetch(request, workerEnv) : feed.fetch(request);
+    },
     connect: () => connectOn(profile),
     // The pairing code (APC 0.9): what Signals' consent shows (formatted, as app.tsx shows it), and the Allow on it.
     ...(profile === "dock"
@@ -103,6 +113,21 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
                 },
               };
             },
+            // The Dock profile as built (APC 0.10). Signals does not sleep (dormant is a SHOULD): no idleMs.
+            lifecycle: dockLifecycle({
+              worker,
+              workerEnv: () => workerEnv,
+              disabledEnv: { APC_PROFILES: "direct,dock" },
+              origin: ORIGIN,
+              sid: SID,
+              cookie: `apc_signals=${SID}.${owner}`,
+              hub,
+              target: targets[0],
+              view: { screen: "feed", params: { kind: "competitor_offer" }, selection: { kind: "post", id: targets[0].id } },
+              room,
+              object: () => feed,
+              restart: () => void (feed = new Feed(room.ctx, feedEnv)),
+            }),
           },
         }
       : {}),
@@ -154,7 +179,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       },
     },
   };
-  return { app, feed, room, hub, calls };
+  return { app, feed, room, hub, calls, workerEnv };
 }
 
 for (const profile of ["direct", "dock"] as const) {
@@ -169,7 +194,7 @@ for (const profile of ["direct", "dock"] as const) {
 }
 
 test("a Signals that offers only the dock makes no Direct agent", async () => {
-  const { feed } = await signals("dock", { env: { HUB_ORIGINS: HUB, APC_PROFILES: "dock" } });
+  const { feed } = await signals("dock", { env: { HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "dock" } });
   assert.deepEqual(await feed.addDirectGrant(), { ok: false, error: "dock_only" });
 });
 
@@ -263,8 +288,10 @@ test("Signals makes a grant for a dock agent only with the nonce its consent was
   assert.match(asked.consent, /^cn_[0-9a-f]{32}$/);
   assert.equal(formatPairingCode(asked.pairing_code).length, 7, "and the pairing code its consent shows (APC 0.9)");
   assert.equal(hubCalls.length, calls);
-  assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: `cn_${"0".repeat(32)}` })).error, "consent_required");
-  assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, agent: "ag_2", consent: asked.consent })).error, "consent_required", "another agent's drop");
+  // An Allow whose nonce does not take fails closed (APC 0.10): consent_expired, and no new question on its word.
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent: `cn_${"0".repeat(32)}` }), { ok: false, error: "consent_expired" });
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, agent: "ag_2", consent: asked.consent }), { ok: false, error: "consent_expired" }, "another agent's drop");
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }), { ok: false, error: "consent_expired" }, "and the nonce went with that try: used or not, it works once");
   assert.equal(hubCalls.length, calls);
   const again = await feed.pairHub(SID, ORIGIN, drop);
   assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: again.consent })).ok, true);
@@ -296,9 +323,9 @@ test("a double-clicked Allow in Signals pairs once: the second request changes n
   const { consent } = await feed.pairHub(SID, ORIGIN, drop);
   const first = feed.pairHub(SID, ORIGIN, { ...drop, consent });
   await asked;
-  // The grant exists while the hub answers, but it is not yet this agent's link.
-  const during = (await feed.state()).grants as Array<{ id: string; agent: string | null }>;
-  assert.deepEqual(during.map((g) => g.agent), [null]);
+  // The grant exists while the hub answers, in flight (APC 0.10): this agent's, and answering nothing yet.
+  const during = (await feed.state()).grants as Array<{ id: string; agent: string | null; state: string }>;
+  assert.deepEqual(during.map((g) => [g.agent, g.state]), [["ag_7", "in_flight"]]);
   assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
   release();
   const done = await first;

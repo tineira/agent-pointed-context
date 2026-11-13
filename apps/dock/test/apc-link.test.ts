@@ -22,6 +22,8 @@ const DOCK = "https://dock.test";
 const PULSE = "https://pulse.test";
 const DID = "c".repeat(32);
 const SID = "d".repeat(32);
+/** Pulse as deployed for pairing (APC 0.10, M8): its public origin and its hub allowlist configured. */
+const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: PULSE };
 const CLIENT = { name: "claude-code", version: "2.1.0" };
 
 type Result = { isError?: boolean; structuredContent?: Record<string, unknown>; content: Array<{ text: string }> };
@@ -35,13 +37,13 @@ async function rpc(fetcher: (r: Request) => Promise<Response>, url: string, meth
 async function world(t: TestContext) {
   const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE });
   await hub.init(DID);
-  const pulse = new Sandbox(durableObjectRoom().ctx, { APC_V2: "1", HUB_ORIGINS: DOCK, APC_PROFILES: "direct,dock" });
+  const pulse = new Sandbox(durableObjectRoom().ctx, PULSE_ENV);
   await pulse.init();
   const customers = demoDataset().customers;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
+    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, PULSE_ENV);
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
     if (url.origin === DOCK && url.pathname === "/apc/pair") return answerAs(await hub.pair(await request.json()));
     if (url.origin === DOCK && url.pathname === "/apc/confirm") return answerAs(await hub.confirm(await request.json()));

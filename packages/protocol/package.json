@@ -1,6 +1,6 @@
 {
   "name": "@tineira/apc-protocol",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Agent Pointed Context (APC): the contract an app and an AI agent share. Wire types, the target grammar, the core, apc.json and the version of the standard.",
   "keywords": ["apc", "agent-pointed-context", "mcp", "model-context-protocol", "ai-agents", "protocol"],
   "homepage": "https://apc.tineira.com/docs",

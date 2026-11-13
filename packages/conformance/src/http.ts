@@ -97,6 +97,8 @@ export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
   { name: "mobile: every agent is shown in the page, and the agent bar cannot be collapsed", why: "needs the page on a phone (page.mobile)" },
   { name: "mobile: a person pins and unpins with a finger", why: "needs the page on a phone (page.mobile)" },
   { name: "apc_link: the offer, the code and its refusals, revoke and unlink of a linked agent", why: "needs Dock connections through a hub and the agent bar (link adapter)" },
+  { name: "dock: the pairing code (APC 0.9)", why: "needs the person's drop and Allow, and a stand-in hub (dock adapter)" },
+  { name: "dock: the Dock profile as built (APC 0.10): the grant's states, the transitions, M1 to M9 and one pending pairing", why: "needs the person's drop, Allow and Cancel, the app's clock, a restart and a stand-in hub (dock.lifecycle)" },
 ];
 
 const DEFAULT_TIMEOUT_MS = 15_000;

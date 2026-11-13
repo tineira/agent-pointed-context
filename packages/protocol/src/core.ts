@@ -18,7 +18,9 @@
  *   app's page just now (the reference apps: a single-use nonce the page shows its consent with,
  *   `DockConsent` in `@tineira/apc-server`), whatever the page last loaded. A page that missed a revoke must not
  *   pair without asking. Since APC 0.9 the consent shows a pairing code, and the dock's Allow requires it
- *   (`PAIRING_CODE_LENGTH`, below).
+ *   (`PAIRING_CODE_LENGTH`, below). Since APC 0.10 a dock grant has states (in flight, handoff, live,
+ *   dormant, ended, revoked) that say what it answers, and the hub and the app have MUSTs around the hub
+ *   call (`dock.ts`).
  *
  * The core is the same on both, and per grant: the hub is one more holder of a grant.
  *
@@ -87,11 +89,26 @@ export const THEN_PIN_WINDOW_MIN = 30;
  * the read whole. A failure that concerns the grant itself (its auth, an expired session) still fails it
  * closed.
  */
-export interface CurrentViewResult {
+export type CurrentViewResult = CurrentViewAnswer | IdleCurrentView;
+/** `get_current_view` of a grant that is not dormant: the view and the focus, or nothing with a `note`. */
+export interface CurrentViewAnswer {
   view: ViewPayload | null;
   focus: FocusPayload | null;
   /** Why the result is empty, when the app could not answer it just now (APC 0.8). */
   note?: string;
+  /** Never set here: only `IdleCurrentView` carries `idle`. */
+  idle?: undefined;
+}
+/**
+ * `get_current_view` of a dormant dock grant (Dock profile, APC 0.10, `idleCurrentView`): the person is away
+ * from the app, which answers no data until they come back. Distinct from unavailable, page closed and
+ * revoked. An answer without `idle` (an app before 0.10) reads as unavailable, as before.
+ */
+export interface IdleCurrentView {
+  view: null;
+  focus: null;
+  idle: true;
+  note: string;
 }
 
 /**
@@ -122,10 +139,12 @@ export interface CurrentViewResult {
  * pin is marked seen. A hub that relays a wait holds the pin it was handed: it keeps it unread until its
  * own agent gets it.
  */
-export type WaitForFocusResult = WaitGotFocus | WaitNoFocus;
+export type WaitForFocusResult = WaitGotFocus | WaitNoFocus | IdleWaitForFocus;
 export interface WaitGotFocus {
   focus: FocusPayload;
   timed_out: false;
+  /** Never set here: only `IdleWaitForFocus` carries `idle`. */
+  idle?: undefined;
 }
 export interface WaitNoFocus {
   focus: null;
@@ -133,6 +152,20 @@ export interface WaitNoFocus {
   page_open?: boolean;
   /** On a wait refused because another wait of the grant started just before it (APC 0.8): when to try again. */
   retry_after_s?: number;
+  /** Never set here: only `IdleWaitForFocus` carries `idle`. */
+  idle?: undefined;
+  note: string;
+}
+/**
+ * `wait_for_focus` of a dormant dock grant (Dock profile, APC 0.10, `idleWaitForFocus`), answered at once. A hub
+ * never reads it as page closed and never ends its own wait on it. An answer without `idle` (an app before
+ * 0.10) reads as page closed or unavailable, as before.
+ */
+export interface IdleWaitForFocus {
+  focus: null;
+  timed_out: false;
+  page_open: false;
+  idle: true;
   note: string;
 }
 
@@ -282,8 +315,13 @@ export const TICKET_TTL_MS = 240_000;
 
 /** Why a hub refuses a pairing or an approval over its code. */
 export type PairingCodeError = "invalid_pairing_code" | "pairing_code_required" | "wrong_pairing_code" | "pairing_code_refused";
-/** Why an app did not keep a grant after asking a hub to pair (`pairWithHub`), when the hub gave no reason of its own. */
-export type HubCallError = "hub_unreachable" | "hub_refused" | "hub_ignores_pairing_code";
+/**
+ * Why an app did not keep a grant after asking a hub to pair (`pairWithHub`), when the hub gave no reason of
+ * its own. `hub_not_allowed` (0.10): the hub given is not a bare origin, so no request was sent (M1, M9);
+ * `hub_unreachable`: no answer within the deadline (M3); `hub_refused`: a redirect (M2), an answer past the
+ * byte cap or with a bad `content-length` (M4), or anything that is not an answer.
+ */
+export type HubCallError = "hub_not_allowed" | "hub_unreachable" | "hub_refused" | "hub_ignores_pairing_code";
 
 /**
  * A code as typed or sent, made canonical: case, spaces and dashes are ignored, O reads as 0 and I or L as 1.

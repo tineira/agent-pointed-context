@@ -1,4 +1,4 @@
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest, parseFocusAttrs, urlOnOrigin, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
+import { APC_AGENT_TYPE, APC_JSON_MAX_BYTES, APC_JSON_PATH, parseAgentDrag, parseApcManifest, parseFocusAttrs, urlOnOrigin, type AgentDrag, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
 import { DEFAULT_PINNING_STRINGS, resolveStrings, type PinningStrings } from "./strings.ts";
 
 const profileLoads = new Map<string, Promise<ApcRole[] | null>>();
@@ -217,16 +217,8 @@ export function placeNativeDrop(
   return "pinned";
 }
 
-/** What an agent's drag carries. hub and ticket come with pairing (TIN-382): the hub's origin and a single-use, short-lived ticket. */
-export interface AgentDrag {
-  v: 1;
-  agent: string;
-  hub?: string;
-  ticket?: string;
-}
-
-/** The drag type a dock puts on an agent: its payload is agentDragPayload(handle), never a secret. */
-export const APC_AGENT_TYPE = "application/x-apc-agent";
+/** The drag payload moved to `@tineira/apc-protocol` (APC 0.10) so an app's server can check a drop too; re-exported here. */
+export { AGENT_HANDLE_RE, agentDragPayload, APC_AGENT_TYPE, DRAG_TICKET_RE, parseAgentDrag, parseAgentDragPayload, type AgentDrag } from "@tineira/apc-protocol";
 
 /**
  * Set on the page's root element while enablePinning takes native agent drops (APC 0.5): the page
@@ -234,37 +226,6 @@ export const APC_AGENT_TYPE = "application/x-apc-agent";
  * Direct-only app. A Direct-only app without it gets the extension's answer instead.
  */
 export const APC_DROPS_ATTR = "data-apc-native-drops";
-
-/**
- * What an agent's drag carries: a public handle and nothing else. Any page the agent is dropped on
- * can read it, so it must never hold a grant secret or an MCP URL.
- */
-export function agentDragPayload(handle: string, pairing?: { hub: string; ticket: string }): string {
-  return JSON.stringify(pairing ? { v: 1, agent: handle, hub: pairing.hub, ticket: pairing.ticket } : { v: 1, agent: handle });
-}
-
-/**
- * A drag payload, or null when it is not one (another app's data, a wrong version, junk). A hub
- * that is not a bare http(s) origin, or a ticket that is not a short token, is dropped, not the drag.
- */
-export function parseAgentDrag(text: string): AgentDrag | null {
-  try {
-    const value = JSON.parse(text) as { v?: unknown; agent?: unknown; hub?: unknown; ticket?: unknown } | null;
-    if (value?.v !== 1 || typeof value.agent !== "string" || !/^[\w.:-]{1,128}$/.test(value.agent)) return null;
-    const drag: AgentDrag = { v: 1, agent: value.agent };
-    const hubOk = typeof value.hub === "string" && value.hub.length <= 200 && /^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/.test(value.hub);
-    const ticketOk = typeof value.ticket === "string" && /^[\w.-]{16,200}$/.test(value.ticket);
-    if (hubOk && ticketOk) Object.assign(drag, { hub: value.hub, ticket: value.ticket });
-    return drag;
-  } catch {
-    return null;
-  }
-}
-
-/** The handle in a drag payload, or null when it is not one. */
-export function parseAgentDragPayload(text: string): string | null {
-  return parseAgentDrag(text)?.agent ?? null;
-}
 
 /** The innermost pointable element at a point, with its parsed target. */
 export function targetAt(x: number, y: number): { element: Element; target: FocusTarget } | null {

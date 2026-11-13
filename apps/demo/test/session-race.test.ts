@@ -204,7 +204,7 @@ test("the Worker resumes the sandbox a create's cookie names (set by a parallel 
   assert.equal(owners.size, 1);
 
   // A cookie whose sandbox is gone (expired) opens a new one and names it.
-  const stale = await app.request("https://example.com/api/session", { method: "POST", headers: { cookie: `apc_session=${hex()}.${hex()}` }, body: "{}" }, env);
+  const stale = await app.request("https://example.com/api/session", { method: "POST", headers: { cookie: `apc_session=${hex()}.${hex()}`, "content-type": "application/json" }, body: "{}" }, env);
   const opened = (await stale.json()) as { sid: string; created: boolean };
   assert.equal(opened.created, true);
   assert.match(stale.headers.get("set-cookie") ?? "", new RegExp(`^apc_session=${opened.sid}\\.${owners.get(opened.sid)};`));

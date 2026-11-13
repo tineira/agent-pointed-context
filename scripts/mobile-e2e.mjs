@@ -157,7 +157,7 @@ for (const app of APPS) {
     name: app.name,
     profile: "direct",
     connect: async () => {
-      const made = await evaluate(`fetch("/api/s/${sid}/grants/agent", { method: "POST" }).then((r) => r.json())`);
+      const made = await evaluate(`fetch("/api/s/${sid}/grants/agent", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then((r) => r.json())`);
       const grantId = made.grant_id ?? made.id;
       if (!grantId) throw new Error(`${app.name}: could not make an agent: ${JSON.stringify(made)}`);
       const secret = (await stateOf()).grants.find((g) => g.id === grantId).secret;

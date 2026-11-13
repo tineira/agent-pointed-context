@@ -10,3 +10,5 @@ export * from "./links.ts";
 export * from "./apc-json.ts";
 export * from "./consent.ts";
 export * from "./hub-client.ts";
+export * from "./dock.ts";
+export * from "./dock-secret.ts";

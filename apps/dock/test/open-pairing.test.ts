@@ -249,7 +249,7 @@ test("a Deny while the hub is introducing itself wins: no call after it, nothing
   assert.equal(line.status, "pending");
   assert.equal(line.approving, true);
   assert.equal((await w.listHub()).some((x) => x.name.startsWith("shop_example__")), false);
-  assert.deepEqual(await w.hub.decide(pending.pairing_id!, "approve_unverified"), { ok: false, error: "invalid_action" });
+  assert.deepEqual(await w.hub.decide(pending.pairing_id!, "approve_unverified"), { ok: false, error: "approving" });
 
   assert.deepEqual(await w.hub.decide(pending.pairing_id!, "deny"), { ok: true });
   const callsAtDeny = shop.calls.length;
@@ -313,8 +313,13 @@ test("an approval whose introduction never finished counts as paired after a min
   const shop = fakeApp(SHOP, "Shop");
   const pending = await w.pairApp(shop, { approve: false });
   leftHalfway(w, pending.pairing_id!, SHOP, { agoMs: LIMITS.approvingMs + 1_000 });
+  // Paired in storage, and shown as connecting until the app answered the hub's initialize (the hub tries at once).
+  assert.equal((await w.pairingOf(SHOP)).approving, true);
+  assert.equal(storedStatus(w, pending.pairing_id!), "paired");
+  await w.hub.idle();
   assert.equal((await w.pairingOf(SHOP)).status, "paired");
-  assert.equal((await w.callHub("shop_example__get_figure")).structuredContent.untrusted, true, "its tools are read on first use");
+  assert.deepEqual(shop.calls, ["initialize", "tools/list"]);
+  assert.equal((await w.callHub("shop_example__get_figure")).structuredContent.untrusted, true);
 });
 
 test("removing an agent clears its domains' approvals before giving its grants back: an approval given during a slow give-back is kept (Fix check 3 on #120)", async (t) => {
@@ -398,14 +403,17 @@ test("an Approve during a Remove's give-back finds nothing and inserts nothing: 
 
 test("an Approve whose pairing vanishes during the introduction takes back the approval it inserted", async (t) => {
   const w = await world(t);
-  // The app answers 404 to initialize: it took the grant back, and the hub drops the pairing.
+  // The app answers 404 to initialize: its grant ended, and the hub keeps the pairing as an ended line (H5, APC 0.10).
   const { app } = heldApp(SHOP, { status: 404 });
   const asked = await w.pairApp(app, { approve: false });
-  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: false, error: "unknown_pairing" });
-  assert.equal(await w.pairingOf(SHOP), undefined);
+  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve_unverified"), { ok: false, error: "pairing_ended" });
+  assert.equal((await w.pairingOf(SHOP)).status, "ended");
   assert.equal(approvalOf(w, SHOP), false, "the approval this call inserted went with it");
   app.respond = undefined;
+  // The next drop replaces the ended line, and warns again.
   assert.equal((await w.pairApp(app, { approve: false })).ok, true);
+  assert.equal((await w.agent()).pairings.length, 1);
+  assert.equal((await w.pairingOf(SHOP)).status, "pending");
   assert.equal((await w.pairingOf(SHOP)).warning, true);
 });
 
@@ -418,7 +426,7 @@ test("a failing Approve leaves an approval that stood before it", async (t) => {
   // The other agent's request from the same domain: the usual yes, and the app answers 404 this time.
   shop.respond = (method) => (method === "initialize" ? new Response("gone", { status: 404 }) : null);
   const asked = await w.pairApp(shop, { approve: false, agentIndex: 1 });
-  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve"), { ok: false, error: "unknown_pairing" });
+  assert.deepEqual(await w.hub.decide(asked.pairing_id!, "approve"), { ok: false, error: "pairing_ended" });
   assert.equal(approvalOf(w, SHOP), true, "not this call's to take back");
 });
 

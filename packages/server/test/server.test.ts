@@ -10,6 +10,8 @@ import {
   WAIT_PAGE_CLOSED_NOTE,
   WAIT_TAKEN_OVER_NOTE,
   WAIT_TIMED_OUT_NOTE,
+  apcJsonResponse,
+  apcManifest,
   attachAttention,
   attachThen,
   attentionFor,
@@ -32,6 +34,22 @@ const focus: FocusPayload = {
   next: "get_figure",
   next_args: { key: "customer_bridge", params: { month: "2026-03", step: "new" } },
 };
+
+test("a tool error carries { error, message } in structuredContent and the text, the same JSON (APC 0.10)", () => {
+  const error = toolError("pairing", "Wait, or tell them.");
+  assert.deepEqual(error, {
+    content: [{ type: "text", text: JSON.stringify({ error: "pairing", message: "Wait, or tell them." }) }],
+    structuredContent: { error: "pairing", message: "Wait, or tell them." },
+    isError: true,
+  });
+  assert.deepEqual(JSON.parse(error.content[0]!.text), error.structuredContent);
+});
+
+test("apc.json may be cached a minute at most (M8, APC 0.10)", () => {
+  const response = apcJsonResponse(apcManifest({ name: "Orders", origin: "https://orders.test", profiles: ["dock"] }));
+  assert.equal(response.headers.get("cache-control"), "public, max-age=60");
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
+});
 
 test("the pin is unread until a read after it was dropped", () => {
   const row: FocusRow = { grant_id: "g", kind: "customer", id: "cus_0001", part: null, params: null, pinned_at: "2026-10-15T12:00:00.000Z", seen_at: null };
@@ -66,6 +84,7 @@ test("the loop hint rides on every result only while a page is open, structured 
 
   const error = attachThen(toolError("not_found", "no such customer"), true);
   assert.equal((JSON.parse(error.content[0]!.text) as { then: string }).then, THEN_NOTE, "an error's text carries it too");
+  assert.equal((error.structuredContent as { then: string }).then, THEN_NOTE, "and its structured content (APC 0.10)");
   const plain = attachThen({ content: [{ type: "text", text: "not json" }] }, true);
   assert.deepEqual(JSON.parse(plain.content[1]!.text), { then: THEN_NOTE }, "a non-JSON text gets an extra block");
 });

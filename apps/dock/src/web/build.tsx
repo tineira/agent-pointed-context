@@ -104,7 +104,7 @@ export const PROFILES_SNIPPET = `// wrangler.jsonc
 "vars": { "APC_PROFILES": "direct,dock" }
 
 // GET /.well-known/apc.json
-app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: parseProfiles(c.env.APC_PROFILES), connect: "/?connect" })));`;
+app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: servedProfiles(c.env), connect: "/?connect" })));`;
 
 function Back() {
   return (

@@ -21,6 +21,8 @@ export const DOCK = "https://dock.test";
 export const PULSE = "https://pulse.test";
 const DID = "a".repeat(32);
 export const SID = "b".repeat(32);
+/** Pulse as deployed for pairing (APC 0.10, M8): it lists `dock` and pairs only with its public origin and a hub allowlist configured. */
+export const PULSE_ENV = { APC_V2: "1", APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: PULSE };
 
 export type Json = Record<string, unknown>;
 type Answer = Response | Promise<Response> | null | undefined;
@@ -94,7 +96,7 @@ export async function world(t: TestContext, env: Json = {}) {
   const hub = new Hub(hubRoom.ctx, hubEnv);
   await hub.init(DID);
   const pulseRoom = durableObjectRoom();
-  const pulse = new Sandbox(pulseRoom.ctx, { APC_V2: "1", HUB_ORIGINS: DOCK });
+  const pulse = new Sandbox(pulseRoom.ctx, PULSE_ENV);
   await pulse.init();
   const customers = demoDataset().customers;
   const apps = new Map<string, FakeApp>();
@@ -105,13 +107,11 @@ export async function world(t: TestContext, env: Json = {}) {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     hits.set(url.origin, (hits.get(url.origin) ?? 0) + 1);
-    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, { APC_V2: "1", APC_PROFILES: "direct,dock" });
+    if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, PULSE_ENV);
     if (url.origin === PULSE && url.pathname.startsWith("/mcp/")) return pulse.fetch(request);
-    // Pulse takes its grant back when the hub lets go of a pairing (a deny, an expired request).
+    // Pulse takes its grant back when the hub lets go of a pairing (a deny, an expired request): through its real Worker, which answers the same 200 to anything (M7).
     if (url.origin === PULSE && url.pathname === "/apc/revoke") {
-      const secret = new URL(((await request.json()) as { mcp_url: string }).mcp_url).pathname.split("/").at(-1);
-      const r = await pulse.revokeHubGrant(secret);
-      return Response.json(r, { status: r.ok ? 200 : 404 });
+      return pulseWorker.fetch(request, { ...PULSE_ENV, SANDBOX: { idFromName: (name: string) => name, get: () => pulse } });
     }
     if (url.origin === DOCK && url.pathname === "/apc/pair") return answerAs(await hub.pair(await request.json()));
     if (url.origin === DOCK && url.pathname === "/apc/confirm") return answerAs(await hub.confirm(await request.json()));

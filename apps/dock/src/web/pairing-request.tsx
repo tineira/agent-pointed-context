@@ -14,11 +14,14 @@
  *
  * A request without a code (a reader, an app from before 0.9) keeps its buttons on every surface. An unverified
  * app keeps its warning (unverified.tsx), with the same field or note.
+ *
+ * While the hub introduces itself to the app after the person's yes (`approving`, APC 0.10), every surface shows
+ * "Connecting to …" with Deny only: no field and no Allow, so no code can be typed, sent or counted then.
  */
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { formatPairingCode } from "@tineira/apc-protocol";
-import { buttonsOff, CODE_IN_DOCK, codeErrorText, typedCode, type CodeError, type InFlight } from "./request-state.ts";
-import { UnverifiedRequest, type CodeEntry, type UnverifiedAction } from "./unverified.tsx";
+import { buttonsOff, CODE_IN_DOCK, codeErrorText, connectingText, typedCode, type CodeError, type InFlight } from "./request-state.ts";
+import { NotVerified, UnverifiedRequest, type CodeEntry, type UnverifiedAction } from "./unverified.tsx";
 
 export interface PairingRequestProps {
   /** Where the code is typed: "field" on the dock's page and an agent's page, "dock" on Float, the strip and the pets. */
@@ -55,10 +58,13 @@ export function PairingRequest(props: PairingRequestProps) {
   useEffect(() => {
     if (props.error?.error === "wrong_pairing_code") setValue("");
   }, [props.error]);
-  const code = props.code && props.kind === "app" ? typedCode(value) : null;
+  // While approving the request takes no code (APC 0.10), whatever the state still says of one.
+  const coded = !!props.code && !props.approving;
+  const code = coded && props.kind === "app" ? typedCode(value) : null;
   const off = buttonsOff({ inFlight: props.inFlight, approving: props.approving });
   const approve = (action: UnverifiedAction) => {
-    if (!props.code) return props.decide(action);
+    if (props.approving) return;
+    if (!coded) return props.decide(action);
     if (props.entry !== "field" || !code || off.approve) return;
     props.decide(action, code);
   };
@@ -116,7 +122,31 @@ export function PairingRequest(props: PairingRequestProps) {
       )}
     </span>
   );
-  const entry: CodeEntry | undefined = props.code && props.kind === "app" ? (props.entry === "field" ? { kind: "field", field, ready: !!code } : { kind: "dock", note }) : undefined;
+  const entry: CodeEntry | undefined = coded && props.kind === "app" ? (props.entry === "field" ? { kind: "field", field, ready: !!code } : { kind: "dock", note }) : undefined;
+
+  // The hub is introducing itself to the app: "connecting", and Deny, which still wins.
+  if (props.approving && props.kind === "app")
+    return (
+      <>
+        <p>
+          {props.says}
+          {props.unverified ? (
+            <>
+              {" "}
+              <NotVerified />
+            </>
+          ) : null}
+        </p>
+        <p className="muted connecting" role="status" aria-live="polite">
+          {connectingText(props.app)}
+        </p>
+        <div className="row">
+          <button type="button" disabled={off.deny} onClick={() => props.decide("deny")}>
+            Deny
+          </button>
+        </div>
+      </>
+    );
 
   if (props.unverified)
     return (

@@ -17,8 +17,23 @@ export function toolResult(data: Record<string, unknown>): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data };
 }
 
+/**
+ * A tool error: `{ error, message }` in both `structuredContent` and `content[0].text` (the same JSON), with
+ * `isError: true` (APC 0.10; before 0.10 the text only). The dock grant's `pairing` and `idle` errors use it.
+ *
+ * **A tool that declares an `outputSchema` must admit `{ error, message }`**, or declare none: MCP SDK clients
+ * validate `structuredContent` against the tool's `outputSchema` even when `isError` is true (the SDK's server
+ * does not), so a schema that rejects the error shape turns every error of that tool into a client-side protocol
+ * error instead of `{ error, message }`. For example, with a JSON Schema: `{ type: "object", anyOf: [yourSchema,
+ * { type: "object", properties: { error: { type: "string" }, message: { type: "string" } }, required: ["error",
+ * "message"] }] }` (MCP needs `type: "object"` at the root; leave `additionalProperties` open, since an error may
+ * carry more keys, such as `attention`); with a raw zod shape, make its own fields optional and add optional
+ * `error` and `message`. The same holds for `get_current_view` and `wait_for_focus`, whose dormant answers are
+ * the idle shapes (`view: null`, `idle: true`).
+ */
 export function toolError(code: string, message: string): ToolResult {
-  return { content: [{ type: "text", text: JSON.stringify({ error: code, message }) }], isError: true };
+  const data = { error: code, message };
+  return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, isError: true };
 }
 
 /** The pin is unread while it was dropped after the last read that returned it. */

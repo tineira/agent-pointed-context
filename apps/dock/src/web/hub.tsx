@@ -32,7 +32,7 @@ import { DecisionNotice, NotVerified } from "./unverified.tsx";
 import { PairingRequest } from "./pairing-request.tsx";
 import { ComputersPanel, JoinPanel, JoinRequests, LinkPanel } from "./computers.tsx";
 import { REMOVED_CLOSE } from "../worker/devices.ts";
-import { decisionNotice, inFlightOf, isCodeRetryError, kindOf, landed, mayAnswer, sentOut, type CodeError, type InFlight, type Sent } from "./request-state.ts";
+import { decisionNotice, inFlightOf, isCodeRetryError, isConnectingAnswer, kindOf, landed, mayAnswer, sentOut, type CodeError, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "where your agents point"];
@@ -378,6 +378,8 @@ export function HubDock() {
       // refusal (the last wrong code included: the request is gone) is the dock's notice.
       .then((r) => {
         if (r?.ok !== false) return setCodeErrors((m) => (m.has(pid) ? new Map([...m].filter(([id]) => id !== pid)) : m));
+        // The hub is already connecting this request (APC 0.10): its card says so; nothing was counted, nothing to say.
+        if (isConnectingAnswer(r.error)) return;
         // On its card only when the card has the field (a request with a code); otherwise, the notice.
         if (isCodeRetryError(r.error) && pending.some((x) => x.pairing.id === pid && x.pairing.code)) {
           const error: CodeError = { error: r.error, at: Date.now(), ...(typeof r.attempts_left === "number" ? { attempts_left: r.attempts_left } : {}) };
@@ -598,6 +600,8 @@ export function HubDock() {
           const paired = a.pairings.filter((p) => p.status === "paired");
           // Apps that revoked this agent themselves (APC 0.2), by host.
           const revokedBy = a.pairings.filter((p) => p.status === "revoked").map((p) => p.revoked_by ?? host(p.app.origin));
+          // Apps that ended this agent's grant (APC 0.10), by host: the agent is dropped there again to pair.
+          const endedBy = a.pairings.filter((p) => p.status === "ended").map((p) => p.ended_by ?? host(p.app.origin));
           return (
             <li key={a.id} className={`tile${dragging === a.id ? " dragging" : ""}`}>
               <div className="tile-drag" {...dragProps(a)}>
@@ -640,7 +644,8 @@ export function HubDock() {
                 >
                   Details{paired.length ? ` · ${paired.length} app${paired.length === 1 ? "" : "s"}` : ""}
                   {a.calls ? ` · ${a.calls} call${a.calls === 1 ? "" : "s"}` : ""}
-                  {revokedBy.length ? ` · revoked by ${revokedBy.join(", ")}` : ""} →
+                  {revokedBy.length ? ` · revoked by ${revokedBy.join(", ")}` : ""}
+                  {endedBy.length ? ` · ended by ${endedBy.join(", ")}` : ""} →
                 </a>
               ) : (
                 // Not connected yet: how to connect it stays under its tile, as in the first run.

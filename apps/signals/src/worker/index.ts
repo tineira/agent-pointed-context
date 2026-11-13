@@ -4,8 +4,9 @@
  */
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { apcJsonResponse, apcManifest, parseProfiles, profilesRefusal } from "@tineira/apc-server";
-import { FEED_TTL_MS, type Env, type Feed } from "./feed.ts";
+import { apcJsonResponse, apcManifest, handleDockGiveBack, profilesRefusal } from "@tineira/apc-server";
+import { givenBack, isOwnerStateRequest, ownerRequestRefusal, publicOrigin } from "../../../demo/src/worker/dock-app.ts";
+import { FEED_TTL_MS, servedProfiles, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";
 
@@ -35,6 +36,20 @@ async function allowed(limiter: RateLimit | undefined, key: string): Promise<boo
     return true;
   }
 }
+
+/**
+ * The owner's endpoints (M6, APC 0.10): every state change under /api (the drop, the Allow, Cancel, Revoke, a pin,
+ * opening the session) and the page's WebSocket handshake, which is its heartbeat. On top of the session cookie:
+ * an `Origin` that is sent must be Signals' configured public origin (PUBLIC_ORIGIN, never this request's own
+ * URL), `Sec-Fetch-Site` must not be cross-site or same-site, and a POST must be `application/json`. A request
+ * with neither header is a non-browser client and is taken on its session.
+ */
+app.use("/api/*", async (c, next) => {
+  if (!isOwnerStateRequest(c.req.raw)) return next();
+  const refusal = ownerRequestRefusal(c.req.raw, publicOrigin(c.env, c.req.url));
+  if (refusal) return c.json({ error: refusal }, refusal === "json_required" ? 415 : 403);
+  return next();
+});
 
 /**
  * Resume the visitor's feed, or open one. Every feed shows the demo's one world (TIN-621): a `seed` in
@@ -105,7 +120,18 @@ app.post("/api/s/:sid/grants/:id/unlink", async (c) => {
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/s/:sid/hub/pair", async (c) => {
-  const result = await stub(c).pairHub(c.var.sid, new URL(c.req.url).origin, await c.req.json().catch(() => null));
+  // The MCP URL Signals hands the hub lives on its configured origin, never on this request's (APC 0.10).
+  const origin = publicOrigin(c.env, c.req.url);
+  if (!origin) return c.json({ ok: false, error: "not_available" }, 400);
+  const result = await stub(c).pairHub(c.var.sid, origin, await c.req.json().catch(() => null));
+  return c.json(result, result.ok ? 200 : 400);
+});
+/** Cancel on the waiting card (APC 0.10): revokes a dock grant the dock has not connected to yet, and only then. */
+app.post("/api/s/:sid/hub/cancel", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { grant_id?: unknown } | null;
+  const grantId = body?.grant_id;
+  if (typeof grantId !== "string") return c.json({ ok: false, error: "invalid" }, 400);
+  const result = await stub(c).cancelDockGrant(grantId);
   return c.json(result, result.ok ? 200 : 400);
 });
 app.get("/api/s/:sid/ws", async (c) => {
@@ -114,19 +140,22 @@ app.get("/api/s/:sid/ws", async (c) => {
   return stubFor(c.env, c.var.sid).fetch(new Request(c.req.raw, { headers }));
 });
 
-/** A dock's hub gives back a grant (TIN-388). The MCP URL, on this origin, is the proof. */
-app.post("/apc/revoke", async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { mcp_url?: unknown } | null;
-  let m: RegExpMatchArray | null = null;
-  try {
-    const url = new URL(typeof body?.mcp_url === "string" ? body.mcp_url : "");
-    if (url.origin === new URL(c.req.url).origin) m = url.pathname.match(/^\/mcp\/([0-9a-f]{32})\/([0-9a-f]{32})$/);
-  } catch {
-    m = null;
-  }
-  if (!m) return c.json({ ok: false, error: "invalid" }, 400);
-  const result = await stubFor(c.env, m[1]!).revoke(m[2]!);
-  return c.json(result, result.ok ? 200 : 404);
+/**
+ * A dock's hub gives back a grant (TIN-388). The MCP URL, on Signals' configured origin, is the proof. Public, so it
+ * answers the same HTTP 200 to anything (M7, APC 0.10: a matching URL, an unknown one, junk, another method, a
+ * Signals that pairs with no dock), and tells no one whether a grant matched. The grant is found by its secret's
+ * hash and ends in any state but revoked or ended.
+ */
+app.all("/apc/revoke", async (c) => {
+  const origin = publicOrigin(c.env, c.req.url);
+  if (!origin || !servedProfiles(c.env).includes("dock")) return givenBack();
+  return handleDockGiveBack(c.req.raw, {
+    origin,
+    endGrantBySecretHash: async (hash, url) => {
+      const m = url.pathname.match(/^\/mcp\/([0-9a-f]{32})\/[0-9a-f]{32}$/);
+      if (m) await stubFor(c.env, m[1]!).endDockGrantBySecretHash(hash);
+    },
+  });
 });
 
 app.all("/mcp/:sid/:secret", async (c) => {
@@ -140,7 +169,7 @@ app.all("/mcp/:sid/:secret", async (c) => {
  * What Signals is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles
  * it offers (APC_PROFILES), where its MCP URLs live, and its Connect panel (?connect).
  */
-app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: parseProfiles(c.env.APC_PROFILES), connect: "/?connect" })));
+app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: servedProfiles(c.env), connect: "/?connect" })));
 
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));

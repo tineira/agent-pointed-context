@@ -3,7 +3,7 @@
  * it fits any framework: React, Vue or none. It talks to the server in orders-app.ts (`/api/*`, `/api/events`).
  */
 // #region imports
-import { focusAttrs, formatPairingCode, type FocusTarget } from "@tineira/apc-protocol";
+import { T_IDLE_RECOMMENDED_MS, focusAttrs, formatPairingCode, type FocusTarget } from "@tineira/apc-protocol";
 import {
   createViewReporter,
   defineAgentBar,
@@ -68,27 +68,40 @@ async function refresh(): Promise<void> {
 
 // #region waiting
 /**
- * Dock (APC 0.9): an agent the person allowed here waits until they type its pairing code in their dock. Its row
- * shows the code and Cancel, which takes the access back; if their dock never asks for that code, the agent was
- * someone else's.
+ * Dock: an agent the person allowed here waits until they type its pairing code in their dock. Its row shows
+ * the code while it is good, and Cancel, which takes the access back (only before the dock connected; after
+ * that it is Revoke in the bar): if their dock never asks for that code, the agent was someone else's. The row
+ * believes the server's expiry: past it, it shows no code and says the dock did not finish in time. Once the
+ * dock took the code, the row says it is connecting.
  */
 const waiting = document.querySelector<HTMLElement>("#waiting") ?? document.body.appendChild(document.createElement("div"));
 /** A drop that paired but could not pin its target (the server's `pin_error`), by grant: its row says so. */
 const pinErrors = new Map<string, string>();
-function showWaiting(rows: AgentRow[]): void {
+let waitingRows: AgentRow[] = [];
+function showWaiting(rows: AgentRow[] = waitingRows): void {
+  waitingRows = rows;
   waiting.replaceChildren(
     ...rows.flatMap((a) => {
-      if (!a.pairing) return [];
+      if (!a.waiting) return [];
       const line = document.createElement("p");
       const pinError = pinErrors.get(a.id);
-      line.textContent = `Waiting for your dock — code ${formatPairingCode(a.pairing.code)}. If your dock doesn't ask for this code, the agent wasn't yours: Cancel. ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
+      const left = a.pairing ? Math.max(0, Math.ceil((Date.parse(a.pairing.expires_at) - Date.now()) / 1000)) : 0;
+      const says =
+        a.waiting === "connecting"
+          ? "Your dock took the code and is connecting."
+          : left > 0
+            ? `Waiting for your dock — code ${formatPairingCode(a.pairing!.code)} (${left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel.`
+            : "Your dock didn't finish in time. Drop the agent here again for a new code.";
+      line.textContent = `${says} ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
       const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Cancel" });
-      cancel.addEventListener("click", () => void post(`/api/agents/${a.id}/revoke`).then(refresh));
+      cancel.addEventListener("click", () => void post("/api/cancel", { grant_id: a.id }).then(refresh));
       line.append(cancel);
       return [line];
     }),
   );
 }
+// The countdown, and the code going away at its expiry.
+setInterval(() => waitingRows.some((a) => a.waiting === "code") && showWaiting(), 1000);
 // #endregion
 
 // #region direct
@@ -107,6 +120,19 @@ events.onmessage = (message) => {
   if (data.type === "presence" && data.event) flashTargets(data.event, marks.get(data.event.grant_id) ?? "?");
   else void refresh();
 };
+/**
+ * The heartbeat (Dock, APC 0.10): while the page is open it tells the server the person is here, at least every
+ * T_idle / 2. A dock agent's grant sleeps T_idle after the last one, and wakes with the next. The server's answer
+ * carries the T_idle it runs with (`idle_ms`), so the page follows it; until one arrives it assumes the recommended one.
+ */
+let idleMs = T_IDLE_RECOMMENDED_MS;
+async function heartbeat(): Promise<void> {
+  const answer = await post("/api/heartbeat").catch(() => null);
+  if (typeof answer?.idle_ms === "number" && answer.idle_ms > 0) idleMs = answer.idle_ms;
+  // Every quarter of T_idle: one beat that fails still leaves the next inside T_idle / 2.
+  setTimeout(() => void heartbeat(), Math.max(1000, idleMs / 4));
+}
+void heartbeat();
 // #endregion
 
 // #region pinning
@@ -125,7 +151,8 @@ enablePinning({
 
 /**
  * The server asks for the person's yes first (consent_required with a nonce and a pairing code); their Allow sends
- * the nonce back, and their dock then asks for the code (APC 0.9).
+ * the nonce back, and their dock then asks for the code. A refusal says why: `hub_not_allowed` (a dock this app
+ * does not pair with), `consent_expired` (a newer drop of the agent replaced this consent), `pairing_in_progress`.
  */
 async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget, consent?: string): Promise<void> {
   const answer = await post("/api/drop", { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target, consent });

@@ -76,6 +76,12 @@ export function decisionNotice(error: unknown): string {
       return "The app took the access back while it was being approved, so it was not paired.";
     case "invalid_action":
       return "That answer no longer applies to this request.";
+    // APC 0.10: the app ended the grant before the dock connected to it (it waited too long, or it was given back).
+    case "pairing_ended":
+      return "The app ended this pairing before the dock connected to it, so it was not paired. Drop your agent on the app again.";
+    // APC 0.10: the code was accepted already and the dock is connecting; nothing more to answer, and nothing was counted.
+    case "approving":
+      return CONNECTING_NOTICE;
     // The pairing code (APC 0.9, TIN-859). The three a person can try again after are said on the request's own card
     // (codeErrorText); these are for any surface that shows them as a notice.
     case "pairing_code_refused":
@@ -131,6 +137,16 @@ export function codeErrorText(e: Pick<CodeError, "error" | "attempts_left">): st
       return "Type the code the app shows.";
   }
 }
+
+/**
+ * While the hub introduces itself to the app after the person's yes (`approving`, APC 0.10): the request shows
+ * "connecting" and takes no code. A code typed in that window is not sent; one that reaches the hub anyway is
+ * answered `approving` and never counted as a wrong code.
+ */
+export const connectingText = (app: string) => `Connecting to ${app}…`;
+export const CONNECTING_NOTICE = "The dock is already connecting to this app: there is nothing more to type.";
+/** The hub's answer to a yes on a request it is already connecting: not a refusal to show, the card says "connecting". */
+export const isConnectingAnswer = (error: unknown): boolean => error === "approving";
 
 /** What Float, the strip and the pets show in Allow's place for a request with a code: it is typed in the dock. */
 export const CODE_IN_DOCK = "Allow it in your dock: it needs the code.";

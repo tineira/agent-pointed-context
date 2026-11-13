@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { OrdersApp } from "../src/docs/examples/orders-app.ts";
+import { MCP_BODY_MAX_BYTES, OrdersApp } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
 import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
@@ -21,7 +21,7 @@ test("a page whose stream died is dropped, and the tool call that published to i
   pages.add(() => {
     throw new TypeError("Invalid state: ReadableStream is closed");
   });
-  const made = (await (await app.fetch(new Request(`${origin}/api/agents`, { method: "POST", body: "{}" }))).json()) as { url: string };
+  const made = (await (await app.fetch(new Request(`${origin}/api/agents`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }))).json()) as { url: string };
   const response = await app.fetch(
     new Request(made.url, {
       method: "POST",
@@ -76,7 +76,8 @@ test("the pairing-code checks fail an app that keeps a grant the hub did not ack
 test("Orders: a drop that pairs but cannot pin its target answers ok with the waiting code and pin_error, which its page shows", async () => {
   const { app, adapter } = ordersUnderTest("dock");
   const hub = adapter.dock!.hub;
-  const call = async (body: unknown) => (await app.fetch(new Request("https://orders.test/api/drop", { method: "POST", body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
+  const call = async (body: unknown) =>
+    (await app.fetch(new Request("https://orders.test/api/drop", { method: "POST", headers: { ...adapter.dock!.lifecycle!.owner.session, "content-type": "application/json" }, body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
   const drop = { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target: { kind: "order", id: "ord_9999" } };
   const asked = await call(drop);
   const paired = await call({ ...drop, consent: asked.consent });
@@ -85,4 +86,67 @@ test("Orders: a drop that pairs but cannot pin its target answers ok with the wa
   assert.equal((paired.pairing as { code: string }).code, asked.pairing_code);
   assert.equal(paired.pin_error, "invalid_target");
   assert.deepEqual(app.agents().find((a) => a.id === paired.grant_id)?.pairing, paired.pairing, "the page's waiting row has the code");
+});
+
+test("Orders: the heartbeat's answer carries the T_idle in effect, so the page beats within half of it", async () => {
+  const headers = { "content-type": "application/json" };
+  const beat = async (app: OrdersApp) => (await app.fetch(new Request("https://orders.test/api/heartbeat", { method: "POST", headers, body: "{}" }))).json();
+  assert.deepEqual(await beat(new OrdersApp({ origin: "https://orders.test", profiles: ["direct", "dock"], hubs: ["https://dock.test"], idleMs: 4 * 60_000 })), { ok: true, idle_ms: 4 * 60_000 });
+  assert.deepEqual(await beat(new OrdersApp({ origin: "https://orders.test", profiles: ["direct", "dock"], hubs: ["https://dock.test"] })), { ok: true, idle_ms: 30 * 60_000 });
+});
+
+test("Orders: an MCP request over 1 MiB answers 413 before it is parsed, to a grant's URL and to an unknown one alike", async () => {
+  const origin = "https://orders.test";
+  const app = new OrdersApp({ origin, profiles: ["direct"] });
+  const made = (await (await app.fetch(new Request(`${origin}/api/agents`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }))).json()) as { url: string };
+  const big = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping", params: { pad: "x".repeat(MCP_BODY_MAX_BYTES) } });
+  const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+  for (const url of [made.url, `${origin}/mcp/${"0".repeat(32)}`]) {
+    const declared = await app.fetch(new Request(url, { method: "POST", headers, body: big }));
+    assert.equal(declared.status, 413, url);
+    assert.deepEqual(await declared.json(), { error: "too_large" });
+    // The same bytes with no content-length: a stream, cut at the cap.
+    const streamed = await app.fetch(new Request(url, { method: "POST", headers, body: new Blob([big]).stream(), duplex: "half" } as RequestInit));
+    assert.equal(streamed.status, 413, `${url}, streamed`);
+  }
+  // Under the cap the same grant still answers, from the body the transport was handed back.
+  const ok = await app.fetch(new Request(made.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { jsonrpc: "2.0", id: 1, result: {} });
+});
+
+test("Orders: agent traffic stamps nothing: ping and tools/list in handoff, and anything served while asleep, leave the grant as it was", async () => {
+  const { adapter, app } = ordersUnderTest("dock");
+  const life = adapter.dock!.lifecycle!;
+  const hub = adapter.dock!.hub;
+  const send = async (url: string, method: string, params: Record<string, unknown> = {}) =>
+    adapter.fetch!(new Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }));
+  const grants = (app as unknown as { store: { grants: Map<string, Record<string, unknown>> } }).store.grants;
+  const snapshot = (url: string) => JSON.stringify(grants.get(url.split("/").pop()!));
+
+  // Handoff: dropped and allowed, the dock has not connected.
+  const shown = await life.dropAgent({ agent: "ag_quiet", ticket: hub.ticket("ag_quiet"), hub: hub.origin });
+  assert.equal(shown.page, "consent");
+  assert.equal((await (shown as Extract<typeof shown, { page: "consent" }>).allow()).ok, true);
+  const waiting = hub.pairings.filter((p) => p.agent === "ag_quiet").at(-1)!.mcp_url;
+  const before = snapshot(waiting);
+  await life.advance(60_000);
+  for (const method of ["ping", "tools/list"]) assert.equal((await send(waiting, method)).status, 200, method);
+  const refused = (await (await send(waiting, "tools/call", { name: "list_orders", arguments: {} })).json()) as { result: { structuredContent: { error: string } } };
+  assert.equal(refused.result.structuredContent.error, "pairing");
+  assert.equal(snapshot(waiting), before, "nothing on the grant moved in handoff");
+
+  // Asleep: a live grant, T_idle after the person's last wake action.
+  const live = await adapter.connect();
+  await life.advance(life.idleMs! + 1000);
+  const was = JSON.parse(snapshot(live.mcpUrl)) as Record<string, unknown>;
+  const init = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", version: "1" } };
+  for (const [method, params] of [["initialize", init], ["ping", {}], ["tools/list", {}], ["tools/call", { name: "list_orders", arguments: {} }]] as const) {
+    assert.equal((await send(live.mcpUrl, method, params)).status, 200, method);
+  }
+  const view = (await (await send(live.mcpUrl, "tools/call", { name: "get_current_view", arguments: {} })).json()) as { result: { structuredContent: { idle?: boolean } } };
+  assert.equal(view.result.structuredContent.idle, true, "still asleep after all of it");
+  const after = JSON.parse(snapshot(live.mcpUrl)) as Record<string, unknown>;
+  assert.equal(after.lastWake, was.lastWake, "agent traffic is not a wake action");
+  assert.equal(after.state, was.state);
 });
