@@ -50,6 +50,8 @@ import {
   type ApcProfile,
   type FocusTarget,
   type PresenceEvent,
+  type PresenceMessage,
+  type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
 import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHub } from "./hub.ts";
@@ -269,8 +271,8 @@ export interface ApcAppAdapter {
     showView(): Promise<void>;
     /** The person drops the agent's mark on a target; false when the app refuses the pin. */
     pin(grantId: string, target: FocusTarget): Promise<boolean>;
-    /** The presence events the app published to the person's page since the last call, oldest first. */
-    takePresence(): PresenceEvent[];
+    /** The presence messages the app published to the person's page since the last call, oldest first: calls and (APC 0.11) waits. */
+    takePresence(): PresenceMessage[];
     /** The person's Revoke in the agent bar; false when the app refuses. */
     revoke(grantId: string): Promise<boolean>;
     /** The page on a phone (APC 0.6). Left out: the mobile checks are skipped. */
@@ -339,6 +341,18 @@ async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, p
 
 /** What a check of a 0.8 rule says of an app that claims an earlier standard: passed, not checked. */
 const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
+const NOT_011 = { note: "not checked: the app's apc.json claims a standard before 0.11.0, which has no wait events" };
+const DOCK_WAITS = { note: "not checked on the Dock profile: a dock agent waits on the hub, so the page shows no waiting for a dock grant (APC 0.11)" };
+
+/** The wait events of one grant among presence messages, checked for their exact shape (APC 0.11), oldest first. */
+function waitEventsOf(messages: PresenceMessage[], grantId: string): Array<PresenceWaitEvent["state"]> {
+  const waits = messages.filter((m) => m.grant_id === grantId && m.kind === "wait") as PresenceWaitEvent[];
+  for (const e of waits) {
+    expect(Object.keys(e).sort().join() === "at,grant_id,kind,state,v", `a wait event is { v, grant_id, at, kind, state }, ids only: ${Object.keys(e).join()}`);
+    expect(e.v === 1 && ISO.test(e.at) && (e.state === "open" || e.state === "closed"), `a wait event is v 1, with an ISO time and state open or closed: ${JSON.stringify(e)}`);
+  }
+  return waits.map((e) => e.state);
+}
 
 async function result(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const { status, body } = await send(app, to, method, params, signal);
@@ -537,7 +551,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       app.page.takePresence();
       const read = await call(app, conn, focus.next as string, focus.next_args as Record<string, unknown>);
       expect(!read.isError, "next failed");
-      const events = app.page.takePresence().filter((e) => e.grant_id === grantId && e.tool === focus.next);
+      const events = app.page.takePresence().filter((e): e is PresenceEvent => e.grant_id === grantId && e.kind !== "wait" && e.tool === focus.next);
       expect(events.length === 1, `one presence event for the read, got ${events.length}`);
       const e = events[0]!;
       expect(Object.keys(e).sort().join() === "at,count,grant_id,kind,targets,tool,v", `presence carries ids only: ${Object.keys(e).join()}`);
@@ -545,6 +559,37 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(Array.isArray(e.targets) && e.targets.length <= 20 && e.count >= e.targets.length, "at most 20 targets, and count covers them");
       expect(e.targets.every((t) => Object.keys(t).sort().join() === "id,kind"), "a presence target is { kind, id }");
       if (first.id) expect(e.targets.some((t) => t.kind === first.kind && t.id === first.id), `the read of ${first.kind}:${first.id} names it`);
+    }),
+
+    check("a wait publishes open, then closed, on the presence channel (APC 0.11)", async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const waiting = call(app, conn, "wait_for_focus", { timeout_s: 2 });
+      await sleep(400);
+      expect(waitEventsOf(app.page.takePresence(), conn.grantId).join() === "open", "while the wait runs, the page has its open, and only that");
+      const done = data(await waiting);
+      expect(done.focus === null, "no pin, no focus");
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "closed", `once the wait returned, the page has its closed, and only that: got [${states.join()}]`);
+    }),
+
+    check("a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const older = call(app, conn, "wait_for_focus", { timeout_s: 10 });
+      await sleep((WAIT_CLAIM_GAP_S + 0.3) * 1000);
+      const newer = call(app, conn, "wait_for_focus", { timeout_s: 2 });
+      await older;
+      await newer;
+      // The old wait, finding it was taken over, sends nothing: its place was given up when the newer one claimed it.
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "open,closed,open,closed", `open, then at the takeover closed and open, then closed: got [${states.join()}]`);
     }),
 
     check("revoke from the app cuts that agent at once, and only that agent", async () => {

@@ -7,7 +7,7 @@
  * Direct profile's list from @tineira/apc-web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, formatPairingCode, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { createViewReporter, enablePinning, loadApcProfiles, mergePins, type AgentDrag, type BarAgent } from "@tineira/apc-web";
+import { createViewReporter, enablePinning, foldWaitEvent, loadApcProfiles, mergePins, NO_OPEN_WAITS, waitOpen, type AgentDrag, type BarAgent, type OpenWaits } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_SEED, MONTHS } from "../../../demo/src/model/seed.ts";
 import type { Post } from "../../../demo/src/model/market.ts";
@@ -31,7 +31,6 @@ interface GrantState {
   client: string | null;
   icon: string | null;
   connected: boolean;
-  waiting: boolean;
   pin: FocusRow | null;
   linked_with: string | null;
   /**
@@ -141,6 +140,16 @@ function Shell(props: { children: React.ReactNode; nav?: React.ReactNode; side?:
   );
 }
 
+/** A message from the feed's socket, or null when it is not JSON. */
+function parseMessage(text: string): { type?: string; event?: unknown } | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === "object" ? (value as { type?: string; event?: unknown }) : null;
+  } catch {
+    return null;
+  }
+}
+
 function Feed({ sid }: { sid: string }) {
   const base = `/api/s/${sid}`;
   const [state, setState] = useState<FeedState | null>(null);
@@ -155,6 +164,14 @@ function Feed({ sid }: { sid: string }) {
   const [connectOpen, setConnectOpen] = useState(() => new URLSearchParams(location.search).has("connect") || location.hash === "#connect");
   const stateRef = useRef<FeedState | null>(null);
   stateRef.current = state;
+  // The agents with a wait_for_focus open (APC 0.11), from the wait events on the presence channel.
+  const [openWaits, setOpenWaits] = useState<OpenWaits>(NO_OPEN_WAITS);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    // An open whose closed was lost stops showing after the ceiling plus the margin: look again now and then.
+    const id = setInterval(() => tick((n) => n + 1), 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   const refresh = useCallback(() => void call<FeedState>(`${base}/state`).then(setState), [base]);
   useEffect(() => {
@@ -163,11 +180,19 @@ function Feed({ sid }: { sid: string }) {
     let closed = false;
     const open = () => {
       ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
-      ws.onopen = () => ws?.send("ping");
+      ws.onopen = () => {
+        // A new connection: what was open may have closed meanwhile; the feed sends the waits open now (APC 0.11).
+        setOpenWaits(NO_OPEN_WAITS);
+        ws?.send("ping");
+      };
       ws.onmessage = (e) => {
         if (e.data === "pong") return;
-        // Presence (APC 0.2) is published for the page; this page does not draw it, so it needs no new state.
-        if (String(e.data).includes('"type":"presence"')) return;
+        // Presence (APC 0.2): this page draws only the waits (APC 0.11); a call needs no new state.
+        if (String(e.data).includes('"type":"presence"')) {
+          const message = parseMessage(String(e.data));
+          if (message?.type === "presence") setOpenWaits((w) => foldWaitEvent(w, message.event));
+          return;
+        }
         refresh();
       };
       ws.onclose = () => !closed && setTimeout(open, 2000);
@@ -264,7 +289,8 @@ function Feed({ sid }: { sid: string }) {
         id: g.id,
         name: g.name,
         icon: g.icon ?? other?.icon ?? null,
-        state: !connected ? "off" : g.waiting || other?.waiting ? "waiting" : "idle",
+        // Waiting only while a Direct grant's wait is open: a dock agent waits on the hub, never shown waiting here.
+        state: !connected ? "off" : [g, other].some((x) => x && waitOpen(openWaits, x.id, { path: x.path })) ? "waiting" : "idle",
         // A linked agent holds two grants, so up to two pins: the bar shows both (TIN-607).
         pin: mergePins([g, other].map((x) => (x?.pin?.id ? { label: `${x.pin.id}${x.pin.part ? ` ${x.pin.part}` : ""}`, seen: !!x.pin.seen_at && x.pin.seen_at >= x.pin.pinned_at, here: onScreen(x.pin.id) } : null))),
         paths: other ? ["direct", "dock"] : [g.path],

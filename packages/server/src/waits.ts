@@ -1,4 +1,5 @@
-import { THEN_PIN_WINDOW_MIN, WAIT_CLAIM_GAP_S } from "@tineira/apc-protocol";
+import { THEN_PIN_WINDOW_MIN, WAIT_CLAIM_GAP_S, type PresenceWaitEvent } from "@tineira/apc-protocol";
+import { presenceWaitEvent } from "./presence.ts";
 
 /**
  * One wait per grant (APC 0.8, `WaitForFocusResult` in @tineira/apc-protocol): the place a grant's
@@ -12,17 +13,27 @@ import { THEN_PIN_WINDOW_MIN, WAIT_CLAIM_GAP_S } from "@tineira/apc-protocol";
  * row per grant with the holder's token and when it claimed.
  */
 export interface WaitSlot {
-  /** Takes the place, or says how many seconds until a claim would. */
-  claim(): Promise<{ token: string } | { retryAfterS: number }>;
+  /**
+   * Takes the place, or says how many seconds until a claim would. `tookOver` (APC 0.11): the place was held by
+   * another wait, which this claim took it from; the wait events say that wait closed. A store that cannot tell
+   * leaves it out.
+   */
+  claim(): Promise<{ token: string; tookOver?: boolean } | { retryAfterS: number }>;
   /** Whether the wait that got `token` still holds the place. */
   holds(token: string): Promise<boolean>;
-  /** Gives the place up, if `token` still holds it. */
-  release(token: string): Promise<void>;
+  /**
+   * Gives the place up, if `token` still holds it. Since APC 0.11 it may answer whether it did (true also when the
+   * grant was forgotten while `token` held it): the wait event `closed` goes only then. A store that answers nothing
+   * is asked `holds` just before instead.
+   */
+  release(token: string): Promise<boolean | void>;
 }
 
 /** Waits of grants run in one process: the places in memory, per grant id. */
 export class MemoryWaitSlots {
   private readonly slots = new Map<string, { token: string; claimedAt: number }>();
+  /** Tokens that held a place when its grant was forgotten: their release still says they held it (APC 0.11). */
+  private readonly forgotten = new Set<string>();
   private readonly now: () => number;
   private readonly gapMs: number;
 
@@ -40,19 +51,65 @@ export class MemoryWaitSlots {
         if (held && now - held.claimedAt < this.gapMs) return { retryAfterS: Math.max(1, Math.ceil((held.claimedAt + this.gapMs - now) / 1000)) };
         const token = crypto.randomUUID();
         this.slots.set(grantId, { token, claimedAt: now });
-        return { token };
+        return held ? { token, tookOver: true } : { token };
       },
       holds: async (token) => this.slots.get(grantId)?.token === token,
       release: async (token) => {
-        if (this.slots.get(grantId)?.token === token) this.slots.delete(grantId);
+        if (this.forgotten.delete(token)) return true;
+        if (this.slots.get(grantId)?.token !== token) return false;
+        this.slots.delete(grantId);
+        return true;
       },
     };
   }
 
   /** Forget a grant's place (the grant was revoked or deleted). */
   forget(grantId: string): void {
+    const held = this.slots.get(grantId);
+    if (held) this.forgotten.add(held.token);
     this.slots.delete(grantId);
   }
+
+  /** Whether a wait of the grant holds its place now. */
+  held(grantId: string): boolean {
+    return this.slots.has(grantId);
+  }
+}
+
+/**
+ * The wait events of a grant (APC 0.11, `presence.ts` in @tineira/apc-protocol), from its place for a wait: `slot`
+ * as before, sending `publish` an `open` when a wait claims the place and a `closed` when it gives it up. A claim
+ * that takes over sends the old wait's `closed` first, then the new one's `open`; the old wait, finding later that
+ * it was taken over, sends nothing. A refused claim sends nothing. `publish` failing never fails the wait.
+ *
+ * `registerApcTools` uses it when the context gives `waitPresence`; a hub or an app with its own wait loop wraps
+ * its slot with it.
+ */
+export function announceWaits(slot: WaitSlot, grantId: string, publish: (event: PresenceWaitEvent) => void | Promise<void>): WaitSlot {
+  const send = async (state: "open" | "closed") => {
+    try {
+      await publish(presenceWaitEvent({ grantId, state }));
+    } catch {
+      // Presence is for the page; a wait does not fail on it. A lost closed clears on the page by itself.
+    }
+  };
+  return {
+    claim: async () => {
+      const claim = await slot.claim();
+      if ("token" in claim) {
+        if (claim.tookOver) await send("closed");
+        await send("open");
+      }
+      return claim;
+    },
+    holds: (token) => slot.holds(token),
+    release: async (token) => {
+      const before = await slot.holds(token);
+      const released = await slot.release(token);
+      if (typeof released === "boolean" ? released : before) await send("closed");
+      return released;
+    },
+  };
 }
 
 /**

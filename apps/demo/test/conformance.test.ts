@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { apcConformance, runConformance, standInHub, type ApcAppAdapter, type StandInHub } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { APC_JSON_PATH, APC_STANDARD_VERSION, formatPairingCode, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { APC_JSON_PATH, APC_STANDARD_VERSION, formatPairingCode, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { LAST_MONTH } from "../src/model/seed.ts";
 import { demoDataset } from "../src/model/demo-world.ts";
@@ -167,7 +167,7 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
         await sandbox.reportView({ screen: "customer", params: { month: LAST_MONTH }, selection: { kind: "customer", id: targets[0].id } });
       },
       pin: async (grantId, target) => (await sandbox.pin(grantId, target)).ok,
-      takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceEvent),
+      takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceMessage),
       revoke: async (grantId) => (options.revoke === false ? true : (await sandbox.revokeGrant(grantId)).ok),
       // The page on a phone (APC 0.6), modelled with @tineira/apc-web's own pieces: the bar's collapse rule on mobile and
       // the tap-to-pin controller `enablePinning` runs, which pins through the sandbox like the page's onPin does.
@@ -452,4 +452,21 @@ test("a drop that pairs but cannot pin its target says so: ok with the waiting c
   assert.equal(again.ok, true);
   assert.deepEqual(again.pairing, paired.pairing);
   assert.equal(typeof again.pin_error, "string");
+});
+
+test("Pulse: a page that connects mid-wait is told the open first; a wait closed or past the ceiling and margin is not (APC 0.11)", async () => {
+  const { app, sandbox, room } = await pulse("direct");
+  const conn = await app.connect();
+  await app.page.setOpen(true);
+  room.takeMessages();
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "wait_for_focus", arguments: { timeout_s: 2 } } });
+  const waiting = sandbox.fetch(new Request(conn.mcpUrl, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body }));
+  await sleep(300);
+  assert.deepEqual(sandbox.waitsNow().map((m: { event: { grant_id: string; state: string } }) => [m.event.grant_id, m.event.state]), [[conn.grantId, "open"]]);
+  assert.deepEqual(sandbox.waitsNow(Date.now() + 61_000), [], "an open the worker never closed is not replayed past 50 s plus 10 s");
+  await waiting;
+  assert.deepEqual(sandbox.waitsNow(), []);
+  const messages = room.takeMessages();
+  assert.ok(!messages.some((m) => m.type === "waiting"), "no message of Pulse's own: the wait events replace it");
+  assert.deepEqual(messages.filter((m) => m.type === "presence" && (m.event as { kind: string }).kind === "wait").map((m) => (m.event as { state: string }).state), ["open", "closed"]);
 });

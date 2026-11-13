@@ -49,6 +49,18 @@ While a grant's pin is unread, every tool result on that grant carries `attentio
 
 After each successful tool call, the app publishes a `PresenceEvent` to the person's page: `{ v: 1, grant_id, at, tool, kind, targets, count }`, ids only, `kind` being `read` or `write`, at most 20 `targets` of `{ kind, id }`. A read of a target **MUST** name it in `targets`. The page lights up what the agent read.
 
+#### Wait events (since 0.11)
+
+The page shows that an agent is listening (a drop reaches it now) from a second kind of presence message, never by guessing from recent calls: `PresenceWaitEvent`, `{ v: 1, grant_id, at, kind: "wait", state }`, `state` being `open` or `closed`, ids only, with no targets. It travels on the same channel, with the same rule: only the grant's owner reads it.
+
+- An app **MUST** send `open` when a `wait_for_focus` claims the grant's one place for a wait, and `closed` when the wait gives it up: on return (a pin, a timeout, a closed page), on cancel, and when the grant is revoked or deleted during it. A wait refused within `WAIT_CLAIM_GAP_S` sends nothing.
+- **A takeover** sends the old wait's `closed`, then the new wait's `open`, both when the new wait claims the place. The old wait sends nothing when it later finds it was taken over. So a grant's last wait event always says whether a wait holds its place now.
+- **A `closed` that never comes.** A worker can die before it sends `closed`. A page **MUST** treat an `open` as closed once it is older than the app's longest wait (its ceiling for `timeout_s`; 50 s, `WAIT_CEILING_DEFAULT_S`, unless the app sets its own) plus `WAIT_EVENT_MARGIN_S` (10 s), counted on the page's clock from when the event arrived, never from `at`. A live wait overruns its timeout by at most one poll and its last checks, which the margin covers; a lost `closed` leaves the page "waiting" for a minute at most. An app **SHOULD** tell a page that connects during a wait about it (Pulse and Signals send the open event first), and leave out one past the same limit.
+- **Dock grants.** A Dock agent waits on the hub, not on the app: the waits an app sees on a dock grant are the hub's relays. A page **MUST NOT** show a dock grant as waiting, whatever its wait events say. The dock shows its own agents' waits, from the hub's place for each agent.
+- A page that reads the channel ignores a message it does not know, so a page before 0.11 is not affected (`flashTargets` ignores wait events).
+
+`announceWaits` in `@tineira/apc-server` sends the events from a grant's place for a wait (`registerApcTools` does it when given `waitPresence`); `foldWaitEvent` and `waitOpen` in `@tineira/apc-web` turn them into "a wait is open now", with the rule above.
+
 ### `get_current_view`
 
 Takes no arguments. Returns `{ view, focus }`: the view (or null) and the focus (or null). Returning the focus marks it seen, once the result is final (see [seen once delivered](#seen-once-delivered)).

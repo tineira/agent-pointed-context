@@ -28,6 +28,7 @@ registerApcTools(server, {
   focusUnread: async () => isUnread(await myPinRow(grant)),
   markSeen: async (pinnedAt) => stampSeen(grant, pinnedAt), // that exact pin, once the answer is final
   waitSlot: waits.for(grant), // one wait per grant: const waits = new MemoryWaitSlots() where requests share a process
+  waitPresence: { grantId: grant, publish: (event) => toPage({ type: "presence", event }) }, // a wait's open and closed (APC 0.11)
   signal: request.signal, // a client that hangs up ends its wait
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
 });

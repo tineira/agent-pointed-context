@@ -29,7 +29,8 @@
  *    pin per grant (`FocusRow`) and gives it as `FocusPayload`, with `next` and `next_args`, the
  *    call that reads it. While the pin is unread, every tool result carries `attention`.
  * 3. **Presence**: after each successful tool call the app publishes a `PresenceEvent` (ids only) to
- *    the person's page; a read of a target names it in `targets`.
+ *    the person's page; a read of a target names it in `targets`. Since APC 0.11 it also publishes when a
+ *    wait opens and closes (`PresenceWaitEvent`, `presence.ts`), so the page knows the agent is listening.
  * 4. **The focus format**: `FocusPayload`, from the grammar in `target.ts`.
  * 5. **`get_current_view` and `wait_for_focus`**, the two core tools (`CORE_TOOLS`), with the loop
  *    hint `then` while a page of the person's is open and the grant was pinned lately (APC 0.8), at most

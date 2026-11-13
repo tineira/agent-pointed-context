@@ -30,7 +30,7 @@ What every APC app implements, whichever way agents reach it ([`src/core.ts`](sr
 |---|---|
 | The view | Reports the person's screen as identifiers (`ViewPayload`), trimmed to each grant. |
 | The pin | Keeps one pin per grant, dropped by the person on a target (`FocusTarget`), and gives it as `FocusPayload` with `next` and `next_args`, the call that reads it. While it is unread, every tool result carries `attention`. |
-| Presence | After each successful tool call, publishes a `PresenceEvent` (ids only) to the person's page; a read of a target names it. |
+| Presence | After each successful tool call, publishes a `PresenceEvent` (ids only) to the person's page; a read of a target names it. Since 0.11 a wait's `open` and `closed` too (`PresenceWaitEvent`). |
 | The focus format | `FocusPayload`, from the grammar in [`src/target.ts`](src/target.ts): kinds, ids, parts and key-only params. |
 | `get_current_view`, `wait_for_focus` | The two core tools (`CORE_TOOLS`), with `then` on results while a page of the person's is open and the grant was pinned in the last 30 minutes (0.8), never on a wait that came back empty. A wait returns a pin dropped during it, times out cleanly, and ends as soon as the app knows the page is closed. One wait per grant: a newer one takes over (0.8). A pin is marked seen only once the result that carries it is final, by its `pinned_at` (0.8): delivered twice at worst, never lost. |
 | `apc.json` | Serves `/.well-known/apc.json` from its own origin: what it is and which profiles it offers (below). |

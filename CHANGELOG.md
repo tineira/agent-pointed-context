@@ -10,6 +10,10 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 - **`@tineira/apc-web` ships the agent pet, and the dock draws its pets with it, unchanged.** `createPet` and `<apc-pet>`, the header pets `<apc-pets>` (3 + N, with a popover), the brand logos, `petState` (waiting only when the app says a wait is open), light and dark pets (`scheme`, `tint`), and a `badge` on `<apc-pin>`. (`packages/web/src/pet.ts`, `packages/web/src/pet-state.ts`, `packages/web/src/pet-pose.ts`, `packages/web/src/pet-scheme.ts`, `packages/web/src/brands.ts`, `packages/web/src/header-pets.ts`, `packages/web/src/pin-badge.ts`, `apps/dock/src/web/apc-pet.tsx`, `apps/dock/src/docs/pages/spec.md`, `apps/dock/src/docs/pages/integrate.md`)
 
+### The agent's "waiting" comes from wait events, not a guess (2026-11-13, TIN-886)
+
+- **Pulse, Signals and the dock show an agent waiting only while a `wait_for_focus` holds its place, and never a dock grant in an app.** Apps publish a wait's `open` and `closed` on the presence channel (APC 0.11), their pages fold them with `waitOpen` (an `open` with no `closed` stops after the ceiling plus 10 s), a page that connects mid-wait is told first, and the hub's `waiting` follows the same events, so a wait taken over stops counting at the takeover. (`packages/protocol/src/presence.ts`, `packages/server/src/waits.ts`, `packages/server/src/tools.ts`, `packages/web/src/wait-presence.ts`, `packages/conformance/src/index.ts`, `apps/demo/src/worker/sandbox.ts`, `apps/demo/src/web/App.tsx`, `apps/signals/src/worker/feed.ts`, `apps/signals/src/web/app.tsx`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/docs/examples/orders-app.ts`)
+
 ### The 0.10 conformance checks close the reviews' gaps (2026-11-13, TIN-894)
 
 - **M2, M3 and M4 hold on `/apc/confirm` too.** The stand-in hub breaks `/apc/confirm` with `confirmMode`; a drop of a grant in handoff (and once of a paired grant) against a redirecting, stalling or oversized confirm answer must refuse it within the deadline, call nothing past the hub, pin nothing and wake nothing. (`packages/conformance/src/hub.ts`, `packages/conformance/src/dock-lifecycle.ts`)

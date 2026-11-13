@@ -118,7 +118,7 @@ direct.addEventListener("apc-add", () => void post("/api/agents").then(refresh))
 // #endregion
 
 // #region events
-/** The page's stream: an open page (what `then` and wait_for_focus look at), presence, and changes. */
+/** The page's stream: an open page (what `then` and wait_for_focus look at), presence, and changes. flashTargets ignores a wait event (APC 0.11). */
 const events = new EventSource("/api/events");
 events.onmessage = (message) => {
   const data = JSON.parse(message.data as string) as { type: string; event?: Parameters<typeof flashTargets>[0] };

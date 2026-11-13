@@ -16,6 +16,20 @@ Wave 2 of the APC 1.0 track (TIN-880): the agent in the page (TIN-878), a presen
 - **Colour scheme (SHOULD follow the page)**: the light pet on light pages, the inverse pet on dark ones (a near-white body, a dark outline and eyes, a thin outline on the badge's disc); the state marks do not change. `scheme: "light" | "dark" | "auto"` (`resolvePetScheme`, `petPalette`), and `tint` or `--apc-pet-body` / `--apc-pet-line` for a strict palette.
 - In the spec's "The agent in the page" and the integrate guide.
 
+### Wait events on the presence channel (TIN-886)
+
+Before, a page could not tell whether its agent was listening, so apps guessed from recent calls (75 s, 5 minutes) and showed "waiting" with no wait running. In `packages/protocol/src/presence.ts`, the spec's [presence](https://apc.tineira.com/docs/spec#presence) and DESIGN.md section 23.
+
+- **A presence kind `"wait"`**: `PresenceWaitEvent`, `{ v: 1, grant_id, at, kind: "wait", state: "open" | "closed" }`, ids only, no targets, on the existing presence stream with its read and write rules. `PresenceMessage` is either kind; `parsePresenceWaitEvent` and `isPresenceWaitEvent` take exactly those five keys. `PresenceEvent` is unchanged.
+- **When.** An app **must** send `open` when a `wait_for_focus` claims the grant's place, and `closed` when it gives it up: on return, timeout, cancel, or the grant revoked or deleted. A refused wait sends nothing. A takeover sends the old wait's `closed`, then the new wait's `open`, both at the claim, and the old wait sends nothing later.
+- **Expiry.** A page **must** treat an `open` as closed once it is older, on the page's clock from arrival, than the app's ceiling (`WAIT_CEILING_DEFAULT_S`, 50 s, unless the app sets its own) plus `WAIT_EVENT_MARGIN_S` (10 s; `waitOpenLimitMs`), so a lost `closed` cannot leave it "waiting" for ever. An app **should** tell a page that connects mid-wait.
+- **Dock grants.** A page **must not** show a dock grant as waiting: its agent waits on the hub, and the app sees only the hub's relays.
+- `@tineira/apc-server`: `presenceWaitEvent`; `announceWaits(slot, grantId, publish)` sends the events from a `WaitSlot`; `registerApcTools` takes `waitPresence: { grantId, publish }`. `WaitSlot.claim` may report `tookOver` and `release` whether it held the place (both optional: a store that reports neither still works); `MemoryWaitSlots` reports both, keeps the closed of a grant forgotten mid-wait, and has `held(grantId)`. The default ceiling is `WAIT_CEILING_DEFAULT_S`.
+- `@tineira/apc-web`: `foldWaitEvent`, `waitOpen` (what a pet's `waiting` input takes) and `nextWaitExpiry`; `flashTargets` takes any `PresenceMessage` and ignores wait events.
+- `@tineira/apc-conformance`: `takePresence()` returns `PresenceMessage[]`. Two checks, on the Direct profile of an app that claims 0.11.0: a wait sends `open`, then `closed`; a takeover sends `open, closed, open, closed`.
+
+An app before 0.11 sends no wait events, and its pages are not affected by them; to claim 0.11.0 it sends them.
+
 ## 0.10.0 (draft, 2026-11-13)
 
 The Dock profile as built (TIN-882): a dock grant has states, each state answers in a fixed way, and the hub and the app have MUSTs around the hub call. Before, the profile said how a pairing starts and not what a grant answers between the Allow and the hub's first `initialize`: one app served data in that window, two had no gate at all. In `packages/protocol/src/dock.ts` and `core.ts`, the spec's Dock profile and DESIGN.md section 22. The binding stays the secret MCP URL; other bindings are left open for future versions.

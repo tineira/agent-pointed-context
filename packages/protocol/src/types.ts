@@ -53,7 +53,7 @@ export interface ViewPayload {
   next: string | null;
 }
 
-/** One message on the presence channel, after each successful tool call. */
+/** One message on the presence channel, after each successful tool call. A wait has its own kind, `PresenceWaitEvent` (APC 0.11, `presence.ts`). */
 export interface PresenceEvent {
   v: 1;
   grant_id: string;

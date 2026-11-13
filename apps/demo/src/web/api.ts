@@ -1,4 +1,4 @@
-import type { ApcProfile, FocusRow, FocusTarget, PresenceEvent } from "@tineira/apc-protocol";
+import type { ApcProfile, FocusRow, FocusTarget, PresenceMessage } from "@tineira/apc-protocol";
 import type { Region } from "../model/seed.ts";
 import type { CompatRow } from "../worker/compat.ts";
 import { HEARTBEAT_MS } from "../worker/page.ts";
@@ -45,10 +45,10 @@ export interface SandboxState {
 }
 
 export type ServerMessage =
-  | { type: "presence"; event: PresenceEvent }
+  /** A call, or (APC 0.11) a wait opening or closing. */
+  | { type: "presence"; event: PresenceMessage }
   | { type: "pin"; grant_id: string; pin: FocusRow | null }
   | { type: "grants" }
-  | { type: "waiting"; grant_id: string; on: boolean }
   | { type: "activity" };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -83,7 +83,8 @@ export function createApi(sid: string) {
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
-    connect(onMessage: (message: ServerMessage) => void): () => void {
+    /** `onOpen`: each (re)connection, before its first message; the sandbox then sends the waits open now (APC 0.11). */
+    connect(onMessage: (message: ServerMessage) => void, onOpen?: () => void): () => void {
       let socket: WebSocket | null = null;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let closed = false;
@@ -93,6 +94,7 @@ export function createApi(sid: string) {
         socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
         socket.onopen = () => {
           delay = 2000;
+          onOpen?.();
           // The heartbeat: the sandbox counts this page as open only while its pings are answered.
           const ws = socket;
           ws?.send("ping");

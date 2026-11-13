@@ -24,7 +24,7 @@ import {
   type DockGrantState,
   type FocusPayload,
   type FocusRow,
-  type PresenceEvent,
+  type PresenceMessage,
   type ViewPayload,
 } from "@tineira/apc-protocol";
 import {
@@ -168,7 +168,7 @@ export interface OrdersAppOptions {
   store?: OrdersStore;
 }
 
-type PageMessage = { type: "presence"; event: PresenceEvent } | { type: "agents" };
+type PageMessage = { type: "presence"; event: PresenceMessage } | { type: "agents" };
 
 /**
  * What a drop from a dock answers the page: `consent_required` with the nonce and the pairing code to show; or
@@ -455,6 +455,8 @@ export class OrdersApp {
       pageOpen: async () => this.store.grants.get(secret) === grant && this.pages.size > 0,
       // One wait per grant: a newer wait takes over, a cancelled one frees its place.
       waitSlot: this.waitSlots.for(grant.id),
+      // Wait events (APC 0.11): the page knows the agent is listening while a wait holds its place.
+      waitPresence: { grantId: grant.id, publish: (event) => this.publish({ type: "presence", event }) },
       signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       pollMs: 500,
