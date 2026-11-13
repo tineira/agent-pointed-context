@@ -31,6 +31,7 @@ import {
   T_CONNECT_MAX_MS,
   compareStandard,
   dockGrantAnswer,
+  dockGrantCallOf,
   isRevokedAnswer,
   normalizePairingCode,
   type DockGrantCall,
@@ -70,7 +71,8 @@ interface TableCall {
   call: DockGrantCall;
   method: string;
   params: Record<string, unknown>;
-  notification?: boolean;
+  /** Sent with no `id` member. */
+  noId: boolean;
 }
 
 /** Races `work` against `ms`: the value, or `timedOut`. */
@@ -113,31 +115,61 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     return ((await response.json().catch(() => ({}))) as { standard?: unknown }).standard;
   };
 
-  const send = async (mcpUrl: string, method: string, params: Record<string, unknown>, notification = false): Promise<Sent> => {
+  /** A JSON-RPC message to the grant's URL: with `id: 1` unless `noId`. */
+  const send = async (mcpUrl: string, method: string, params: Record<string, unknown>, noId = false): Promise<Sent> => {
     const started = Date.now();
     const response = await fetchApp(
       new Request(mcpUrl, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
-        body: JSON.stringify(notification ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id: 1, method, params }),
+        body: JSON.stringify(noId ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id: 1, method, params }),
       }),
     );
     const body = rpcBody(response.headers.get("content-type") ?? "", await response.text());
+    return { status: response.status, body, headers: response.headers, ms: Date.now() - started };
+  };
+  /** A request that is not a JSON-RPC message (the spec's "any request" row): a GET, a DELETE, a POST that does not parse. */
+  const sendRaw = async (mcpUrl: string, method: "GET" | "DELETE" | "POST"): Promise<Sent> => {
+    const started = Date.now();
+    const response = await fetchApp(
+      new Request(mcpUrl, {
+        method,
+        headers: { accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+        ...(method === "POST" ? { body: "{ not json" } : {}),
+      }),
+    );
+    const text = await response.text();
+    let body: unknown = text;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // not JSON
+    }
     return { status: response.status, body, headers: response.headers, ms: Date.now() - started };
   };
   const toolCall = (mcpUrl: string, tool: string, args: Record<string, unknown> = {}) => send(mcpUrl, "tools/call", { name: tool, arguments: args });
   const resultOf = (s: Sent): ToolCallResult | undefined => (isObject(s.body) && isObject(s.body.result) ? (s.body.result as ToolCallResult) : undefined);
   const brief = (s: Sent) => `HTTP ${s.status} ${JSON.stringify(s.body).slice(0, 200)}`;
 
+  /** A message of the table, classified as the protocol classifies it (`dockGrantCallOf`), never by hand. */
+  const entry = (label: string, method: string, params: Record<string, unknown>, noId = false): TableCall => ({
+    label,
+    method,
+    params,
+    noId,
+    call: dockGrantCallOf({ method, params, ...(noId ? {} : { id: 1 }) }),
+  });
   const tableCalls = (): TableCall[] => [
-    { label: "initialize", call: "initialize", method: "initialize", params: INIT },
-    { label: "ping", call: "ping", method: "ping", params: {} },
-    { label: "tools/list", call: "tools/list", method: "tools/list", params: {} },
-    { label: "get_current_view", call: "core_tool", method: "tools/call", params: { name: "get_current_view", arguments: {} } },
-    { label: "wait_for_focus", call: "core_tool", method: "tools/call", params: { name: "wait_for_focus", arguments: { timeout_s: 3 } } },
-    { label: app.probe.tool, call: "app_tool", method: "tools/call", params: { name: app.probe.tool, arguments: app.probe.args } },
-    { label: "resources/list", call: "other_method", method: "resources/list", params: {} },
-    { label: "notifications/initialized", call: "notification", method: "notifications/initialized", params: {}, notification: true },
+    entry("initialize", "initialize", INIT),
+    entry("ping", "ping", {}),
+    entry("tools/list", "tools/list", {}),
+    entry("get_current_view", "tools/call", { name: "get_current_view", arguments: {} }),
+    entry("wait_for_focus", "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 3 } }),
+    entry(app.probe.tool, "tools/call", { name: app.probe.tool, arguments: app.probe.args }),
+    entry("resources/list", "resources/list", {}),
+    entry("notifications/initialized (no id)", "notifications/initialized", {}, true),
+    // A notifications/* method with an id is still a notification.
+    entry("notifications/cancelled (with an id)", "notifications/cancelled", { requestId: 99, reason: "apc-conformance" }),
   ];
 
   /** No key of a gated answer points the agent anywhere: no attention, then or apc_link, in the structured result or the text. */
@@ -163,7 +195,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         expect(s.status === 202, `${where} is ignored with HTTP 202, got ${brief(s)}`);
         return;
       case "serve": {
-        if (c.notification) {
+        if (c.call === "notification") {
           expect(s.status >= 200 && s.status < 300, `${where} is taken as 0.8 takes it (HTTP 2xx), got ${brief(s)}`);
           return;
         }
@@ -225,7 +257,17 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     const calls = tableCalls();
     const ordered = state === "handoff" ? [...calls.slice(1), calls[0]!] : calls;
     app.page.takePresence();
-    for (const c of ordered) expectAnswer(state, c, await send(mcpUrl, c.method, c.params, c.notification));
+    for (const c of ordered) expectAnswer(state, c, await send(mcpUrl, c.method, c.params, c.noId));
+    // The "any request" row: what is not a JSON-RPC message gets the state's answer too, where the state fixes one.
+    if (state === "in_flight" || state === "ended" || state === "revoked") {
+      for (const method of ["GET", "DELETE", "POST"] as const) {
+        const s = await sendRaw(mcpUrl, method);
+        const what = method === "POST" ? "a POST whose body does not parse" : `a ${method}`;
+        if (state === "revoked") {
+          expect(s.status === REVOKED_HTTP_STATUS && isRevokedAnswer(s.body), `${what} in revoked answers HTTP ${REVOKED_HTTP_STATUS} with RevokedAnswer, got ${brief(s)}`);
+        } else expect(s.status === 404, `${what} in ${state} answers HTTP 404, got ${brief(s)}`);
+      }
+    }
     if (grantId && (state === "handoff" || state === "dormant")) {
       const events = app.page.takePresence().filter((e) => e.grant_id === grantId);
       expect(events.length === 0, `a grant in ${state} published ${events.length} presence event(s): no answer in ${state} may`);

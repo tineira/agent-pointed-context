@@ -29,6 +29,8 @@ import { standInHub, type ApcAppAdapter, type ApcDockDropOutcome, type StandInHu
 
 export type FixtureBreak =
   | "in_flight_serves"
+  | "any_request_405"
+  | "notification_by_id_only"
   | "handoff_serves_data"
   | "attention_in_handoff"
   | "tool_error_text_only"
@@ -399,14 +401,17 @@ class Fixture {
     const g = this.storage.grants.find((x) => x.secret === secret);
     if (!g) return json({ error: "not_found" }, 404);
     let st = this.stateOf(g);
+    // A request that is not a JSON-RPC POST, checked before the state: the "any request" row broken.
+    if (this.has("any_request_405") && request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (st === "revoked" || (st === "ended" && this.has("ended_answers_revoked"))) return json(revokedAnswer("fixture.test", g.revokedAt ?? new Date(this.now()).toISOString()), this.has("revoked_answers_404") && st === "revoked" ? 404 : 403);
     if (st === "ended" || (st === "in_flight" && !this.has("in_flight_serves"))) return json({ error: "not_found" }, 404);
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-    const rpc = (await request.json().catch(() => null)) as { id?: unknown; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } } | null;
+    const rpc = (await request.json().catch(() => null)) as { id?: string | number | null; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } } | null;
     if (!rpc || typeof rpc.method !== "string") return json({ error: "invalid" }, 400);
-    const notification = !("id" in rpc);
     const tool = rpc.params?.name;
-    const call = dockGrantCallOf({ method: rpc.method, notification, ...(tool ? { tool } : {}) });
+    // A notification has no id, or is any notifications/* method (broken: by the id alone).
+    const call = this.has("notification_by_id_only") && rpc.id !== undefined && rpc.method.startsWith("notifications/") ? "other_method" : dockGrantCallOf({ method: rpc.method, ...(rpc.id !== undefined ? { id: rpc.id } : {}), params: rpc.params });
+    const notification = call === "notification";
     if (st === "in_flight") st = "handoff";
     const commits = st === "handoff" && call === "initialize";
     const as = st === "handoff" && this.has("handoff_serves_data") && !commits ? "live" : st;
