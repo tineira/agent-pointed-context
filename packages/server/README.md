@@ -10,6 +10,8 @@ npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod
 
 Pre-releases go out on the `next` tag while the standard is 0.x. `@modelcontextprotocol/sdk` (^1.32.1) and `zod` (^4) are peer dependencies; `@tineira/apc-protocol` comes with it.
 
+The `@tineira/apc-*` packages are ESM only: an `import` export, no `require` build. From CommonJS, load them with `await import("@tineira/apc-server")`; on Node 20.19+ or 22.12+ a plain `require()` works too, since they use no top-level await. A CommonJS test runner needs the same: Jest in its default mode cannot load them, so run it with `NODE_OPTIONS=--experimental-vm-modules` and an ESM config, or let its transform handle them (`transformIgnorePatterns: ["node_modules/(?!@tineira/)"]`); Vitest and `node --test` load them as they are.
+
 ## Example
 
 Register the two APC tools next to your own, and attach the envelope to every result while a pin is unread:

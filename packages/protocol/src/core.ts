@@ -315,8 +315,13 @@ export const TICKET_TTL_MS = 240_000;
 
 /** Why a hub refuses a pairing or an approval over its code. */
 export type PairingCodeError = "invalid_pairing_code" | "pairing_code_required" | "wrong_pairing_code" | "pairing_code_refused";
-/** Why an app did not keep a grant after asking a hub to pair (`pairWithHub`), when the hub gave no reason of its own. */
-export type HubCallError = "hub_unreachable" | "hub_refused" | "hub_ignores_pairing_code";
+/**
+ * Why an app did not keep a grant after asking a hub to pair (`pairWithHub`), when the hub gave no reason of
+ * its own. `hub_not_allowed` (0.10): the hub given is not a bare origin, so no request was sent (M1, M9);
+ * `hub_unreachable`: no answer within the deadline (M3); `hub_refused`: a redirect (M2), an answer past the
+ * byte cap or with a bad `content-length` (M4), or anything that is not an answer.
+ */
+export type HubCallError = "hub_not_allowed" | "hub_unreachable" | "hub_refused" | "hub_ignores_pairing_code";
 
 /**
  * A code as typed or sent, made canonical: case, spaces and dashes are ignored, O reads as 0 and I or L as 1.

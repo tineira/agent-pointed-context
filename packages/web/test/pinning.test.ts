@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDragPayload, APC_AGENT_TYPE, parseAgentDrag, parseAgentDragPayload } from "../src/pinning.ts";
 
+test("the drag payload lives in @tineira/apc-protocol and @tineira/apc-web re-exports it (APC 0.10)", async () => {
+  const protocol = await import("@tineira/apc-protocol");
+  assert.equal(APC_AGENT_TYPE, protocol.APC_AGENT_TYPE);
+  assert.equal(parseAgentDrag, protocol.parseAgentDrag);
+  assert.equal(agentDragPayload, protocol.agentDragPayload);
+  assert.equal(parseAgentDragPayload, protocol.parseAgentDragPayload);
+  const web = await import("../src/index.ts");
+  assert.equal(web.parseAgentDrag, protocol.parseAgentDrag, "the package entry too");
+});
+
 test("an agent's drag carries a public handle only, and reads back (TIN-369)", () => {
   assert.equal(APC_AGENT_TYPE, "application/x-apc-agent");
   assert.equal(parseAgentDragPayload(agentDragPayload("g_1a2b3c4d")), "g_1a2b3c4d");
