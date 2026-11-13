@@ -17,8 +17,13 @@ export function toolResult(data: Record<string, unknown>): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data };
 }
 
+/**
+ * A tool error: `{ error, message }` in both `structuredContent` and `content[0].text` (the same JSON), with
+ * `isError: true` (APC 0.10; before 0.10 the text only). The dock grant's `pairing` and `idle` errors use it.
+ */
 export function toolError(code: string, message: string): ToolResult {
-  return { content: [{ type: "text", text: JSON.stringify({ error: code, message }) }], isError: true };
+  const data = { error: code, message };
+  return { content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data, isError: true };
 }
 
 /** The pin is unread while it was dropped after the last read that returned it. */

@@ -1,27 +1,42 @@
-import { PAIRING_CODE_ACK, type DockPairRequest } from "@tineira/apc-protocol";
+import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type DockPairRequest, type HubCallError } from "@tineira/apc-protocol";
 
 /**
- * An app's calls to a dock's hub, server to server (the Dock profile; APC 0.9): `pairWithHub` after the
- * person's Allow, `confirmWithHub` on every later drop. Both fail closed. A call never follows a redirect
- * (`redirect: "error"`: the app's hub list is its trust anchor, and a redirect would hand the grant and the
- * pairing code to another host), gives up after `timeoutMs` (10 s by default), and believes only these
- * answers:
+ * An app's calls to a dock's hub, server to server (the Dock profile; APC 0.9, hardened in 0.10):
+ * `pairWithHub` after the person's Allow, `confirmWithHub` on every later drop. Both fail closed, and follow
+ * the app's MUSTs on the hub call (APC 0.10):
+ *
+ * - **M9.** The request goes to the parsed origin of `hub` (`new URL(hub).origin` and the path), never to
+ *   the raw string. A `hub` that is not a bare http(s) origin (unparsable, userinfo, a path other than `/`,
+ *   a query or a fragment) is `hub_not_allowed`, and nothing is sent. Check the hub against the app's
+ *   allowlist first (`parseDockDrop`, M1): this client does not know the allowlist.
+ * - **M2.** `redirect: "error"`, and any 3xx, `opaqueredirect` or `response.redirected` is `hub_refused`:
+ *   the app's hub list is its trust anchor, and a redirect would hand the grant and the pairing code to
+ *   another host.
+ * - **M3.** One deadline, `timeoutMs` (10 s by default, and never more: `HUB_CALL_DEADLINE_MS`), covers the
+ *   headers **and** the whole body. Past it the call is `hub_unreachable`.
+ * - **M4.** A `content-length` that is present must be digits only and at most `HUB_ANSWER_MAX_BYTES`, or
+ *   the answer is `hub_refused` before a byte is read. The decoded body is read as a stream and cut at the
+ *   cap (past it: `hub_refused`). An absent `content-length` (chunked) is fine, and the declared length is
+ *   never compared with the decoded one (gzip).
+ *
+ * It believes only these answers:
  *
  * - **HTTP 200** with `ok: true` and, for a pairing, the acknowledgement `pairing_code: "required"` and a
  *   string `pairing_id`; for a confirm, `status` `"pending"` or `"paired"`.
  * - **HTTP 400** with `ok: false` and an `error` in the hub's vocabulary (`/^[a-z_]{1,64}$/`): the hub's
  *   own refusal, passed on.
  *
- * Anything else is a refusal of the app's own: `hub_unreachable` (no answer, a time limit, a redirect the
- * runtime refused), `hub_ignores_pairing_code` (a yes without the acknowledgement: a hub that would not check
- * the code), `hub_refused` (any other status, a redirect that came through, JSON that is not an answer).
- * On any refusal after `/apc/pair` the app deletes the grant it made, before it answers its page: a grant is
- * kept only when the hub said it holds the code.
+ * Anything else is a refusal of the app's own (`HubCallError`): `hub_not_allowed`, `hub_unreachable` (no
+ * answer, the deadline, a redirect the runtime refused), `hub_ignores_pairing_code` (a yes without the
+ * acknowledgement: a hub that would not check the code), `hub_refused` (any other status, a redirect that
+ * came through, a body past the cap or a bad `content-length`, JSON that is not an answer). On any refusal
+ * after `/apc/pair` the app ends the grant it made, before it answers its page: a grant is kept only when
+ * the hub said it holds the code.
  */
 export interface HubCallOptions {
   /** How the app reaches the hub; the global fetch by default. */
   fetch?: typeof fetch;
-  /** Milliseconds before the call gives up: 10 000 by default. */
+  /** Milliseconds for the whole call, headers and body: 10 000 by default, and never more (`HUB_CALL_DEADLINE_MS`). */
   timeoutMs?: number;
 }
 
@@ -41,32 +56,131 @@ const agentOf = (raw: unknown): HubAgent => {
   return { name: typeof a.name === "string" ? a.name : null, icon: typeof a.icon === "string" ? a.icon : null };
 };
 
-type Answer = { status: number; body: Record<string, unknown> | null } | { error: "hub_unreachable" | "hub_refused" };
+type Answer = { status: number; body: Record<string, unknown> | null } | { error: Exclude<HubCallError, "hub_ignores_pairing_code"> };
 
-async function post(hub: string, path: string, body: unknown, options: HubCallOptions): Promise<Answer> {
+/**
+ * The origin a hub call goes to (M9): `hub` parsed with `new URL`, an http(s) origin with no userinfo, no
+ * path but `/`, no query and no fragment; null otherwise. Whether it is https and on the app's allowlist is
+ * `parseDockDrop`'s question (M1), asked before the call.
+ */
+export function hubCallOrigin(hub: string | URL): string | null {
+  const raw = String(hub);
+  if (/[@\\\s?#]/.test(raw)) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
+  return url.origin;
+}
+
+/** The one deadline of a call (M3): `timeoutMs` when it is a positive number, never more than `HUB_CALL_DEADLINE_MS`. */
+function deadlineMs(timeoutMs: number | undefined): number {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, HUB_CALL_DEADLINE_MS) : HUB_CALL_DEADLINE_MS;
+}
+
+/** The deadline passed (M3). */
+class Expired extends Error {}
+
+/** A body as bytes, at most `cap` of them (the decoded stream, M4), or null past it: the rest is never read. */
+async function readCapped(response: Response, cap: number, expired: Promise<never>): Promise<Uint8Array | null> {
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), expired]);
+      if (done) break;
+      size += value.byteLength;
+      if (size > cap) {
+        void reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    void reader.cancel().catch(() => {});
+    throw error;
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/** A present `content-length` that is not digits only, or is over the cap (M4). An absent one is fine. */
+export function badContentLength(headers: Headers, cap: number): boolean {
+  const declared = headers.get("content-length");
+  return declared !== null && (!/^\d+$/.test(declared) || Number(declared) > cap);
+}
+
+async function post(hub: string | URL, path: string, body: unknown, options: HubCallOptions): Promise<Answer> {
+  const origin = hubCallOrigin(hub);
+  if (!origin) return { error: "hub_not_allowed" };
   const send = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
-  let response: Response;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // One deadline for the headers and the whole body (M3): it aborts the request and fails any read still waiting.
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(new DOMException("The hub call took too long.", "TimeoutError"));
+      reject(new Expired());
+    }, deadlineMs(options.timeoutMs));
+  });
+  expired.catch(() => {});
   try {
-    response = await send(`${hub}${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      redirect: "error",
-      signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
-    });
-  } catch {
-    return { error: "hub_unreachable" };
-  }
-  // A fetch that followed a redirect anyway (or gave the redirect itself back) is not the hub answering.
-  if (response.redirected || (response.type as string) === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
-    await response.body?.cancel().catch(() => {});
-    return { error: "hub_refused" };
-  }
-  try {
-    const parsed = (await response.json()) as unknown;
-    return { status: response.status, body: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null };
-  } catch {
-    return { status: response.status, body: null };
+    let response: Response;
+    try {
+      response = await Promise.race([
+        send(`${origin}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          redirect: "error",
+          signal: controller.signal,
+        }),
+        expired,
+      ]);
+    } catch {
+      return { error: "hub_unreachable" };
+    }
+    const discard = () => void response.body?.cancel().catch(() => {});
+    // A fetch that followed a redirect anyway (or gave the redirect itself back) is not the hub answering (M2).
+    if (response.redirected || (response.type as string) === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
+      discard();
+      return { error: "hub_refused" };
+    }
+    // Only a 200 or the hub's own 400 is ever believed: the body of anything else is not read.
+    if (response.status !== 200 && response.status !== 400) {
+      discard();
+      return { error: "hub_refused" };
+    }
+    if (badContentLength(response.headers, HUB_ANSWER_MAX_BYTES)) {
+      discard();
+      return { error: "hub_refused" };
+    }
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await readCapped(response, HUB_ANSWER_MAX_BYTES, expired);
+    } catch (error) {
+      return { error: error instanceof Expired || controller.signal.aborted ? "hub_unreachable" : "hub_refused" };
+    }
+    if (!bytes) return { error: "hub_refused" };
+    try {
+      const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)) as unknown;
+      return { status: response.status, body: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null };
+    } catch {
+      return { status: response.status, body: null };
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -77,9 +191,10 @@ function refusal(a: { status: number; body: Record<string, unknown> | null }): s
 
 /**
  * `POST {hub}/apc/pair` with the pairing code (APC 0.9). `{ ok: true }` only on HTTP 200 with the
- * acknowledgement; on anything else the caller deletes the grant it made before it answers.
+ * acknowledgement; on anything else the caller ends the grant it made before it answers. Pass the hub as
+ * `parseDockDrop` gave it: its allowlisted origin.
  */
-export async function pairWithHub(hub: string, body: DockPairRequest, options: HubCallOptions = {}): Promise<PairWithHubResult> {
+export async function pairWithHub(hub: string | URL, body: DockPairRequest, options: HubCallOptions = {}): Promise<PairWithHubResult> {
   const a = await post(hub, "/apc/pair", body, options);
   if ("error" in a) return { ok: false, error: a.error };
   const refused = refusal(a);
@@ -91,7 +206,7 @@ export async function pairWithHub(hub: string, body: DockPairRequest, options: H
 }
 
 /** `POST {hub}/apc/confirm` on a drop of an agent the app holds a grant for: whether the hub still pairs them. */
-export async function confirmWithHub(hub: string, body: { ticket: string; agent: string; mcp_url: string }, options: HubCallOptions = {}): Promise<ConfirmWithHubResult> {
+export async function confirmWithHub(hub: string | URL, body: { ticket: string; agent: string; mcp_url: string }, options: HubCallOptions = {}): Promise<ConfirmWithHubResult> {
   const a = await post(hub, "/apc/confirm", body, options);
   if ("error" in a) return { ok: false, error: a.error };
   const refused = refusal(a);

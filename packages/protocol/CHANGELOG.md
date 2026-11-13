@@ -31,7 +31,19 @@ Before the acknowledgement a new drop replaces the pending consent (the stale Al
 
 ### Packages
 
-`@tineira/apc-protocol`: `dock.ts` (the states, the answer table, the tool errors, the idle shapes, the time limits, `PAIRING_ENDED_ERROR`, `DockDropError`, and the H and M rules in prose). The server helpers (the M2 to M4 hub client, `toolError`'s `structuredContent`, the M1 drop parser, the M7 give-back, `apcJsonResponse` at `max-age=60`), the reference hub and apps, and the conformance checks follow in their own changes.
+`@tineira/apc-protocol`: `dock.ts` (the states, the answer table, the tool errors, the idle shapes, the time limits, `PAIRING_ENDED_ERROR`, `DockDropError`, and the H and M rules in prose). The drag payload moves here from `@tineira/apc-web`, unchanged, so an app's server can check a drop with the page's grammar (`drag.ts`: `AgentDrag`, `APC_AGENT_TYPE`, `agentDragPayload`, `parseAgentDrag`, `parseAgentDragPayload`, and the grammar as `AGENT_HANDLE_RE` and `DRAG_TICKET_RE`); `@tineira/apc-web` re-exports it. `HubCallError` gains `hub_not_allowed` (a hub that is not a bare origin: nothing is sent).
+
+`@tineira/apc-server` (TIN-883):
+
+- **`pairWithHub` and `confirmWithHub` follow M2, M3, M4 and M9**: the call goes to the hub's parsed origin (`hubCallOrigin`; anything but a bare http(s) origin is `hub_not_allowed`, nothing sent); a 3xx, `opaqueredirect` or `redirected` answer is `hub_refused`; one deadline of at most 10 s covers the headers and the whole body (`hub_unreachable`); a `content-length` that is not digits or is over 8 KiB is refused before reading, and the decoded body is read as a stream and cut at 8 KiB (`hub_refused`), with an absent `content-length` taken and never compared.
+- **`toolError` sets `structuredContent`** with the same `{ error, message }` as its text.
+- **`parseDockDrop(body, { hubs, localDevHubs })`** (M1): the hub parsed with `new URL`, `https:` (or a listed loopback origin), no userinfo, path, query or fragment, written as its own origin, and exactly equal to one on the allowlist; the agent and ticket in the drag grammar. It answers `{ ok, hub, agent, ticket }` or `hub_not_allowed` / `invalid_drop`; call it on the drop and again on the Allow.
+- **`handleDockGiveBack(request, { origin, endGrantBySecretHash })`** (M7): `POST /apc/revoke` answers the same 200 to any input, reads at most 4 KiB, and hands the app the `secretHash` of the URL's secret to end that grant unless it is revoked or ended; it never logs the URL.
+- **`dockGrantGate(state, message, { host })`** and **`dockGrantToolResult(state, tool)`**: the answer table as a gate for an app's MCP handler, with the exact HTTP 404, 202, `RevokedAnswer`, JSON-RPC -32000, `pairing` / `idle` tool error or idle shape.
+- **The derived-secret recipe** (optional): `deriveDockSecret(key, appTag, grantId, salt)`, `dockSecretHash(secret)` and `newDockSalt()`, Web Crypto only.
+- **`apcJsonResponse` caches `max-age=60`** (was 300; M8, H7).
+
+The reference hub and apps, and the conformance checks, follow in their own changes.
 
 An app that implements 0.9 keeps working with a 0.10 hub: its answers carry no `idle`, and read as they did. To claim 0.10.0 it implements the states it uses as the table says, and M1 to M9.
 

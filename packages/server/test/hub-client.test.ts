@@ -83,3 +83,185 @@ test("a confirm is believed on a 200 with ok and a known status only", async () 
   assert.equal(sent.sent[0]!.url, `${HUB}/apc/confirm`);
   assert.equal(sent.sent[0]!.init.redirect, "error");
 });
+
+// #region APC 0.10: M2, M3, M4 and M9 on the hub call (TIN-883)
+
+/** A body that hands out `chunks` one read at a time and counts the reads; `hang` keeps it open after them. */
+function streamed(chunks: string[], o: { hang?: boolean } = {}) {
+  const state = { pulls: 0, cancelled: false };
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        state.pulls++;
+        const next = chunks.shift();
+        if (next !== undefined) controller.enqueue(encoder.encode(next));
+        else if (!o.hang) controller.close();
+        else return new Promise(() => {});
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { body, state };
+}
+
+const ackText = JSON.stringify(ACK);
+const CONFIRM = { ticket: BODY.ticket, agent: "ag_1", mcp_url: BODY.mcp_url };
+
+test("M9: the call goes to the parsed origin, never the raw string; a hub that is not a bare origin sends nothing", async () => {
+  const slash = hubAnswering(() => Response.json(ACK));
+  assert.equal((await pairWithHub(`${HUB}/`, BODY, { fetch: slash.fetch })).ok, true);
+  assert.equal(slash.sent[0]!.url, `${HUB}/apc/pair`, "no //apc/pair");
+  const asUrl = hubAnswering(() => Response.json(ACK));
+  assert.equal((await pairWithHub(new URL(HUB), BODY, { fetch: asUrl.fetch })).ok, true);
+  assert.equal(asUrl.sent[0]!.url, `${HUB}/apc/pair`);
+  const port = hubAnswering(() => Response.json(ACK));
+  await pairWithHub("https://dock.test:443", BODY, { fetch: port.fetch });
+  assert.equal(port.sent[0]!.url, `${HUB}/apc/pair`, "the default port is the origin's");
+  for (const hub of ["https://dock.test/x", "https://dock.test/apc", "https://u:p@dock.test", "https://@dock.test", "https://dock.test?x=1", "https://dock.test#f", "https:\\\\dock.test", "dock.test", "not a url", "", "ftp://dock.test", "javascript:alert(1)", "https://dock.test/ "]) {
+    const hubFor = hubAnswering(() => Response.json(ACK));
+    assert.deepEqual(await pairWithHub(hub, BODY, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, hub);
+    assert.deepEqual(await confirmWithHub(hub, CONFIRM, { fetch: hubFor.fetch }), { ok: false, error: "hub_not_allowed" }, hub);
+    assert.equal(hubFor.sent.length, 0, `nothing sent to ${hub}`);
+  }
+});
+
+test("M4: a content-length that is not digits, or is over 8 KiB, is refused before a byte is read", async () => {
+  for (const declared of ["8193", "99999999999999999999", "", "abc", "-1", "1e3", "0x10", "10, 10", "+10"]) {
+    const { body, state } = streamed([ackText]);
+    const hub = hubAnswering(() => new Response(body, { status: 200, headers: { "content-length": declared } }));
+    assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hub.fetch }), { ok: false, error: "hub_refused" }, JSON.stringify(declared));
+    assert.equal(state.pulls, 0, `nothing read for content-length ${JSON.stringify(declared)}`);
+  }
+  // The hub's own 400 is capped the same way.
+  const refusing = hubAnswering(() => new Response(JSON.stringify({ ok: false, error: "ticket_expired" }), { status: 400, headers: { "content-length": "9000" } }));
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: refusing.fetch }), { ok: false, error: "hub_refused" });
+});
+
+test("M4: a lying content-length is never compared; the decoded stream is what is cut at the cap", async () => {
+  // Says less than it sends (as with gzip, where it is the compressed length), all of it under the cap: fine.
+  const low = streamed([ackText.slice(0, 20), ackText.slice(20)]);
+  assert.equal((await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(low.body, { headers: { "content-length": "5", "content-encoding": "gzip" } })).fetch })).ok, true);
+  // Says more than it sends, under the cap: fine.
+  const high = streamed([ackText]);
+  assert.equal((await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(high.body, { headers: { "content-length": "8192" } })).fetch })).ok, true);
+  // Says little and sends past the cap: cut, and the rest is never read.
+  const big = streamed([`{"pad":"${"x".repeat(5000)}`, "x".repeat(5000), "x".repeat(5000), `","ok":true}`]);
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(big.body, { headers: { "content-length": "100" } })).fetch }), { ok: false, error: "hub_refused" });
+  assert.equal(big.state.cancelled, true, "the stream is cancelled at the cap");
+  assert.ok(big.state.pulls <= 3, `read ${big.state.pulls} chunks, not all four`);
+  // The cap itself: exactly 8192 bytes is read, 8193 is not.
+  const exact = JSON.stringify({ ...ACK, pad: "" });
+  const at = JSON.stringify({ ...ACK, pad: "x".repeat(8192 - exact.length) });
+  assert.equal(new TextEncoder().encode(at).length, 8192);
+  assert.equal((await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(at)).fetch })).ok, true, "8192 bytes");
+  const over = JSON.stringify({ ...ACK, pad: "x".repeat(8193 - exact.length) });
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(over)).fetch }), { ok: false, error: "hub_refused" }, "8193 bytes");
+});
+
+test("M4: an absent content-length (chunked) is not refused, and is still capped", async () => {
+  const chunks = streamed([ackText.slice(0, 10), ackText.slice(10, 30), ackText.slice(30)]);
+  const response = new Response(chunks.body);
+  assert.equal(response.headers.get("content-length"), null);
+  assert.equal((await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => response).fetch })).ok, true);
+  const endless = streamed(Array.from({ length: 50 }, () => "x".repeat(1000)));
+  assert.deepEqual(await confirmWithHub(HUB, CONFIRM, { fetch: hubAnswering(() => new Response(endless.body)).fetch }), { ok: false, error: "hub_refused" });
+  assert.ok(endless.state.pulls <= 10, `stopped after ${endless.state.pulls} reads`);
+});
+
+test("M3: one deadline covers the headers and the whole body; a slow body is hub_unreachable", async () => {
+  const slowBody = streamed(['{"ok":true,'], { hang: true });
+  const started = Date.now();
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(slowBody.body)).fetch, timeoutMs: 50 }), { ok: false, error: "hub_unreachable" });
+  assert.ok(Date.now() - started < 2000, "the deadline, not the body, ended it");
+  assert.equal(slowBody.state.cancelled, true, "the body is cancelled");
+  // The headers and the body share the one deadline: headers that take most of it leave the body the rest.
+  const late = (() => new Promise<Response>((resolve) => setTimeout(() => resolve(new Response(streamed(['{"ok":'], { hang: true }).body)), 30))) as typeof fetch;
+  const before = Date.now();
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: late, timeoutMs: 60 }), { ok: false, error: "hub_unreachable" });
+  assert.ok(Date.now() - before < 1000);
+  // A fetch that ignores the signal is still cut off by the deadline.
+  const deaf = (() => new Promise<Response>(() => {})) as typeof fetch;
+  assert.deepEqual(await confirmWithHub(HUB, CONFIRM, { fetch: deaf, timeoutMs: 20 }), { ok: false, error: "hub_unreachable" });
+  // The signal handed to fetch is aborted at the deadline.
+  let signal: AbortSignal | undefined;
+  const watching = ((_url: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal ?? undefined;
+    return new Promise<Response>(() => {});
+  }) as typeof fetch;
+  await pairWithHub(HUB, BODY, { fetch: watching, timeoutMs: 20 });
+  assert.equal(signal?.aborted, true);
+});
+
+test("M2: a redirect in any form is refused, and its body is not read", async () => {
+  for (const status of [300, 301, 302, 303, 307, 308]) {
+    const { body, state } = streamed([ackText]);
+    assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(body, { status, headers: { location: "https://evil.test/apc/pair" } })).fetch }), { ok: false, error: "hub_refused" }, String(status));
+    assert.equal(state.pulls, 0);
+  }
+  const opaque = () => {
+    const r = new Response(null, { status: 200 });
+    Object.defineProperty(r, "type", { value: "opaqueredirect" });
+    return r;
+  };
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(opaque).fetch }), { ok: false, error: "hub_refused" });
+  const followed = () => {
+    const r = Response.json({ ok: true, status: "paired" });
+    Object.defineProperty(r, "redirected", { value: true });
+    return r;
+  };
+  assert.deepEqual(await confirmWithHub(HUB, CONFIRM, { fetch: hubAnswering(followed).fetch }), { ok: false, error: "hub_refused" });
+  // Any status but 200 and 400: refused, the body never read.
+  const { body, state } = streamed([ackText]);
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(body, { status: 500 })).fetch }), { ok: false, error: "hub_refused" });
+  assert.equal(state.pulls, 0);
+});
+
+test("a body that is not UTF-8, or is empty, is not an answer", async () => {
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(new Uint8Array([0x7b, 0xff, 0x7d]))).fetch }), { ok: false, error: "hub_refused" });
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response(null)).fetch }), { ok: false, error: "hub_refused" });
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hubAnswering(() => new Response("", { headers: { "content-length": "0" } })).fetch }), { ok: false, error: "hub_refused" });
+});
+
+test("against a real HTTP server: gzip is decoded and capped, a slow body hits the deadline, a redirect is refused", async () => {
+  const { createServer } = await import("node:http");
+  const { gzipSync } = await import("node:zlib");
+  const padded = JSON.stringify({ ...ACK, pad: "x".repeat(6000) });
+  const bomb = JSON.stringify({ ok: true, status: "paired", pad: "x".repeat(200_000) });
+  const gzipping = createServer((req, res) => {
+    req.resume();
+    const zipped = gzipSync(req.url === "/apc/pair" ? padded : bomb);
+    res.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip", "content-length": String(zipped.length) });
+    res.end(zipped);
+  });
+  const slow = createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "application/json" });
+    res.write('{"ok":true,');
+  });
+  const redirecting = createServer((req, res) => {
+    req.resume();
+    res.writeHead(307, { location: "https://evil.test/apc/pair" });
+    res.end();
+  });
+  const servers = [gzipping, slow, redirecting];
+  const listen = (s: (typeof servers)[number]) => new Promise<string>((resolve) => s.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(s.address() as { port: number }).port}`)));
+  const [gz, slowHub, redirectHub] = [await listen(gzipping), await listen(slow), await listen(redirecting)];
+  try {
+    assert.ok(gzipSync(padded).length < 300, "small on the wire");
+    assert.equal((await pairWithHub(gz!, BODY)).ok, true, "a gzip answer under the cap once decoded, its content-length the compressed one");
+    assert.deepEqual(await confirmWithHub(gz!, CONFIRM), { ok: false, error: "hub_refused" }, "a gzip bomb: small on the wire, cut at 8 KiB decoded");
+    const started = Date.now();
+    assert.deepEqual(await pairWithHub(slowHub!, BODY, { timeoutMs: 200 }), { ok: false, error: "hub_unreachable" }, "headers in time, the body never ends");
+    assert.ok(Date.now() - started < 3000);
+    assert.deepEqual(await pairWithHub(redirectHub!, BODY), { ok: false, error: "hub_unreachable" }, "redirect: error, as the runtime refuses it");
+  } finally {
+    for (const s of servers) s.closeAllConnections();
+    await Promise.all(servers.map((s) => new Promise((r) => s.close(r))));
+  }
+});
+
+// #endregion
