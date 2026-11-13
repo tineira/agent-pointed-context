@@ -250,7 +250,7 @@ function callOf(message: unknown): { call: DockGrantCall; id: RpcId; tool?: stri
   // A message without an id (a notification) or without a method (a client's response) needs no answer.
   if (m.id === undefined || typeof m.method !== "string") return { call: "notification", id: null };
   const tool = m.method === "tools/call" && m.params && typeof m.params === "object" ? (m.params as { name?: unknown }).name : undefined;
-  return { call: dockGrantCallOf({ method: m.method, tool: typeof tool === "string" ? tool : undefined }), id, ...(typeof tool === "string" ? { tool } : {}) };
+  return { call: dockGrantCallOf({ method: m.method, id, params: m.params }), id, ...(typeof tool === "string" ? { tool } : {}) };
 }
 
 const noStore = { "cache-control": "no-store" };
@@ -271,7 +271,7 @@ function errorMessage(error: DockGrantError, options: { pairingMessage?: string;
  * must run before the transport (`dockGrantGate`).
  */
 export function dockGrantToolResult(state: DockGrantState, tool: string, options: { pairingMessage?: string; idleMessage?: string } = {}): ToolResult | null {
-  const answer = dockGrantAnswer(state, dockGrantCallOf({ method: "tools/call", tool }));
+  const answer = dockGrantAnswer(state, dockGrantCallOf({ method: "tools/call", id: 0, params: { name: tool } }));
   if (answer.kind === "serve") return null;
   if (answer.kind === "tool_error") return toolError(answer.error, errorMessage(answer.error, options));
   if (answer.kind === "idle_shape") {
@@ -301,7 +301,7 @@ export function dockGrantGate(state: DockGrantState, message: unknown, options: 
   const answer = dockGrantAnswer(state, call);
   switch (answer.kind) {
     case "serve":
-      return { serve: true, commits: answer.commits === true, answer };
+      return { serve: true, commits: answer.commits, answer };
     case "not_found":
       return { serve: false, answer, response: Response.json({ error: "not_found" }, { status: 404, headers: noStore }) };
     case "revoked":

@@ -263,13 +263,13 @@ test("the gate: in flight and ended answer 404 to everything, revoked RevokedAns
       assert.equal(revoked.response.status, REVOKED_HTTP_STATUS);
       assert.deepEqual(await revoked.response.json(), revokedAnswer("orders.test", GATE.revokedAt));
     }
-    assert.deepEqual(dockGrantGate("live", message, GATE), { serve: true, commits: false, answer: { kind: "serve" } });
+    assert.deepEqual(dockGrantGate("live", message, GATE), { serve: true, commits: false, answer: { kind: "serve", commits: false, wakes: false } });
   }
 });
 
 test("the gate in handoff: initialize commits, ping and tools/list serve, a tool call is the pairing error, a notification 202", async () => {
-  assert.deepEqual(dockGrantGate("handoff", rpc("initialize", {}), GATE), { serve: true, commits: true, answer: { kind: "serve", commits: true } });
-  for (const method of ["ping", "tools/list"]) assert.deepEqual(dockGrantGate("handoff", rpc(method), GATE), { serve: true, commits: false, answer: { kind: "serve" } });
+  assert.deepEqual(dockGrantGate("handoff", rpc("initialize", {}), GATE), { serve: true, commits: true, answer: { kind: "serve", commits: true, wakes: false } });
+  for (const method of ["ping", "tools/list"]) assert.deepEqual(dockGrantGate("handoff", rpc(method), GATE), { serve: true, commits: false, answer: { kind: "serve", commits: false, wakes: false } });
   for (const tool of ["get_current_view", "wait_for_focus", "list_orders"]) {
     const gate = dockGrantGate("handoff", call(tool), GATE);
     assert.equal(gate.serve, false);
@@ -294,8 +294,8 @@ test("the gate in handoff: initialize commits, ping and tools/list serve, a tool
 });
 
 test("the gate when dormant: initialize serves without committing, core tools answer their idle shapes, other tools idle", async () => {
-  assert.deepEqual(dockGrantGate("dormant", rpc("initialize", {}), GATE), { serve: true, commits: false, answer: { kind: "serve" } });
-  assert.deepEqual(dockGrantGate("dormant", notify("notifications/initialized"), GATE), { serve: true, commits: false, answer: { kind: "serve" } });
+  assert.deepEqual(dockGrantGate("dormant", rpc("initialize", {}), GATE), { serve: true, commits: false, answer: { kind: "serve", commits: false, wakes: false } });
+  assert.deepEqual(dockGrantGate("dormant", notify("notifications/initialized"), GATE), { serve: true, commits: false, answer: { kind: "serve", commits: false, wakes: false } });
   const shapes: Record<string, unknown> = {
     get_current_view: { view: null, focus: null, idle: true, note: IDLE_MESSAGE },
     wait_for_focus: { focus: null, timed_out: false, page_open: false, idle: true, note: IDLE_MESSAGE },
