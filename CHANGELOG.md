@@ -6,6 +6,14 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The 0.10 conformance checks close the reviews' gaps (2026-11-13, TIN-894)
+
+- **M2, M3 and M4 hold on `/apc/confirm` too.** The stand-in hub breaks `/apc/confirm` with `confirmMode`; a drop of a grant in handoff against a redirecting, stalling or oversized confirm answer must refuse it within the deadline and call nothing past the hub. (`packages/conformance/src/hub.ts`, `packages/conformance/src/dock-lifecycle.ts`)
+- **M3 measures the whole call.** A new stall (`slow_headers_then_stall`: headers at 90% of the deadline, then a body that never ends) and a time limit of the deadline plus under 30% fail an app whose two deadlines add up past it. (`packages/conformance/src/hub.ts`, `packages/conformance/src/dock-lifecycle.ts`)
+- **M6 refuses look-alike origins, counts only the app's own answer to the other-host probe, and fails a GET that makes a consent.** A longer host, another port, a trailing dot, a prefix and a cut-short origin; without `app.fetch`, or when a redirect, a 5xx or a network error answers, the other-host probe is a note; Cancel's GET probe is a note when `body()` pairs no grant during the call. (`packages/conformance/src/dock-lifecycle.ts`, `packages/conformance/src/index.ts`)
+- **M1 checks the Allow's hub itself, not `allowCarriesHub`.** The suite posts the Allow with a foreign hub to `owner.allow`; it must be refused or ignored. (`packages/conformance/src/dock-lifecycle.ts`)
+- **The skip for an app before 0.10 needs a grant at the owner origin, the T_connect and precedence checks use the app's own `connectMs`, long dormancy is checked with `dormancyMs`, and the suite gives its grants back after each check.** Orders declares its 30-day long dormancy. (`packages/conformance/src/dock-lifecycle.ts`, `packages/conformance/src/index.ts`, `apps/dock/src/docs/examples/orders-conformance.ts`, `apps/dock/src/docs/pages/conformance.md`)
+
 ### The reference hub and the reference apps meet APC 0.10 (2026-11-13, TIN-892)
 
 - **The dock's hub sends a grant nothing over MCP before the dock owner approved it with the code, and `initialize` before anything else (H1).** Three guarded wrappers are the only callers of the app client; a pairing settled without its introduction is introduced on first use. (`apps/dock/src/worker/hub.ts`)

@@ -6,12 +6,13 @@
  * any host, as an app behind a proxy does, and compares `Origin` with its configured origin.
  *
  * `break` makes it wrong in one way, as a real app (or its adapter) might be: each negative test pairs one break
- * with the check that must catch it. The variants (`idle: false`, `hubBoundToConsent`, `dropWaits`, `wsHeartbeat`)
- * are other designs the spec allows, which must pass.
+ * with the check that must catch it. The variants (`idle: false`, `hubBoundToConsent`, `dropWaits`, `wsHeartbeat`,
+ * `abortSignalDeadline`, `connectMs`, `unknownHost`) are other designs the spec allows, which must pass.
  */
 import {
   APC_STANDARD_VERSION,
   HUB_ANSWER_MAX_BYTES,
+  LONG_DORMANCY_RECOMMENDED_MS,
   PAIRING_CODE_ACK,
   PAIRING_CODE_TTL_MS,
   T_ACK_MAX_MS,
@@ -66,9 +67,12 @@ export type FixtureBreak =
   | "dormant_over_handoff"
   | "dormant_over_revoked"
   | "dormant_over_ended"
+  | "connect_ms_understated"
+  | "long_dormancy_ignored"
   // The hub call.
   | "allowlist_by_origin_only"
   | "no_allow_recheck"
+  | "bound_misdeclared"
   | "follows_redirects"
   | "follows_then_checks_redirected"
   | "ignores_redirected_flag"
@@ -77,6 +81,10 @@ export type FixtureBreak =
   | "no_deadline_on_body"
   | "no_deadline_on_headers"
   | "deadline_per_part"
+  | "deadline_short_on_body"
+  | "confirm_follows_redirects"
+  | "confirm_no_deadline"
+  | "confirm_no_cap"
   | "trusts_content_length"
   | "content_length_number_parse"
   | "no_stream_cap"
@@ -90,6 +98,9 @@ export type FixtureBreak =
   | "no_origin_check"
   | "get_changes_state"
   | "origin_from_request_url"
+  | "origin_prefix_compare"
+  | "origin_suffix_compare"
+  | "get_drop_consent"
   | "heartbeat_no_origin_check"
   | "ws_no_origin_check"
   | "revoke_404_unknown"
@@ -118,12 +129,18 @@ export interface FixtureOptions {
   abortSignalDeadline?: boolean;
   /** The heartbeat is a WebSocket. */
   wsHeartbeat?: boolean;
+  /** The app's T_connect, shorter than the standard's 10 minutes (declared in the adapter as connectMs). */
+  connectMs?: number;
+  /** A request for a host the app does not serve gets a redirect to its own origin, or a proxy's 502. */
+  unknownHost?: "redirect" | "bad_gateway";
 }
 
 export const ORIGIN = "https://fixture.test";
 export const HUB = "https://dock.test";
 const SESSION = { cookie: "session=owner" };
 export const IDLE_MS = 60_000;
+/** Long dormancy: a grant dormant this long after falling asleep ends (the recommended 30 days). */
+const DORMANCY_MS = LONG_DORMANCY_RECOMMENDED_MS;
 /** The fixture's deadline on a hub call: under the standard's 10 s, so the checks run fast. */
 const DEADLINE_MS = 4_000;
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -165,6 +182,8 @@ interface Config {
   hubBoundToConsent: boolean;
   dropWaits: boolean;
   abortSignalDeadline: boolean;
+  connectMs: number;
+  unknownHost: FixtureOptions["unknownHost"];
 }
 
 const random = (n: number, alphabet = "abcdefghijklmnopqrstuvwxyz0123456789") => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => alphabet[b % alphabet.length]).join("");
@@ -222,8 +241,13 @@ class Fixture {
     }
     if (g.state === "handoff") {
       if (this.has("dormant_over_handoff") && this.idleLapsed(g)) return "dormant";
-      if (!this.has("t_connect_ignored") && this.now() - g.ackedAt > T_CONNECT_MAX_MS) g.state = "ended";
+      if (!this.has("t_connect_ignored") && this.now() - g.ackedAt > this.config.connectMs) g.state = "ended";
       return g.state;
+    }
+    // Long dormancy ends a grant for good.
+    if (this.config.idle && !this.has("long_dormancy_ignored") && this.now() - g.lastWake > IDLE_MS + DORMANCY_MS) {
+      g.state = "ended";
+      return "ended";
     }
     return this.idleLapsed(g) ? "dormant" : "live";
   }
@@ -239,6 +263,8 @@ class Fixture {
   async fetch(request: Request): Promise<Response> {
     // Any host, as behind a proxy: routed by path.
     const url = new URL(request.url);
+    // A deployment that answers only its own host: a redirect to it, or a proxy's 502.
+    if (this.config.unknownHost && url.origin !== ORIGIN) return this.config.unknownHost === "redirect" ? Response.redirect(`${ORIGIN}${url.pathname}`, 308) : json({ error: "bad_gateway" }, 502);
     if (url.pathname === "/.well-known/apc.json") return url.origin === ORIGIN || this.has("owner_origin_elsewhere") ? this.apcJson(url.origin) : json({ error: "not_found" }, 404);
     if (url.pathname === "/apc/revoke" && request.method === "POST") return this.giveBack(request);
     if (url.pathname.startsWith("/mcp/")) return this.mcp(request, url.pathname.slice("/mcp/".length));
@@ -246,6 +272,10 @@ class Fixture {
       // A state change on a GET, parameters from the query: what M6's "every state change is a POST" forbids.
       if (url.pathname === "/api/cancel") return json({ ok: await this.cancel(url.searchParams.get("grant_id") ?? "") });
       if (url.pathname === "/api/heartbeat") return json(this.heartbeat());
+    }
+    if (this.has("get_drop_consent") && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie && url.pathname === "/api/drop") {
+      // A drop on a GET, parameters from the query: it makes a consent whose nonce an Allow can use.
+      return json(await this.drop(Object.fromEntries(url.searchParams)));
     }
     if (url.pathname === "/api/drop") return this.owner(request, (b) => this.drop(b));
     if (url.pathname === "/api/heartbeat/ws") return this.wsHeartbeat(request);
@@ -266,7 +296,12 @@ class Fixture {
     if (this.has("no_origin_check")) return false;
     const origin = request.headers.get("origin");
     const configured = this.has("origin_from_request_url") ? new URL(request.url).origin : ORIGIN;
-    if (origin !== null && origin !== configured) return true;
+    if (origin !== null) {
+      const own = new URL(configured);
+      // (origin_prefix_compare, origin_suffix_compare: a careless comparison that takes look-alikes.)
+      const same = this.has("origin_prefix_compare") ? origin.startsWith(configured) : this.has("origin_suffix_compare") ? origin.startsWith(own.protocol) && origin.endsWith(own.host) : origin === configured;
+      if (!same) return true;
+    }
     const site = request.headers.get("sec-fetch-site");
     return site === "cross-site" || site === "same-site";
   }
@@ -327,7 +362,7 @@ class Fixture {
         // The consent is taken by the Allow that waits on the hub: a second Allow of the agent meanwhile is in progress.
         if (!c) return { ok: false, error: [...this.locks.keys()].some((k) => k.endsWith(`|${agent}`)) ? "pairing_in_progress" : "consent_expired" };
         hub = c.hub;
-      } else if (this.has("no_allow_recheck")) hub = typeof b.hub === "string" && URL.canParse(b.hub) ? new URL(b.hub).origin : null;
+      } else if (this.has("no_allow_recheck") || this.has("bound_misdeclared")) hub = typeof b.hub === "string" && URL.canParse(b.hub) ? new URL(b.hub).origin : null;
       else hub = this.parseHub(b.hub);
       if (!hub) return { ok: false, error: "hub_not_allowed" };
       const base = this.has("raw_hub_string") && !this.config.hubBoundToConsent ? String(b.hub) : hub;
@@ -386,7 +421,8 @@ class Fixture {
     const triple = `${hub}|${agent}`;
     if (this.locks.has(triple) && !this.has("double_allow_not_refused")) return { ok: false, error: "pairing_in_progress" };
     const c = this.storage.consents.get(nonce);
-    if (!c || c.agent !== agent || c.hub !== hub || this.now() > c.expiresAt) return { ok: false, error: "consent_expired" };
+    // (bound_misdeclared: the consent's hub is not compared either, so the Allow's hub is the one called.)
+    if (!c || c.agent !== agent || (c.hub !== hub && !this.has("bound_misdeclared")) || this.now() > c.expiresAt) return { ok: false, error: "consent_expired" };
     const held = this.lock(triple);
     try {
       this.storage.consents.delete(nonce);
@@ -416,20 +452,23 @@ class Fixture {
 
   /** M2 to M4 and M9: the hub call, to the parsed origin, refusing redirects, under one deadline and the byte cap. */
   private async hubCall(base: string, path: string, body: unknown): Promise<{ status: number; body?: unknown }> {
-    const follows = this.has("follows_redirects") || this.has("follows_then_checks_redirected");
-    const checksRedirects = !this.has("follows_redirects");
-    const trusts = this.has("trusts_content_length");
+    // (confirm_*: the same mistakes on /apc/confirm only.)
+    const onConfirm = path === "/apc/confirm";
+    const follows = this.has("follows_redirects") || this.has("follows_then_checks_redirected") || (onConfirm && this.has("confirm_follows_redirects"));
+    const checksRedirects = !this.has("follows_redirects") && !(onConfirm && this.has("confirm_follows_redirects"));
+    const trusts = this.has("trusts_content_length") || (onConfirm && this.has("confirm_no_cap"));
+    const noDeadline = onConfirm && this.has("confirm_no_deadline");
     const whole = deadline(DEADLINE_MS);
     let perPart: ReturnType<typeof deadline> | null = null;
     try {
       const request = this.hub.fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "error", ...(this.config.abortSignalDeadline ? { signal: AbortSignal.timeout(DEADLINE_MS) } : {}) });
-      const response = await Promise.race([request, this.has("no_deadline_on_headers") || this.config.abortSignalDeadline ? never : whole.promise]);
-      // (deadline_per_part: a fresh timer for the body once the headers came, as a careless app has.)
-      if (this.has("deadline_per_part")) {
+      const response = await Promise.race([request, this.has("no_deadline_on_headers") || noDeadline || this.config.abortSignalDeadline ? never : whole.promise]);
+      // (deadline_per_part: a fresh timer for the body once the headers came, as a careless app has; deadline_short_on_body: half of one.)
+      if (this.has("deadline_per_part") || this.has("deadline_short_on_body")) {
         whole.clear();
-        perPart = deadline(DEADLINE_MS);
+        perPart = deadline(this.has("deadline_short_on_body") ? DEADLINE_MS / 2 : DEADLINE_MS);
       }
-      const bodyDeadline = this.has("no_deadline_on_body") || this.config.abortSignalDeadline ? never : perPart ? perPart.promise : whole.promise;
+      const bodyDeadline = this.has("no_deadline_on_body") || noDeadline || this.config.abortSignalDeadline ? never : perPart ? perPart.promise : whole.promise;
       if (checksRedirects) {
         if (response.type === "opaqueredirect" && !this.has("ignores_opaqueredirect")) return { status: 0 };
         if (response.redirected && !this.has("ignores_redirected_flag")) return { status: 0 };
@@ -651,7 +690,18 @@ class Fixture {
 /** The fixture and its adapter: `break` makes it (or its adapter) wrong in one way; the other options are designs the spec allows. */
 export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdapter; hub: StandInHub } {
   const brk = new Set<FixtureBreak>(options.break ? [options.break] : []);
-  const config: Config = { brk, pairing: true, idle: options.idle ?? true, hubBoundToConsent: options.hubBoundToConsent ?? false, dropWaits: options.dropWaits ?? false, abortSignalDeadline: options.abortSignalDeadline ?? false };
+  const config: Config = {
+    brk,
+    pairing: true,
+    idle: options.idle ?? true,
+    hubBoundToConsent: options.hubBoundToConsent ?? false,
+    dropWaits: options.dropWaits ?? false,
+    abortSignalDeadline: options.abortSignalDeadline ?? false,
+    connectMs: options.connectMs ?? T_CONNECT_MAX_MS,
+    unknownHost: options.unknownHost,
+  };
+  // (bound_misdeclared: the adapter says the hub is bound to the consent, and the app takes the Allow's hub unchecked.)
+  const allowCarriesHub = !options.hubBoundToConsent && !brk.has("bound_misdeclared");
   const fresh = (): Storage => ({ grants: [], consents: new Map(), failWrites: false, page: { open: false, presence: [] } });
   const storage = fresh();
   const clock = { skew: 0 };
@@ -675,7 +725,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
         async allow(over) {
           // An app whose hub is bound to the consent sends no hub with the Allow.
           const { hub: dropHub, ...rest } = drop;
-          const sent = options.hubBoundToConsent ? rest : { ...rest, hub: over?.hub ?? dropHub };
+          const sent = options.hubBoundToConsent ? rest : { ...rest, hub: allowCarriesHub ? (over?.hub ?? dropHub) : dropHub };
           const a = await post("/api/drop", { ...sent, consent: r.consent });
           return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
         },
@@ -698,7 +748,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
 
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
-    allowCarriesHub: !options.hubBoundToConsent,
+    allowCarriesHub,
     hubDeadlineMs: DEADLINE_MS,
     cancel: async (grantId) => (await post("/api/cancel", { grant_id: grantId })).ok === true,
     heartbeat: async () => void (await post("/api/heartbeat", {})),
@@ -712,7 +762,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
       current.dead = true;
       current = new Fixture(storage, config, clock, hub);
     },
-    ...(config.idle ? { idleMs: IDLE_MS } : {}),
+    ...(config.idle ? { idleMs: IDLE_MS, dormancyMs: DORMANCY_MS } : {}),
+    ...(options.connectMs ? { connectMs: options.connectMs } : brk.has("connect_ms_understated") ? { connectMs: 30_000 } : {}),
     owner: {
       origin: brk.has("owner_origin_slash") ? `${ORIGIN}/` : brk.has("owner_origin_elsewhere") ? "https://admin.fixture.test" : ORIGIN,
       session: SESSION,

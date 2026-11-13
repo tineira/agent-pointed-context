@@ -163,6 +163,10 @@ export type ApcDockDropOutcome =
 /**
  * One owner-session endpoint (M6, APC 0.10): its path on the app's origin, and `body()`, a fresh body the app takes
  * with a 2xx each time (a drop with a new ticket, an Allow with a new consent, a Cancel on a new grant in handoff).
+ *
+ * Cancel's `body()` must make its grant during the call, through `dock.hub` (a drop and an Allow the stand-in
+ * acknowledges): the suite finds the grant by the `/apc/pair` the hub received while `body()` ran, to see that a
+ * Cancel sent as a GET changed nothing. A grant paired beforehand leaves that probe unchecked, with a note.
  */
 export interface ApcDockOwnerEndpoint {
   path: string;
@@ -189,7 +193,8 @@ export interface ApcDockOwnerEndpoints {
 /**
  * The Dock profile as built (APC 0.10), from an app that claims 0.10.0 or later on the Dock profile: what the suite
  * needs to put a grant into each state, and to reach the owner's endpoints. The app pairs with the `hub` of
- * `ApcDockAdapter`; its `apc.json` is read at `owner.origin`.
+ * `ApcDockAdapter`; its `apc.json` is read at `owner.origin`. Every hub call the app makes, on any origin, goes
+ * through `hub.fetch`: a request that leaves another way is not seen, so M1 and M2 cannot catch it.
  */
 export interface ApcDockLifecycleAdapter {
   /**
@@ -217,6 +222,17 @@ export interface ApcDockLifecycleAdapter {
   restart(): Promise<void>;
   /** The app's T_idle in ms. Left out: the app does not sleep (dormant is a SHOULD), and the dormant checks say so. */
   idleMs?: number;
+  /**
+   * The app's T_connect in ms, when shorter than the standard's 10 minutes (`T_CONNECT_MAX_MS`, the default): the
+   * T_connect check ends a grant past it, and a grant in handoff is held past `idleMs` only while it is shorter.
+   */
+  connectMs?: number;
+  /**
+   * Long dormancy, for an app that sleeps and ends a grant that stays dormant (30 days is recommended): how long a
+   * grant stays dormant before it ends, counted from when it fell asleep (`idleMs` after the last wake action). Left
+   * out, long dormancy is not checked.
+   */
+  dormancyMs?: number;
   owner: ApcDockOwnerEndpoints;
   /** The same app with pairing disabled (its dock configuration missing): its `fetch`, for `apc.json` (M8). */
   pairingDisabled(): Promise<(request: Request) => Promise<Response>>;

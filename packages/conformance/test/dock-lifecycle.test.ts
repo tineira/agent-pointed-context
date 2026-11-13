@@ -23,14 +23,20 @@ const fails = async (check: ConformanceCheck, message: RegExp) =>
 const NOTE_FREE = /M5/;
 
 {
-  const { adapter } = dockFixture();
+  const { adapter, hub } = dockFixture();
   const checks = ours(apcConformance(adapter));
   test("the suite has the 0.10 Dock checks", () => assert.equal(checks.length, 31));
   for (const check of checks) {
-    test(`the conforming fixture passes: ${check.name}`, async () => {
+    test(`the conforming fixture passes, and every grant the check made is given back: ${check.name}`, async () => {
       await check.run();
       if (NOTE_FREE.test(check.name)) assert.match(check.note ?? "", /refused with pairing_in_progress/, "the M5 probe says what it saw");
       else assert.equal(check.note, undefined, `no note: ${check.note}`);
+      // The suite leaves no grant behind: each one the hub paired answers 404 (ended) or 403 (revoked).
+      for (const url of new Set(hub.received.map((b) => b.mcp_url).filter((u): u is string => typeof u === "string"))) {
+        const r = await adapter.fetch!(new Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }));
+        await r.body?.cancel();
+        assert.ok(r.status === 404 || r.status === 403, `${url} answers HTTP ${r.status} after the check: the suite gives its grants back`);
+      }
     });
   }
 }
@@ -42,6 +48,9 @@ const allowed: Array<[string, FixtureOptions, string[], RegExp?]> = [
   ["an app that makes a second drop of the same agent wait for the first Allow", { dropWaits: true }, ["M5:"], /waited for the first, then answered: waiting/],
   ["an app whose heartbeat is a WebSocket", { wsHeartbeat: true }, ["M6:"]],
   ["an app that keeps the hub call's deadline with AbortSignal.timeout on the fetch", { abortSignalDeadline: true }, ["M3:"]],
+  ["an app whose T_connect (30 s) is shorter than its T_idle (60 s)", { connectMs: 30_000 }, ["T_connect", "precedence", "stored expiry", "the answer table: dormant"]],
+  ["an app that redirects a host it does not serve to its own origin", { unknownHost: "redirect" }, ["M6:"], /not checked: the request to https:\/\/apc-conformance-internal\.example.*HTTP 308/],
+  ["an app behind a proxy that answers 502 for a host it does not serve", { unknownHost: "bad_gateway" }, ["M6:"], /not checked: the request to https:\/\/apc-conformance-internal\.example.*HTTP 502/],
 ];
 for (const [what, options, parts, note] of allowed) {
   test(`${what} passes`, async () => {
@@ -68,6 +77,41 @@ test("an app that claims a standard before 0.10 skips the 0.10 checks with a not
   for (const check of ours(apcConformance(older))) {
     await check.run();
     assert.match(check.note ?? "", /claims 0\.9\.0, before 0\.10\.0/);
+  }
+});
+
+test("an owner origin elsewhere whose apc.json claims a standard before 0.10 does not skip: every 0.10 check fails, closed", async () => {
+  const { adapter } = dockFixture({ break: "owner_origin_elsewhere" });
+  const inner = adapter.fetch!;
+  const older: ApcAppAdapter = {
+    ...adapter,
+    fetch: async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.origin !== "https://admin.fixture.test" || url.pathname !== "/.well-known/apc.json") return inner(request);
+      const body = (await (await inner(request)).json()) as Record<string, unknown>;
+      return Response.json({ ...body, standard: "0.9.0" });
+    },
+  };
+  for (const check of ours(apcConformance(older))) await fails(check, /whose apc\.json claims 0\.9\.0, but the app's grants live at https:\/\/fixture\.test/);
+});
+
+test("without app.fetch (a deployed app), M6 leaves the request to another host unchecked with a note, and passes", async () => {
+  const { adapter } = dockFixture();
+  const inner = adapter.fetch!;
+  const saved = globalThis.fetch;
+  // The network as a deployed app meets it: the fixture for its own origin, a DNS failure for the reserved name.
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).hostname.endsWith(".example")) throw new TypeError(`getaddrinfo ENOTFOUND ${new URL(request.url).hostname}`);
+    return inner(request);
+  }) as typeof fetch;
+  try {
+    const { fetch: _fetch, ...deployed } = adapter;
+    const check = named(apcConformance(deployed), "M6:");
+    await check.run();
+    assert.match(check.note ?? "", /not checked: the request to https:\/\/apc-conformance-internal\.example.*gives no fetch/);
+  } finally {
+    globalThis.fetch = saved;
   }
 });
 
@@ -117,6 +161,8 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["t_ack_ignored", "the acknowledgement's move is conditional", /T_ack/],
   ["t_ack_ignored", "across a restart", /pairing_in_progress/],
   ["t_connect_ignored", "T_connect", /expected 404 \(ended\)/],
+  ["connect_ms_understated", "T_connect", /the adapter's connectMs\) after the acknowledgement .*expected 404 \(ended\)/],
+  ["long_dormancy_ignored", "T_idle:", /past long dormancy/],
   ["heartbeat_does_not_wake", "T_idle:", /after the page's heartbeat/],
   ["drop_does_not_wake", "T_idle:", /confirmed drop/],
   ["traffic_wakes", "agent traffic", /must not extend/],
@@ -125,6 +171,7 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["dormant_over_ended", "precedence", /in ended answers HTTP 404/],
   ["allowlist_by_origin_only", "M1:", /hub_not_allowed/],
   ["no_allow_recheck", "M1:", /an Allow sent with hub/],
+  ["bound_misdeclared", "M1:", /put in its body called https:\/\/dock\.test\.evil\.example/],
   ["follows_redirects", "M2:", /redirect/],
   ["follows_then_checks_redirected", "M2:", /reached https:\/\/elsewhere\.example/],
   ["ignores_redirected_flag", "M2:", /answers redirected, the Allow says it paired/],
@@ -133,6 +180,10 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["no_deadline_on_headers", "M3:", /answers slow_headers, the Allow was still waiting/],
   ["no_deadline_on_body", "M3:", /answers slow_body, the Allow was still waiting/],
   ["deadline_per_part", "M3:", /answers slow_headers_then_body, the Allow says it paired/],
+  ["deadline_short_on_body", "M3:", /answers slow_headers_then_stall, the Allow was still waiting/],
+  ["confirm_follows_redirects", "M2:", /M2 on \/apc\/confirm: with a hub that answers redirect, the app's request reached https:\/\/elsewhere\.example\/apc\/confirm/],
+  ["confirm_no_deadline", "M3:", /M3 on \/apc\/confirm: with a hub that answers slow_headers, the drop was still waiting/],
+  ["confirm_no_cap", "M4:", /M4 on \/apc\/confirm: with a hub that answers length_over_cap, the drop shows .*waiting/],
   ["trusts_content_length", "M4:", /must refuse the answer/],
   ["content_length_number_parse", "M4:", /answers length_not_digits, the Allow says it paired/],
   ["no_stream_cap", "M4:", /answers body_over_cap, the Allow says it paired/],
@@ -144,6 +195,9 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["raw_hub_on_confirm", "M9:", /a second drop shows the waiting card.*https:\/\/dock\.test\/\/apc\/confirm/],
   ["no_origin_check", "M6:", /is refused \(4xx\)/],
   ["origin_from_request_url", "M6:", /Origin https:\/\/apc-conformance-internal\.example, the request's own host/],
+  ["origin_prefix_compare", "M6:", /a look-alike Origin with a longer host .* is refused/],
+  ["origin_suffix_compare", "M6:", /a look-alike Origin with a prefix .* is refused/],
+  ["get_drop_consent", "M6:", /the drop: after a GET .*the app answered a consent/],
   ["heartbeat_no_origin_check", "M6:", /the heartbeat: a request with a foreign Origin is refused/],
   ["ws_no_origin_check", "M6:", /the heartbeat: a WebSocket handshake with a foreign Origin is refused/, { wsHeartbeat: true }],
   ["get_changes_state", "M6:", /after a GET with the owner.s session and the body.s fields as a query \(every state change is a POST\)/],

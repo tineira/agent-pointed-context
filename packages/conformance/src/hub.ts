@@ -23,7 +23,9 @@
  *   follows is logged as reaching `https://elsewhere.example/apc/pair` in `requests` and `bodies`, as the
  *   redirect's target would get the body. `"length_over_cap"`, `"length_not_digits"` and
  *   `"body_over_cap"` break the byte cap; `"length_mismatch"` and `"ack_with_length"` are yeses an app must take (a
- *   `content-length` other than the decoded body's, as with gzip, and a plain one). `hold()` keeps the next
+ *   `content-length` other than the decoded body's, as with gzip, and a plain one). `"slow_headers_then_stall"` holds
+ *   the headers `delayMs` and then stalls the body (an app whose two deadlines add up past the limit refuses it late).
+ *   `confirmMode` breaks `/apc/confirm` the same way (M2 to M4 hold on every hub call). `hold()` keeps the next
  *   `/apc/pair` answer back until the check releases it (the grant is in flight); `requests` lists every URL the
  *   app called (M9) and `bodies` every body it sent (the code only in `/apc/pair`); `forget()` drops a pairing without giving it back (it expired at the hub, so `/apc/confirm`
  *   answers `not_paired`); `decide(…, { introduce: false })` approves without the hub's `initialize`.
@@ -47,7 +49,8 @@ export type StandInHubMode =
   | "length_mismatch"
   | "ack_with_length"
   | "slow_headers"
-  | "slow_headers_then_body";
+  | "slow_headers_then_body"
+  | "slow_headers_then_stall";
 
 /** A `/apc/pair` answer kept back (`hold()`): what the app sent once it arrives, and the release. */
 export interface StandInHold {
@@ -83,6 +86,8 @@ export interface StandInHub {
   readonly fetch: typeof fetch;
   /** How the hub answers `/apc/pair`: "ack" (a hub of 0.9) unless a check sets another. */
   mode: StandInHubMode;
+  /** How the hub answers `/apc/confirm`: "ack" (plainly) unless a check sets one of the M2 to M4 modes. */
+  confirmMode: StandInHubMode;
   /** A new single-use ticket for this agent, as the dock puts on a drag. */
   ticket(agent: string): string;
   /** The pairings it holds, pending and paired. */
@@ -93,7 +98,7 @@ export interface StandInHub {
   readonly requests: string[];
   /** Every request the app sent through this hub's `fetch`: its URL and its raw body, oldest first (the code goes only in `/apc/pair`). */
   readonly bodies: Array<{ url: string; text: string }>;
-  /** How long `"slow_headers_then_body"` holds each part, in ms (6000 by default). */
+  /** How long `"slow_headers_then_body"` holds each part, and `"slow_headers_then_stall"` the headers, in ms (6000 by default). */
   delayMs: number;
   /** The MCP URL of the agent's latest pairing. */
   urlOf(agent: string): string | undefined;
@@ -108,7 +113,7 @@ export interface StandInHub {
   hold(): StandInHold;
   /** The hub drops a pairing without giving its grant back (it expired at the hub): `/apc/confirm` then answers `not_paired`. */
   forget(pairingId: string): void;
-  /** Ends every stall of `"slow_body"`, `"slow_headers"` and `"slow_headers_then_body"`. */
+  /** Ends every stall of `"slow_body"`, `"slow_headers"`, `"slow_headers_then_body"` and `"slow_headers_then_stall"`. */
   releaseStalls(): void;
 }
 
@@ -177,21 +182,32 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     return json({ ok: true, pairing_id: p.id, status: "pending", agent: { name: "Agent via dock", icon: null }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}) });
   };
 
-  /** What `/apc/pair` answers in `mode`. */
-  const answerPair = async (body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined, signal: AbortSignal): Promise<Response> => {
-    const yes = { ok: true, pairing_id: "pr_elsewhere", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: PAIRING_CODE_ACK };
+  const confirm = (body: Record<string, unknown>): Response => {
+    if (!live(body.ticket, body.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
+    const p = pairings.find((x) => x.agent === body.agent && x.mcp_url === body.mcp_url);
+    if (!p) return json({ ok: false, error: "not_paired" }, 400);
+    tickets.delete(body.ticket as string);
+    return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null } });
+  };
+
+  /** What `path` (`/apc/pair` or `/apc/confirm`) answers in `mode`. */
+  const answerIn = async (path: "/apc/pair" | "/apc/confirm", body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined, signal: AbortSignal): Promise<Response> => {
+    const yes =
+      path === "/apc/pair"
+        ? { ok: true, pairing_id: "pr_elsewhere", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: PAIRING_CODE_ACK }
+        : { ok: true, status: "pending", agent: { name: "Agent via dock", icon: null } };
     if (mode === "redirect") {
       // A fetch that refuses redirects (as an app's must) fails; one that follows lands on another host that says yes.
-      if (redirect === "error") throw new TypeError(`redirect from ${origin}/apc/pair refused`);
-      // A fetch that follows has sent the body (the secret MCP URL and the code) on to the target: logged where the checks see it.
-      requests.push("https://elsewhere.example/apc/pair");
-      bodies.push({ url: "https://elsewhere.example/apc/pair", text: JSON.stringify(body) });
+      if (redirect === "error") throw new TypeError(`redirect from ${origin}${path} refused`);
+      // A fetch that follows has sent the body (the secret MCP URL, and on /apc/pair the code) on to the target: logged where the checks see it.
+      requests.push(`https://elsewhere.example${path}`);
+      bodies.push({ url: `https://elsewhere.example${path}`, text: JSON.stringify(body) });
       const elsewhere = json(yes);
       Object.defineProperty(elsewhere, "redirected", { value: true });
       return elsewhere;
     }
-    if (mode === "error_500") return json({ ...yes, pairing_id: "pr_500" }, 500);
-    const answer = pair(body);
+    if (mode === "error_500") return json(path === "/apc/pair" ? { ...yes, pairing_id: "pr_500" } : yes, 500);
+    const answer = path === "/apc/pair" ? pair(body) : confirm(body);
     if (mode === "ack") return answer;
     const text = await answer.text();
     const headers = (more: Record<string, string> = {}) => ({ "content-type": "application/json", ...more });
@@ -204,7 +220,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       }
       case "status_3xx":
         // A 3xx with a yes in it: an app must refuse it, whatever its redirect option let through.
-        return new Response(text, { status: 307, headers: headers({ location: "https://elsewhere.example/apc/pair" }) });
+        return new Response(text, { status: 307, headers: headers({ location: `https://elsewhere.example${path}` }) });
       case "opaque_redirect": {
         const r = new Response(text, { status: 200, headers: headers() });
         Object.defineProperty(r, "type", { value: "opaqueredirect" });
@@ -269,6 +285,20 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
         });
         return new Response(stream, { status: answer.status, headers: headers() });
       }
+      case "slow_headers_then_stall": {
+        // Headers after delayMs (under the app's deadline), then half the body and nothing more: an app whose second
+        // deadline starts with the body refuses it, but later than one deadline over both allows.
+        await Promise.race([pause(hub.delayMs), onAbort(signal)]);
+        const bytes = new TextEncoder().encode(text);
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes.slice(0, Math.floor(bytes.length / 2)));
+            stalls.add(controller);
+            void errorOnAbort(controller, signal);
+          },
+        });
+        return new Response(stream, { status: answer.status, headers: headers() });
+      }
       case "ack_with_length":
         return new Response(text, { status: answer.status, headers: headers({ "content-length": String(new TextEncoder().encode(text).length) }) });
     }
@@ -277,6 +307,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   const hub: StandInHub = {
     origin,
     mode: "ack",
+    confirmMode: "ack",
     delayMs: 6000,
     bodies,
     pairings,
@@ -311,15 +342,9 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
           held.resolve(body);
           mode = (await Promise.race([held.gate, onAbort(init?.signal ?? request.signal)])) ?? hub.mode;
         }
-        return answerPair(body, mode, init?.redirect ?? request.redirect, init?.signal ?? request.signal);
+        return answerIn("/apc/pair", body, mode, init?.redirect ?? request.redirect, init?.signal ?? request.signal);
       }
-      if (url.pathname === "/apc/confirm") {
-        if (!live(body.ticket, body.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
-        const p = pairings.find((x) => x.agent === body.agent && x.mcp_url === body.mcp_url);
-        if (!p) return json({ ok: false, error: "not_paired" }, 400);
-        tickets.delete(body.ticket as string);
-        return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null } });
-      }
+      if (url.pathname === "/apc/confirm") return answerIn("/apc/confirm", body, hub.confirmMode, init?.redirect ?? request.redirect, init?.signal ?? request.signal);
       return json({ ok: false, error: "not_found" }, 404);
     }) as typeof fetch,
     async decide(pairingId, action, code, decideOptions) {

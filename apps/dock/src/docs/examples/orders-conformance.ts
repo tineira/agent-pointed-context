@@ -6,7 +6,7 @@
  */
 // #region imports
 import { apcConformance, runConformance, standInHub, type AgentConnection, type ApcAppAdapter, type ApcDockDropOutcome, type ApcDockLifecycleAdapter } from "@tineira/apc-conformance";
-import { T_IDLE_RECOMMENDED_MS, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { OrdersApp, newOrdersStore, type OrdersAppOptions } from "./orders-app.ts";
 // #endregion
@@ -132,6 +132,8 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
       app = new OrdersApp(config);
     },
     idleMs: T_IDLE_RECOMMENDED_MS,
+    // A grant asleep 30 days ends (long dormancy).
+    dormancyMs: LONG_DORMANCY_RECOMMENDED_MS,
     owner: {
       origin: ORIGIN,
       session: SESSION,
