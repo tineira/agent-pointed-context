@@ -18,11 +18,14 @@
  *   `"error_500"` says yes with HTTP 500.
  * - **Since 0.10**, for the checks of the hub call (M2 to M4): `"status_3xx"` answers a yes with a 307 (whatever the
  *   app's `redirect` option), `"opaque_redirect"` and `"redirected"` a yes marked as a redirect; `"slow_body"` sends
- *   its headers and stalls the body (`releaseStalls()` ends it); `"length_over_cap"`, `"length_not_digits"` and
+ *   its headers and stalls the body, `"slow_headers"` sends no headers, and `"slow_headers_then_body"` holds the
+ *   headers and then the body `delayMs` each (`releaseStalls()` ends them all). In `"redirect"` mode a fetch that
+ *   follows is logged as reaching `https://elsewhere.example/apc/pair` in `requests` and `bodies`, as the
+ *   redirect's target would get the body. `"length_over_cap"`, `"length_not_digits"` and
  *   `"body_over_cap"` break the byte cap; `"length_mismatch"` and `"ack_with_length"` are yeses an app must take (a
  *   `content-length` other than the decoded body's, as with gzip, and a plain one). `hold()` keeps the next
  *   `/apc/pair` answer back until the check releases it (the grant is in flight); `requests` lists every URL the
- *   app called (M9); `forget()` drops a pairing without giving it back (it expired at the hub, so `/apc/confirm`
+ *   app called (M9) and `bodies` every body it sent (the code only in `/apc/pair`); `forget()` drops a pairing without giving it back (it expired at the hub, so `/apc/confirm`
  *   answers `not_paired`); `decide(…, { introduce: false })` approves without the hub's `initialize`.
  *
  * It never shows a code: `received` keeps what the app sent, for the checks to compare with what the app showed.
@@ -42,7 +45,9 @@ export type StandInHubMode =
   | "length_not_digits"
   | "body_over_cap"
   | "length_mismatch"
-  | "ack_with_length";
+  | "ack_with_length"
+  | "slow_headers"
+  | "slow_headers_then_body";
 
 /** A `/apc/pair` answer kept back (`hold()`): what the app sent once it arrives, and the release. */
 export interface StandInHold {
@@ -86,6 +91,10 @@ export interface StandInHub {
   readonly received: Array<Record<string, unknown>>;
   /** Every URL the app's server called through this hub's `fetch`, on any origin, oldest first. */
   readonly requests: string[];
+  /** Every request the app sent through this hub's `fetch`: its URL and its raw body, oldest first (the code goes only in `/apc/pair`). */
+  readonly bodies: Array<{ url: string; text: string }>;
+  /** How long `"slow_headers_then_body"` holds each part, in ms (6000 by default). */
+  delayMs: number;
   /** The MCP URL of the agent's latest pairing. */
   urlOf(agent: string): string | undefined;
   /**
@@ -99,7 +108,7 @@ export interface StandInHub {
   hold(): StandInHold;
   /** The hub drops a pairing without giving its grant back (it expired at the hub): `/apc/confirm` then answers `not_paired`. */
   forget(pairingId: string): void;
-  /** Ends every body `"slow_body"` stalled. */
+  /** Ends every stall of `"slow_body"`, `"slow_headers"` and `"slow_headers_then_body"`. */
   releaseStalls(): void;
 }
 
@@ -115,6 +124,10 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   const requests: string[] = [];
   const holds: Array<{ resolve: (body: Record<string, unknown>) => void; gate: Promise<StandInHubMode | undefined>; open: (mode?: StandInHubMode) => void; taken: boolean }> = [];
   const stalls = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  const stalledHeaders = new Set<() => void>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const bodies: Array<{ url: string; text: string }> = [];
+  const pause = (ms: number) => new Promise<void>((resolve) => { const t = setTimeout(() => { timers.delete(t); resolve(); }, ms); timers.add(t); stalledHeaders.add(resolve); });
   const json = (body: unknown, status = 200) => Response.json(body, { status });
 
   const callApp = async (url: string, body: unknown) => {
@@ -151,6 +164,9 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     if (mode === "redirect") {
       // A fetch that refuses redirects (as an app's must) fails; one that follows lands on another host that says yes.
       if (redirect === "error") throw new TypeError(`redirect from ${origin}/apc/pair refused`);
+      // A fetch that follows has sent the body (the secret MCP URL and the code) on to the target: logged where the checks see it.
+      requests.push("https://elsewhere.example/apc/pair");
+      bodies.push({ url: "https://elsewhere.example/apc/pair", text: JSON.stringify(body) });
       const elsewhere = json(yes);
       Object.defineProperty(elsewhere, "redirected", { value: true });
       return elsewhere;
@@ -202,6 +218,32 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       case "length_mismatch":
         // As with gzip: the declared length is not the decoded one. An app must not compare them.
         return new Response(text, { status: answer.status, headers: headers({ "content-length": "20" }) });
+      case "slow_headers":
+        // No headers until the check releases the stall: an app's deadline must cover the fetch itself.
+        await new Promise<void>((resolve) => stalledHeaders.add(resolve));
+        return new Response(text, { status: answer.status, headers: headers() });
+      case "slow_headers_then_body": {
+        // Headers after delayMs, then half the body, then the rest after delayMs more: each part is under the
+        // app's deadline, the two together over it. Only one deadline over both refuses it.
+        await pause(hub.delayMs);
+        const bytes = new TextEncoder().encode(text);
+        const half = Math.floor(bytes.length / 2);
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(bytes.slice(0, half));
+            stalls.add(controller);
+            await pause(hub.delayMs);
+            try {
+              controller.enqueue(bytes.slice(half));
+              controller.close();
+            } catch {
+              // released and closed already
+            }
+            stalls.delete(controller);
+          },
+        });
+        return new Response(stream, { status: answer.status, headers: headers() });
+      }
       case "ack_with_length":
         return new Response(text, { status: answer.status, headers: headers({ "content-length": String(new TextEncoder().encode(text).length) }) });
     }
@@ -210,6 +252,8 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   const hub: StandInHub = {
     origin,
     mode: "ack",
+    delayMs: 6000,
+    bodies,
     pairings,
     received,
     requests,
@@ -224,7 +268,15 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       requests.push(request.url);
       const url = new URL(request.url);
       if (url.origin !== origin || request.method !== "POST") return json({ ok: false, error: "not_found" }, 404);
-      const body = ((await request.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+      const raw = await request.text().catch(() => "");
+      bodies.push({ url: request.url, text: raw });
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        // not JSON
+      }
+      const body = (parsed ?? {}) as Record<string, unknown>;
       if (url.pathname === "/apc/pair") {
         received.push(body);
         let mode = hub.mode;
@@ -302,6 +354,10 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
         }
       }
       stalls.clear();
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
+      for (const resolve of stalledHeaders) resolve();
+      stalledHeaders.clear();
     },
   };
   return hub;
