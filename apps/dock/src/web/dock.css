@@ -318,6 +318,9 @@ main.landing { max-width: 1000px; margin: 0 auto; padding: 20px 16px 48px; gap: 
 .landing-see { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 10px; }
 .landing-see li { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 14px; color: var(--muted); line-height: 1.55; }
 .landing-see li::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+.landing-apps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 10px; }
+.landing-apps li { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 14px; color: var(--muted); line-height: 1.55; }
+.landing-apps a { font-weight: 700; color: var(--fg); }
 .landing-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 24px; padding-top: 8px; font-size: 13px; }
 /* The site's other pages (TIN-627): /try, /build and its profile pages, in the landing's look. */
 a.kicker { text-decoration: none; }

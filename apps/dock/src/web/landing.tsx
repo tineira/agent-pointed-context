@@ -26,6 +26,18 @@ const AGENTS = [
   { brand: "grok", name: "Grok" },
 ];
 
+/**
+ * Apps that serve APC in production and pass the standard's conformance live (TIN-804): each line was confirmed by
+ * the app's owner. An app is listed only after `apc-conformance` passes against its live hosts with a real grant.
+ */
+const IN_USE = [
+  {
+    name: "Autio",
+    url: "https://www.autio.cl",
+    what: "A used-car marketplace in Chile. Private sellers and dealerships point their own agent at a listing, a visit or a buyer conversation.",
+  },
+];
+
 /** Whether the visitor asks for less motion, kept current. */
 function useReducedMotion(): boolean {
   const query = "(prefers-reduced-motion: reduce)";
@@ -142,6 +154,18 @@ export function Landing() {
           </div>
         </div>
       </div>
+
+      <section>
+        <h2 className="landing-title">In use</h2>
+        <ul className="landing-apps">
+          {IN_USE.map((app) => (
+            <li key={app.name}>
+              <a href={app.url}>{app.name}</a>
+              <span>{app.what}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <section>
         <h2 className="landing-title">What your agent can and cannot see</h2>

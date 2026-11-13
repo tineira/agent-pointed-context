@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The landing lists apps that use APC (2026-11-13, TIN-804)
+
+- **The landing at apc.tineira.com gains an "In use" section listing apps that serve APC in production and pass `apc-conformance` live; the first is Autio, a used-car marketplace in Chile (APC 0.8, Direct, 0 failures on both its hosts).** (`apps/dock/src/web/landing.tsx`, `apps/dock/src/web/dock.css`, `apps/dock/test/landing.test.ts`)
+
 ### APC standard 0.8: `then` only after a recent pin, one wait per grant, a pin never lost, and Direct whatever the auth (2026-11-12, TIN-839, TIN-667)
 
 - **Agents are told to wait for the next pin only when the person pinned them in the last 30 minutes, not after every answer while the page is open; and they are told to wait in the background where their client can.** Pulse, Signals and the dock's hub follow the new rule. (`packages/protocol/src/core.ts`, `packages/server/src/waits.ts`, `packages/server/src/envelope.ts`, `packages/server/src/prompts.ts`, `apps/demo/src/worker/page.ts`, `apps/dock/src/worker/hub.ts`)
