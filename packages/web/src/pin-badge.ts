@@ -18,6 +18,8 @@
  * script has no customElements, and it moves the badge with its own drag, since a moved reading is
  * sent again from the page. Keep the two in step.
  */
+import type { PetBadge } from "./brands.ts";
+import { drawBadge } from "./pet.ts";
 import { DEFAULT_PIN_STRINGS, resolveStrings, type PinStrings } from "./strings.ts";
 
 export interface PinAgent {
@@ -26,6 +28,11 @@ export interface PinAgent {
   name: string;
   /** An image source for the agent's mark (a data URI or URL), unless the app draws it (renderIcon). */
   icon?: string | null;
+  /**
+   * The agent's logo or neutral mark, as its pet wears it (agentBadge, TIN-878): drawn when there is no
+   * `icon` and the app draws none. Without either, a small robot.
+   */
+  badge?: PetBadge | null;
   /** Whether the agent has read the pin: a check instead of the dashed ring. */
   seen: boolean;
 }
@@ -40,6 +47,7 @@ apc-pin { position: relative; display: inline-block; width: var(--apc-pin-size, 
   background: var(--apc-chip, #ffffff); color: var(--apc-ink, #141a24); box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); }
 .apc-pin__icon { display: grid; place-items: center; }
 .apc-pin__mark .apc-pin__img { width: 18px; height: 18px; display: block; object-fit: contain; pointer-events: none; }
+.apc-pin__mark .apc-pin__badge { width: 22px; height: 22px; display: block; overflow: visible; pointer-events: none; }
 apc-pin[data-apc-pin-state="waiting"] .apc-pin__mark { outline: 2px dashed var(--apc-accent, #b85209); animation: apc-pin-breathe 1.8s ease-in-out infinite; }
 apc-pin.apc-pin--dragging { opacity: 0.35; }
 .apc-pin__check { position: absolute; right: -7px; bottom: -7px; width: 15px; height: 15px; border-radius: 50%; background: var(--apc-ok, #1f7a4d); color: #fff;
@@ -55,6 +63,45 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
 
 /** A small robot, for an agent with no icon. */
 const BOT = '<svg class="apc-pin__img" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 2h2v2.07A7 7 0 0 1 19 11v7a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-7a7 7 0 0 1 6-6.93V2Zm-2.5 10a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm7 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3ZM2 12h2v5H2v-5Zm18 0h2v5h-2v-5Z"/></svg>';
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+let clips = 0;
+
+/** What the icon is drawn from: an `icon` wins over a `badge`, which wins over the robot. */
+const iconKeyOf = (a: PinAgent) => JSON.stringify(a.icon ? [a.icon] : [null, a.badge ?? null]);
+
+/** An agent's badge as the pet wears it, in a small SVG. */
+function badgeSvg(badge: PetBadge): Element {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "apc-pin__badge");
+  svg.setAttribute("viewBox", "-20 -20 40 40");
+  svg.setAttribute("aria-hidden", "true");
+  const clip = `apc-pin-clip-${++clips}`;
+  const path = document.createElementNS(SVG_NS, "clipPath");
+  path.setAttribute("id", clip);
+  const circle = document.createElementNS(SVG_NS, "circle");
+  circle.setAttribute("r", "15.5");
+  path.appendChild(circle);
+  svg.appendChild(path);
+  for (const el of drawBadge(document, badge, clip)) svg.appendChild(el);
+  return svg;
+}
+
+/** How far (px) each further badge on the same target sits from the last, so every × stays reachable (TIN-878). */
+export const PIN_STACK_STEP = 30;
+
+/**
+ * Where an agent's badge goes among the badges on the same target (0: the first), so several agents
+ * pinned to one element each keep a badge and an × the person can reach: place each one PIN_STACK_STEP
+ * further along. Two pins are on the same target when kind, id, part and params are the same.
+ */
+export function pinStackIndex(agents: ReadonlyArray<{ id: string; target: StackTarget }>, id: string): number {
+  const key = (t: StackTarget) => JSON.stringify([t.kind, t.id ?? null, t.part ?? null, t.params ?? null]);
+  const mine = agents.find((a) => a.id === id);
+  if (!mine) return 0;
+  return Math.max(0, agents.filter((a) => key(a.target) === key(mine.target)).findIndex((a) => a.id === id));
+}
+type StackTarget = { kind: string; id?: string | null; part?: string | null; params?: unknown };
 
 /** The words a badge says, for its tooltip and screen readers. Pure, so it is tested. */
 export function pinBadgeLabels(a: Pick<PinAgent, "name" | "seen">, given?: Partial<PinStrings> | null): { title: string; unpin: string } {
@@ -189,9 +236,10 @@ export function definePinBadge(tag = "apc-pin"): void {
       check.hidden = !a.seen;
       unpin.setAttribute("aria-label", labels.unpin);
       if (this.draw) this.draw(a, icon);
-      else if (this.iconKey !== JSON.stringify(a.icon ?? null)) {
-        this.iconKey = JSON.stringify(a.icon ?? null);
-        if (a.icon) {
+      else if (this.iconKey !== iconKeyOf(a)) {
+        this.iconKey = iconKeyOf(a);
+        if (!a.icon && a.badge) icon.replaceChildren(badgeSvg(a.badge));
+        else if (a.icon) {
           const img = document.createElement("img");
           img.className = "apc-pin__img";
           img.src = a.icon;

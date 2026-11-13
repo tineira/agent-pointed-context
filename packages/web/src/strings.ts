@@ -117,6 +117,50 @@ export const DEFAULT_PIN_STRINGS: PinStrings = {
   markAria: (name, seen) => `${name}, ${seen ? "has read its pin" : "has not read its pin yet"}`,
 };
 
+/** What `<apc-pets>` (the agents in the header, TIN-878) says. */
+export interface PetsStrings {
+  /** The group's `aria-label`, and the popover's. */
+  group: string;
+  /** What a state says, after the agent's name (the pet's `aria-label`, and the popover). */
+  state(state: "idle" | "waiting" | "calling" | "pinned" | "read" | "pairing" | "dragging" | "offline"): string;
+  /** A pet's tooltip. */
+  markTitle(name: string): string;
+  /** A pet's `aria-label`: its name and what it is doing. */
+  markAria(name: string, doing: string): string;
+  /** The "+N" button's `aria-label`. */
+  moreAria(count: number): string;
+  /** The popover's line for an agent's pin: where it points and whether it read it. */
+  pinned(label: string, seen: boolean): string;
+  /** The popover's line for an agent with no pin. */
+  notPinned: string;
+  /** Said of a pin whose target is not on this page (the dot on the pet). */
+  offPage: string;
+  /** The popover's close button. */
+  close: string;
+}
+
+export const DEFAULT_PETS_STRINGS: PetsStrings = {
+  group: "Agents in this page",
+  state: (state) =>
+    ({
+      idle: "connected",
+      waiting: "waiting for you to point",
+      calling: "calling tools",
+      pinned: "pointed at something, not read yet",
+      read: "read what you pointed at",
+      pairing: "a pairing request waits for you",
+      dragging: "being dragged",
+      offline: "not connected",
+    })[state],
+  markTitle: (name) => `${name}. Drag onto anything to point this agent.`,
+  markAria: (name, doing) => `${name}, ${doing}`,
+  moreAria: (count) => `${count} more ${count === 1 ? "agent" : "agents"}`,
+  pinned: (label, seen) => `Pinned to ${label}, ${seen ? "read" : "not read yet"}`,
+  notPinned: "Not pinned",
+  offPage: "Its pin is on another page",
+  close: "Close",
+};
+
 /** What `<apc-direct-agents>` says, and the prompt it hands the person to paste to their agent. */
 export interface DirectStrings {
   /** The agent name field: `aria-label` and placeholder. */

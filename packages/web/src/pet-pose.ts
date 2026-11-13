@@ -1,7 +1,7 @@
 /**
- * The APC character's motion (TIN-483), pure: each state is a pose (numbers), the renderer eases
- * toward it, and a frame is a function of time. apc-pet.tsx draws a Frame into SVG; nothing here
- * touches the DOM, so the tests run without a browser.
+ * The APC character's motion (TIN-483, TIN-878), pure: each state is a pose (numbers), the renderer eases
+ * toward it, and a frame is a function of time. pet.ts draws a Frame into SVG; nothing here touches the
+ * DOM, so the tests run without a browser.
  *
  * The character is APC's own, a soft blob with two eyes, the same for every agent. The agent's logo
  * is a badge on it; no vendor's mascot is drawn or animated.
@@ -84,7 +84,7 @@ export const share = (dt: number, rate: number) => 1 - Math.exp(-Math.max(0, dt)
 
 /**
  * Where things are drawn, in the SVG's 200 unit box (viewBox -100 -110 200 200, centre (0, -10)). The
- * Windows pet window is clipped to a circle of CLIP.r around that centre (apps/dock-desktop/src/pets.rs),
+ * dock's Windows pet window is clipped to a circle of CLIP.r around that centre (apps/dock-desktop/src/pets.rs),
  * so everything must stay inside it: the tests check the farthest point each state draws. The pet's
  * grip (TIN-484) shows above that circle, outside it, so nothing drawn here reaches it.
  */
@@ -147,7 +147,10 @@ export interface Eye {
 export interface Frame {
   body: string;
   shine: string;
+  /** The light pet's body colour; pet.ts colours it by the scheme from `grey`. */
   fill: string;
+  /** 0 colour .. 1 grey (offline), eased. */
+  grey: number;
   /** The group's offset (px) and tilt (degrees). */
   bob: number;
   tilt: number;
@@ -163,7 +166,7 @@ export interface Frame {
 }
 
 const hex = (c: string) => [1, 3, 5].map((i) => Number.parseInt(c.slice(i, i + 2), 16));
-const mix = (a: string, b: string, k: number) => {
+export const mix = (a: string, b: string, k: number) => {
   const [x, y] = [hex(a), hex(b)];
   return `rgb(${x.map((v, i) => Math.round(v + (y[i]! - v) * k)).join(",")})`;
 };
@@ -193,6 +196,7 @@ export function frameAt(pose: Pose, fx: Fx, t: number, still: boolean): Frame {
     body: blobPath(pose, time, 1),
     shine: blobPath(pose, time, 0.94),
     fill: mix(BODY, BODY_GREY, pose.grey),
+    grey: pose.grey,
     bob: still ? 0 : pose.bob * Math.sin(time * pose.bspeed) - pose.hop * hop,
     tilt: pose.tilt,
     left: { x: -21 + gx, y: cy, w: pose.eyeW, h, rx, opacity: 1 },

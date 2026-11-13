@@ -17,6 +17,10 @@ import {
   type ApcDirectAgentsElement,
   type PinningStrings,
   formatPageTime,
+  agentBadge,
+  defineHeaderPets,
+  petState,
+  type ApcPetsElement,
 } from "@tineira/apc-web";
 import type { AgentRow, Order } from "./orders-app.ts";
 // #endregion
@@ -63,6 +67,7 @@ async function refresh(): Promise<void> {
   bar.agents = rows.map((a) => ({ id: a.id, name: a.name, state: "idle", paths: a.paths, pin: a.pin ? { ...a.pin, here: true } : null }));
   direct.agents = rows.filter((a) => a.url).map((a) => ({ id: a.id, name: a.name, url: a.url!, connected: a.client !== null, client: a.client, linked: a.paths.length === 2 }));
   showWaiting(rows);
+  showPets(rows);
 }
 // #endregion
 
@@ -133,6 +138,42 @@ async function heartbeat(): Promise<void> {
   setTimeout(() => void heartbeat(), Math.max(1000, idleMs / 4));
 }
 void heartbeat();
+// #endregion
+
+// #region pets
+/**
+ * The agent in the page: each agent a pet in the header, up to 3 and then "+N", the same character the dock draws.
+ * A pet is a mark too: drag it onto a row to point the agent. Its state comes only from what the page knows: an
+ * unread pin, a call presence just reported, a pairing waiting on the person. Never a guess from timing.
+ */
+defineHeaderPets();
+const pets = document.querySelector("apc-pets") as ApcPetsElement;
+pets.scheme = "auto"; // follow the page's prefers-color-scheme; an app with a theme switch passes "light" or "dark"
+const heard = new Map<string, number>(); // grant id -> when presence last reported a call
+events.addEventListener("message", (message) => {
+  const data = JSON.parse(message.data as string) as { type: string; event?: { grant_id: string } };
+  if (data.type !== "presence" || !data.event) return;
+  heard.set(data.event.grant_id, Date.now());
+  showPets();
+  setTimeout(() => showPets(), 4000);
+});
+let petRows: AgentRow[] = [];
+function showPets(rows: AgentRow[] = petRows): void {
+  petRows = rows;
+  pets.agents = rows.map((a) => ({
+    id: a.id,
+    name: a.name,
+    badge: agentBadge({ clientName: a.client, key: a.id }),
+    pin: a.pin ? { ...a.pin, here: true } : null,
+    // An open wait_for_focus shows as `waiting` only from the page-readable wait signal: pass `waiting` when your page has it.
+    state: petState({
+      connected: a.client !== null,
+      busy: Date.now() - (heard.get(a.id) ?? 0) < 4000,
+      pin: a.pin && !a.pin.seen ? "unread" : "none",
+      requests: a.waiting === "code" ? 1 : 0,
+    }),
+  }));
+}
 // #endregion
 
 // #region pinning
