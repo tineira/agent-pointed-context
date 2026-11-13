@@ -6,6 +6,14 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The 0.10 conformance checks close the reviews' gaps (2026-11-13, TIN-894)
+
+- **M2, M3 and M4 hold on `/apc/confirm` too.** The stand-in hub breaks `/apc/confirm` with `confirmMode`; a drop of a grant in handoff (and once of a paired grant) against a redirecting, stalling or oversized confirm answer must refuse it within the deadline, call nothing past the hub, pin nothing and wake nothing. (`packages/conformance/src/hub.ts`, `packages/conformance/src/dock-lifecycle.ts`)
+- **M3 measures the whole call.** A new stall (`slow_headers_then_stall`: headers at 90% of the deadline, then a body that never ends) and a time limit of the deadline plus 30% (at least 1 s, at most 2.5 s) fail an app whose two deadlines add up past it. (`packages/conformance/src/hub.ts`, `packages/conformance/src/dock-lifecycle.ts`)
+- **M6 refuses look-alike origins on HTTP and the WebSocket handshake, compares the other-host probe with a foreign Origin, and checks GETs by what they do.** A longer host, another port, a trailing dot, a prefix, a cut-short origin and the other scheme; an other-host answer that is not a 4xx is a note only when a foreign Origin gets the same; a token from a GET drop's answer must not let an Allow send `/apc/pair`, and a Cancel GET must leave every grant in handoff as it was. (`packages/conformance/src/dock-lifecycle.ts`, `packages/conformance/src/index.ts`)
+- **M1 checks the Allow's hub itself, not `allowCarriesHub`.** The suite posts the Allow with a foreign hub in every member that names the drop's hub; it must be refused or ignored, and while a check runs a hub call through the global `fetch` past the stand-in counts as a call off the hub's origin. (`packages/conformance/src/dock-lifecycle.ts`)
+- **The skip for an app before 0.10 needs a grant at the owner origin, the T_connect and precedence checks use the app's own `connectMs`, long dormancy is checked with `dormancyMs` (a note without it), and the suite gives its grants back after each check, 2 s at most each.** Orders declares its 30-day long dormancy. (`packages/conformance/src/dock-lifecycle.ts`, `packages/conformance/src/index.ts`, `apps/dock/src/docs/examples/orders-conformance.ts`, `apps/dock/src/docs/pages/conformance.md`)
+
 ### The reference hub and the reference apps meet APC 0.10 (2026-11-13, TIN-892)
 
 - **The dock's hub sends a grant nothing over MCP before the dock owner approved it with the code, and `initialize` before anything else (H1).** Three guarded wrappers are the only callers of the app client; a pairing settled without its introduction is introduced on first use. (`apps/dock/src/worker/hub.ts`)
