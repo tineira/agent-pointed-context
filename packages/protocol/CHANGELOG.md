@@ -4,6 +4,37 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor (or, from 1.0, a major) version. A patch (0.7.0 to 0.7.1) never changes the contract; it fixes the packages or the wording, so an app that implements 0.7.0 implements every 0.7.x.
 
+## 0.10.0 (draft, 2026-11-13)
+
+The Dock profile as built (TIN-882): a dock grant has states, each state answers in a fixed way, and the hub and the app have MUSTs around the hub call. Before, the profile said how a pairing starts and not what a grant answers between the Allow and the hub's first `initialize`: one app served data in that window, two had no gate at all. In `packages/protocol/src/dock.ts` and `core.ts`, the spec's Dock profile and DESIGN.md section 22. The binding stays the secret MCP URL; other bindings are left open for future versions.
+
+### Grant states
+
+- **A dock grant is `in_flight`, `handoff`, `live`, `dormant`, `ended` or `revoked`, in that order of precedence from the last** (`DockGrantState`, `DOCK_GRANT_STATES`: revoked > ended > in_flight > handoff > dormant > live; `dockGrantStateOf`). In flight runs from the Allow to the hub's acknowledgement; handoff from the acknowledgement to the first committed `initialize`; live from then on; dormant (SHOULD) after `T_idle` with no wake action; ended after `T_ack` (at most 30 s, `T_ACK_MAX_MS`) still in flight, after `T_connect` (at most 10 minutes, `T_CONNECT_MAX_MS`) in handoff, on a give-back, or after long dormancy; revoked on the owner's Revoke or on Cancel.
+- **Each state answers in a fixed way** (`dockGrantAnswer`, MUST wherever the state is implemented). In flight and ended answer HTTP 404 to everything; revoked answers `RevokedAnswer` as in 0.8; live serves. Handoff serves `initialize` (which commits the connection), `ping` and `tools/list`; a `tools/call` is the tool error `{ error: "pairing", message }`, another method JSON-RPC -32000 with that as `data`, a notification 202. Dormant serves `initialize` (without waking), `ping` and `tools/list`; the core tools answer their idle shapes; another tool is the tool error `{ error: "idle", message }`, another method -32000. No answer in handoff or dormant carries `attention`, `then`, an `apc_link` offer or a presence event.
+- **The idle shapes** (MUST for an app that sleeps): `get_current_view` answers `{ view: null, focus: null, idle: true, note }` (`idleCurrentView`), `wait_for_focus` `{ focus: null, timed_out: false, page_open: false, idle: true, note }` (`idleWaitForFocus`). `CurrentViewResult` and `WaitNoFocus` gain the optional `idle: true`; an answer without it (a 0.9 app) reads as before. `isIdleAnswer`, `isPairingAnswer`.
+- **Tool errors** (`DockGrantErrorAnswer`) are carried in both `structuredContent` and `content[0].text` (JSON), with `isError: true`.
+- **Transitions.** `initialize` fails closed: no result unless the move out of handoff committed (on a persistence failure, JSON-RPC -32603 or HTTP 500), and the commit is conditional on the grant being neither revoked nor ended in the same atomic step. The acknowledgement's move from in flight to handoff is conditional the same way. A served call is a `tools/call` that returned app data while live. Wake actions are the owner's authenticated page heartbeat (at least every `T_idle / 2` while the page is open) or a confirmed drop; agent traffic never wakes or extends a grant. Cancel revokes, only in handoff before any served call, atomically.
+- **Recommended times**: `T_idle` 30 minutes (`T_IDLE_RECOMMENDED_MS`), long dormancy 30 days (`LONG_DORMANCY_RECOMMENDED_MS`).
+
+### The hub (H1 to H7)
+
+- **H1.** The hub sends `initialize` on a grant only after the dock owner approved with the code, and nothing before; while approving, the dock takes no code. **H2.** `/apc/confirm` expires overdue requests before it answers. **H3.** One pending request per (agent, app origin): `/apc/pair` replaces an unapproved one (never an approving or paired one), outside the cap, giving its URL back afterwards when it differs, the new one's wrong-code count at 0. **H4.** `pairing` and `idle` are relayed as tool errors (in the envelope for an unverified app), `idle: true` per app in `views[]`, an idle answer never ends the hub's wait or reads as page closed, and an all-idle wait answers the idle shape. **H5.** A 404 from a pairing introduced or in handoff is `pairing_ended` (`PAIRING_ENDED_ERROR`), with an `ended` tombstone. **H6.** The instructions and guide say what `idle` and `pairing` mean. **H7.** The `apc.json` copy for a pairing decision is at most 60 s old (`APC_JSON_PAIRING_MAX_AGE_S`), and an unreachable one refuses the pairing (`apc_json_unreachable`).
+
+### The app (M1 to M9)
+
+- **M1** a constant allowlist of hub origins, parsed with `new URL`, on the drop and the Allow (`hub_not_allowed`); **M2** no redirects; **M3** one deadline of at most 10 s for headers and body (`HUB_CALL_DEADLINE_MS`); **M4** at most 8 KiB read (`HUB_ANSWER_MAX_BYTES`), with a strict `content-length` rule; **M5** no lock held across the hub call, one drop, Allow or confirm at a time per (user, hub, agent); **M6** the owner-session endpoints are `POST` `application/json`, refuse a foreign `Origin` or a cross-site `Sec-Fetch-Site`, and take a request with neither on the session alone; **M7** `/apc/revoke` answers the same 200 to anything and ends a matching grant in any state but revoked or ended; **M8** `apc.json` lists `dock` only while the app can pair, cached 60 s at most; **M9** hub requests go to the parsed origin.
+
+### One pending pairing
+
+Before the acknowledgement a new drop replaces the pending consent (the stale Allow is `consent_expired`); a second Allow is `pairing_in_progress`. After it and before `initialize`, a drop asks `/apc/confirm`: `pending` with the app's own expiry ahead shows the same code and the time left; `not_paired` or a passed expiry ends the grant and starts a fresh consent; `paired` keeps the grant in handoff until `initialize`. The page treats its stored expiry as the truth.
+
+### Packages
+
+`@tineira/apc-protocol`: `dock.ts` (the states, the answer table, the tool errors, the idle shapes, the time limits, `PAIRING_ENDED_ERROR`, `DockDropError`, and the H and M rules in prose). The server helpers (the M2 to M4 hub client, `toolError`'s `structuredContent`, the M1 drop parser, the M7 give-back, `apcJsonResponse` at `max-age=60`), the reference hub and apps, and the conformance checks follow in their own changes.
+
+An app that implements 0.9 keeps working with a 0.10 hub: its answers carry no `idle`, and read as they did. To claim 0.10.0 it implements the states it uses as the table says, and M1 to M9.
+
 ## 0.9.0 (draft, 2026-11-12)
 
 The pairing code: on the Dock profile the app's consent shows a code, and the dock's Allow requires it (TIN-859). A drag can be put on any page, and anyone who runs a dock can mint tickets for their own agent; before, they could lure an app's owner into a drop and an Allow and get their own agent paired with the owner's data. In `packages/protocol/src/core.ts`, `packages/server/src/consent.ts`, `packages/server/src/hub-client.ts`, `packages/conformance` and DESIGN.md section 12.

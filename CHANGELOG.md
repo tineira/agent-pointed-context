@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### APC standard 0.10: the Dock profile as built (2026-11-13, TIN-882)
+
+- **The spec now says what a dock grant answers at every step, from the Allow to the end: in flight, handoff, live, dormant, ended or revoked, with a fixed answer per method, the `pairing` and `idle` tool errors, the idle shapes (`idle: true`), and the time limits that end a grant that never connected.** It also lists what the hub must do (H1 to H7: no `initialize` before the code, one pending request per agent and app, `pairing_ended`, a fresh `apc.json`) and what the app must do around the hub call (M1 to M9: a hub allowlist, no redirects, 10 s and 8 KiB, no lock across the call, the `Origin` rule, a public give-back, an honest `apc.json`); `@tineira/apc-protocol` gains the types, constants and pure helpers (`DockGrantState`, `dockGrantAnswer`, `idleCurrentView`, `idleWaitForFocus`, `isIdleAnswer`, `isPairingAnswer`, `PAIRING_ENDED_ERROR`, `T_ACK_MAX_MS`, `T_CONNECT_MAX_MS`), and the packages are 0.10.0. The server helpers, the conformance checks and the reference hub and apps follow in their own changes. (`packages/protocol/src/dock.ts`, `packages/protocol/src/core.ts`, `packages/protocol/CHANGELOG.md`, `apps/dock/src/docs/pages/spec.md`, `DESIGN.md`)
+
 ### Docs catch-up (2026-11-13, TIN-881)
 
 - **The docs no longer say the first npm publish is pending, and the overview counts four packages.** The integrate and conformance pages now say the packages are on npm with `next` on the newest release. (`apps/dock/src/docs/pages/integrate.md`, `overview.md`, `conformance.md`)
