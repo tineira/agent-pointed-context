@@ -6,7 +6,7 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are 0.x pre-releases on npm: the `next` dist-tag carries the newest release, and `latest` can trail it by one while the standard is 0.x. Their version follows the standard's: 0.9.x ships APC 0.9.
+The packages are 0.x pre-releases on npm: the `next` dist-tag carries the newest release, and `latest` can trail it by one while the standard is 0.x. Their version follows the standard's: 0.10.x ships APC 0.10.
 
 ```sh
 npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)

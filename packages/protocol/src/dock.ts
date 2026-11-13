@@ -49,7 +49,7 @@
  *   any served call; the check and the revoke are one atomic step, and every tool handler re-checks revoke
  *   after its work and before it returns data (as 0.8 already requires).
  */
-import type { CurrentViewResult, WaitNoFocus } from "./core.ts";
+import type { IdleCurrentView, IdleWaitForFocus } from "./core.ts";
 
 /** A dock grant's state in the app (APC 0.10). */
 export type DockGrantState = "revoked" | "ended" | "in_flight" | "handoff" | "dormant" | "live";
@@ -117,44 +117,57 @@ export function idleAnswer(message: string = IDLE_MESSAGE): DockGrantErrorAnswer
 }
 
 /** `get_current_view` of a dormant grant (MUST for an app that sleeps): no data, and `idle: true`. */
-export function idleCurrentView(note: string = IDLE_MESSAGE): CurrentViewResult & { idle: true } {
+export function idleCurrentView(note: string = IDLE_MESSAGE): IdleCurrentView {
   return { view: null, focus: null, idle: true, note };
 }
 /** `wait_for_focus` of a dormant grant (MUST for an app that sleeps): no focus, at once, and `idle: true`. */
-export function idleWaitForFocus(note: string = IDLE_MESSAGE): WaitNoFocus & { idle: true } {
+export function idleWaitForFocus(note: string = IDLE_MESSAGE): IdleWaitForFocus {
   return { focus: null, timed_out: false, page_open: false, idle: true, note };
 }
 
 /**
- * Whether an answer says the grant is asleep: the `idle` tool error, or a core tool's idle shape. An answer
- * without `idle` (from a 0.9 app) is not idle: it reads as unavailable or page closed, as before.
+ * Whether an answer says the grant is asleep: the `idle` tool error (`{ error: "idle", message }`), or a core
+ * tool's idle shape (`idle: true` with a `note`). An answer without `idle` (from a 0.9 app) is not idle: it
+ * reads as unavailable or page closed, as before.
  */
-export function isIdleAnswer(body: unknown): boolean {
+export function isIdleAnswer(body: unknown): body is DockGrantErrorAnswer | IdleCurrentView | IdleWaitForFocus {
   if (!body || typeof body !== "object") return false;
-  const b = body as { error?: unknown; idle?: unknown };
-  return b.error === IDLE_ERROR || b.idle === true;
+  const b = body as { error?: unknown; message?: unknown; idle?: unknown; note?: unknown };
+  return (b.error === IDLE_ERROR && typeof b.message === "string") || (b.idle === true && typeof b.note === "string");
 }
-/** Whether an answer is the `pairing` tool error: the grant is in handoff. */
+/** Whether an answer is the `pairing` tool error (`{ error: "pairing", message }`): the grant is in handoff. */
 export function isPairingAnswer(body: unknown): body is DockGrantErrorAnswer {
-  return !!body && typeof body === "object" && (body as { error?: unknown }).error === PAIRING_ERROR;
+  if (!body || typeof body !== "object") return false;
+  const b = body as { error?: unknown; message?: unknown };
+  return b.error === PAIRING_ERROR && typeof b.message === "string";
 }
 
 /** What reaches a dock grant, as the answer table splits it. */
 export type DockGrantCall = "initialize" | "ping" | "tools/list" | "core_tool" | "app_tool" | "other_method" | "notification";
 
-/** Classifies an MCP message for `dockGrantAnswer`: a notification has no `id`; `tool` is the name in a `tools/call`. */
-export function dockGrantCallOf(message: { method: string; notification?: boolean; tool?: string }): DockGrantCall {
-  if (message.notification) return "notification";
+/**
+ * Classifies a JSON-RPC message, as received, for `dockGrantAnswer`. A message with no `id` member, or any
+ * `notifications/*` method, is a notification. A `tools/call` names its tool in `params.name`: a core tool
+ * (`get_current_view`, `wait_for_focus`) or any other.
+ */
+export function dockGrantCallOf(message: { method: string; id?: string | number | null; params?: unknown }): DockGrantCall {
+  if (message.id === undefined || message.method.startsWith("notifications/")) return "notification";
   if (message.method === "initialize" || message.method === "ping" || message.method === "tools/list") return message.method;
-  if (message.method === "tools/call") return message.tool === "get_current_view" || message.tool === "wait_for_focus" ? "core_tool" : "app_tool";
+  if (message.method === "tools/call") {
+    const tool = message.params && typeof message.params === "object" ? (message.params as { name?: unknown }).name : undefined;
+    return tool === "get_current_view" || tool === "wait_for_focus" ? "core_tool" : "app_tool";
+  }
   return "other_method";
 }
 
 /**
  * How a grant answers, per state and call (APC 0.10, MUST wherever the state is implemented):
  *
- * - `serve`: as 0.8. On `initialize` in handoff the answer `commits` the connection (the grant goes live);
- *   in dormant `initialize` is served and does not wake the grant.
+ * - `serve`: as 0.8. `wakes` is always false: agent traffic never wakes a dormant grant or extends one, so
+ *   `initialize` in dormant is served and the grant stays dormant. `commits` is true only for `initialize` in
+ *   handoff: that answer commits the connection (the grant goes live), and only if, in the same atomic step,
+ *   the grant is still in handoff (neither revoked nor ended); otherwise `initialize` answers by the state
+ *   that won (`RevokedAnswer` or 404). It returns no result until the commit is durable.
  * - `not_found`: HTTP 404, and the state is unchanged.
  * - `revoked`: 403 (secret URL) with `RevokedAnswer`, as 0.8.
  * - `tool_error`: the tool error `{ error, message }` (`DockGrantErrorAnswer`).
@@ -164,6 +177,7 @@ export function dockGrantCallOf(message: { method: string; notification?: boolea
  *
  * | Call | in_flight | handoff | live | dormant | ended | revoked |
  * |---|---|---|---|---|---|---|
+ * | any request (a `GET`, a `DELETE`, one that does not parse, too) | 404, state unchanged | rows below | rows below | rows below | 404 | revoked |
  * | `initialize` | 404 | serve, commits | serve | serve, no wake | 404 | revoked |
  * | `ping`, `tools/list` | 404 | serve | serve | serve | 404 | revoked |
  * | `tools/call` | 404 | tool error `pairing` | serve | core: idle shape; other: tool error `idle` | 404 | revoked |
@@ -171,7 +185,7 @@ export function dockGrantCallOf(message: { method: string; notification?: boolea
  * | notifications | 404 | 202, ignored | serve | serve | 404 | revoked |
  */
 export type DockGrantAnswerKind =
-  | { kind: "serve"; commits?: true }
+  | { kind: "serve"; commits: boolean; wakes: false }
   | { kind: "not_found" }
   | { kind: "revoked" }
   | { kind: "tool_error"; error: DockGrantError }
@@ -187,10 +201,10 @@ export function dockGrantAnswer(state: DockGrantState, call: DockGrantCall): Doc
     case "in_flight":
       return { kind: "not_found" };
     case "live":
-      return { kind: "serve" };
+      return { kind: "serve", commits: false, wakes: false };
     case "handoff":
-      if (call === "initialize") return { kind: "serve", commits: true };
-      if (call === "ping" || call === "tools/list") return { kind: "serve" };
+      if (call === "initialize") return { kind: "serve", commits: true, wakes: false };
+      if (call === "ping" || call === "tools/list") return { kind: "serve", commits: false, wakes: false };
       if (call === "core_tool" || call === "app_tool") return { kind: "tool_error", error: PAIRING_ERROR };
       if (call === "other_method") return { kind: "rpc_error", code: DOCK_GRANT_RPC_ERROR_CODE, error: PAIRING_ERROR };
       return { kind: "ignored" };
@@ -198,7 +212,7 @@ export function dockGrantAnswer(state: DockGrantState, call: DockGrantCall): Doc
       if (call === "core_tool") return { kind: "idle_shape" };
       if (call === "app_tool") return { kind: "tool_error", error: IDLE_ERROR };
       if (call === "other_method") return { kind: "rpc_error", code: DOCK_GRANT_RPC_ERROR_CODE, error: IDLE_ERROR };
-      return { kind: "serve" };
+      return { kind: "serve", commits: false, wakes: false };
   }
 }
 
