@@ -6,6 +6,17 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The hub hardened: redirects, pins dated ahead, give-backs, logs, the socket, readers and joins (2026-11-14, TIN-911)
+
+- **The hub follows no app's redirect, verified or not.** Every MCP call and every give-back uses `redirect: "manual"` and takes a 3xx as a failure, as the app side's hub client does. (`apps/dock/src/worker/app-client.ts`, `apps/dock/test/hostile-world.ts`)
+- **A pin dated ahead of the hub's clock is never taken, from any app.** It used to apply to unverified apps only; a verified app's pin dated in the future would have kept the agent's one focus. (`apps/dock/src/worker/trust.ts`, `apps/dock/src/worker/hub.ts`)
+- **A give-back the app did not take is tried again, and a dock gives every grant back before its data goes.** The alarm retries after 1 min, 5 min, 30 min, 2 h and 12 h, then stops; an expired dock, Start over and a last computer leaving give back every grant they hold first. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/trust.ts`)
+- **No secret URL in the logs.** The dock, Pulse and Signals keep no Workers invocation logs, which record each request URL; the dock redacts MCP paths, tickets and tokens from what it logs itself. (`apps/dock/wrangler.jsonc`, `apps/demo/wrangler.jsonc`, `apps/signals/wrangler.jsonc`, `apps/dock/src/worker/redact.ts`, `apps/dock/src/worker/index.ts`)
+- **The dock's socket answers on its own path only.** An agent's MCP path is passed to the hub only with a real secret and without the owner header a caller sent. (`apps/dock/src/worker/index.ts`, `apps/dock/src/worker/hub.ts`)
+- **A reader request alone no longer unpairs the browser already sending readings;** the new one replaces it only once the person allows it. (`apps/dock/src/worker/hub.ts`)
+- **A join request shows a four-digit number on both screens,** so the person compares more than the label the joining computer gave itself. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/web/computers.tsx`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/web/dock.css`)
+- Found by the APC 1.0 security review; the contract does not change. (`apps/dock/test/hub-hardening.test.ts`, `apps/dock/src/docs/pages/spec.md`, `DESIGN.md`)
+
 ### An outsider can implement APC from the public docs alone (2026-11-14, TIN-914)
 
 - **The docs read with a plain GET, no JavaScript.** The dock's build writes every /docs page as HTML with its text and its own description in it (the page still renders itself once its script runs), each page as Markdown at `/docs/<page>.md` (linked from the page with `<link rel="alternate" type="text/markdown">` and in its footer), and `/llms.txt`; `pnpm test:workerd` GETs them from the built dock. (`apps/dock/src/docs/static.ts`, `apps/dock/vite.config.ts`, `apps/dock/src/web/docs.tsx`, `apps/dock/test/docs.test.ts`, `scripts/dock-pairing.mjs`)
