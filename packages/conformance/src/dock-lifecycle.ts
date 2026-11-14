@@ -223,7 +223,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
    */
   const send = async (mcpUrl: string, method: string, params: Record<string, unknown>, noId = false, exact = false): Promise<Sent> => {
     const started = Date.now();
-    const pairing = method === "initialize" && !exact && !("_meta" in params) ? dock?.hub.pairings.filter((p) => p.mcp_url === mcpUrl).at(-1) : undefined;
+    // The grant's own pairing: the first the app made for this URL (a later one, made by a check, is another pairing).
+    const pairing = method === "initialize" && !exact && !("_meta" in params) ? dock?.hub.pairings.find((p) => p.mcp_url === mcpUrl) : undefined;
     if (pairing?.bound) params = { ...params, _meta: { [APC_PAIRING_ID_META]: pairing.id, [APC_AGENT_META]: pairing.agent } };
     const response = await fetchApp(
       new Request(mcpUrl, {
@@ -1364,7 +1365,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       const decided = await d.hub.decide(pairing.id, "approve", "K7M4P2");
       expect(decided.ok, `the stand-in hub did not approve: ${decided.error}`);
       expect(pairing.status === "refused", `the hub's introduction (initialize naming a pairing) on a Direct grant was served: the pairing is ${pairing.status}. A grant that is not a Dock grant refuses it (HTTP 404, or any refusal: 401 for a bearer grant)`);
-      expect(pairing.calls.every((c) => c === "initialize"), `the hub sent ${pairing.calls.join(", ")} to the Direct grant`);
+      // A hub sends tools/list once its introduction is served (the stand-in does): a refused one gets nothing more.
+      expect(pairing.calls.every((c) => c === "initialize"), `the hub sent ${pairing.calls.join(", ")} to the Direct grant: its introduction was served`);
       for (const [label, body] of [
         ["in a batch", [{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INIT, _meta: { [APC_PAIRING_ID_META]: pairing.id, [APC_AGENT_META]: agent } } }]],
         ["without an id", { jsonrpc: "2.0", method: "initialize", params: { ...INIT, _meta: { [APC_PAIRING_ID_META]: pairing.id } } }],
@@ -1402,6 +1404,13 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         expect(s.status === 404, `initialize on a grant in handoff with ${label} answers HTTP 404, got ${brief(s)}`);
         await expectState(a.mcpUrl, "pairing", `after initialize with ${label}`);
       }
+      // Every initialize in a request counts: one in a batch, and one without an id.
+      const batch = await sendRaw(a.mcpUrl, "POST", JSON.stringify([{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INIT, _meta: { ...own, [APC_PAIRING_ID_META]: b.pairing.id } } }]));
+      expect(batch.status === 404, `a batch whose initialize names another pairing answers HTTP 404, got ${brief(batch)}`);
+      await expectState(a.mcpUrl, "pairing", "after a batch naming another pairing");
+      const noId = await sendRaw(a.mcpUrl, "POST", JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { ...INIT, _meta: { ...own, [APC_PAIRING_ID_META]: b.pairing.id } } }));
+      expect(noId.status === 404, `an initialize without an id naming another pairing answers HTTP 404, got ${brief(noId)}`);
+      await expectState(a.mcpUrl, "pairing", "after an initialize without an id naming another pairing");
       // A body with the key twice: the app reads the body it gates on, and the duplicate whose last value is not its own is refused.
       const twice = await sendRaw(a.mcpUrl, "POST", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"apc-hub","version":"0.12.0"},"_meta":{"${APC_PAIRING_ID_META}":"${a.pairing.id}","${APC_AGENT_META}":"${a.agent}","${APC_PAIRING_ID_META}":"${b.pairing.id}"}}}`);
       expect(twice.status === 404, `initialize whose pairing_id appears twice, the last another pairing's, answers HTTP 404, got ${brief(twice)}`);
@@ -1419,6 +1428,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       const refused = await send(a.mcpUrl, "initialize", { ...INIT, _meta: other }, false, true);
       expect(refused.status === 404, `initialize on a live grant naming another pairing answers HTTP 404, got ${brief(refused)}`);
       await expectState(a.mcpUrl, "data", "live, after initialize naming another pairing");
+      const batch = await sendRaw(a.mcpUrl, "POST", JSON.stringify([{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INIT, _meta: other } }]));
+      expect(batch.status === 404, `a batch on a live grant whose initialize names another pairing answers HTTP 404, got ${brief(batch)}`);
       const none = await send(a.mcpUrl, "initialize", INIT, false, true);
       expect(served(none), `initialize on a live grant naming no pairing is served (a hub rolled back): ${brief(none)}`);
       if (!life.idleMs) return { note: "the dormant half not checked: the adapter gives no idleMs" };
@@ -1433,16 +1444,21 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       await life.heartbeat();
     }),
 
-    check12("M10: a binding never changes, and an acknowledgement with a binding no app knows holds no grant", async (life, d) => {
+    check12("M10: a later hub answer never rebinds a grant (a /apc/confirm naming another pairing, a second pairing of its URL), and an acknowledgement with a binding no app knows holds no grant", async (life, d) => {
       const a = await liveGrant(life, d);
-      // Another drop of the same agent (/apc/confirm) and a new pairing at the hub do not rebind the grant.
-      await drop(life, d, a.agent);
+      // A second pairing of the grant's URL at the hub, and another drop whose /apc/confirm answer names it: neither rebinds the grant.
       const ticket = d.hub.ticket(a.agent);
       await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent: a.agent, app: { name: app.name, origin: life.owner.origin }, mcp_url: a.mcpUrl, pairing_code: "K7M4P2" }) });
       const later = d.hub.pairings.filter((p) => p.mcp_url === a.mcpUrl).at(-1)!;
       expect(later.id !== a.pairing.id, "the stand-in made a second pairing for the grant");
+      d.hub.confirmPairingId = later.id;
+      try {
+        await drop(life, d, a.agent);
+      } finally {
+        d.hub.confirmPairingId = null;
+      }
       const stillOwn = await send(a.mcpUrl, "initialize", { ...INIT, _meta: { [APC_PAIRING_ID_META]: a.pairing.id, [APC_AGENT_META]: a.agent } }, false, true);
-      expect(served(stillOwn), `the grant's own pairing is still served after a second pairing named it: ${brief(stillOwn)}`);
+      expect(served(stillOwn), `the grant's own pairing is still served after a second pairing named it and a /apc/confirm answer carried that one (it must not rebind): ${brief(stillOwn)}`);
       const rebound = await send(a.mcpUrl, "initialize", { ...INIT, _meta: { [APC_PAIRING_ID_META]: later.id, [APC_AGENT_META]: a.agent } }, false, true);
       expect(rebound.status === 404, `the second pairing's id took the grant (the binding changed): ${brief(rebound)}`);
       await refusedWith(life, d, "ack_unknown_binding", "M10 (an unknown binding scheme)");

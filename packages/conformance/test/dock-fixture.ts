@@ -1,7 +1,8 @@
 /**
- * A minimal Dock app of APC 0.10, in plain code, for testing the suite's 0.10 checks (`dock-lifecycle.test.ts`):
+ * A minimal Dock app of APC 0.10 to 0.12, in plain code, for testing the suite's Dock checks (`dock-lifecycle.test.ts`):
  * the grant's states and what each answers, the transitions, the hub call (M1 to M5, M9), the owner's endpoints
- * (M6), the give-back (M7), `apc.json` (M8) and one pending pairing. It keeps everything in memory (`Storage`,
+ * (M6), the give-back (M7), `apc.json` (M8), one pending pairing, and the binding (M10 to M12, APC 0.12; with
+ * `bothProfiles` it offers Direct agents too, on the same `/mcp/` path, so M12 can be checked). It keeps everything in memory (`Storage`,
  * which outlives a restart), and its clock is `Date.now()` plus the adapter's skew (the time seam). It answers on
  * any host, as an app behind a proxy does, and compares `Origin` with its configured origin.
  *
@@ -10,8 +11,12 @@
  * `abortSignalDeadline`, `connectMs`, `unknownHost`) are other designs the spec allows, which must pass.
  */
 import {
+  APC_AGENT_META,
+  APC_PAIRING_ID_META,
   APC_STANDARD_VERSION,
   HUB_ANSWER_MAX_BYTES,
+  PAIRING_BINDING,
+  PAIRING_ID_RE,
   LONG_DORMANCY_RECOMMENDED_MS,
   PAIRING_CODE_ACK,
   PAIRING_CODE_TTL_MS,
@@ -123,7 +128,20 @@ export type FixtureBreak =
   | "keeps_grant_on_not_paired"
   | "ignores_stored_expiry"
   | "confirm_paired_goes_live"
-  | "stale_allow_accepted";
+  | "stale_allow_accepted"
+  // The binding (APC 0.12).
+  | "binding_ignored"
+  | "binding_case_insensitive"
+  | "binding_prefix_compare"
+  | "binding_handoff_only"
+  | "binding_first_message_only"
+  | "binding_absent_refused_live"
+  | "binding_unbound_refused"
+  | "binding_rebound_on_confirm"
+  | "binding_unknown_scheme_accepted"
+  | "binding_shown"
+  | "direct_serves_hub"
+  | "direct_first_message_only";
 
 export interface FixtureOptions {
   break?: FixtureBreak;
@@ -145,6 +163,8 @@ export interface FixtureOptions {
   allowNoAgent?: boolean;
   /** Cancel's `body()` hands out grants paired when the adapter was made, not during the call. */
   cancelPrepaired?: boolean;
+  /** The app offers Direct agents too, on the same `/mcp/` path (APC 0.12: the suite checks M12 on one). */
+  bothProfiles?: boolean;
 }
 
 export const ORIGIN = "https://fixture.test";
@@ -174,6 +194,11 @@ interface Grant {
   pinnedAt: number;
   pinUnread: boolean;
   revokedAt: string | null;
+  /** The binding (APC 0.12, M10): written with the move to handoff, never after. */
+  pairingId: string | null;
+  declared: boolean;
+  /** A Direct agent's grant: never handed to a dock. */
+  direct: boolean;
 }
 interface Consent {
   agent: string;
@@ -197,6 +222,7 @@ interface Config {
   connectMs: number;
   unknownHost: FixtureOptions["unknownHost"];
   allowNoAgent: boolean;
+  bothProfiles: boolean;
 }
 
 const random = (n: number, alphabet = "abcdefghijklmnopqrstuvwxyz0123456789") => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => alphabet[b % alphabet.length]).join("");
@@ -307,7 +333,7 @@ class Fixture {
   private apcJson(at: string): Response {
     const dock = this.config.pairing || this.has("dock_always_listed");
     const origin = this.has("owner_origin_elsewhere") ? at : ORIGIN;
-    const body = { name: "Fixture", standard: APC_STANDARD_VERSION, origin, profiles: dock ? ["dock"] : ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${origin}/agents` } };
+    const body = { name: "Fixture", standard: APC_STANDARD_VERSION, origin, profiles: dock ? (this.config.bothProfiles ? ["direct", "dock"] : ["dock"]) : ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${origin}/agents` } };
     return new Response(JSON.stringify(body), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${this.has("max_age_300") ? 300 : 60}` } });
   }
 
@@ -419,8 +445,10 @@ class Fixture {
         const base = this.has("raw_hub_string") || this.has("raw_hub_on_confirm") ? String(b.hub) : hub;
         const answer = await this.hubCall(base, "/apc/confirm", { ticket, agent, mcp_url: this.urlOf(g), ...(this.has("code_in_confirm") ? { pairing_code: g.code } : {}) });
         if (this.dead) return { ok: false, error: "gone" };
-        const a = answer.body as { ok?: unknown; status?: unknown; error?: unknown } | undefined;
+        const a = answer.body as { ok?: unknown; status?: unknown; error?: unknown; pairing_id?: unknown } | undefined;
         const status = a?.ok === true ? a.status : a?.error === "not_paired" ? "not_paired" : null;
+        // (binding_rebound_on_confirm: a later hub answer naming a pairing replaces the binding.)
+        if (this.has("binding_rebound_on_confirm") && typeof a?.pairing_id === "string") g.pairingId = a.pairing_id;
         if (status === null) return { ok: false, error: "hub_unreachable" };
         if (st === "handoff") {
           const ahead = this.now() < g.codeExpiresAt || this.has("ignores_stored_expiry");
@@ -463,20 +491,29 @@ class Fixture {
     try {
       this.storage.consents.delete(nonce);
       const now = this.now();
-      const g: Grant = { id: `g_${random(8)}`, secret: random(22), agent, hub, state: "in_flight", allowedAt: now, ackedAt: 0, liveAt: 0, lastWake: now, served: false, code: c.code, codeExpiresAt: 0, pin: null, pinnedAt: 0, pinUnread: false, revokedAt: null };
+      const g: Grant = { id: `g_${random(8)}`, secret: random(22), agent, hub, state: "in_flight", allowedAt: now, ackedAt: 0, liveAt: 0, lastWake: now, served: false, code: c.code, codeExpiresAt: 0, pin: null, pinnedAt: 0, pinUnread: false, revokedAt: null, pairingId: null, declared: false, direct: false };
       this.storage.grants.push(g);
       const answer = await this.hubCall(base, "/apc/pair", { ticket, agent, app: { name: "Fixture", origin: ORIGIN }, mcp_url: this.urlOf(g), pairing_code: c.code });
       if (this.dead) return { ok: false, error: "gone" };
-      const a = answer.body as { ok?: unknown; pairing_code?: unknown; error?: unknown } | undefined;
+      const a = answer.body as { ok?: unknown; pairing_code?: unknown; error?: unknown; pairing_id?: unknown; binding?: unknown } | undefined;
       // (ignores_3xx: any status under 400 with a yes in it counts, as a careless app's check does.)
       const statusOk = this.has("ignores_3xx") ? answer.status >= 200 && answer.status < 400 : answer.status === 200;
       if (!(statusOk && a?.ok === true && a.pairing_code === PAIRING_CODE_ACK)) {
         if (g.state !== "revoked") g.state = "ended";
         return { ok: false, error: typeof a?.error === "string" ? a.error : "hub_refused" };
       }
+      // M10: a binding no app knows, or a declared id out of form, is a refusal.
+      const declared = a.binding !== undefined;
+      if (declared && !this.has("binding_unknown_scheme_accepted") && (a.binding !== PAIRING_BINDING || typeof a.pairing_id !== "string" || !PAIRING_ID_RE.test(a.pairing_id))) {
+        if (g.state !== "revoked") g.state = "ended";
+        return { ok: false, error: "hub_refused" };
+      }
       // The acknowledgement's move, conditional on the grant being still in flight.
       if (!this.has("ack_unconditional") && this.stateOf(g) !== "in_flight") return { ok: false, error: "pairing_ended" };
       g.state = "handoff";
+      // The binding, in the same step (M10).
+      g.pairingId = typeof a.pairing_id === "string" ? a.pairing_id : null;
+      g.declared = declared && a.binding === PAIRING_BINDING;
       g.ackedAt = this.now();
       g.codeExpiresAt = g.ackedAt + PAIRING_CODE_TTL_MS;
       g.pin = target;
@@ -619,17 +656,71 @@ class Fixture {
     return { ...g.pin!, app_url: `${ORIGIN}/`, pinned_at: new Date(g.pinnedAt).toISOString(), next: "list_orders", next_args: {} };
   }
 
+  /** A Direct agent (bothProfiles): its own grant, on the same /mcp/ path as the Dock grants. */
+  addDirect(): { grantId: string; mcpUrl: string } {
+    const now = this.now();
+    const g: Grant = { id: `g_${random(8)}`, secret: random(22), agent: "", hub: "", state: "live", allowedAt: now, ackedAt: now, liveAt: now, lastWake: now, served: false, code: "", codeExpiresAt: 0, pin: null, pinnedAt: 0, pinUnread: false, revokedAt: null, pairingId: null, declared: false, direct: true };
+    this.storage.grants.push(g);
+    return { grantId: g.id, mcpUrl: this.urlOf(g) };
+  }
+
+  /** M12: a hub's introduction (an initialize with a binding key) to a grant that is not a Dock grant: 404, first. */
+  private async directMcp(request: Request, g: Grant): Promise<Response> {
+    if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+    const body = (await request.json().catch(() => null)) as unknown;
+    const messages = (Array.isArray(body) ? body : [body]) as Array<{ id?: unknown; method?: unknown; params?: { _meta?: unknown; name?: string } } | null>;
+    const keyed = (m: (typeof messages)[number]) => {
+      const meta = m?.params?._meta;
+      return m?.method === "initialize" && !!meta && typeof meta === "object" && (Object.hasOwn(meta, APC_PAIRING_ID_META) || Object.hasOwn(meta, APC_AGENT_META));
+    };
+    // (direct_first_message_only: only a single message with an id is looked at.)
+    const looked = this.has("direct_first_message_only") ? (!Array.isArray(body) && messages[0]?.id !== undefined ? messages : []) : messages;
+    if (!this.has("direct_serves_hub") && looked.some(keyed)) return json({ error: "pairing_mismatch" }, 404);
+    const rpc = messages[0];
+    if (rpc?.method === "initialize") return rpcResult(rpc.id ?? null, { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } });
+    if (rpc?.method === "tools/list") return rpcResult(rpc.id, { tools: TOOLS });
+    if (rpc?.method === "tools/call" && rpc.params?.name === "list_orders") return rpcResult(rpc.id, toolResult({ orders: [{ id: "ord_1" }, { id: "ord_2" }] }));
+    return rpcError(rpc?.id ?? null, -32601, "Method not found");
+  }
+
+  /** M11: whether one message holds the grant's binding (absent, invalid or valid keys; mismatch-only unless declared). */
+  private bindingHolds(m: unknown, g: Grant, st: DockGrantState): boolean {
+    const msg = m as { method?: unknown; params?: { _meta?: unknown } } | null;
+    if (!msg || msg.method !== "initialize") return true;
+    const meta = msg.params?._meta;
+    const has = (k: string) => !!meta && typeof meta === "object" && !Array.isArray(meta) && Object.hasOwn(meta, k);
+    const value = (k: string) => (meta as Record<string, unknown>)[k];
+    // (binding_case_insensitive, binding_prefix_compare: a careless comparison.)
+    const same = (given: string, stored: string) => (this.has("binding_case_insensitive") ? given.toLowerCase() === stored.toLowerCase() : this.has("binding_prefix_compare") ? stored.startsWith(given) : given === stored);
+    if (has(APC_PAIRING_ID_META)) {
+      const id = value(APC_PAIRING_ID_META);
+      if (typeof id !== "string" || id.length === 0) return false;
+      if (g.pairingId !== null && !same(id, g.pairingId)) return false;
+    } else if ((g.declared || this.has("binding_unbound_refused")) && (st === "handoff" || this.has("binding_absent_refused_live"))) return false;
+    if (has(APC_AGENT_META) && value(APC_AGENT_META) !== g.agent) return false;
+    return true;
+  }
+
   private async mcp(request: Request, secret: string): Promise<Response> {
     const g = this.storage.grants.find((x) => x.secret === secret);
     if (!g) return json({ error: "not_found" }, 404);
+    if (g.direct) return this.directMcp(request, g);
     let st = this.stateOf(g);
     // A request that is not a JSON-RPC POST, checked before the state: the "any request" row broken.
     if (this.has("any_request_405") && request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     if (st === "revoked" || (st === "ended" && this.has("ended_answers_revoked"))) return json(revokedAnswer("fixture.test", g.revokedAt ?? new Date(this.now()).toISOString()), this.has("revoked_answers_404") && st === "revoked" ? 404 : 403);
     if (st === "ended" || (st === "in_flight" && !this.has("in_flight_serves"))) return json({ error: "not_found" }, 404);
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-    const rpc = (await request.json().catch(() => null)) as { id?: string | number | null; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } } | null;
-    if (!rpc || typeof rpc.method !== "string") return json({ error: "invalid" }, 400);
+    const body = (await request.json().catch(() => null)) as unknown;
+    // M11: every initialize in the request holds the binding, in handoff, live or dormant (in flight is answered below).
+    if (!this.has("binding_ignored") && (st === "handoff" || st === "live" || st === "dormant") && !(this.has("binding_handoff_only") && st !== "handoff")) {
+      // (binding_first_message_only: a batch, or a message without an id, is not looked at.)
+      const single = !Array.isArray(body) && (body as { id?: unknown } | null)?.id !== undefined;
+      const messages = this.has("binding_first_message_only") ? (single ? [body] : []) : Array.isArray(body) ? body : [body];
+      if (messages.some((m) => !this.bindingHolds(m, g, st))) return json({ error: "pairing_mismatch" }, 404);
+    }
+    const rpc = body as { id?: string | number | null; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } } | null;
+    if (!rpc || Array.isArray(rpc) || typeof rpc.method !== "string") return json({ error: "invalid" }, 400);
     const tool = rpc.params?.name;
     // A notification has no id, or is any notifications/* method (broken: by the id alone).
     const call = this.has("notification_by_id_only") && rpc.id !== undefined && rpc.method.startsWith("notifications/") ? "other_method" : dockGrantCallOf({ method: rpc.method, ...(rpc.id !== undefined ? { id: rpc.id } : {}), params: rpc.params });
@@ -688,7 +779,8 @@ class Fixture {
           }
         }
       }
-      return rpcResult(rpc.id, { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } });
+      // (binding_shown: the binding put in an answer.)
+      return rpcResult(rpc.id, { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" }, ...(this.has("binding_shown") ? { _meta: { [APC_PAIRING_ID_META]: g.pairingId } } : {}) });
     }
     if (rpc.method === "ping") return rpcResult(rpc.id, {});
     if (rpc.method === "tools/list") return rpcResult(rpc.id, { tools: TOOLS });
@@ -738,6 +830,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     connectMs: options.connectMs ?? T_CONNECT_MAX_MS,
     unknownHost: options.unknownHost,
     allowNoAgent: !!(options.hubBoundToConsent && options.allowNoAgent),
+    bothProfiles: !!options.bothProfiles,
   };
   // (bound_misdeclared: the adapter says the hub is bound to the consent, and the app takes the Allow's hub unchecked.)
   const allowCarriesHub = !options.hubBoundToConsent && !brk.has("bound_misdeclared") && !brk.has("bound_misdeclared_field") && !brk.has("bound_misdeclared_global");
@@ -833,6 +926,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
       const off = new Fixture(fresh(), { ...config, pairing: false }, clock, hub);
       return (request) => off.fetch(request);
     },
+    ...(options.bothProfiles ? { directGrant: async () => current.addDirect() } : {}),
   };
   if (brk.has("no_restart")) delete (lifecycle as Partial<ApcDockLifecycleAdapter>).restart;
   if (brk.has("no_cancel_endpoint")) delete (lifecycle.owner as Partial<ApcDockLifecycleAdapter["owner"]>).cancel;

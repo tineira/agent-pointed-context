@@ -132,6 +132,11 @@ export interface StandInHub {
   releaseStalls(): void;
   /** The hub's clock, ms since the epoch: the `now` option, Date.now by default. */
   now(): number;
+  /**
+   * A `pairing_id` the hub's `/apc/confirm` answer carries, when set (null by default): a later hub answer naming
+   * another pairing, which an app must never take as the grant's binding (APC 0.12, M10).
+   */
+  confirmPairingId: string | null;
 }
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -212,7 +217,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     // A pairing the app refused to be introduced to is ended at the hub (H5): not paired.
     if (!p || p.status === "refused") return json({ ok: false, error: "not_paired" }, 400);
     tickets.delete(body.ticket as string);
-    return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null } });
+    return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null }, ...(hub.confirmPairingId ? { pairing_id: hub.confirmPairingId } : {}) });
   };
 
   /** What `path` (`/apc/pair` or `/apc/confirm`) answers in `mode`. */
@@ -417,6 +422,11 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       const served = await callApp(p.mcp_url, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", title: "Agent via dock", version: "0.12.0" }, ...meta } });
       // An introduction the app did not serve: the pairing never goes live, and the hub sends it nothing more (H1, H5).
       if (served === false) p.status = "refused";
+      else if (served === true) {
+        // Served: the hub learns the app's tools, as a real one does after its introduction.
+        p.calls.push("tools/list");
+        await callApp(p.mcp_url, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+      }
       return { ok: true };
     },
     async expire() {
@@ -442,6 +452,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       if (i >= 0) pairings.splice(i, 1);
     },
     now,
+    confirmPairingId: null,
     releaseStalls() {
       for (const c of stalls) {
         try {
