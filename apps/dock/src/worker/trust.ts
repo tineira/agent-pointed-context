@@ -110,34 +110,40 @@ export interface AppPin {
 const PIN_ID = /^[a-z0-9]{1,14}$/;
 
 /**
- * The operator's pins in `APP_ORIGINS` (TIN-910), by origin. An entry may carry them in its URL fragment, so a
- * reader that knows only the origin (`allowedOrigin`, `new URL(entry).origin`) reads the same list:
- * `https://pulse.apc.tineira.com/#id=pulse&name=Pulse`. The fragment is form-encoded (`%2C` for a comma, which
- * would split the list). A pin that is malformed (an `id` that is not `[a-z0-9]{1,14}` or is `page`, a name that
- * is empty or changes when cleaned, by `verifiedName`) is ignored, and so is a second pin of the same id: the
- * entry stays verified, unpinned. An entry with no fragment has no pin.
+ * The operator's pins in `APP_ORIGINS` (TIN-910), by origin, and the parts of pins it ignored. An entry may carry
+ * them in its URL fragment, so a reader that knows only the origin (`allowedOrigin`, `new URL(entry).origin`) reads
+ * the same list: `https://pulse.apc.tineira.com/#id=pulse&name=Pulse`. The fragment is form-encoded (`%2C` for a
+ * comma, which would split the list).
+ *
+ * **A malformed pin is dropped, never fatal** (the variable is read per request, so a throw would stop every pairing):
+ * an `id` that is not `[a-z0-9]{1,14}`, is `page`, or repeats an earlier pin's id, or a `name` that is empty, over 40
+ * code points, or changes when cleaned (`verifiedName`), is ignored and listed in `ignored`, which the hub logs; the
+ * entry stays verified, with whatever part of its pin was valid. An entry with no fragment has no pin.
  */
-export function appPins(entries: readonly string[]): Map<string, AppPin> {
+export function parseAppPins(entries: readonly string[]): { pins: Map<string, AppPin>; ignored: Array<{ origin: string; part: "id" | "name"; value: string }> } {
   const pins = new Map<string, AppPin>();
+  const ignored: Array<{ origin: string; part: "id" | "name"; value: string }> = [];
   const ids = new Set<string>();
   for (const entry of entries) {
     const origin = allowedOrigin(entry);
     const hash = entry.trim().split("#")[1];
     if (!origin || hash === undefined || pins.has(origin)) continue;
-    let params: URLSearchParams;
-    try {
-      params = new URLSearchParams(hash);
-    } catch {
-      continue;
-    }
+    const params = new URLSearchParams(hash);
     const rawId = params.get("id");
     const rawName = params.get("name");
     const id = rawId !== null && PIN_ID.test(rawId) && rawId !== "page" && !ids.has(rawId) ? rawId : null;
     const name = rawName !== null && rawName.length > 0 && verifiedName(rawName) === rawName ? rawName : null;
+    if (rawId !== null && !id) ignored.push({ origin, part: "id", value: rawId.slice(0, 64) });
+    if (rawName !== null && !name) ignored.push({ origin, part: "name", value: rawName.slice(0, 64) });
     if (id) ids.add(id);
     if (id || name) pins.set(origin, { id, name });
   }
-  return pins;
+  return { pins, ignored };
+}
+
+/** The operator's valid pins in `APP_ORIGINS`, by origin (`parseAppPins`). */
+export function appPins(entries: readonly string[]): Map<string, AppPin> {
+  return parseAppPins(entries).pins;
 }
 
 /** Whether the app's origin is on the blocklist we operate: its host, or any domain above it. */

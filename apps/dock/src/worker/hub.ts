@@ -19,7 +19,7 @@ import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
 import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, giveBackOutcome, readApcJson, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
-import { appPins, appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView, verifiedFocus, verifiedName } from "./trust.ts";
+import { appVerdict, parseAppPins, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView, verifiedFocus, verifiedName } from "./trust.ts";
 import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJoinCode, REMOVED_CLOSE } from "./devices.ts";
 import type { JoinCodes } from "./join-codes.ts";
 
@@ -1651,14 +1651,18 @@ export class Hub extends DurableObject<Env> {
    * no other app of the agent holds it now, and an unpinned origin never takes another origin's pinned id.
    */
   private verifiedApp(agentId: string, origin: string, manifest: ApcManifest, held: readonly string[]): { id: string; name: string } {
-    const pins = appPins(envList(this.env.APP_ORIGINS));
+    const { pins, ignored } = parseAppPins(envList(this.env.APP_ORIGINS));
+    // A pin the operator wrote and the hub dropped: said in the log, for the origin being paired (no request data).
+    for (const i of ignored.filter((x) => x.origin === origin)) console.warn(`APP_ORIGINS: the ${i.part} pinned for ${origin} (${JSON.stringify(i.value)}) is not valid and is ignored`);
     const pin = pins.get(origin);
     const name = pin?.name ?? (verifiedName(manifest.name) || host(origin));
     const taken = new Set([...held, PAGE_APP.id]);
+    // The pin first, whenever it is free: a prefix that drifted (pulse2, while another pairing of the origin held pulse) goes back to it.
     if (pin?.id && !taken.has(pin.id)) return { id: pin.id, name };
+    // Another origin's pinned id is never reused or made, even when that origin has no pairing in this agent now.
+    for (const [other, p] of pins) if (other !== origin && p.id) taken.add(p.id);
     const before = this.sql.exec<{ app_id: string }>("select app_id from app_ids where agent_id = ? and origin = ?", agentId, origin).toArray()[0]?.app_id;
     if (before && !taken.has(before)) return { id: before, name };
-    for (const [other, p] of pins) if (other !== origin && p.id) taken.add(p.id);
     return { id: appIdFor(pin?.id ?? name, taken), name };
   }
 
