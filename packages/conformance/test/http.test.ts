@@ -329,6 +329,24 @@ test("a newer patch of the checks' own standard passes with a note; a newer mino
   assert.equal(standardSupport("0.4.9", "0.7.1").ok, false, "apc.json exists since 0.5.0");
 });
 
+test("from 1.0 the suite passes a newer minor of its major with a note, checks pre-1.0 claims from 0.10, and fails another major (versioning and compatibility)", () => {
+  assert.deepEqual(standardSupport("1.0.0", "1.2.0"), { ok: true });
+  const minor = standardSupport("1.3.0", "1.2.0");
+  assert.equal(minor.ok, true, "a newer minor only adds what readers ignore");
+  assert.match("note" in minor ? (minor.note ?? "") : "", /newer minor .* checked by 1\.2\.0's rules/);
+  assert.match("note" in standardSupport("1.2.5", "1.2.0") ? (standardSupport("1.2.5", "1.2.0") as { note: string }).note : "", /newer patch/);
+  const pre = standardSupport("0.11.2", "1.0.0");
+  assert.equal(pre.ok, true);
+  assert.match("note" in pre ? (pre.note ?? "") : "", /pre-1\.0/);
+  assert.equal(standardSupport("0.10.0", "1.0.0").ok, true);
+  const old = standardSupport("0.9.0", "1.0.0");
+  assert.equal(old.ok, false, "below 0.10 a 1.x suite does not check");
+  const next = standardSupport("2.0.0", "1.4.0");
+  assert.equal(next.ok, false);
+  assert.match("reason" in next ? next.reason : "", /apc-conformance@2/);
+  assert.equal(standardSupport("0.13.0", "0.12.0").ok, false, "at 0.x a newer minor still fails");
+});
+
 test("mcp.endpoints (APC 0.11): the grant is checked for the profile given, as a hub checks it; the file's entries are checked as readers take them", async () => {
   const TG = `${ORIGIN}/mcp/AbCdEfGhIjKlMnOpQrStUv`;
   const TR = `${ORIGIN}/mcp/ZyXwVuTsRqPoNmLkJiHgFe`;

@@ -161,17 +161,31 @@ export function checkCoreToolList(listed: unknown, coreTools: readonly string[])
 }
 
 /**
- * Whether checks written for the standard `own` can judge an app that claims `claimed` in its apc.json:
- * any version from 0.5.0 (apc.json exists since) up to `own`, and also a newer patch of the same minor
- * (`own` 0.7.0, `claimed` 0.7.1), since a patch never changes the contract: that passes with a note. A newer
- * minor or major may change the contract, so it fails: the checks need updating.
+ * Whether checks written for the standard `own` can judge an app that claims `claimed` in its apc.json.
+ *
+ * - At 0.x (a draft, where any minor may break): any version from 0.5.0 (apc.json exists since) up to `own`, and a
+ *   newer patch of the same minor (`own` 0.7.0, `claimed` 0.7.1) with a note, since a patch never changes the
+ *   contract. A newer minor or major fails: the checks need updating.
+ * - From 1.0 (the spec's "Versioning and compatibility"): any N.x up to `own`; a newer minor of the same major
+ *   passes with a note, checked by `own`'s rules, since a minor only adds what readers ignore; another major fails
+ *   and names the suite to use; claims from 0.10 to before 1.0 are still checked, labelled pre-1.0, and older ones fail.
  */
 export function standardSupport(claimed: string, own: string): { ok: true; note?: string } | { ok: false; reason: string } {
   if (!/^\d+\.\d+\.\d+$/.test(claimed)) return { ok: false, reason: `standard is ${claimed}, not a version` };
   if (compareStandard(claimed, "0.5.0") < 0) return { ok: false, reason: `standard is ${claimed}: apc.json exists since 0.5.0` };
+  const [cMajor, cMinor] = claimed.split(".").map(Number) as [number, number];
+  const [oMajor, oMinor] = own.split(".").map(Number) as [number, number];
+  if (oMajor >= 1) {
+    if (cMajor === 0) {
+      if (compareStandard(claimed, "0.10.0") < 0) return { ok: false, reason: `standard is ${claimed}: a ${oMajor}.x suite checks claims from 0.10.0 up; use @tineira/apc-conformance@0 for an older one` };
+      return { ok: true, note: `standard ${claimed} is pre-1.0: checked by the rules of ${own}, as a ${oMajor}.x hub reads it` };
+    }
+    if (cMajor !== oMajor) return { ok: false, reason: `standard is ${claimed}, another major than the ${own} these checks know: use @tineira/apc-conformance@${cMajor}` };
+    if (compareStandard(claimed, own) <= 0) return { ok: true };
+    if (cMinor === oMinor) return { ok: true, note: `standard ${claimed} is a newer patch of the ${own} these checks know; a patch never changes the contract, so they apply (update @tineira/apc-conformance when you can)` };
+    return { ok: true, note: `standard ${claimed} is a newer minor than the ${own} these checks know: checked by ${own}'s rules, since a minor only adds what readers ignore (update @tineira/apc-conformance to check what it added)` };
+  }
   if (compareStandard(claimed, own) <= 0) return { ok: true };
-  const [cMajor, cMinor] = claimed.split(".");
-  const [oMajor, oMinor] = own.split(".");
   if (cMajor === oMajor && cMinor === oMinor) {
     return { ok: true, note: `standard ${claimed} is a newer patch of the ${own} these checks know; a patch never changes the contract, so they apply (update @tineira/apc-conformance when you can)` };
   }

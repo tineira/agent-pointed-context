@@ -1034,7 +1034,7 @@ It is **not**: presentation (the pet, the cards, badges, wording and motion, whi
 
 **Deprecation, normative from 1.0.** Marked deprecated in a minor release (in the changelog and the spec), then kept for at least one more minor **and** 3 months, whichever is longer, before a major removes it. A security fix may shorten the window; the changelog says why, and the conformance suite gets the check in the same release.
 
-**The conformance suite.** At N.y it checks a claim of any N.x up to N.y, passes a claim of a newer minor N.z with a note, checking it by N.y's rules (at 0.x a newer minor fails, since any 0.x minor may break), fails a claim of another major and names the suite to use, and keeps checking claims from 0.10 up, labelled "pre-1.0". The command line still fails a newer minor today: that changes with the 1.0 release of the suite, not here (`standardSupport` in `packages/conformance/src/shared.ts`).
+**The conformance suite.** At N.y it checks a claim of any N.x up to N.y, passes a claim of a newer minor N.z with a note, checking it by N.y's rules (at 0.x a newer minor fails, since any 0.x minor may break), fails a claim of another major and names the suite to use, and keeps checking claims from 0.10 up, labelled "pre-1.0". `standardSupport` in `packages/conformance/src/shared.ts` applies this rule once the suite's own version is 1.x; at 0.x a newer minor still fails.
 
 **Process.** After 1.0 each change to the contract is its own PR: one rule, one changelog entry, one conformance check. `main` requires a PR with `check` and `changelog` green (since 2026-11-14), so the changelog check also covers what reaches `main`.
 
