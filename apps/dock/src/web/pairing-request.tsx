@@ -29,7 +29,7 @@ export interface PairingRequestProps {
   kind: "app" | "reader";
   /** The app's name (a verified app) or its domain (an unverified one), for "Type the code shown in …". */
   app: string;
-  /** The app's host, for an unverified app's warning. */
+  /** The app's host: under a verified app's name on every request (TIN-910), and in an unverified app's warning. */
   host: string;
   agent: string;
   /** What the request says, in this surface's words. */
@@ -102,7 +102,7 @@ export function PairingRequest(props: PairingRequestProps) {
         }}
       />
       <p id={hintId} className="muted code-hint">
-        It is on {props.app.endsWith("s") ? `${props.app}'` : `${props.app}'s`} screen, where you allowed the agent. If you didn&apos;t just do that, Deny.
+        Type it only if you allowed the agent on {props.host}, in your own account. If any other site shows you a code, Deny.
       </p>
       <p id={errorId} className="code-error" aria-live="polite">
         {props.error ? codeErrorText(props.error) : ""}
@@ -122,6 +122,14 @@ export function PairingRequest(props: PairingRequestProps) {
   );
   const entry: CodeEntry | undefined = coded && props.kind === "app" ? (props.entry === "field" ? { kind: "field", field, ready: !!code } : { kind: "dock", note }) : undefined;
 
+  // A verified app's host, always under the request (TIN-910): the name is the operator's or the app's own, the host is where it runs.
+  const where =
+    props.kind === "app" && !props.unverified ? (
+      <p className="muted request-host" data-request-host="">
+        {props.host}
+      </p>
+    ) : null;
+
   // The hub is introducing itself to the app: "connecting", and Deny, which still wins.
   if (props.approving && props.kind === "app")
     return (
@@ -135,6 +143,7 @@ export function PairingRequest(props: PairingRequestProps) {
             </>
           ) : null}
         </p>
+        {where}
         <p className="muted connecting" role="status" aria-live="polite">
           {connectingText(props.app)}
         </p>
@@ -166,6 +175,7 @@ export function PairingRequest(props: PairingRequestProps) {
     return (
       <>
         <p>{props.says}</p>
+        {where}
         <div className="row">
           <button type="button" className="primary" disabled={off.approve} onClick={() => props.decide("approve")}>
             Allow
@@ -183,6 +193,7 @@ export function PairingRequest(props: PairingRequestProps) {
         {props.says}
         {entry.kind === "field" ? <> Type the code shown in {props.app}.</> : null}
       </p>
+      {where}
       {entry.kind === "field" ? entry.field : null}
       <div className="row">
         <button type="button" disabled={off.deny} onClick={() => props.decide("deny")}>

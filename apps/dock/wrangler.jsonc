@@ -21,7 +21,10 @@
   // The apps a hub may pair with (comma-separated origins); under vite dev, localhost too.
   // READER_ORIGINS: the APC browser extensions that may send page readings (TIN-421): the unpacked build (its id comes from the key
   // in apps/extension/manifest.json); add the store ids once published.
-  // APP_ORIGINS are the verified apps (TIN-580). BLOCKED_APPS: comma-separated domains we block (a domain covers its subdomains): never
+  // APP_ORIGINS are the verified apps (TIN-580). Each may pin, in its URL fragment, the tool prefix and the name the dock shows
+  // (TIN-910: "#id=pulse&name=Pulse", form-encoded: %2C for a comma); a reader that wants only the origin ignores the fragment.
+  // id is [a-z0-9]{1,14}, never "page", one origin each; name is 1 to 40 code points with no control or separator character.
+  // Anything else is dropped (never fatal): the entry stays verified, and the hub logs what it ignored. BLOCKED_APPS: comma-separated domains we block (a domain covers its subdomains): never
   // paired or called, and a pairing with one shows as blocked.
   // UNVERIFIED_PAIRING (TIN-581): "open" lets any other APC app pair, as unverified, once the person approves the warning in the dock.
   // The kill switch, for emergencies: set it to "closed" and deploy. No new unverified app pairs, and every unverified pairing is held
@@ -29,7 +32,7 @@
   // PAIRING_CODE (APC 0.9, TIN-859): "required" (TIN-885) refuses a pairing without a pairing code (an app from before 0.9), at
   // /apc/pair and at approval; every verified app sends one. Unset or any other value means required too. "when_sent" would let
   // those through as before, counted in MCP_SESSIONS as "pair_codeless"; a pairing that carries a code needs it in either mode.
-  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com,https://signals.apc.tineira.com,https://pfa.tineira.com", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj", "BLOCKED_APPS": "", "UNVERIFIED_PAIRING": "open", "PAIRING_CODE": "required" },
+  "vars": { "APP_ORIGINS": "https://pulse.apc.tineira.com/#id=pulse&name=Pulse,https://signals.apc.tineira.com/#id=signals&name=Signals,https://pfa.tineira.com/#id=surplus&name=Surplus", "READER_ORIGINS": "chrome-extension://lhmcidpijocjiifjmoldencfocchonoj", "BLOCKED_APPS": "", "UNVERIFIED_PAIRING": "open", "PAIRING_CODE": "required" },
   // Agent sessions, in Pulse v1's dataset and shape, marked "dock" (TIN-416). Written only with the ANALYTICS_SALT secret set; read by scripts/mcp-sessions.mjs.
   "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
   "routes": [{ "pattern": "apc.tineira.com", "custom_domain": true }],

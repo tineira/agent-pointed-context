@@ -153,7 +153,7 @@ test("rendered: a request with a code on the dock's page asks for it in one labe
   assert.match(html, /aria-describedby="[^"]+-hint [^"]+-error"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /Type the code shown in Orders\./);
-  assert.match(html, /It is on Orders&#x27; screen, where you allowed the agent\. If you didn&#x27;t just do that, Deny\./);
+  assert.match(html, /Type it only if you allowed the agent on orders\.example, in your own account\. If any other site shows you a code, Deny\./);
   assert.doesNotMatch(html, /<form/);
   assert.doesNotMatch(html, /class="primary"/, "no default answer on a card with a code");
   assert.ok(html.indexOf(">Deny<") < html.indexOf(">Allow<"), "Deny first");
@@ -210,4 +210,14 @@ test("rendered: an unverified app's warning keeps Deny first, then the field; on
   assert.ok(dock.includes(CODE_IN_DOCK));
   // Approved before in this dock: the short card, with the field.
   assert.deepEqual(buttons(renderRequest({ code: true, unverified: { declared: null, warning: false }, host: "evil.example", app: "evil.example" })), { Deny: false, Allow: true });
+});
+
+test("rendered (TIN-910): a verified app's request always shows its host under the name, on every surface; an unverified one keeps its warning", () => {
+  for (const props of [{}, { code: true }, { entry: "dock", code: true }, { approving: true }, { code: true, approving: true }]) {
+    const html = renderRequest(props);
+    assert.match(html, /<p class="muted request-host" data-request-host="">orders\.example<\/p>/, JSON.stringify(props));
+  }
+  const unverified = renderRequest({ code: true, unverified: { declared: "Orders", warning: true }, host: "evil.example", app: "evil.example" });
+  assert.doesNotMatch(unverified, /data-request-host/, "an unverified app is named by its host already, in its warning");
+  assert.doesNotMatch(renderRequest({ kind: "reader", app: "Chrome on Windows" }), /data-request-host/, "a reader has no host line");
 });

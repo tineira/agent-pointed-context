@@ -33,6 +33,7 @@ import {
   CONSENT_REQUIRED,
   DockConsent,
   confirmWithHub,
+  directGrantGate,
   dockGrantGate,
   handleDockGiveBack,
   pairWithHub,
@@ -113,6 +114,13 @@ export interface Grant {
   lastWake: number;
   /** Dock: the pairing code the person types in their dock, while the grant is in handoff. Shown only on the person's page. */
   pairing: { code: string; expires_at: string } | null;
+  /**
+   * Dock (APC 0.12): the binding, written with the move to handoff and never changed: the hub's `pairing_id` from its
+   * acknowledgement, and whether that acknowledgement declared `binding: "pairing_id"`. The hub's `initialize` must
+   * name this pairing and this agent, or it gets 404.
+   */
+  pairingId: string | null;
+  declared: boolean;
 }
 
 /** What Orders keeps: in a real app, tables in its database. It outlives the process (`OrdersAppOptions.store`). */
@@ -121,13 +129,15 @@ export interface OrdersStore {
   grants: Map<string, Grant>;
   /** Revoked grants: the SHA-256 of the secret (never the secret) and when. */
   revoked: Map<string, string>;
+  /** The hashes of revoked Direct grants: a hub's introduction to one gets 404, never the revoked answer (APC 0.12, M12). */
+  revokedDirect: Set<string>;
   /** One pin per grant, by grant id. */
   pins: Map<string, FocusRow>;
   /** Consent nonces and `apc_link` codes (`DockConsent`, `ApcLinks`). */
   kv: ApcKv;
 }
 
-export const newOrdersStore = (): OrdersStore => ({ grants: new Map(), revoked: new Map(), pins: new Map(), kv: memoryKv() });
+export const newOrdersStore = (): OrdersStore => ({ grants: new Map(), revoked: new Map(), revokedDirect: new Set(), pins: new Map(), kv: memoryKv() });
 // #endregion
 
 // #region app
@@ -340,7 +350,7 @@ export class OrdersApp {
   async addAgent(): Promise<{ ok: boolean; id?: string; url?: string; error?: string }> {
     if (!this.profiles.includes("direct")) return { ok: false, error: "direct_not_offered" };
     const { id, secret } = newDirectGrant();
-    this.store.grants.set(secret, { id, secret, hash: await secretHash(secret), path: "direct", name: "New agent", client: null, hub: null, agent: null, state: "live", allowedAt: 0, ackedAt: 0, lastWake: 0, pairing: null });
+    this.store.grants.set(secret, { id, secret, hash: await secretHash(secret), path: "direct", name: "New agent", client: null, hub: null, agent: null, state: "live", allowedAt: 0, ackedAt: 0, lastWake: 0, pairing: null, pairingId: null, declared: false });
     this.publish({ type: "agents" });
     return { ok: true, id, url: this.mcpUrl(secret) };
   }
@@ -407,6 +417,13 @@ export class OrdersApp {
     // Nothing is awaited from here to the gate and the commit below: the grant's state cannot change in between.
     this.sweep();
     const grant = this.store.grants.get(secret);
+    // A hub introducing itself to a grant that is not a Dock grant (APC 0.12, M12): 404 before anything else, a revoked
+    // Direct grant included, and nothing changes. Whether it is a Dock grant is Orders' own record, never the URL:
+    // here both profiles share /mcp/{secret}.
+    if (grant ? grant.path === "direct" : this.store.revokedDirect.has(hash)) {
+      const refused = directGrantGate(body);
+      if (refused) return refused;
+    }
     if (!grant) {
       const revokedAt = this.store.revoked.get(hash);
       // Revoked in the app: 403 with who and when, whatever the method. Unknown, ended or given back: 404.
@@ -416,7 +433,8 @@ export class OrdersApp {
     // notes the client, publishes presence or attaches attention, then or apc_link. In flight: 404. Handoff:
     // only initialize, ping and tools/list are served, a tool call gets the `pairing` error. Dormant: the idle shapes.
     if (grant.path === "dock") {
-      const gate = dockGrantGate(this.stateOf(grant), body, { host: this.host });
+      // The binding (APC 0.12, M11): the hub's initialize must name this grant's own pairing and agent.
+      const gate = dockGrantGate(this.stateOf(grant), body, { host: this.host, binding: { pairing_id: grant.pairingId, agent: grant.agent ?? "", declared: grant.declared } });
       if (!gate.serve) return gate.response;
       // The hub's first initialize is the dock owner's yes: it makes the grant live, or it gets no result (it fails closed).
       if (gate.commits) {
@@ -551,6 +569,7 @@ export class OrdersApp {
   /** The grant's URL answers `revoked` from now on: its hash is kept, never its secret. Nothing is awaited (the hash is on the grant). */
   private revokeNow(g: Grant): void {
     this.store.revoked.set(g.hash, new Date().toISOString());
+    if (g.path === "direct") this.store.revokedDirect.add(g.hash);
     this.forget(g);
   }
 
@@ -644,7 +663,7 @@ export class OrdersApp {
     this.store.kv.delete(newest);
     const now = this.now();
     // In flight: stored before the hub is called, so its URL answers 404 until the hub acknowledges it.
-    const grant: Grant = { id, secret, hash, path: "dock", name: "Agent via dock", client: null, hub, agent, state: "in_flight", allowedAt: now, ackedAt: 0, lastWake: now, pairing: null };
+    const grant: Grant = { id, secret, hash, path: "dock", name: "Agent via dock", client: null, hub, agent, state: "in_flight", allowedAt: now, ackedAt: 0, lastWake: now, pairing: null, pairingId: null, declared: false };
     this.store.grants.set(secret, grant);
     // pairWithHub refuses redirects, has one 10 s deadline and reads 8 KiB at most (M2 to M4). The hub must say
     // it keeps the code: on any other answer the grant ends, before the page hears back.
@@ -659,6 +678,9 @@ export class OrdersApp {
     // T_ack that came first wins. In a database: UPDATE ... SET state = 'handoff' WHERE state = 'in_flight'.
     if (!still) return { ok: false, error: "pairing_ended" };
     grant.state = "handoff";
+    // The binding, in the same step (APC 0.12, M10): in a database, the same UPDATE.
+    grant.pairingId = answer.pairing_id;
+    grant.declared = answer.binding !== null;
     grant.ackedAt = this.now();
     grant.pairing = { code: taken.pairing_code, expires_at: new Date(grant.ackedAt + PAIRING_CODE_TTL_MS).toISOString() };
     if (answer.agent.name) grant.name = answer.agent.name.replace(/[\p{C}]/gu, "").slice(0, 60);

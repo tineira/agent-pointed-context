@@ -10,7 +10,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { APC_LINK_KEY, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
+import { APC_LINK_KEY, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_BINDING, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_MISMATCH_ERROR, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
 import { announceWaits, attachAttention, attachThen, InflightCalls, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
@@ -19,7 +19,7 @@ import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
 import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, giveBackOutcome, readApcJson, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
-import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView, verifiedFocus } from "./trust.ts";
+import { appVerdict, parseAppPins, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView, verifiedFocus, verifiedName } from "./trust.ts";
 import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJoinCode, REMOVED_CLOSE } from "./devices.ts";
 import type { JoinCodes } from "./join-codes.ts";
 
@@ -140,6 +140,11 @@ interface Pairing {
   revoked_at: string | null;
   /** When the app's 404 ended the pairing (H5). */
   ended_at: string | null;
+  /**
+   * Why, when a verified app said exactly `pairing_mismatch` (M11, M12, APC 0.12): the grant the hub introduced
+   * itself to was not handed to this pairing. Null otherwise; an unverified app's words are never kept.
+   */
+  ended_reason: typeof PAIRING_MISMATCH_ERROR | null;
   /**
    * When the app answered the hub's `initialize` (H1, APC 0.10): the app's grant is live from then. Until then the
    * hub sends this pairing nothing but `initialize`: an app in handoff would answer the `pairing` error anyway.
@@ -313,6 +318,7 @@ export class Hub extends DurableObject<Env> {
         origin text not null, at text not null, site text not null, bytes integer not null);
       create table if not exists apc_json (origin text primary key, body text not null, read_at integer not null);
       create table if not exists unverified_ok (origin text primary key, approved_at text not null);
+      create table if not exists app_ids (agent_id text not null, origin text not null, app_id text not null, primary key (agent_id, origin));
       create table if not exists devices (id text primary key, secret text not null unique, label text, created_at text not null, last_used_at text);
       create table if not exists joins (
         id text primary key, code text not null unique, status text not null, expires_at integer not null,
@@ -326,7 +332,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"], ["pairings", "ended_reason text"], ["pairings", "app_standard text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -391,6 +397,7 @@ export class Hub extends DurableObject<Env> {
         approved_at: (r.approved_at as string | null) ?? null,
         revoked_at: (r.revoked_at as string | null) ?? null,
         ended_at: (r.ended_at as string | null) ?? null,
+        ended_reason: r.ended_reason === PAIRING_MISMATCH_ERROR ? (PAIRING_MISMATCH_ERROR as typeof PAIRING_MISMATCH_ERROR) : null,
         introduced_at: (r.introduced_at as string | null) ?? null,
         intro_attempts: Number(r.intro_attempts ?? 0),
         idle: r.idle === 1,
@@ -1012,6 +1019,7 @@ export class Hub extends DurableObject<Env> {
     for (const p of lines.filter((x) => !x.verified)) this.sql.exec("delete from unverified_ok where origin = ?", p.app_origin);
     this.sql.exec("delete from pointer where agent_id = ?", agentId);
     this.sql.exec("delete from pairings where agent_id = ?", agentId);
+    this.sql.exec("delete from app_ids where agent_id = ?", agentId);
     this.sql.exec("delete from readers where agent_id = ?", agentId);
     this.sql.exec("delete from reading_log where agent_id = ?", agentId);
     this.sql.exec("delete from tickets where agent_id = ?", agentId);
@@ -1104,6 +1112,8 @@ export class Hub extends DurableObject<Env> {
               ...(p.status === "revoked" ? { revoked_by: host(p.app_origin), revoked_at: p.revoked_at } : {}),
               // The app ended the grant (H5): the line says so until the agent is dropped there again, or it is removed.
               ...(p.status === "ended" ? { ended_by: host(p.app_origin), ended_at: p.ended_at } : {}),
+              // A verified app refused the hub's introduction as not its own pairing (APC 0.12): the dock says so, in its own words.
+              ...(p.status === "ended" && p.verified && p.ended_reason ? { ended_reason: p.ended_reason } : {}),
               // The app said it is asleep (H4): the person is away from it.
               ...(p.status === "paired" && p.idle && !this.connecting(p) ? { idle: true } : {}),
             })),
@@ -1390,7 +1400,8 @@ export class Hub extends DurableObject<Env> {
     if (!this.callable(p)) throw new NotCallable();
     const agent = this.agent(p.agent_id);
     // The agent's own MCP client goes to a verified app only (apc_link, APC 0.4): an unverified one learns nothing of it.
-    await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null, transport(p), p.verified ? (agent?.client_name ?? null) : null);
+    // The binding (H8, APC 0.12): every initialize names this pairing and its agent, to every app.
+    await initializeApp(p.mcp_url, `${agent ? this.nameOf(agent) : "Agent"} via dock`, agent?.badge ?? null, transport(p), p.verified ? (agent?.client_name ?? null) : null, { pairingId: p.id, agent: p.agent_id });
     this.sql.exec("update pairings set introduced_at = coalesce(introduced_at, ?) where id = ? and mcp_url = ? and status in ('approving', 'paired')", new Date().toISOString(), p.id, p.mcp_url);
   }
 
@@ -1531,7 +1542,7 @@ export class Hub extends DurableObject<Env> {
    * the dock then needs it (decide). The body is checked whole before the ticket is read or spent (I6): a
    * malformed request leaves the ticket good for a correct one.
    */
-  async pair(body: unknown): Promise<{ ok: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name: string; icon: string | null }; pairing_code?: typeof PAIRING_CODE_ACK }> {
+  async pair(body: unknown): Promise<{ ok: boolean; error?: string; pairing_id?: string; status?: string; agent?: { name: string; icon: string | null }; pairing_code?: typeof PAIRING_CODE_ACK; binding?: typeof PAIRING_BINDING }> {
     if (!(await this.alive())) return { ok: false, error: "dock_expired" };
     const b = body as { ticket?: unknown; agent?: unknown; app?: { name?: unknown; origin?: unknown }; mcp_url?: unknown; pairing_code?: unknown } | null;
     if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
@@ -1599,16 +1610,26 @@ export class Hub extends DurableObject<Env> {
     // always has a "_", so the two never meet.
     const domainId = verdict.verified ? null : domainAppId(origin, others);
     if (domainId && "error" in domainId) return { ok: false, error: domainId.error };
-    const appId = verdict.verified ? appIdFor(name, new Set([...others.map((p) => p.app_id), PAGE_APP.id])) : domainId!.id;
+    // A verified app's name and tool prefix (F10, TIN-910): the operator's pin, else the name in its own apc.json, never
+    // the request's; its prefix stays the one it had in this agent, so a rename never changes an agent's tool names.
+    const verified = verdict.verified ? this.verifiedApp(t.agent_id, origin, manifest, others.map((p) => p.app_id)) : null;
+    const appId = verified ? verified.id : domainId!.id;
     const declared = verdict.verified ? null : declaredName(name) || null;
-    const id = `pr_${randomHex(6)}`;
+    // 128 random bits, unique across the hub: the pairing's id is its binding at the app (H8, APC 0.12).
+    const id = `pr_${randomHex(16)}`;
     // A grant this request carries again is no longer one to give back (TIN-911).
     this.sql.exec("delete from givebacks where mcp_url = ?", b.mcp_url);
     this.sql.exec(
-      "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at, verified, declared_name, pairing_code, code_attempts, code_expires_at) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
-      id, t.agent_id, appId, verdict.verified ? name : host(origin), origin, b.mcp_url, new Date().toISOString(), verdict.verified ? 1 : 0, declared,
-      code, code ? new Date(Date.now() + LIMITS.pairingCodeMs).toISOString() : null,
+      "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at, verified, declared_name, pairing_code, code_attempts, code_expires_at, app_standard) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?, ?)",
+      id, t.agent_id, appId, verified ? verified.name : host(origin), origin, b.mcp_url, new Date().toISOString(), verdict.verified ? 1 : 0, declared,
+      code, code ? new Date(Date.now() + LIMITS.pairingCodeMs).toISOString() : null, manifest.standard.slice(0, 32),
     );
+    if (verified) {
+      // One id per origin in this agent: a later pairing of the same origin takes it again, and no other origin keeps it.
+      this.sql.exec("delete from app_ids where agent_id = ? and app_id = ? and origin <> ?", t.agent_id, appId, origin);
+      this.sql.exec("insert into app_ids (agent_id, origin, app_id) values (?, ?, ?) on conflict(agent_id, origin) do update set app_id = excluded.app_id", t.agent_id, origin, appId);
+    }
+    this.countStandard(origin, manifest.standard, verdict.verified);
     this.broadcast();
     // An app that sent no code, counted for the operator's switch to "required" (TIN-859): no ticket, no URL.
     if (!code) this.countCodeless(origin, verdict.verified ? "verified" : "unverified", "pair_codeless");
@@ -1620,7 +1641,40 @@ export class Hub extends DurableObject<Env> {
     if (giveBack.length) this.later(this.giveBack(giveBack));
     // The alarm ends the request on time if nobody decides it (TIN-581).
     await this.arm();
-    return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}) };
+    return { ok: true, pairing_id: id, status: "pending", agent: { name: `${this.nameOf(agent)} via dock`, icon: agent.badge }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}), binding: PAIRING_BINDING };
+  }
+
+  /**
+   * A verified app's name and `app_id` in this agent (F10, TIN-910). The name: the operator's pin in APP_ORIGINS, else
+   * the app's own apc.json name, cleaned (`verifiedName`), else its host; never the name in the request. The id: the
+   * pin, else the one this origin had in this agent (app_ids), else one made from the name (`appIdFor`); each only if
+   * no other app of the agent holds it now, and an unpinned origin never takes another origin's pinned id.
+   */
+  private verifiedApp(agentId: string, origin: string, manifest: ApcManifest, held: readonly string[]): { id: string; name: string } {
+    const { pins, ignored } = parseAppPins(envList(this.env.APP_ORIGINS));
+    // A pin the operator wrote and the hub dropped: said in the log, for the origin being paired (no request data).
+    for (const i of ignored.filter((x) => x.origin === origin)) console.warn(`APP_ORIGINS: the ${i.part} pinned for ${origin} (${JSON.stringify(i.value)}) is not valid and is ignored`);
+    const pin = pins.get(origin);
+    const name = pin?.name ?? (verifiedName(manifest.name) || host(origin));
+    const taken = new Set([...held, PAGE_APP.id]);
+    // The pin first, whenever it is free: a prefix that drifted (pulse2, while another pairing of the origin held pulse) goes back to it.
+    if (pin?.id && !taken.has(pin.id)) return { id: pin.id, name };
+    // Another origin's pinned id is never reused or made, even when that origin has no pairing in this agent now.
+    for (const [other, p] of pins) if (other !== origin && p.id) taken.add(p.id);
+    const before = this.sql.exec<{ app_id: string }>("select app_id from app_ids where agent_id = ? and origin = ?", agentId, origin).toArray()[0]?.app_id;
+    if (before && !taken.has(before)) return { id: before, name };
+    return { id: appIdFor(pin?.id ?? name, taken), name };
+  }
+
+  /** One Analytics Engine point per pairing, with the standard the app's apc.json claims (APC 0.12): bookkeeping for the 0.10 and 0.11 window, never a check. */
+  private countStandard(origin: string, standard: string, verified: boolean): void {
+    const { MCP_SESSIONS, ANALYTICS_SALT } = this.env;
+    if (!MCP_SESSIONS || !ANALYTICS_SALT) return;
+    try {
+      MCP_SESSIONS.writeDataPoint({ indexes: ["pair_standard"], blobs: ["pair_standard", host(origin).slice(0, 200), verified ? "verified" : "unverified", "dock", standard.slice(0, 32)], doubles: [1] });
+    } catch {
+      // analytics only
+    }
   }
 
   /**
@@ -1847,10 +1901,12 @@ export class Hub extends DurableObject<Env> {
   }
 
   /** The app ended this grant (H5): a tombstone, like revoked. Only a pairing the hub was calling (approving or paired) and that still holds this grant. */
-  private markEnded(p: Pairing): void {
+  private markEnded(p: Pairing, code?: string): void {
+    // Only the exact token, and only from a verified app, is kept as the reason (APC 0.12): never an app's own words.
+    const reason = p.verified && code === PAIRING_MISMATCH_ERROR ? PAIRING_MISMATCH_ERROR : null;
     this.sql.exec(
-      "update pairings set status = 'ended', ended_at = coalesce(ended_at, ?), view = null, tools = null, page_open = null, error = null, idle = null, pairing_code = null where id = ? and mcp_url = ? and status in ('approving', 'paired')",
-      new Date().toISOString(), p.id, p.mcp_url,
+      "update pairings set status = 'ended', ended_at = coalesce(ended_at, ?), ended_reason = ?, view = null, tools = null, page_open = null, error = null, idle = null, pairing_code = null where id = ? and mcp_url = ? and status in ('approving', 'paired')",
+      new Date().toISOString(), reason, p.id, p.mcp_url,
     );
     if (this.stored(p.id) === "ended") this.sql.exec("delete from pointer where pairing_id = ?", p.id);
     this.broadcast();
@@ -1869,7 +1925,8 @@ export class Hub extends DurableObject<Env> {
     // a pairing it is introducing itself to or has paired, so the 404 is one of those. The pairing stays as an
     // `ended` tombstone, to say "drop the agent on the app again" instead of "unknown app": nothing of the app's is
     // kept, it is never called or given back, holds no place under the cap, and a new drop there replaces it.
-    if (error instanceof AppCallError && error.status === 404) return this.markEnded(p);
+    // A 404 with `pairing_mismatch` (M11, M12, APC 0.12) is ended the same way; a verified app's says why.
+    if (error instanceof AppCallError && error.status === 404) return this.markEnded(p, error.code);
     // What the dock shows; for an unverified app, never the app's own words (TIN-580).
     this.sql.exec("update pairings set error = ? where id = ?", (p.verified ? String(error) : failureReason(error)).slice(0, 200), p.id);
   }

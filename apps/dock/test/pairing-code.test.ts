@@ -156,7 +156,8 @@ test("a malformed pairing_code is refused before the ticket is spent, and the ti
 
 test("a pairing without a code: when_sent pairs it the old way and counts it; required refuses it with the ticket unspent", async (t) => {
   const points: Json[] = [];
-  const analytics = { MCP_SESSIONS: { writeDataPoint: (p: Json) => points.push(p) }, ANALYTICS_SALT: "salt" };
+  // The codeless points only: every pairing also counts its claimed standard (pair_standard, APC 0.12).
+  const analytics = { MCP_SESSIONS: { writeDataPoint: (p: Json) => (p as { indexes: string[] }).indexes[0] === "pair_standard" || points.push(p) }, ANALYTICS_SALT: "salt" };
   {
     const w = await shopWorld(t, { ...analytics, PAIRING_CODE: "when_sent" });
     const { answer } = await w.ask({ pairing_code: undefined });

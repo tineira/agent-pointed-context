@@ -52,6 +52,8 @@ export interface DockAppUnderTest {
   pinned(state: Json, grantId: string): string | null;
   /** Every grant id the page's state lists. */
   grantIds(state: Json): string[];
+  /** A new Direct agent, made the app's way: its id and secret (APC 0.12, M12). */
+  direct(object: DockObject, room: DurableObjectRoom): Promise<{ id: string; secret: string }>;
 }
 
 const ACK = { ok: true, pairing_id: "pr_test", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" };
@@ -745,6 +747,115 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
       const i = await start({ ...app.env, ...over });
       assert.deepEqual((await i.object.state()).profiles, ["direct"], what);
       assert.deepEqual(await i.object.pairHub(SID, app.origin, { hub: HUB, agent: "ag_m8", ticket: ticket(), target: app.targets[0] }), { ok: false, error: "not_available" }, what);
+    }
+  });
+
+  // ---- the binding (APC 0.12, TIN-910) ----
+
+  const BOUND_ID = "pr_0123456789abcdef0123456789abcdef";
+  const OTHER_ID = "pr_fedcba9876543210fedcba9876543210";
+  const introduce = (i: Instance, mcpUrl: string, meta?: Json, id: number | undefined = 1) =>
+    i.rpc(mcpUrl, { jsonrpc: "2.0", ...(id === undefined ? {} : { id }), method: "initialize", params: { ...INITIALIZE, ...(meta ? { _meta: meta } : {}) } });
+  const mismatch = (r: { status: number; body: Json | null }, what: string) => {
+    assert.equal(r.status, 404, `${what}: HTTP ${r.status}`);
+    assert.deepEqual(r.body, { error: "pairing_mismatch" }, what);
+  };
+
+  test(name("M10, M11: a hub that declares the binding: the grant in handoff commits only on its own pairing_id and agent, and a live one refuses another pairing"), async (t) => {
+    const hub = fakeHub(t);
+    hub.pair = async () => Response.json({ ...ACK, pairing_id: BOUND_ID, binding: "pairing_id" });
+    const i = await start();
+    const g = await allow(i, hub, "ag_bound");
+    assert.equal(g.answer.ok, true, g.answer.error);
+    const own = { "apc.tineira.com/pairing_id": BOUND_ID, "apc.tineira.com/agent": "ag_bound" };
+    for (const [what, meta] of [
+      ["no value", undefined],
+      ["another pairing", { ...own, "apc.tineira.com/pairing_id": OTHER_ID }],
+      ["its id changed by one character", { ...own, "apc.tineira.com/pairing_id": `${BOUND_ID.slice(0, -1)}0` }],
+      ["its id as a prefix", { ...own, "apc.tineira.com/pairing_id": BOUND_ID.slice(0, -1) }],
+      ["its id with a suffix", { ...own, "apc.tineira.com/pairing_id": `${BOUND_ID}0` }],
+      ["its id in another case", { ...own, "apc.tineira.com/pairing_id": BOUND_ID.toUpperCase() }],
+      ["a number", { ...own, "apc.tineira.com/pairing_id": 7 }],
+      ["an empty string", { ...own, "apc.tineira.com/pairing_id": "" }],
+      ["another agent", { ...own, "apc.tineira.com/agent": "ag_other" }],
+      ["no id, its agent", { "apc.tineira.com/agent": "ag_bound" }],
+    ] as const) {
+      mismatch(await introduce(i, g.mcpUrl, meta as Json | undefined), what);
+      assert.equal((await i.link(g.grantId))?.state, "handoff", `${what}: still in handoff`);
+    }
+    mismatch(await introduce(i, g.mcpUrl, { ...own, "apc.tineira.com/pairing_id": OTHER_ID }, undefined), "without an id");
+    const batch = await i.rpc(g.mcpUrl, [{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INITIALIZE, _meta: { ...own, "apc.tineira.com/pairing_id": OTHER_ID } } }]);
+    mismatch(batch, "in a batch");
+    // A body with the key twice: the parsed body the gate reads is the one that counts (the last value).
+    const twice = await i.object.fetch(new Request(g.mcpUrl, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"apc-hub","version":"0"},"_meta":{"apc.tineira.com/pairing_id":"${BOUND_ID}","apc.tineira.com/agent":"ag_bound","apc.tineira.com/pairing_id":"${OTHER_ID}"}}}` }));
+    assert.equal(twice.status, 404, "a duplicate key whose last value is another pairing");
+    assert.equal((await i.link(g.grantId))?.state, "handoff");
+    const ok = await introduce(i, g.mcpUrl, own);
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal((await i.link(g.grantId))?.state, "live", "its own pairing commits");
+    mismatch(await introduce(i, g.mcpUrl, { ...own, "apc.tineira.com/pairing_id": OTHER_ID }), "live, another pairing");
+    assert.equal((await introduce(i, g.mcpUrl)).status, 200, "live, no value: a hub rolled back to 0.11");
+    assert.equal((await i.call(g.mcpUrl, app.probe.tool, app.probe.args)).status, 200, "still live");
+  });
+
+  test(name("M11: a hub before 0.12 (no binding declared): its plain initialize commits; one naming another pairing or agent is refused"), async (t) => {
+    const hub = fakeHub(t);
+    const i = await start();
+    const g = await allow(i, hub, "ag_legacy");
+    assert.equal(g.answer.ok, true, g.answer.error);
+    mismatch(await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_legacy" }), "another pairing than the one acknowledged");
+    mismatch(await introduce(i, g.mcpUrl, { "apc.tineira.com/agent": "ag_other" }), "another agent");
+    assert.equal((await i.link(g.grantId))?.state, "handoff");
+    assert.equal((await introduce(i, g.mcpUrl)).status, 200);
+    assert.equal((await i.link(g.grantId))?.state, "live");
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": ACK.pairing_id, "apc.tineira.com/agent": "ag_legacy" })).status, 200, "a 0.12 hub's re-introduction of it");
+  });
+
+  test(name("M11: a link migrated from before 0.12 (no declared flag) keeps working: its stored id, or without one its agent, is checked mismatch-only"), async (t) => {
+    const hub = fakeHub(t);
+    hub.pair = async () => Response.json({ ...ACK, pairing_id: BOUND_ID, binding: "pairing_id" });
+    const i = await start();
+    const g = await allow(i, hub, "ag_migrated");
+    assert.equal(g.answer.ok, true, g.answer.error);
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": BOUND_ID, "apc.tineira.com/agent": "ag_migrated" })).status, 200);
+    // The row as an app before 0.12 left it: no declared flag (the column added by the migration, null).
+    i.room.db.prepare(`update ${app.row.table} set declared = null where ${app.row.id} = ?`).run(g.grantId);
+    i.room.db.prepare(`update ${app.row.table} set state = 'handoff' where ${app.row.id} = ?`).run(g.grantId);
+    assert.equal((await introduce(i, g.mcpUrl)).status, 200, "a hub before 0.12 still introduces itself: no value is served");
+    assert.equal((await i.link(g.grantId))?.state, "live");
+    mismatch(await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_migrated" }), "another pairing than the stored one");
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": BOUND_ID, "apc.tineira.com/agent": "ag_migrated" })).status, 200, "the 0.12 hub's re-introduction of it");
+    // A row with no stored id at all (Signals before 0.12): checked on its agent alone.
+    i.room.db.prepare(`update ${app.row.table} set pairing_id = null where ${app.row.id} = ?`).run(g.grantId);
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_migrated" })).status, 200, "its own agent, any pairing: served");
+    mismatch(await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_other" }), "another agent");
+    assert.equal((await i.call(g.mcpUrl, app.probe.tool, app.probe.args)).status, 200, "still live");
+  });
+
+  test(name("M12: a Direct grant answers 404 to an initialize carrying either key, revoked or not; its agent's own initialize is served"), async (t) => {
+    fakeHub(t);
+    const i = await start();
+    const direct = await app.direct(i.object, i.room);
+    const url = `${app.origin}/mcp/${SID}/${direct.secret}`;
+    for (const meta of [{ "apc.tineira.com/pairing_id": BOUND_ID }, { "apc.tineira.com/agent": "ag_x" }, { "apc.tineira.com/pairing_id": null }]) mismatch(await introduce(i, url, meta), JSON.stringify(meta));
+    mismatch(await introduce(i, url, { "apc.tineira.com/pairing_id": BOUND_ID }, undefined), "without an id");
+    assert.equal((await introduce(i, url)).status, 200, "the agent's own initialize");
+    assert.equal((await i.object.revokeGrant(direct.id)).ok, true);
+    mismatch(await introduce(i, url, { "apc.tineira.com/pairing_id": BOUND_ID }), "revoked: still never the revoked answer for a hub");
+    revokedAnswer(await introduce(i, url), "revoked, to its own agent");
+  });
+
+  test(name("M10: an acknowledgement with an unknown binding, or a declared id under 128 bits, is a refusal: the grant ends before the page hears back"), async (t) => {
+    const hub = fakeHub(t);
+    const i = await start();
+    for (const [agent, body] of [
+      ["ag_unknown", { ...ACK, pairing_id: BOUND_ID, binding: "hmac-v9" }],
+      ["ag_short", { ...ACK, binding: "pairing_id" }],
+    ] as const) {
+      hub.pair = async () => Response.json(body);
+      const g = await allow(i, hub, agent);
+      assert.deepEqual(g.answer, { ok: false, error: "hub_refused" }, agent);
+      assert.equal((await i.initialize(g.mcpUrl)).status, 404, `${agent}: no grant`);
     }
   });
 }

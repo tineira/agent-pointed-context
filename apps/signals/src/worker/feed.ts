@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -93,6 +93,12 @@ interface Grant {
   /** When the person allowed it, and when the hub acknowledged it: ms since the epoch. */
   allowed_at: number | null;
   acked_at: number | null;
+  /**
+   * The binding (M10, APC 0.12, TIN-910): the hub's `pairing_id` from its acknowledgement, and whether it declared
+   * `binding: "pairing_id"` (1). Null on a dock grant from before 0.12: it is then checked on its agent alone.
+   */
+  pairing_id: string | null;
+  declared: number | null;
   /** The code the dock owner types, while the grant waits in handoff (APC 0.9), and until when the page shows it. */
   pairing_code: string | null;
   pairing_expires_at: string | null;
@@ -159,7 +165,7 @@ export class Feed extends DurableObject<Env> {
     `);
     // client_icon since TIN-388, the names since TIN-578; a dock grant's lifecycle, its secret's hash and the code it
     // waits on since APC 0.10 (TIN-892). The two times are ms since the epoch.
-    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text"]) {
+    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text", "pairing_id text", "declared integer"]) {
       try {
         this.sql.exec(`alter table grants add column ${column}`);
       } catch {
@@ -468,8 +474,9 @@ export class Feed extends DurableObject<Env> {
     const name = answer.agent.name ? answer.agent.name.replace(/[\p{C}]/gu, "").trim().slice(0, 60) || null : null;
     const moved = this.sql
       .exec(
-        "update grants set state = 'handoff', acked_at = ?, pairing_expires_at = ?, client_title = ?, client_icon = ? where secret = ? and state = 'in_flight' and allowed_at > ? returning id",
-        at, pairing.expires_at, name, pickClientIcon([{ src: answer.agent.icon }]), secret, at - DOCK_TIMES.ackMs,
+        // The binding is written in the same statement (M10, APC 0.12): only this move writes it, so it never changes.
+        "update grants set state = 'handoff', acked_at = ?, pairing_expires_at = ?, client_title = ?, client_icon = ?, pairing_id = ?, declared = ? where secret = ? and state = 'in_flight' and allowed_at > ? returning id",
+        at, pairing.expires_at, name, pickClientIcon([{ src: answer.agent.icon }]), answer.pairing_id, answer.binding ? 1 : 0, secret, at - DOCK_TIMES.ackMs,
       )
       .toArray().length === 1;
     if (!moved) {
@@ -639,6 +646,14 @@ export class Feed extends DurableObject<Env> {
     // A dock grant past T_ack or T_connect has ended (APC 0.10): it is gone before it is looked up.
     this.sweepDock();
     const grant = this.grants().find((g) => g.secret === secret);
+    // A hub introducing itself to a grant that is not a Dock grant (M12, APC 0.12): 404 before anything else, a revoked
+    // Direct grant included, and nothing changes. Whether it is a Dock grant is Signals' own record (its hub, or the
+    // revoked row's), never this request.
+    const directGrant = grant ? !grant.hub : this.sql.exec("select 1 from revoked_grants where secret_hash = ? and hub = ''", hash).toArray().length > 0;
+    if (directGrant) {
+      const refused = directGrantGate(rpcBody);
+      if (refused) return refused;
+    }
     // Revoked: 403 with the answer, whatever the method (checked before the method), so the dock's hub can say who revoked it.
     if (!grant) return gone();
     // Agent traffic on a grant that is not live yet extends nothing (APC 0.10): the feed's life is not touched by it.
@@ -647,7 +662,10 @@ export class Feed extends DurableObject<Env> {
     // tools/list are served, and a tools/call gets the `pairing` error; live, everything. A gated answer is built here,
     // before the links, presence and the transport, so it carries no attention, then, apc_link or app data.
     if (grant.hub) {
-      const gate = dockGrantGate((grant.state ?? "live") as DockStored, request.method === "POST" ? rpcBody : null, { host });
+      // The binding (M11, APC 0.12): every initialize must carry this pairing's id and agent, or it is a 404. A grant from
+      // before 0.12 has no id: it is checked on its agent alone.
+      const binding = { pairing_id: grant.pairing_id ?? null, agent: grant.agent ?? "", declared: grant.declared === 1 };
+      const gate = dockGrantGate((grant.state ?? "live") as DockStored, request.method === "POST" ? rpcBody : null, { host, binding });
       if (!gate.serve) return gate.response;
       if (gate.commits) {
         // The hub's first initialize (the dock owner's yes) makes the grant live: one conditional statement, and no

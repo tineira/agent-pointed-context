@@ -184,11 +184,15 @@ POST https://apc.tineira.com/apc/pair
 
 The hub checks the body first, before it reads or spends the ticket: a `pairing_code` that is present but not a code (`null`, `""`, a number) is `invalid_pairing_code`, so a malformed request leaves the ticket good. Then it checks the ticket, the app's origin and its [`apc.json`](#apcjson) (it **MUST** refuse the pairing when the file is missing, redirected, invalid, names another origin, does not list `"dock"`, or does not cover `mcp_url`), and answers HTTP 200 with `{ ok: true, pairing_id, status: "pending", agent: { name, icon }, pairing_code: "required" }`, or HTTP 400 with `{ ok: false, error }`. `pairing_code: "required"` is the acknowledgement: the hub keeps the code and will ask for it. The pairing counts only when the person has also said yes in the dock, with the code. The app links the grant to the agent only once the hub took it, and pins it.
 
+Since 0.12 the acknowledgement also carries `binding: "pairing_id"`: the hub names this pairing on every `initialize` it sends to the grant ([the binding](#the-binding)). An app accepts only that value: an acknowledgement with any other `binding`, or with `binding: "pairing_id"` and a `pairing_id` that is not 22 to 64 of `A–Z a–z 0–9 _ -`, is a refusal, and the app deletes the grant before it answers its page. An acknowledgement without `binding` is a hub before 0.12.
+
 The app **MUST** treat any other answer as a refusal and delete the grant: a redirect (never followed: [M2](#the-app-and-the-hub-call)), any status but 200 and 400, a 200 without the acknowledgement (`hub_ignores_pairing_code`), no answer within its time limit. `pairWithHub` in `@tineira/apc-server` does exactly that. Since 0.10 the call also follows [the app's rules on the hub call](#the-app-and-the-hub-call) (M1 to M9), and the grant is [in flight](#the-grants-states) until the acknowledgement. Only an absent `pairing_code` is a pairing without a code, from an app before 0.9: the reference hub refuses it with `pairing_code_required`, and other hubs SHOULD.
 
 ### Every drop: `POST {hub}/apc/confirm`
 
 On a drop of an agent it already holds a grant for, the app asks the hub whether that pairing still stands: `{ ticket, agent, mcp_url }`. HTTP 200 with `{ ok: true, status }` (`"pending"` or `"paired"`) pins it; while it is pending the reference apps show the pairing code again. The answer never carries the code. `{ ok: false, error: "not_paired" }` means the dock no longer pairs it: the app drops the grant and asks the person again (the ticket is still good). A hub never confirms a revoked or blocked pairing. Since 0.10 the hub expires overdue requests before it answers (H2) and answers `not_paired` for a pairing it holds as ended; what the app does with a grant still in handoff is in [one pending pairing](#one-pending-pairing).
+
+An app **MUST** ignore fields it does not know in a hub's answer to `/apc/pair` or `/apc/confirm`: a later version may add some, and none of them changes what the app stored for a grant (since 0.12, its [binding](#the-binding) is written only from the acknowledgement of its own `/apc/pair`).
 
 ### The hub gives a grant back: `POST {app}/apc/revoke`
 
@@ -220,7 +224,7 @@ The time limits (`T_ACK_MAX_MS`, `T_CONNECT_MAX_MS` and the recommended times in
 | Method | in flight | handoff | live | dormant | ended | revoked |
 |---|---|---|---|---|---|---|
 | any request | HTTP 404, state unchanged | (rows below) | (rows below) | (rows below) | HTTP 404 | 403 `RevokedAnswer` |
-| `initialize` | 404 | served; commits the connection | served | served, does not wake | 404 | `RevokedAnswer` |
+| `initialize` | 404 | served, commits the connection; since 0.12 only if it holds the [binding](#the-binding), else 404, state unchanged | served if it holds the binding, else 404 | served if it holds the binding (does not wake), else 404 | 404 | `RevokedAnswer` |
 | `ping`, `tools/list` | 404 | served | served | served | 404 | `RevokedAnswer` |
 | `tools/call` | 404 | tool error `pairing` | app data | core tools: the idle shapes; other tools: tool error `idle` | 404 | `RevokedAnswer` |
 | other methods (`resources/*`, `prompts/*`) | 404 | JSON-RPC -32000, `data: { error: "pairing", message }` | as the app serves them | JSON-RPC -32000, `data: { error: "idle", message }` | 404 | `RevokedAnswer` |
@@ -271,6 +275,7 @@ What an app **MUST** do around the drop and the hub call (`DockAppRequirement`):
 - **M7. `/apc/revoke`**, as [above](#the-hub-gives-a-grant-back-post-appapcrevoke).
 - **M8. `apc.json`** lists `dock` only when the app can pair right now (its configuration is present), computed per request or cached 60 seconds at most (a `max-age` of 60 or less).
 - **M9.** The app sends hub requests to the parsed `url.origin` of M1, never to the raw `hub` string.
+- **M10, M11, M12** (since 0.12): [the binding](#the-binding).
 
 ### The hub's duties
 
@@ -283,6 +288,19 @@ What a hub **MUST** do (`DockHubRequirement`; the reference hub follows them):
 - **H5.** A 404 from a pairing that was introduced, or is in handoff, is reported as `pairing_ended` ("drop the agent on the app again"), never as `app_unreachable`. The hub keeps an `ended` tombstone, like `revoked`: outside the cap, deleted on a re-pair, and `relay()` and `decide()` on it answer `pairing_ended`, not `unknown_app` or `unknown_pairing`.
 - **H6.** The hub's instructions and `guide` say what the errors mean. `idle`: the person is away from that app; tell them, and do not retry. `pairing`: the person has not finished pairing yet; wait, or tell them.
 - **H7.** The copy of an app's `apc.json` used for a pairing decision is at most 60 seconds old: the hub fetches it fresh on `/apc/pair`, or honours a `max-age` of 60 or less. A 5xx or unreachable `apc.json` never falls back to a stale copy that lists `dock`: the pairing is refused (`apc_json_unreachable`).
+- **H8** (since 0.12). [The binding](#the-binding): every `initialize` names the pairing and its agent.
+
+### The binding
+
+Since 0.12. The pairing code proves that the dock's owner read a code. The binding proves that the grant the hub introduces itself to is the one this app handed to this pairing, for this agent: a URL the app did not hand to that pairing (a Direct grant, another pairing's grant, a copied URL) never goes live at an app that implements 0.12.
+
+- **H8.** The hub **MUST**, on every `initialize` it sends to a grant (the introduction, its retries, and every later one), put in `params._meta` the pairing's `pairing_id` under `apc.tineira.com/pairing_id` (`APC_PAIRING_ID_META`) and its agent's handle under `apc.tineira.com/agent` (`APC_AGENT_META`), for every app, verified or not, and **MUST** answer `/apc/pair` with `binding: "pairing_id"`. A `pairing_id` is 22 to 64 of `A–Z a–z 0–9 _ -`, holds at least 128 random bits, is unique across every dock the hub runs, never changes while its pairing exists, and authorizes nothing at the hub. Neither value is a secret: the agent handle is public (it is in the drag), and the app had the `pairing_id` already, from its own acknowledgement. What makes the check hold is that the app compares them with what it stored from its own call, which nobody else can write.
+- **M10.** Whether a grant is a Dock grant **MUST** come from the app's own record of how it made the grant, written when it made it: never from its URL, the request, its client or the keys above. On the acknowledgement, in the same atomic step as the move out of in flight, the app **MUST** store with the grant the hub's origin, the agent, the `pairing_id`, and whether `binding` was declared. They never change. The hub's origin is context (which hub the binding came from), not a check: the `initialize` names no hub. The app reads the keys from the same parsed body it gates on, never from a later parse or an SDK handler.
+- **M11.** On a Dock grant in handoff, live or dormant, an `initialize` **MUST** get HTTP 404, its state unchanged, when its `apc.tineira.com/pairing_id` or `apc.tineira.com/agent` is present and is not exactly what the app stored for the grant (a value of another type or form included), or, on a grant whose `binding` was declared, when it is in handoff and carries no `pairing_id`. A missing value is otherwise served: a grant from before 0.12, a hub before 0.12 and a hub rolled back keep working. An app that allows more than one hub **SHOULD** also refuse a missing `pairing_id` on a declared grant in every state. Every `initialize` in a request counts: in a batch, or without an `id`. Revoked, ended and in flight answer first, as before.
+- **M12.** On a grant that is not a Dock grant, a request carrying an `initialize` with either key, whatever its value, **MUST** get HTTP 404 before any other answer, revoked included, and the grant is unchanged.
+- The 404s of M11 and M12 **SHOULD** carry `{ "error": "pairing_mismatch" }`; a hub reads only that exact token. The app never shows the keys to its page or puts them in an answer, and **SHOULD NOT** log them.
+- A grant whose record holds no `pairing_id` (made before the app implemented 0.12) is checked on its agent alone.
+- Apps on 0.10 and 0.11 ignore the keys and pair with the reference hub as before, unchecked. The policy is that they keep doing so for at least 6 months from 0.12.0 (tagged 2026-11-14, so until 2027-05-14): the hub records the standard each app claims and refuses nothing on it, and only a later release, announced in the changelog, may end that. An app that validates `params._meta` strictly must accept the two keys.
 
 ### The derived secret (optional)
 
@@ -297,7 +315,9 @@ An app may derive a dock grant's secret instead of storing a random one. The rec
 
 The Dock's security is the 0.9 pairing code plus a secret URL over TLS. There is no end-to-end encryption, and the hub sees what it relays.
 
-The pairing code gates the honest hub's approval, and that hub's `initialize` is the owner's yes (H1). The code never gates the app's data path. Against a hub that breaks H1, or against someone holding the URL, the URL is the credential, as in 0.9. No app can detect a breach of H1: hub conformance and the operator's allowlist are the controls. Other ways to authenticate the link from the app to the dock are left open for future versions.
+The pairing code gates the honest hub's approval, and that hub's `initialize` is the owner's yes (H1). The code never gates the app's data path. Against a hub that breaks H1, or against someone holding the URL, the URL is the credential, as in 0.9. No app can detect a breach of H1: hub conformance and the operator's allowlist are the controls.
+
+Since 0.12 [the binding](#the-binding) ties the hub's `initialize` to the app's own `/apc/pair` call for that agent, so a URL the app did not hand to that pairing (a Direct grant, another pairing's grant, a copied URL) never goes live at an app that implements 0.12. It does not stop a drop's ticket being relayed through a real account on the app: someone who holds an account there can take a drop on their own page through the app's own consent and show its code elsewhere, and the binding then passes, since the app itself made the call. The dock shows the app's host on every request, and the person types a code only from their own account there. Closing the relay is planned before 1.0.
 
 The page never sees the MCP URL or the secret, and the code is shown only on the owner's page and sent only in `/apc/pair`. APC covers pointing only: confirmations and approvals of what an agent does are outside the standard.
 
