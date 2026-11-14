@@ -11,7 +11,7 @@ import { APC_MOBILE_MEDIA } from "@tineira/apc-protocol";
 import { defined, doc, El } from "./fake-dom.ts";
 
 const { PIN_BADGE_CSS, PIN_STACK_STEP, PIN_STACK_STEP_TOUCH, pinStackStep, pinBadgeX, pinStackIndex, definePinBadge } = await import("../src/pin-badge.ts");
-const { defineHeaderPets } = await import("../src/header-pets.ts");
+const { defineHeaderPets, safeLinkHref } = await import("../src/header-pets.ts");
 const { enablePinning } = await import("../src/pinning.ts");
 
 const win = globalThis.window as unknown as Record<string, unknown>;
@@ -173,6 +173,24 @@ test("the app's own links sit at the foot of the popover and tell the app first 
   assert.deepEqual(seen, ["/agents"]);
   assert.equal(popover.hidden, true, "choosing a link closes the popover");
   assert.ok(prevented, "the app can take the navigation (a client-side router)");
+  el.remove();
+});
+
+test("a link's address is http(s) or relative; javascript: and the like are shown as text, never as a link (TIN-903)", () => {
+  const { el, find } = mountPets([{ id: "g1", name: "Claude", state: "idle" }]);
+  (el as unknown as { links: unknown }).links = [
+    { label: "Manage", href: "/agents" },
+    { label: "Docs", href: "https://example.com/a?b=c" },
+    { label: "Evil", href: "javascript:alert(1)" },
+    { label: "Tabbed", href: "java	script:alert(1)" },
+    { label: "Data", href: "data:text/html,x" },
+    { label: "Empty", href: "" },
+  ];
+  const all = find("apc-pets__link");
+  assert.deepEqual(all.filter((l) => l.tagName === "A").map((l) => l.getAttribute("href")), ["/agents", "https://example.com/a?b=c"]);
+  assert.deepEqual(all.filter((l) => l.tagName !== "A").map((l) => l.textContent), ["Evil", "Tabbed", "Data", "Empty"]);
+  assert.equal(safeLinkHref("HTTP://x.test"), "HTTP://x.test");
+  assert.equal(safeLinkHref(null), null);
   el.remove();
 });
 

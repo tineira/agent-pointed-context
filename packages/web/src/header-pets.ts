@@ -53,6 +53,20 @@ export interface HeaderPet {
   pin?: { label: string; seen: boolean; here: boolean; href?: string | null } | null;
 }
 
+/**
+ * A link's address as it may be set on an anchor: http(s) or relative, nothing else. The address is parsed as the browser
+ * would (so "java	script:" is read as javascript:), and any other scheme (javascript:, data:, blob:, file:) is refused.
+ */
+export function safeLinkHref(href: unknown): string | null {
+  if (typeof href !== "string" || href.trim() === "") return null;
+  try {
+    const url = new URL(href, "https://relative.invalid/");
+    return url.protocol === "http:" || url.protocol === "https:" ? href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A link of the app's own in the popover's foot (TIN-903), for example "Manage agents". */
 export interface PetsLink {
   label: string;
@@ -271,11 +285,18 @@ export function defineHeaderPets(tag = "apc-pets"): void {
     /** The app's links: kept while they are the same, so a link being focused or pressed is left alone. */
     private renderLinks(foot: HTMLElement): void {
       foot.hidden = this.menu.length === 0;
-      const key = JSON.stringify(this.menu.map((l) => [l.label, l.href]));
+      const key = JSON.stringify(this.menu.map((l) => [l.label, safeLinkHref(l.href)]));
       if (foot.getAttribute("data-key") === key) return;
       foot.setAttribute("data-key", key);
       foot.replaceChildren(
         ...this.menu.map((l) => {
+          // An address that is not http(s) or relative is shown as text, never as a link.
+          if (safeLinkHref(l.href) === null) {
+            const text = document.createElement("span");
+            text.className = "apc-pets__link";
+            text.textContent = l.label;
+            return text;
+          }
           const a = document.createElement("a");
           a.className = "apc-pets__link";
           a.setAttribute("href", l.href);
