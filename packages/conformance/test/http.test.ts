@@ -27,6 +27,9 @@ interface FakeOptions {
   waitReply?: Record<string, unknown>;
   /** The grant answers 500 with a body that echoes the request URL. */
   echo500?: boolean;
+  /** The live and the revoked grant's URLs, when not GRANT and REVOKED. */
+  grantUrl?: string;
+  revokedUrl?: string;
 }
 
 /** A small APC app behind a fetch: apc.json, one live grant and one revoked. */
@@ -48,8 +51,8 @@ function fakeApp(o: FakeOptions = {}): { fetch: (r: Request) => Promise<Response
         if (o.redirectManifest) return new Response(null, { status: 302, headers: { location: "https://elsewhere.example/apc.json" } });
         return json(o.manifest ?? { name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/?connect` } });
       }
-      if (url.href === REVOKED) return json(revokedAnswer("app.example", "2026-11-04T10:00:00.000Z"), o.revokedStatus ?? 403);
-      if (url.href !== GRANT) return json({ error: "not_found" }, o.unknownStatus ?? 404);
+      if (url.href === (o.revokedUrl ?? REVOKED)) return json(revokedAnswer("app.example", "2026-11-04T10:00:00.000Z"), o.revokedStatus ?? 403);
+      if (url.href !== (o.grantUrl ?? GRANT)) return json({ error: "not_found" }, o.unknownStatus ?? 404);
       if (o.echo500) return new Response(`internal error while serving ${request.url} (${request.url.toUpperCase()})`, { status: 500, headers: { "content-type": "text/plain" } });
       const rpc = (await request.json()) as { id: number; method: string; params: { name?: string; arguments?: Record<string, unknown> } };
       const reply = (result: unknown) => json({ jsonrpc: "2.0", id: rpc.id, result });
@@ -83,7 +86,7 @@ const status = (report: Awaited<ReturnType<typeof run>>, id: string) => report.r
 test("a conforming app passes every HTTP check, and the in-process ones are reported skipped", async () => {
   const report = await run({ then: true });
   assert.equal(report.failed, 0, JSON.stringify(report.results.filter((r) => r.status === "fail"), null, 2));
-  assert.equal(report.passed, 11);
+  assert.equal(report.passed, 12);
   assert.equal(report.skipped, IN_PROCESS_ONLY.length);
   assert.deepEqual(report.app, { name: "Fake", standard: APC_STANDARD_VERSION, profiles: ["direct"] });
 });
@@ -92,7 +95,7 @@ test("without --grant or --revoked the MCP checks are skipped, not failed", asyn
   const app = fakeApp();
   const report = await runHttpConformance({ origin: `${ORIGIN}/`, fetch: app.fetch });
   assert.equal(report.failed, 0);
-  assert.equal(report.passed, 4);
+  assert.equal(report.passed, 5);
   assert.equal(status(report, "mcp-initialize"), "skip");
   assert.equal(status(report, "revoked-answers"), "skip");
   assert.ok(app.seen.every((r) => new URL(r.url).pathname === "/.well-known/apc.json"), "nothing but apc.json is read");
@@ -292,4 +295,52 @@ test("a newer patch of the checks' own standard passes with a note; a newer mino
   assert.equal(standardSupport("0.8.0", "0.7.1").ok, false);
   assert.equal(standardSupport("1.7.1", "0.7.1").ok, false);
   assert.equal(standardSupport("0.4.9", "0.7.1").ok, false, "apc.json exists since 0.5.0");
+});
+
+test("mcp.endpoints (APC 0.11): the grant is checked for the profile given, as a hub checks it; the file's entries are checked as readers take them", async () => {
+  const TG = `${ORIGIN}/mcp/AbCdEfGhIjKlMnOpQrStUv`;
+  const TR = `${ORIGIN}/mcp/ZyXwVuTsRqPoNmLkJiHgFe`;
+  const file = (mcp: unknown, profiles: string[] = ["direct", "dock"], over: Record<string, unknown> = {}) => ({ name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles, mcp, direct: { connect: `${ORIGIN}/?connect` }, ...over });
+  const go = (manifest: unknown, extra: Partial<HttpConformanceOptions> = {}) => run({ manifest, grantUrl: TG, revokedUrl: TR }, { grant: TG, revoked: TR, ...extra });
+  const detail = (report: Awaited<ReturnType<typeof run>>, id: string) => report.results.find((r) => r.id === id);
+
+  // Both profiles on one template, with mcp.path for older readers: passes as dock and as direct, and says what covered it.
+  const both = file({ path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] });
+  const asDock = await go(both, { profile: "dock" });
+  assert.equal(asDock.failed, 0, JSON.stringify(asDock.results.filter((r) => r.status === "fail"), null, 2));
+  assert.match(detail(asDock, "grant-declared")!.note ?? "", /covered by mcp\.endpoints \/mcp\/\{secret\}, for dock/);
+  assert.match(detail(asDock, "apc-json-endpoints")!.note ?? "", /readers before 0\.11 still cover all of mcp\.path \/mcp\//);
+  assert.match(detail(asDock, "apc-json-endpoints")!.note ?? "", /declares every child of \/mcp\//);
+  assert.ok(!JSON.stringify(asDock).includes("AbCdEfGhIjKlMnOpQrStUv"), "the secret never shows");
+  assert.equal((await go(both)).failed, 0, "direct by default");
+  assert.match(detail(await go(file({ endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] })), "apc-json-endpoints")!.note ?? "", /no mcp\.path: readers before 0\.11/);
+
+  // A Direct-only template checked as dock fails: the hub would refuse it.
+  const directOnly = await go(file({ path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }, { path: "/mcp/dock/{secret}", profiles: ["dock"] }] }), { profile: "dock" });
+  assert.equal(status(directOnly, "grant-declared"), "fail");
+  assert.equal(status(directOnly, "apc-json-endpoints"), "pass");
+  // Inside mcp.path, outside every entry: fails, though the 0.10 rule would pass it.
+  assert.equal(status(await go(file({ path: "/mcp/", endpoints: [{ path: "/mcp/agents/{secret}", profiles: ["direct", "dock"] }] })), "grant-declared"), "fail");
+  assert.equal(status(await go(file({ path: "/mcp/" })), "grant-declared"), "pass", "the same URL under mcp.path alone");
+
+  // What readers would read otherwise fails apc-json-endpoints.
+  for (const [manifest, why] of [
+    [file({ endpoints: [{ path: "/mcp", profiles: ["direct", "dock"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] }), "dock on an exact path"],
+    [file({ endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }, { path: "/mcp/x/", profiles: ["direct"] }] }), "an entry readers drop"],
+    [file({ endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"], note: "x" }] }), "a key readers do not know"],
+    [file({ path: "/mcp/", endpoints: [] }), "an empty list"],
+    [file({ endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }] }), "dock offered, no entry serves it"],
+    [file({ path: "/mcp/", endpoint: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] }), "a near-miss key in mcp"],
+    [file({ path: "/mcp/" }, ["direct", "dock"], { endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] }), "endpoints at the top level"],
+  ] as const) {
+    assert.equal(status(await go(manifest), "apc-json-endpoints"), "fail", why);
+  }
+  // M8: an entry that lists dock while the app is not pairing is no failure.
+  const m8 = await go(file({ endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }, { path: "/mcp/dock/{secret}", profiles: ["dock"] }] }, ["direct"]));
+  assert.equal(m8.failed, 0, JSON.stringify(m8.results.filter((r) => r.status === "fail"), null, 2));
+  assert.equal(status(await go(file({ path: "/mcp/" })), "apc-json-endpoints"), "pass", "no mcp.endpoints: only the near-miss keys are checked");
+
+  // A Dock grant takes no bearer token; a profile is direct or dock.
+  await assert.rejects(go(both, { profile: "dock", bearer: "tok" }), HttpConformanceUsageError);
+  await assert.rejects(go(both, { profile: "hub" as never }), HttpConformanceUsageError);
 });

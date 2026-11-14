@@ -328,10 +328,115 @@ Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`,
 - `origin`: exactly the origin it is served from; a file that names another is refused.
 - `profiles`: `"direct"`, `"dock"` or both for an app; `"hub"` alone for a hub, which then also gives `dock: { pair, confirm }`. A reader ignores words and keys it does not know. Since 0.10 an app lists `"dock"` only while it can pair, and the file is computed per request or cached 60 seconds at most (M8).
 - `mcp.path`: every grant's MCP URL on the origin starts with `origin + path`. A hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it. A Direct app whose grants share one URL (a bearer token names the grant) may serve it at `mcp.path` itself, or without its last `/` (`/api/mcp` for `"/api/mcp/"`).
+- `mcp.endpoints` (0.11, optional): the exact MCP endpoints of the origin and the profiles each serves; when present, only they cover a URL ([below](#mcpendpoints-011)).
 - `direct.connect` (with `"direct"`): the page on the same origin where the person connects an agent directly.
 - `direct.auth` and `direct.resource_metadata` (optional, information only): how agents authenticate (`"url"`, `"oauth"`) and, with OAuth, the protected-resource metadata URL on the origin. A reader never requires them.
 
 A dock agent dropped on an app that offers only Direct is answered, never lost: the page tells the person that it connects agents directly, with its connect page (`directOnlyNote`), and pairs nothing. A page that cannot read its own `apc.json` pairs nothing either.
+
+### `mcp.endpoints` (0.11)
+
+An origin that serves several MCP endpoints, some of them not APC, declares the APC ones exactly:
+
+```json
+"mcp": { "path": "/mcp/",
+         "endpoints": [ { "path": "/mcp", "profiles": ["direct"] },
+                        { "path": "/mcp/{secret}", "profiles": ["dock"] } ] }
+```
+
+Each entry is a `path` and the `profiles` it serves. A path is exact. `{secret}` as its last segment stands for one grant's secret. When `mcp.endpoints` is present, a reader of 0.11 or later **MUST** cover an MCP URL only by an entry of it, never by `mcp.path`: anything else on the origin is not APC. `mcp.path` may stay beside it for readers before 0.11, which still cover all of it. An app keeps it while any such reader exists (a hub, the browser extension, its own bundled `@tineira/apc-web`); one that wants the narrower rule for every reader leaves it out and accepts that older readers refuse the file.
+
+**Reading the file.** A reader **MUST** treat the file as invalid when:
+
+- `mcp` has neither `path` nor `endpoints`, or has a `path` that fails the rule above (with or without `endpoints`);
+- `endpoints` is there and is not a list, or has more than 16 entries;
+- an entry is not an object; its `path` is not a string of at most 200 characters that starts with `/`, or holds `%`, `?`, `#`, `\`, a space or a control character, or a `.` or `..` segment; its `profiles` is not a list of at most 8 strings; or two entries have the same `path`;
+- `mcp.path` is there and a usable entry lies outside it: `P/{secret}` needs `P/` to start with `mcp.path`; an exact path needs to start with `mcp.path` or to equal it without its last `/`.
+
+A reader **MUST** drop, whole, an entry it does not fully understand, and never use part of it: an entry with any key but `path` and `profiles`, or a path outside the 0.11 grammar (fixed segments of `A-Z a-z 0-9 . _ ~ ! $ & ' ( ) * + , ; = : @ -`, then at most one final `/{secret}` after at least one fixed segment; so no trailing `/`, no empty segment, no other `{…}`). A dropped entry covers nothing, but still names its path (below). Profile words other than `direct` and `dock` are left out of an entry one by one, and so is `dock` on an exact path: a Dock grant is one URL per grant. An entry may list a profile the top-level `profiles` does not (an app that is not pairing right now, M8); it covers nothing for that profile. A file left with no usable entry still parses, and covers nothing.
+
+**Matching.** A reader **MUST** cover an MCP URL for a profile R (`direct` or `dock`; a hub pairing a Dock app checks `dock`) only when all of these hold:
+
+1. It is an absolute `http`/`https` URL on the file's origin, with no user or password.
+2. The string holds no `?`, `#` or `%`, and is exactly `origin + path` as a URL parser writes it back: no dot segment, backslash, upper-case host, written default port or encoding.
+3. The top-level `profiles` and a usable entry both list R, and either:
+   - the entry is exact, the path equals it (case-sensitive), and the grants share the URL (a bearer token names the grant); or
+   - the entry is `P/{secret}`, the path is `P/s` where `s` is 16 to 128 of `A-Z a-z 0-9 _ -`, and the path names no entry: it neither equals the path of any entry, usable or dropped, nor starts one followed by `/`, compared without ASCII case (exact wins).
+
+An app **MUST NOT** serve anything but its grants on a child of `P` that fits the secret, other than the exact entries it declares: `P/{secret}` claims every such child. Keep fixed routes out of a `{secret}` parent. A file that narrows does not end pairings already made; the app revokes them. `declaresMcpUrl(manifest, url, { profile, shared })` and `mcpUrlCoverage` in `@tineira/apc-protocol` implement this, and these vectors are its tests (`packages/protocol/test/mcp-endpoint-vectors.json`):
+
+<!-- mcp-endpoint-vectors:start -->
+```json
+{
+  "shared-urls": {"name":"Example","standard":"0.11.0","origin":"https://www.cars.example","profiles":["direct"],"mcp":{"path":"/api/","endpoints":[{"path":"/api/mcp","profiles":["direct"]},{"path":"/api/ops/mcp","profiles":["direct"]}]},"direct":{"connect":"https://www.cars.example/connect"}},
+  "split": {"name":"Example","standard":"0.11.0","origin":"https://ledger.example","profiles":["direct","dock"],"mcp":{"path":"/mcp/","endpoints":[{"path":"/mcp","profiles":["direct"]},{"path":"/mcp/{secret}","profiles":["dock"]}]},"direct":{"connect":"https://ledger.example/connect"}},
+  "split-not-pairing": {"name":"Example","standard":"0.11.0","origin":"https://ledger.example","profiles":["direct"],"mcp":{"path":"/mcp/","endpoints":[{"path":"/mcp","profiles":["direct"]},{"path":"/mcp/{secret}","profiles":["dock"]}]},"direct":{"connect":"https://ledger.example/connect"}},
+  "named-siblings": {"name":"Example","standard":"0.11.0","origin":"https://ops.example","profiles":["direct","dock"],"mcp":{"endpoints":[{"path":"/mcp/operations-console","profiles":["direct"]},{"path":"/mcp/tenant-admin-console/mcp","profiles":["direct"]},{"path":"/mcp/future-console-entry/","profiles":["direct"]},{"path":"/mcp/later-feature-route","profiles":["direct"],"methods":["POST"]},{"path":"/mcp/{secret}","profiles":["dock"]}]},"direct":{"connect":"https://ops.example/connect"}},
+  "direct-template": {"name":"Example","standard":"0.11.0","origin":"https://orders.example","profiles":["direct","dock"],"mcp":{"endpoints":[{"path":"/mcp/{secret}","profiles":["direct"]}]},"direct":{"connect":"https://orders.example/connect"}},
+  "unknown-key": {"name":"Example","standard":"0.11.0","origin":"https://orders.example","profiles":["direct","dock"],"mcp":{"endpoints":[{"path":"/mcp/{secret}","profiles":["dock"],"requires":"pairing_code"}]},"direct":{"connect":"https://orders.example/connect"}},
+  "path-only": {"name":"Example","standard":"0.11.0","origin":"https://ledger.example","profiles":["direct","dock"],"mcp":{"path":"/mcp/"},"direct":{"connect":"https://ledger.example/connect"}}
+}
+```
+
+| File | URL | Profile | Shared | Covered | Why |
+|---|---|---|---|---|---|
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | **yes** | a grant's secret under the dock template |
+| `split` | `https://ledger.example/mcp` | direct | yes | **yes** | the shared Direct URL, with a bearer |
+| `split` | `https://ledger.example/mcp` | direct | no | no | an exact endpoint covers a shared URL only |
+| `split` | `https://ledger.example/mcp` | dock | no | no | the hub never pairs a shared URL |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | direct | no | no | the template serves dock only |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | (none) | no | no | no profile given covers nothing |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv/x` | dock | no | no | a secret is one segment |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnO` | dock | no | no | 15 characters is too short for a secret |
+| `split` | `https://ledger.example/mcp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` | dock | no | no | 129 characters is too long for a secret |
+| `split` | `https://ledger.example/mcp/abcdefgh.ijklmnop` | dock | no | no | no dot in a secret |
+| `split` | `https://ledger.example/mcp/abcdefgh~ijklmnop` | dock | no | no | no tilde in a secret |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv?` | dock | no | no | an empty query |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv#` | dock | no | no | an empty fragment |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv?a=1` | dock | no | no | a query |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv/` | dock | no | no | a trailing slash |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv;x=1` | dock | no | no | a matrix parameter |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv\|` | dock | no | no | a pipe |
+| `split` | `https://ledger.example//mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | a double slash |
+| `split` | `https://ledger.example/mcp/./AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | a dot segment |
+| `split` | `https://ledger.example/mcp/%41AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | any percent-encoding |
+| `split` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv/..%2f` | dock | no | no | encoded traversal |
+| `split` | `https://ledger.example/mcp/%2e%2e%2fadminabcdefghij` | dock | no | no | encoded dots and slash |
+| `split` | `https://ledger.example/mcp\AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | a backslash |
+| `split` | `https://ledger.example/Mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | the path is case-sensitive |
+| `split` | `https://LEDGER.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | an upper-case host is not written as parsed |
+| `split` | `https://ledger.example:443/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | a written default port |
+| `split` | `https://u:p@ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | credentials |
+| `split` | `blob:https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | a blob: URL has the origin, not the scheme |
+| `split` | `https://evil.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | another origin |
+| `split` | `not a url` | dock | no | no | not a URL |
+| `split-not-pairing` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | the top level does not list dock: not pairing right now |
+| `split-not-pairing` | `https://ledger.example/mcp` | direct | yes | **yes** | Direct still covered |
+| `shared-urls` | `https://www.cars.example/api/mcp` | direct | yes | **yes** | the personal endpoint |
+| `shared-urls` | `https://www.cars.example/api/ops/mcp` | direct | yes | **yes** | the ops endpoint |
+| `shared-urls` | `https://www.cars.example/api/mcp/public` | direct | yes | no | not declared, although mcp.path /api/ holds it |
+| `shared-urls` | `https://www.cars.example/api/mcp/` | direct | yes | no | a trailing slash is another URL |
+| `shared-urls` | `https://www.cars.example/API/mcp` | direct | yes | no | the path is case-sensitive |
+| `shared-urls` | `https://www.cars.example/api/mcp?x=1` | direct | yes | no | a query |
+| `shared-urls` | `https://www.cars.example/api//mcp` | direct | yes | no | a double slash |
+| `shared-urls` | `https://www.cars.example/api/mcp;x` | direct | yes | no | a matrix parameter |
+| `shared-urls` | `https://www.cars.example/api/mcp` | direct | no | no | an exact endpoint covers a shared URL only |
+| `shared-urls` | `https://www.cars.example/api/mcp` | dock | no | no | the app does not offer dock |
+| `named-siblings` | `https://ops.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | **yes** | a grant's secret |
+| `named-siblings` | `https://ops.example/mcp/operations-console` | dock | no | no | exact wins: a sibling the file names |
+| `named-siblings` | `https://ops.example/mcp/Operations-Console` | dock | no | no | exact wins without ASCII case |
+| `named-siblings` | `https://ops.example/mcp/tenant-admin-console` | dock | no | no | exact wins: the fixed parent of a deeper entry |
+| `named-siblings` | `https://ops.example/mcp/future-console-entry` | dock | no | no | exact wins: named by an entry this reader drops (trailing slash) |
+| `named-siblings` | `https://ops.example/mcp/later-feature-route` | dock | no | no | exact wins: named by an entry this reader drops (unknown key) |
+| `named-siblings` | `https://ops.example/mcp/operations-console` | direct | yes | **yes** | the exact endpoint itself |
+| `named-siblings` | `https://ops.example/mcp/later-feature-route` | direct | yes | no | an entry with an unknown key covers nothing |
+| `named-siblings` | `https://ops.example/mcp/future-console-entry/` | direct | yes | no | an exact path ending in / is not understood in 0.11 |
+| `direct-template` | `https://orders.example/mcp/0123456789abcdef0123456789abcdef` | direct | no | **yes** | a Direct secret URL |
+| `direct-template` | `https://orders.example/mcp/0123456789abcdef0123456789abcdef` | dock | no | no | a Direct-only template never pairs |
+| `unknown-key` | `https://orders.example/mcp/AbCdEfGhIjKlMnOpQrStUv` | dock | no | no | an entry with an unknown key is dropped whole |
+| `path-only` | `https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv?a=1` | dock | no | **yes** | no endpoints: the 0.10 rule under mcp.path, unchanged |
+| `path-only` | `https://ledger.example/mcp` | direct | yes | **yes** | no endpoints: the 0.8 shared allowance, unchanged |
+<!-- mcp-endpoint-vectors:end -->
 
 ## The hub's trust model
 

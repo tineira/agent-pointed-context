@@ -15,7 +15,7 @@ const HELP = `apc-conformance: checks a live APC app over HTTP (https://apc.tine
 
 Usage:
   apc-conformance <app-origin> [--grant <mcp-url>] [--bearer-env <VAR>] [--revoked <mcp-url>] [--revoked-bearer-env <VAR>]
-                  [--json] [--allow-http] [--timeout <s>]
+                  [--profile direct|dock] [--json] [--allow-http] [--timeout <s>]
 
   <app-origin>        The app's origin, e.g. https://pulse.apc.tineira.com
   --grant <mcp-url>   The MCP URL of a live agent connected directly (Direct profile). Runs the MCP checks:
@@ -25,6 +25,8 @@ Usage:
                       sent as Authorization: Bearer and never printed. Never put a token on the command line.
   --revoked <mcp-url> The MCP URL of a grant you revoked in the app: checks the revoked answer.
   --revoked-bearer-env <VAR>  The same, for the revoked grant's token.
+  --profile direct|dock  The profile the grant URLs are for (default direct). With dock, a Dock grant's secret URL,
+                      checked against apc.json exactly as a hub pairing it checks it; no bearer token then.
   --json              Print the report as JSON.
   --allow-http        Allow http:, for a dev server on the host localhost, 127.0.0.1 or [::1] only (not *.localhost).
   --timeout <s>       Seconds per request (default 15).
@@ -73,6 +75,7 @@ async function main(argv: string[]): Promise<number> {
         revoked: { type: "string" },
         "bearer-env": { type: "string" },
         "revoked-bearer-env": { type: "string" },
+        profile: { type: "string" },
         json: { type: "boolean", default: false },
         "allow-http": { type: "boolean", default: false },
         timeout: { type: "string" },
@@ -126,6 +129,7 @@ async function main(argv: string[]): Promise<number> {
       origin: positionals[0]!,
       ...(values.grant !== undefined ? { grant: values.grant } : {}),
       ...(values.revoked !== undefined ? { revoked: values.revoked } : {}),
+      ...(values.profile !== undefined ? { profile: values.profile as "direct" | "dock" } : {}),
       ...tokens,
       allowHttp: values["allow-http"],
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),

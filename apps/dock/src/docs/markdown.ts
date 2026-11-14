@@ -30,11 +30,18 @@ const startsBlock = (line: string) => FENCE.test(line) || HEADING.test(line) || 
 
 function cells(line: string): string[] {
   const inner = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  // A pipe inside `code` is not a cell border.
+  // A pipe inside `code` is not a cell border, nor is `\|` (GitHub's way to write one, in code too): it is a pipe.
   const out: string[] = [];
   let cell = "";
   let code = false;
-  for (const ch of inner) {
+  const chars = [...inner];
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i]!;
+    if (ch === "\\" && chars[i + 1] === "|") {
+      cell += "|";
+      i++;
+      continue;
+    }
     if (ch === "`") code = !code;
     if (ch === "|" && !code) {
       out.push(cell.trim());

@@ -253,8 +253,12 @@ export class OrdersApp {
   // #region routes
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    // What Orders is, for hubs, the browser extension and any tool (apc.json).
-    if (path === "/.well-known/apc.json") return apcJsonResponse(apcManifest({ name: "Orders", origin: this.origin, profiles: this.profiles, connect: "/agents" }));
+    // What Orders is, for hubs, the browser extension and any tool (apc.json). Its one MCP endpoint (APC 0.11) is
+    // exact: a grant's secret under /mcp/, on both profiles; /mcp/ stays for readers before 0.11.
+    if (path === "/.well-known/apc.json") {
+      const endpoints = [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] as const;
+      return apcJsonResponse(apcManifest({ name: "Orders", origin: this.origin, profiles: this.profiles, connect: "/agents", mcpPath: "/mcp/", endpoints }));
+    }
     // Each grant's MCP URL: the agent itself (Direct) or a dock's hub (Dock) calls it.
     const mcp = path.match(/^\/mcp\/([0-9a-f]{32})$/);
     if (mcp) return this.mcp(request, mcp[1]!);
@@ -307,7 +311,7 @@ export class OrdersApp {
   }
   // #endregion
 
-  /** A grant's MCP URL: the origin, under apc.json's mcp.path ("/mcp/"), and the secret. */
+  /** A grant's MCP URL: the origin, apc.json's endpoint "/mcp/{secret}", with the secret. */
   mcpUrl(secret: string): string {
     return `${this.origin}/mcp/${secret}`;
   }

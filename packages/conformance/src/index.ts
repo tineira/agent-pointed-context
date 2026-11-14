@@ -41,7 +41,8 @@ import {
   WAIT_CLAIM_GAP_S,
   canonicalTarget,
   compareStandard,
-  declaresMcpUrl,
+  describeMcpCoverage,
+  mcpUrlCoverage,
   isRevokedAnswer,
   normalizePairingCode,
   PAIRING_CODE_MAX_ATTEMPTS,
@@ -53,7 +54,7 @@ import {
   type PresenceMessage,
   type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkMcpEndpoints, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHub } from "./hub.ts";
 import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
@@ -450,9 +451,13 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       if (app.link) expect(m.profiles.includes("direct") && m.profiles.includes("dock"), `profiles ${JSON.stringify(m.profiles)}: an app that links both paths offers both`);
       // A Direct app whose grants share one URL (a bearer token names the grant) may serve it at mcp.path itself (APC 0.8).
       const shared = app.profile === "direct" && sharesUrl(conn);
-      expect(declaresMcpUrl(m, conn.mcpUrl, { shared }), `the grant's MCP URL is not under ${origin}${m.mcp.path} (mcp.path)${shared ? ", nor that path itself" : ""}`);
+      // The profile the adapter serves, exactly as a hub pairing a Dock app checks it (APC 0.11).
+      const covered = mcpUrlCoverage(m, conn.mcpUrl, { profile: app.profile, shared });
+      expect(covered.covered, `the grant's MCP URL is not covered for ${app.profile} by ${describeMcpCoverage(m)}${covered.covered ? "" : `: ${covered.reason}`}`);
       if (m.profiles.includes("direct")) expect(m.direct && new URL(m.direct.connect).origin === origin, "direct.connect is the app's own page");
-      if (support.note) return { note: support.note };
+      const endpoints = checkMcpEndpoints(body, m);
+      const notes = [support.note, endpoints].filter((n): n is string => !!n);
+      if (notes.length) return { note: notes.join("; ") };
     }),
 
     check("lists the core tools, with their arguments", async () => {

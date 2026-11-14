@@ -24,6 +24,8 @@ import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJo
 import type { JoinCodes } from "./join-codes.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
+/** The shape of the apc.json copy the hub keeps (APC 0.11, TIN-888): a row without it was written by an older parser. */
+export const APC_JSON_COPY_VERSION = 2;
 const WAIT_CEILING_S = 50;
 const WAIT_DEFAULT_S = 25;
 /** The calls kept per agent (TIN-419). */
@@ -1358,6 +1360,8 @@ export class Hub extends DurableObject<Env> {
    * and forgets the copy, verified app or not: no file, a redirect, a file that is not one, another origin,
    * and also a file out of reach (no answer, a time limit, a 5xx). An unreachable apc.json never falls back to
    * the copy the hub kept, nor to the operator's word (APP_ORIGINS): the pairing is refused, `apc_json_unreachable`.
+   * The copy is kept as `{ v: 2, manifest }` (APC 0.11): a row an older hub wrote, from a parser that knew no
+   * `mcp.endpoints`, is no copy, and the file is read again.
    */
   private async manifestFor(origin: string, verified: boolean): Promise<{ ok: true; manifest: ApcManifest } | { ok: false; error: ApcJsonRefusal }> {
     const now = Date.now();
@@ -1365,8 +1369,9 @@ export class Hub extends DurableObject<Env> {
     const row = this.sql.exec<{ body: string; read_at: number }>("select body, read_at from apc_json where origin = ?", origin).toArray()[0];
     if (row && now - row.read_at < LIMITS.apcJsonFreshMs) {
       try {
-        const parsed = parseApcManifest(JSON.parse(row.body), origin);
-        if (parsed.ok) return { ok: true, manifest: parsed.manifest };
+        const copy = JSON.parse(row.body) as { v?: unknown; manifest?: unknown };
+        const parsed = copy?.v === APC_JSON_COPY_VERSION ? parseApcManifest(copy.manifest, origin) : null;
+        if (parsed?.ok) return { ok: true, manifest: parsed.manifest };
       } catch {
         // not a copy the hub can use: read the file
       }
@@ -1378,7 +1383,7 @@ export class Hub extends DurableObject<Env> {
         this.sql.exec("delete from apc_json where origin = ?", origin);
         return { ok: false, error: parsed.error };
       }
-      this.sql.exec("insert into apc_json (origin, body, read_at) values (?, ?, ?) on conflict(origin) do update set body = excluded.body, read_at = excluded.read_at", origin, JSON.stringify(parsed.manifest), Date.now());
+      this.sql.exec("insert into apc_json (origin, body, read_at) values (?, ?, ?) on conflict(origin) do update set body = excluded.body, read_at = excluded.read_at", origin, JSON.stringify({ v: APC_JSON_COPY_VERSION, manifest: parsed.manifest }), Date.now());
       return { ok: true, manifest: parsed.manifest };
     }
     this.sql.exec("delete from apc_json where origin = ?", origin);
@@ -1436,7 +1441,8 @@ export class Hub extends DurableObject<Env> {
     if (!read.ok) return { ok: false, error: read.error };
     const manifest = read.manifest;
     if (!manifest.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
-    if (!declaresMcpUrl(manifest, b.mcp_url)) return { ok: false, error: "mcp_url_not_declared" };
+    // The Dock profile, one URL per grant (APC 0.11: under mcp.endpoints, only a {secret} entry that lists dock).
+    if (!declaresMcpUrl(manifest, b.mcp_url, { profile: "dock" })) return { ok: false, error: "mcp_url_not_declared" };
     // Everything below is synchronous: the agent may have gone while the file was read.
     if (!this.agent(t.agent_id)) return { ok: false, error: "ticket_expired" };
     // Refused first, replaced after: a request the dock has no room for leaves the "Revoked by" or "Ended by" line

@@ -179,7 +179,7 @@ Localizing changes no protocol text, the tools or conformance: [Conformance](/do
 
 ## Checklist
 
-- `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`.
+- `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`. If the origin serves other MCP endpoints too, it lists the APC ones in `mcp.endpoints` (0.11; [the spec](/docs/spec#mcpendpoints-011)): exact paths, and `/{secret}` last for one URL per grant. Keep fixed routes out of a `{secret}` parent, and keep `mcp.path` for readers before 0.11. `declaresMcpUrl` now takes the profile (`{ profile: "dock" }`, or `{ profile: "direct", shared: true }` for an exact endpoint whose grants share the URL).
 - Every pointable element has `data-focus`; targets carry ids and keys only.
 - `get_current_view` and `wait_for_focus` are registered on every grant.
 - Every tool runs inside the wrapper: revoke check, `attention`, presence, `then`.

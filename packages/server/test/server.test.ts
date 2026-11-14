@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { FocusPayload, FocusRow, PresenceEvent, PresenceWaitEvent } from "@tineira/apc-protocol";
+import { parseApcManifest, type FocusPayload, type FocusRow, type PresenceEvent, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import {
   THEN_NOTE,
   MemoryWaitSlots,
@@ -50,6 +50,32 @@ test("apc.json may be cached a minute at most (M8, APC 0.10)", () => {
   const response = apcJsonResponse(apcManifest({ name: "Orders", origin: "https://orders.test", profiles: ["dock"] }));
   assert.equal(response.headers.get("cache-control"), "public, max-age=60");
   assert.equal(response.headers.get("access-control-allow-origin"), "*");
+});
+
+test("apcManifest with mcp.endpoints (APC 0.11): it builds only a file readers take as written, and never judges the profiles offered now", () => {
+  const origin = "https://orders.test";
+  const split = [{ path: "/mcp", profiles: ["direct"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] as const;
+  const both = apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], connect: "/agents", mcpPath: "/mcp/", endpoints: split });
+  assert.deepEqual(both.mcp, { path: "/mcp/", endpoints: [{ path: "/mcp", profiles: ["direct"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] });
+  assert.ok(parseApcManifest(both, origin).ok);
+  const alone = apcManifest({ name: "Orders", origin, profiles: ["dock"], mcpPath: null, endpoints: split });
+  assert.deepEqual(alone.mcp, { endpoints: [{ path: "/mcp", profiles: ["direct"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] }, "null leaves mcp.path out");
+  // M8: an app that is not pairing right now, or offers nothing at the moment, still serves its endpoints.
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["direct"], connect: "/agents", mcpPath: "/mcp/", endpoints: split }).mcp.endpoints?.length, 2);
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: [], mcpPath: "/mcp/", endpoints: split }).profiles, []);
+  for (const [endpoints, mcpPath, why] of [
+    [[{ path: "/api/mcp", profiles: ["direct"] }], "/mcp/", "outside mcpPath"],
+    [[{ path: "/mcp/", profiles: ["direct"] }], null, "a trailing slash"],
+    [[{ path: "/mcp/{sid}/{secret}", profiles: ["direct"] }], null, "two variables"],
+    [[{ path: "/mcp", profiles: ["dock"] }], null, "dock on an exact path"],
+    [[{ path: "/mcp/{secret}", profiles: ["hub"] }], null, "a word readers ignore"],
+    [[{ path: "/mcp/{secret}", profiles: [] }], null, "no profile"],
+    [[{ path: "/mcp/{secret}", profiles: ["dock"] }, { path: "/mcp/{secret}", profiles: ["direct"] }], null, "a path twice"],
+    [[], "/mcp/", "an empty list"],
+  ] as const) {
+    assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], mcpPath, endpoints: endpoints as never }), Error, why);
+  }
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["dock"] }).mcp, { path: "/mcp/" }, "without endpoints, as before");
 });
 
 test("the pin is unread until a read after it was dropped", () => {

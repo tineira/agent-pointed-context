@@ -2,12 +2,45 @@
  * What the in-process suite (`index.ts`) and the HTTP checks (`http.ts`) share: the error a check
  * throws, how a JSON-RPC reply is read off Streamable HTTP, and the shapes of the core's view and focus.
  */
-import { compareStandard, parseParams, parseTarget, type FocusTarget } from "@tineira/apc-protocol";
+import { compareStandard, endpointRule, parseParams, parseTarget, type ApcEndpointProfile, type ApcManifest, type FocusTarget } from "@tineira/apc-protocol";
 
 export class ConformanceError extends Error {}
 
 export function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new ConformanceError(message);
+}
+
+/**
+ * `mcp.endpoints` (APC 0.11) as the file wrote it (`raw`, the JSON read) and as it parsed: throws on what readers
+ * would silently read otherwise (a near-miss key, an entry they drop, a profile word they ignore there, an empty
+ * list, a top-level profile no entry serves), and gives the notes an author should see. Null when the file has
+ * no `mcp.endpoints` (and no near-miss key). An entry may list a profile the top level does not: that is an app
+ * not pairing right now (M8), never a failure.
+ */
+export function checkMcpEndpoints(raw: unknown, manifest: ApcManifest): string | null {
+  const file = isObject(raw) ? raw : {};
+  const rawMcp = isObject(file.mcp) ? file.mcp : {};
+  // A near-miss key falls back to mcp.path in silence: the author believes the file is narrower than it is.
+  const nearMiss = [...Object.keys(file).filter((k) => /^endpoints?$/i.test(k)), ...Object.keys(rawMcp).filter((k) => k !== "endpoints" && /^endpoints?$/i.test(k)).map((k) => `mcp.${k}`)];
+  expect(!nearMiss.length, `${nearMiss.join(", ")}: readers ignore it; the list of endpoints is mcp.endpoints`);
+  const entries = manifest.mcp.endpoints;
+  if (!Array.isArray(entries)) return null;
+  expect(entries.length > 0, "mcp.endpoints is empty: it covers no MCP URL, and mcp.path no longer does either");
+  for (const entry of entries) {
+    const rule = endpointRule(entry);
+    expect(rule, `mcp.endpoints ${entry.path}: readers of 0.11 drop this entry (a key other than path and profiles, or a path that is neither exact nor ends in /{secret}; no trailing /)`);
+    for (const word of entry.profiles) {
+      expect(rule.profiles.includes(word as ApcEndpointProfile), `mcp.endpoints ${entry.path} lists ${JSON.stringify(word)}, which readers ignore there${word === "dock" ? ": dock needs a path ending in /{secret}, one URL per grant" : " (direct or dock)"}`);
+    }
+  }
+  for (const p of ["direct", "dock"] as const) {
+    if (manifest.profiles.includes(p)) expect(entries.some((e) => endpointRule(e)?.profiles.includes(p)), `profiles lists ${p}, and no entry of mcp.endpoints serves it`);
+  }
+  const notes = [manifest.mcp.path === undefined ? "there is no mcp.path: readers before 0.11 (hubs, the browser extension, an older @tineira/apc-web) refuse this file" : `readers before 0.11 still cover all of mcp.path ${manifest.mcp.path}`];
+  for (const e of entries.map(endpointRule)) {
+    if (e?.secret) notes.push(`${e.path} declares every child of ${e.base}/ that is 16 to 128 of A-Z, a-z, 0-9, _ and - a grant: serve nothing else there but the exact entries listed`);
+  }
+  return notes.join("; ");
 }
 
 export const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
