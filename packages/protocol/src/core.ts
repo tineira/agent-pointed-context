@@ -268,9 +268,9 @@ export function isRevokedAnswer(body: unknown): body is RevokedAnswer {
  *   ("tap to pin"), or dragging the mark with a finger with pointer events. The result is the same pin
  *   (`FocusTarget`) as a mouse drag. Removing the pin (unpin) and Revoke work by touch too.
  *
- * How the bar sits on a phone, that it stays reachable while the page scrolls, how "tap to pin" shows its
- * state and cancels, and the size of a finger target are the UX guide's (apc.tineira.com/docs/ux#phones),
- * not the contract's.
+ * How the bar sits on a phone, that it stays reachable while the page scrolls, how "tap to pin" looks and
+ * the size of a finger target are the UX guide's (apc.tineira.com/docs/ux#phones), not the contract's.
+ * While an agent is armed the page SHOULD show that it is and give a way to cancel.
  *
  * `APC_MOBILE_VIEWPORT` is the reference viewport the conformance suite and the apps are checked at.
  */

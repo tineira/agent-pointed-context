@@ -122,14 +122,14 @@ On a phone there is no dock window, extension or desktop pet to drag from, so th
 
 The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims 0.6.0 or later **MUST** give the conformance suite its page on a phone.
 
-This is interoperability, not presentation: with no mouse and no dock window, a page that hides the agents or cannot be tapped leaves the person with no way to point, so the conformance suite checks it (`page.mobile`). Where the bar sits on a phone, that it stays reachable while the page scrolls without covering content, how "tap to pin" shows its state and cancels, and how large a finger target is, are [the UX guide's](/docs/ux#phones), not the contract's.
+This is interoperability, not presentation: with no mouse and no dock window, a page that hides the agents or cannot be tapped leaves the person with no way to point, so the conformance suite checks it (`page.mobile`). Where the bar sits on a phone, that it stays reachable while the page scrolls without covering content, how "tap to pin" looks, and how large a finger target is, are [the UX guide's](/docs/ux#phones), not the contract's; that an armed agent shows it is armed and can be cancelled is the **SHOULD** above.
 
 ### The agent in the page
 
 How an app shows each connected agent inside its page is the app's own choice. [The UX guide](/docs/ux) describes the reference pattern (the pet, the header, the pin badge, the states, motion, colour, phones, the pairing cards); it is non-normative, nothing in it is required to interoperate, and `@tineira/apc-web` is its reference implementation. Whatever an app draws, these bind it:
 
 - **Marks.** A pet, a pin badge and the agent bar's mark **MUST** carry `data-apc-mark` and `data-grant`, so the person drags them (or taps them, then a target) to point the agent. The browser extension finds an APC app by them and steps back from its marks, so an app that leaves them off is treated as a page without APC.
-- **States are not guessed.** A page **MUST NOT** show an agent's state that the app's data does not give, and **MUST NOT** guess one from timing. In particular a page **MUST** show an agent as waiting only from the page-readable wait signal ([wait events](#wait-events-since-011)), never from how recently the agent called.
+- **States are not guessed.** A page **SHOULD NOT** show an agent's state that the app's data does not give, and **SHOULD NOT** guess one from timing. In particular it **SHOULD** show an agent as waiting only from the page-readable wait signal ([wait events](#wait-events-since-011)), never from how recently the agent called. A page that infers waiting from grant use (a call heard in the last seconds, or a `wait_for_focus` call) shows "waiting" when no wait runs, and **SHOULD** move to wait events.
 - **A logo is not a verification.** A badge **MUST NOT** suggest that an agent is verified: it says which agent is connected. A page **MUST NOT** draw or animate a vendor's mascot; brands only.
 - **Revoke is in the bar.** The app's agent bar **MUST** offer Revoke for every agent it shows (see [Revoke from the app](#revoke-from-the-app)).
 - **The bar for a Direct agent.** The agent bar **MUST NOT** be collapsed or hidden while it shows a Direct agent, on any viewport: the app's page is the only place the person sees and points one (see also [Mobile](#mobile)).
