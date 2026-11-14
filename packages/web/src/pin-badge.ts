@@ -18,6 +18,8 @@
  * script has no customElements, and it moves the badge with its own drag, since a moved reading is
  * sent again from the page. Keep the two in step.
  */
+import { APC_MOBILE_MEDIA } from "@tineira/apc-protocol";
+import { markArmed } from "./armed.ts";
 import type { PetBadge } from "./brands.ts";
 import { drawBadge } from "./pet.ts";
 import { DEFAULT_PIN_STRINGS, resolveStrings, type PinStrings } from "./strings.ts";
@@ -41,7 +43,8 @@ export interface PinAgent {
 export type PinBadgeEvent = "apc-unpin";
 
 const STYLE_ID = "apc-pin-style";
-const CSS = `
+/** The badge's styles (exported for tests). */
+export const PIN_BADGE_CSS = `
 apc-pin { position: relative; display: inline-block; width: var(--apc-pin-size, 28px); height: var(--apc-pin-size, 28px); vertical-align: middle; }
 .apc-pin__mark { display: grid; place-items: center; width: var(--apc-pin-size, 28px); height: var(--apc-pin-size, 28px); border-radius: 6px; cursor: grab; touch-action: none; outline-offset: 2px;
   background: var(--apc-chip, #ffffff); color: var(--apc-ink, #141a24); box-shadow: 0 2px 6px rgb(0 0 0 / 0.18); }
@@ -56,7 +59,12 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
 .apc-pin__unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--apc-line, #d6dce5);
   background: var(--apc-pin-unpin-bg, var(--apc-chip, #ffffff)); color: var(--apc-muted, #56627a); font-size: 12px; line-height: 13px; cursor: pointer; opacity: 0.85; }
 .apc-pin__unpin:hover { color: var(--apc-ink, #141a24); opacity: 1; }
-@media (pointer: coarse), (max-width: 640px) { .apc-pin__unpin::after { content: ""; position: absolute; inset: -14px; } }
+/* On touch the × sits beside the mark, never over its corner, and its hit area stops at the mark's edge (TIN-903):
+   a tap on the mark arms or drags it, and a tap on the × unpins. The step between stacked badges is PIN_STACK_STEP_TOUCH. */
+@media ${APC_MOBILE_MEDIA} {
+  .apc-pin__unpin { right: auto; top: 2px; left: calc(var(--apc-pin-size, 28px) + 4px); width: 24px; height: 24px; font-size: 16px; line-height: 21px; }
+  .apc-pin__unpin::after { content: ""; position: absolute; inset: -10px -10px -10px -4px; }
+}
 @keyframes apc-pin-breathe { 0%, 100% { outline-offset: 2px; } 50% { outline-offset: 4px; } }
 @media (prefers-reduced-motion: reduce) { apc-pin .apc-pin__mark { animation: none !important; } }
 `;
@@ -91,9 +99,39 @@ function badgeSvg(badge: PetBadge): Element {
 export const PIN_STACK_STEP = 30;
 
 /**
+ * The same step on touch (TIN-903): the × sits beside the mark (4 px off, 24 px wide, a 10 px hit area), so
+ * a badge takes 28 + 4 + 24 + 10 px, and the next badge starts past that: no × covers another badge's mark.
+ */
+export const PIN_STACK_STEP_TOUCH = 72;
+
+/** The step between stacked badges: PIN_STACK_STEP, or PIN_STACK_STEP_TOUCH where the page is touch (APC_MOBILE_MEDIA). */
+export function pinStackStep(touch: boolean): number {
+  return touch ? PIN_STACK_STEP_TOUCH : PIN_STACK_STEP;
+}
+
+/** Whether the page is touch for the badge: the media query the badge's styles use. False where there is no matchMedia. */
+export function pinTouch(): boolean {
+  return typeof globalThis.matchMedia === "function" && globalThis.matchMedia(APC_MOBILE_MEDIA).matches;
+}
+
+/**
+ * Where a badge's left edge goes on the page (px), for the app that places badges itself (Pulse floats them over their
+ * targets): at the target's right edge, each further badge on the same target `index` steps to the left, and the first
+ * never so far right that its × leaves the viewport. The stack keeps its steps at the right edge (it moves left as a
+ * whole), and no badge goes past 4 px from the left edge.
+ */
+export function pinBadgeX(o: { targetRight: number; viewportWidth: number; index: number; touch: boolean; size?: number }): number {
+  const size = o.size ?? 28;
+  // The room the × needs right of the mark: 8 px of corner on a pointer, 4 + 24 + 10 px of beside-and-hit-area on touch.
+  const room = o.touch ? 38 : 8;
+  const first = Math.min(o.targetRight - 22, o.viewportWidth - size - room);
+  return Math.max(first - Math.max(0, o.index) * pinStackStep(o.touch), 4);
+}
+
+/**
  * Where an agent's badge goes among the badges on the same target (0: the first), so several agents
- * pinned to one element each keep a badge and an × the person can reach: place each one PIN_STACK_STEP
- * further along. Two pins are on the same target when kind, id, part and params are the same.
+ * pinned to one element each keep a badge and an × the person can reach: place each one pinStackStep(touch)
+ * further along (PIN_STACK_STEP, and PIN_STACK_STEP_TOUCH on touch; pinBadgeX does it). Two pins are on the same target when kind, id, part and params are the same.
  */
 export function pinStackIndex(agents: ReadonlyArray<{ id: string; target: StackTarget }>, id: string): number {
   const key = (t: StackTarget) => JSON.stringify([t.kind, t.id ?? null, t.part ?? null, t.params ?? null]);
@@ -175,7 +213,7 @@ export function definePinBadge(tag = "apc-pin"): void {
       if (!document.getElementById(STYLE_ID)) {
         const style = document.createElement("style");
         style.id = STYLE_ID;
-        style.textContent = CSS;
+        style.textContent = PIN_BADGE_CSS;
         document.head.append(style);
       }
       if (!this.parts) {
@@ -231,8 +269,10 @@ export function definePinBadge(tag = "apc-pin"): void {
       this.setAttribute("title", labels.title);
       this.setAttribute("data-apc-pin-state", a.seen ? "seen" : "waiting");
       mark.setAttribute("data-grant", a.id);
-      mark.setAttribute("role", "img");
+      // A button, so the armed state (aria-pressed) is valid on it; it is not a tab stop: the person drags it.
+      mark.setAttribute("role", "button");
       mark.setAttribute("aria-label", this.words.markAria(a.name, a.seen));
+      markArmed(mark, a.id);
       check.hidden = !a.seen;
       unpin.setAttribute("aria-label", labels.unpin);
       if (this.draw) this.draw(a, icon);

@@ -17,9 +17,11 @@
  * A custom element in light DOM, like <apc-agents>: the app's fonts and theme apply. It is themed by
  * --apc-* custom properties (--apc-chip, --apc-line, --apc-ink, --apc-muted, --apc-accent, and
  * --apc-pets-size for the pet), and the pets by `scheme` and `tint` (pet-scheme.ts). Framework-agnostic:
- * set `agents`, listen for apc-open.
+ * set `agents`, listen for apc-open. The app's own links (for example "Manage agents") go in `links`, at the
+ * foot of the popover; a pet that is armed wears data-armed and aria-pressed (armed.ts).
  */
 import { APC_MOBILE_MEDIA } from "@tineira/apc-protocol";
+import { markArmed } from "./armed.ts";
 import { colorFor, type PetBadge } from "./brands.ts";
 import { createPet, petPhase, type PetHandle } from "./pet.ts";
 import type { PetScheme, PetTint } from "./pet-scheme.ts";
@@ -43,12 +45,40 @@ export interface HeaderPet {
   state: PetState;
   /** Its logo (agentBadge); left out, the neutral mark in the agent's own colour. */
   badge?: PetBadge | null;
-  /** Where it points: in words, whether it read it, and whether that target is on this page. */
-  pin?: { label: string; seen: boolean; here: boolean } | null;
+  /**
+   * Where it points: in words, whether it read it, and whether that target is on this page. `href` is the
+   * route to that target: left out, the row is a button (apc-open) as before; a string is carried in the apc-open
+   * event (detail.href); `null` says the pin has no page to go to, so the row is plain text, never a dead button.
+   */
+  pin?: { label: string; seen: boolean; here: boolean; href?: string | null } | null;
 }
 
-/** Event, with detail { id }: the person chose an agent's pin in the popover (go to it). */
-export type HeaderPetsEvent = "apc-open";
+/**
+ * A link's address as it may be set on an anchor: http(s) or relative, nothing else. The address is parsed as the browser
+ * would (so "java	script:" is read as javascript:), and any other scheme (javascript:, data:, blob:, file:) is refused.
+ */
+export function safeLinkHref(href: unknown): string | null {
+  if (typeof href !== "string" || href.trim() === "") return null;
+  try {
+    const url = new URL(href, "https://relative.invalid/");
+    return url.protocol === "http:" || url.protocol === "https:" ? href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A link of the app's own in the popover's foot (TIN-903), for example "Manage agents". */
+export interface PetsLink {
+  label: string;
+  href: string;
+}
+
+/**
+ * Events: `apc-open`, with detail { id, href? }: the person chose an agent's pin in the popover (go to it);
+ * `apc-link`, with detail { href }, cancelable: the person chose one of the app's links. Cancel it
+ * (preventDefault) to navigate yourself, for example with a client-side router; left alone, the link opens.
+ */
+export type HeaderPetsEvent = "apc-open" | "apc-link";
 
 const STYLE_ID = "apc-pets-style";
 /** The component's styles (exported for tests). */
@@ -73,11 +103,15 @@ apc-pets[hidden] { display: none; }
 .apc-pets__pin[hidden], .apc-pets__open[hidden] { display: none; }
 .apc-pets__open { padding: 0; border: 0; background: none; color: var(--apc-accent, #b85209); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; min-height: 32px; }
 .apc-pets__open:hover { text-decoration: underline; }
+.apc-pets__links { display: grid; gap: 2px; margin-top: 8px; }
+.apc-pets__links[hidden] { display: none; }
+.apc-pets__link { display: inline-flex; align-items: center; min-height: 32px; color: var(--apc-muted, #56627a); font-size: 12px; font-weight: 600; text-decoration: none; }
+.apc-pets__link:hover { text-decoration: underline; }
 .apc-pets__close { position: absolute; right: 4px; top: 4px; width: 32px; height: 32px; padding: 0; border: 0; background: none; color: var(--apc-muted, #56627a); font-size: 18px; cursor: pointer; }
 @media ${APC_MOBILE_MEDIA} {
   .apc-pets__pet + .apc-pets__pet { margin-left: 0; }
   .apc-pets__more { margin-left: 0; }
-  .apc-pets__open, .apc-pets__close { min-height: 44px; min-width: 44px; }
+  .apc-pets__open, .apc-pets__close, .apc-pets__link { min-height: 44px; min-width: 44px; }
 }
 `;
 
@@ -89,6 +123,8 @@ interface Row {
   name: HTMLElement;
   doing: HTMLElement;
   open: HTMLButtonElement;
+  /** The pin as plain text, for a pin with no route (href: null). */
+  plain: HTMLElement;
   note: HTMLElement;
 }
 
@@ -102,15 +138,24 @@ export function defineHeaderPets(tag = "apc-pets"): void {
     private look: { scheme: PetScheme; tint: PetTint | null } = { scheme: "light", tint: null };
     private given: Partial<PetsStrings> | null = null;
     private words: PetsStrings = DEFAULT_PETS_STRINGS;
-    private parts: { row: HTMLElement; more: HTMLButtonElement; count: HTMLElement; popover: HTMLElement; items: HTMLElement; close: HTMLButtonElement } | null = null;
+    private parts: { row: HTMLElement; more: HTMLButtonElement; count: HTMLElement; popover: HTMLElement; items: HTMLElement; foot: HTMLElement; close: HTMLButtonElement } | null = null;
     private pets = new Map<string, { button: HTMLButtonElement; dot: HTMLElement; pet: PetHandle; drawn: Pick<HeaderPet, "state" | "badge" | "name"> }>();
     private rows = new Map<string, Row>();
+    private menu: PetsLink[] = [];
 
     get agents(): HeaderPet[] {
       return this.list;
     }
     set agents(next: HeaderPet[]) {
       this.list = next ?? [];
+      this.render();
+    }
+    /** The app's own links, at the foot of the popover: `[{ label, href }]`. Choosing one fires `apc-link`. */
+    get links(): PetsLink[] {
+      return this.menu;
+    }
+    set links(next: PetsLink[]) {
+      this.menu = next ?? [];
       this.render();
     }
     /** How many pets show before "+N" (default 3). */
@@ -154,7 +199,7 @@ export function defineHeaderPets(tag = "apc-pets"): void {
 
     connectedCallback(): void {
       const own = this as unknown as Record<string, unknown>;
-      for (const key of ["agents", "limit", "scheme", "tint", "strings"]) {
+      for (const key of ["agents", "links", "limit", "scheme", "tint", "strings"]) {
         if (!Object.hasOwn(own, key)) continue;
         const value = own[key];
         delete own[key];
@@ -189,8 +234,10 @@ export function defineHeaderPets(tag = "apc-pets"): void {
         close.addEventListener("click", () => this.close());
         const items = document.createElement("ul");
         items.className = "apc-pets__list";
-        popover.append(close, items);
-        this.parts = { row, more, count, popover, items, close };
+        const foot = document.createElement("div");
+        foot.className = "apc-pets__links";
+        popover.append(close, items, foot);
+        this.parts = { row, more, count, popover, items, foot, close };
         this.append(row, popover);
       }
       document.addEventListener("keydown", this.onKey);
@@ -235,9 +282,39 @@ export function defineHeaderPets(tag = "apc-pets"): void {
       if (refocus && this.parts.more.isConnected) this.parts.more.focus();
     }
 
+    /** The app's links: kept while they are the same, so a link being focused or pressed is left alone. */
+    private renderLinks(foot: HTMLElement): void {
+      foot.hidden = this.menu.length === 0;
+      const key = JSON.stringify(this.menu.map((l) => [l.label, safeLinkHref(l.href)]));
+      if (foot.getAttribute("data-key") === key) return;
+      foot.setAttribute("data-key", key);
+      foot.replaceChildren(
+        ...this.menu.map((l) => {
+          // An address that is not http(s) or relative is shown as text, never as a link.
+          if (safeLinkHref(l.href) === null) {
+            const text = document.createElement("span");
+            text.className = "apc-pets__link";
+            text.textContent = l.label;
+            return text;
+          }
+          const a = document.createElement("a");
+          a.className = "apc-pets__link";
+          a.setAttribute("href", l.href);
+          a.textContent = l.label;
+          a.addEventListener("click", (e) => {
+            this.close(false);
+            const go = new CustomEvent("apc-link", { detail: { href: l.href }, bubbles: true, cancelable: true });
+            this.dispatchEvent(go);
+            if (go.defaultPrevented) (e as Event).preventDefault();
+          });
+          return a;
+        }),
+      );
+    }
+
     private render(): void {
       if (!this.parts) return;
-      const { row, more, count, popover, items, close } = this.parts;
+      const { row, more, count, popover, items, foot, close } = this.parts;
       const w = this.words;
       const popoverId = (popover.id ||= `apc-pets-${Math.random().toString(36).slice(2, 10)}`);
       row.setAttribute("aria-label", w.group);
@@ -279,6 +356,7 @@ export function defineHeaderPets(tag = "apc-pets"): void {
         const offPage = !!a.pin && !a.pin.here;
         button.setAttribute("aria-label", w.markAria(a.name, offPage ? `${w.state(a.state)}. ${w.offPage}` : w.state(a.state)));
         button.style.zIndex = String(shown.length - i);
+        markArmed(button, a.id);
         dot.hidden = !offPage;
         // In order, before the list button.
         if (row.children[i] !== button) row.insertBefore(button, row.children[i] ?? null);
@@ -310,22 +388,29 @@ export function defineHeaderPets(tag = "apc-pets"): void {
           open.addEventListener("click", (e) => {
             if (!(e as Event).isTrusted) return;
             this.close(false);
-            this.dispatchEvent(new CustomEvent("apc-open", { detail: { id: a.id }, bubbles: true }));
+            const href = this.list.find((x) => x.id === a.id)?.pin?.href;
+            this.dispatchEvent(new CustomEvent("apc-open", { detail: typeof href === "string" ? { id: a.id, href } : { id: a.id }, bubbles: true }));
           });
+          const plain = document.createElement("div");
+          plain.className = "apc-pets__pin";
           const note = document.createElement("div");
           note.className = "apc-pets__pin";
-          li.append(name, doing, open, note);
-          r = { li, name, doing, open, note };
+          li.append(name, doing, open, plain, note);
+          r = { li, name, doing, open, plain, note };
           this.rows.set(a.id, r);
         }
         setText(r.name, a.name);
         setText(r.doing, w.state(a.state));
-        r.open.hidden = !a.pin;
-        if (a.pin) setText(r.open, w.pinned(a.pin.label, a.pin.seen));
+        // A pin with a route is a button; with no route (href: null) it is text; never a button that goes nowhere.
+        const routed = !!a.pin && a.pin.href !== null;
+        r.open.hidden = !routed;
+        r.plain.hidden = !a.pin || routed;
+        if (a.pin) setText(routed ? r.open : r.plain, w.pinned(a.pin.label, a.pin.seen));
         r.note.hidden = !!a.pin?.here;
         setText(r.note, a.pin ? w.offPage : w.notPinned);
         if (items.children[i] !== r.li) items.insertBefore(r.li, items.children[i] ?? null);
       });
+      this.renderLinks(foot);
       if (this.list.length === 0 && !popover.hidden) this.close(false);
     }
   }
@@ -343,6 +428,8 @@ export interface ApcPetsElement extends HTMLElement {
   agents: HeaderPet[];
   /** How many pets show before "+N" (default 3). */
   limit: number;
+  /** The app's own links, at the foot of the popover. */
+  links: PetsLink[];
   scheme: PetScheme;
   tint: PetTint | null;
   strings: Partial<PetsStrings> | null;

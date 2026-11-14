@@ -10,7 +10,9 @@ import { canonicalTarget, parseFocusAttrs, type FocusRow } from "@tineira/apc-pr
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { displayNames, type AgentMotion } from "./agent-brands.ts";
+import { pinTouch } from "@tineira/apc-web";
 import { ApcPin } from "./apc-pin.tsx";
+import { badgeCenterX } from "./pin-place.ts";
 import type { GrantState } from "./api.ts";
 
 export const isSeen = (pin: FocusRow) => !!pin.seen_at && pin.seen_at >= pin.pinned_at;
@@ -44,13 +46,13 @@ function place(grants: GrantState[]): Placed[] {
     // A chart column (an SVG group) has a hit area taller than its bar: sit on the bar. A card that holds a chart is not a column.
     const r = ((el instanceof SVGElement ? el.querySelector(".bar") : null) ?? el).getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
-    // Two agents on one element sit side by side.
+    // Two agents on one element sit side by side, a step apart that keeps each × off the next mark (pin-place.ts).
     const n = stacked.get(el) ?? 0;
     stacked.set(el, n + 1);
     // A bar or a cell: astride its right edge, just below its top, clear of the value printed above it.
     // A row or a card: just inside its top right corner.
     const narrow = r.width < 140;
-    out.push({ grantId: g.id, left: (narrow ? r.right : r.right - 24) - n * 32, top: r.top + (narrow ? 16 : Math.min(22, r.height / 2)) });
+    out.push({ grantId: g.id, left: badgeCenterX({ right: r.right, narrow, index: n, viewportWidth: document.documentElement.clientWidth, touch: pinTouch() }), top: r.top + (narrow ? 16 : Math.min(22, r.height / 2)) });
   }
   return out;
 }

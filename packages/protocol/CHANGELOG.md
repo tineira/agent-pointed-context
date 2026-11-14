@@ -4,6 +4,15 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor (or, from 1.0, a major) version. A patch (0.7.0 to 0.7.1) never changes the contract; it fixes the packages or the wording, so an app that implements 0.7.0 implements every 0.7.x.
 
+## 0.11.2 (draft, 2026-11-14)
+
+A package patch: `@tineira/apc-web` and the wording only; the contract an app implements is the same as in 0.11.0 and 0.11.1 (TIN-903).
+
+- **The pin badge's × never covers the mark on touch.** Under `APC_MOBILE_MEDIA` the × sat on the mark's corner with a 44 px hit area, so a tap meant to arm or drag the mark unpinned. It now sits beside the mark (24 px, its hit area stopping at the mark's edge), and the step between stacked badges on touch is `PIN_STACK_STEP_TOUCH` (72 px; `pinStackStep(touch)`, `pinBadgeX`). Desktop pointers are unchanged. The spec's wording of the pin badge says so (`packages/web/src/pin-badge.ts`, the spec).
+- **`<apc-pets>`: a pin row can have no route, and the app can add its own links.** `pin.href: null` shows the pin as text, not as a button that goes nowhere; `links` puts the app's own links (for example "Manage agents") at the popover's foot (`apc-link` event, cancelable) (`packages/web/src/header-pets.ts`).
+- **The armed mark wears `data-armed` and `aria-pressed` itself**, for pets, pin badges and the agent bar's marks, from `enablePinning`; an app needs no code of its own (`packages/web/src/armed.ts`, `packages/web/src/pinning.ts`). A pin badge's mark is now a `button` (it was an `img`), so `aria-pressed` is valid on it.
+- **0.11.2 includes the `<apc-handoff>` card from PR 178** (`@tineira/apc-web`: `<apc-handoff>`, `handoffView`, `HandoffStrings`). It is in the package since the 0.11.1 tag was cut before it merged; the contract (pairing in § 4) does not change.
+
 ## 0.11.1 (draft, 2026-11-13)
 
 A patch: the wording of M2 and the packages; the contract an app implements is the same (TIN-880).

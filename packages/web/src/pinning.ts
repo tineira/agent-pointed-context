@@ -1,5 +1,6 @@
 import { APC_AGENT_TYPE, APC_JSON_MAX_BYTES, APC_JSON_PATH, parseAgentDrag, parseApcManifest, parseFocusAttrs, urlOnOrigin, type AgentDrag, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
 import { DEFAULT_PINNING_STRINGS, resolveStrings, type PinningStrings } from "./strings.ts";
+import { syncArmedMarks } from "./armed.ts";
 
 const profileLoads = new Map<string, Promise<ApcRole[] | null>>();
 
@@ -299,7 +300,7 @@ export const TAP_SLOP_PX = 10;
 const ARMED_STYLE_ID = "apc-pinning-style";
 const ARMED_CSS = `
 body.apc-armed [data-focus] { outline: 2px dashed var(--apc-accent, #b85209); outline-offset: 2px; cursor: pointer; }
-[data-apc-mark][aria-pressed="true"] { outline: 3px solid var(--apc-accent, #b85209); outline-offset: 2px; }
+[data-apc-mark][aria-pressed="true"], [data-apc-mark][data-armed="true"] { outline: 3px solid var(--apc-accent, #b85209); outline-offset: 2px; }
 `;
 
 /** The note shown while an agent is armed: what to do, and a way out. Fixed above the agent bar (--apc-bar-height). */
@@ -363,10 +364,10 @@ export function enablePinning(options: PinningOptions): () => void {
       restore = [];
       if (watch) clearInterval(watch);
       watch = null;
-      for (const m of document.querySelectorAll(markSelector)) m.removeAttribute("aria-pressed");
       if (!armed) {
         document.body.classList.remove("apc-armed", "apc-dragging");
         document.documentElement.removeAttribute("data-apc-armed");
+        syncArmedMarks(markSelector);
       } else {
         if (!document.getElementById(ARMED_STYLE_ID)) {
           const style = document.createElement("style");
@@ -380,7 +381,7 @@ export function enablePinning(options: PinningOptions): () => void {
         document.body.append(note.box);
         document.body.classList.add("apc-armed", "apc-dragging");
         document.documentElement.setAttribute("data-apc-armed", armed);
-        mark?.setAttribute("aria-pressed", "true");
+        syncArmedMarks(markSelector);
         // A route change (pushState too) or a hidden page lets go: the person is never left armed on another screen.
         const href = location.href;
         watch = setInterval(() => {

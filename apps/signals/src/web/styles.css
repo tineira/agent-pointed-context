@@ -75,6 +75,9 @@ button, select { font: inherit; color: inherit; }
 
 .pins { display: inline-flex; gap: 12px; margin-left: 6px; vertical-align: middle; }
 .post-head .pins { margin-left: auto; }
+/* On touch the pin badge's × sits beside its mark and reaches 38 px past it (apc-web, TIN-903): a pitch of 72 px (28 + 44) keeps it off the next
+   badge's mark, and the last badge keeps room for its × inside the screen. Under APC_MOBILE_MEDIA. */
+@media (pointer: coarse), (max-width: 640px) { .pins { gap: 44px; padding-right: 30px; } }
 .apc-dragging [data-focus] { outline: 1px dashed var(--muted); outline-offset: 2px; }
 .apc-dragging .apc-target { outline: 2px solid var(--accent); outline-offset: 2px; }
 
