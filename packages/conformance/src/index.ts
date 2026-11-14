@@ -397,6 +397,26 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
   /** Whether the app's apc.json claims `version` or later: a rule added in a version is checked only of apps that claim it. */
+  /**
+   * An agent for a wait-event check (APC 0.11), revoked once the check ends (`waitCheck`), so the five checks add no
+   * agents to the app's count: an app may cap its agents (Signals keeps at most 20 Direct ones).
+   */
+  let waitAgents: string[] = [];
+  const waitAgent = async (): Promise<AgentConnection> => {
+    const conn = await app.connect();
+    waitAgents.push(conn.grantId);
+    return conn;
+  };
+  const waitCheck = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck =>
+    check(name, async () => {
+      try {
+        return await run();
+      } finally {
+        const made = waitAgents;
+        waitAgents = [];
+        for (const grantId of made) await Promise.resolve(app.page.revoke(grantId)).catch(() => false);
+      }
+    });
   const claims = async (conn: AgentConnection, version: string): Promise<boolean> => {
     const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
     const response = await (app.fetch ? app.fetch(request) : fetch(request));
@@ -561,9 +581,9 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       if (first.id) expect(e.targets.some((t) => t.kind === first.kind && t.id === first.id), `the read of ${first.kind}:${first.id} names it`);
     }),
 
-    check("a wait publishes open, then closed, on the presence channel (APC 0.11)", async () => {
+    waitCheck("a wait publishes open, then closed, on the presence channel (APC 0.11)", async () => {
       if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await app.connect();
+      const conn = await waitAgent();
       if (!(await claims(conn, "0.11.0"))) return NOT_011;
       await app.page.setOpen(true);
       app.page.takePresence();
@@ -576,9 +596,9 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "closed", `once the wait returned, the page has its closed, and only that: got [${states.join()}]`);
     }),
 
-    check("a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", async () => {
+    waitCheck("a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", async () => {
       if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await app.connect();
+      const conn = await waitAgent();
       if (!(await claims(conn, "0.11.0"))) return NOT_011;
       await app.page.setOpen(true);
       app.page.takePresence();
@@ -592,9 +612,9 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed,open,closed", `open, then at the takeover closed and open, then closed: got [${states.join()}]`);
     }),
 
-    check("a cancelled wait publishes closed (APC 0.11)", async () => {
+    waitCheck("a cancelled wait publishes closed (APC 0.11)", async () => {
       if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await app.connect();
+      const conn = await waitAgent();
       if (!(await claims(conn, "0.11.0"))) return NOT_011;
       await app.page.setOpen(true);
       app.page.takePresence();
@@ -608,9 +628,9 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed", `a cancelled wait sends open, then closed when it stops: got [${states.join()}]`);
     }),
 
-    check("a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", async () => {
+    waitCheck("a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", async () => {
       if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await app.connect();
+      const conn = await waitAgent();
       if (!(await claims(conn, "0.11.0"))) return NOT_011;
       await app.page.setOpen(true);
       app.page.takePresence();
@@ -625,9 +645,9 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed", `a wait cut by a revoke sends open, then closed, and a wait on the revoked grant nothing: got [${states.join()}]`);
     }),
 
-    check("a refused wait publishes nothing (APC 0.11)", async () => {
+    waitCheck("a refused wait publishes nothing (APC 0.11)", async () => {
       if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await app.connect();
+      const conn = await waitAgent();
       if (!(await claims(conn, "0.11.0"))) return NOT_011;
       await app.page.setOpen(true);
       app.page.takePresence();
