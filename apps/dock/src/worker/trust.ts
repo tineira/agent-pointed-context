@@ -208,11 +208,34 @@ export function unverifiedFocus(raw: unknown, origin: string, now: number): Focu
   if (typeof f.next !== "string" || !TOOL_NAME.test(f.next) || f.next === "get_current_view" || f.next === "wait_for_focus") return null;
   const args = f.next_args ?? {};
   if (!args || typeof args !== "object" || Array.isArray(args) || JSON.stringify(args).length > 1024) return null;
-  const at = typeof f.pinned_at === "string" ? Date.parse(f.pinned_at) : NaN;
-  if (!Number.isFinite(at) || at > now + 5_000) return null;
+  const pinnedAt = pinTime(f.pinned_at, now);
+  if (!pinnedAt) return null;
   // Its address only on the app's own origin: never a link the app points elsewhere.
   const appUrl = typeof f.app_url === "string" && f.app_url.length <= 2048 && (f.app_url === origin || f.app_url.startsWith(`${origin}/`)) ? f.app_url : "";
-  return { ...target, app_url: appUrl, pinned_at: new Date(at).toISOString(), next: f.next, next_args: args as Record<string, unknown> } as FocusPayload;
+  return { ...target, app_url: appUrl, pinned_at: pinnedAt, next: f.next, next_args: args as Record<string, unknown> } as FocusPayload;
+}
+
+/** How far ahead of the hub's clock a pin may be dated (clock skew between the app's server and the hub). */
+export const PIN_SKEW_MS = 5_000;
+
+/**
+ * A pin's `pinned_at` as the hub orders pins by it: a real time no later than the hub's now plus PIN_SKEW_MS,
+ * as ISO 8601 in UTC; null otherwise. "Newest across apps wins", so a pin dated ahead would keep the agent's
+ * one focus away from every other app until the person cleared it.
+ */
+export function pinTime(raw: unknown, now: number): string | null {
+  const at = typeof raw === "string" ? Date.parse(raw) : NaN;
+  return Number.isFinite(at) && at <= now + PIN_SKEW_MS ? new Date(at).toISOString() : null;
+}
+
+/**
+ * A verified app's focus (TIN-911): taken as the app sent it, its pinned_at held to the hub's clock as an
+ * unverified app's is (pinTime). A pin dated ahead, or with no real time, is not taken. null otherwise.
+ */
+export function verifiedFocus(raw: unknown, now: number): FocusPayload | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const pinnedAt = pinTime((raw as { pinned_at?: unknown }).pinned_at, now);
+  return pinnedAt ? ({ ...(raw as FocusPayload), pinned_at: pinnedAt } as FocusPayload) : null;
 }
 
 /**

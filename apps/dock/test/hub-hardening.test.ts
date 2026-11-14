@@ -61,6 +61,28 @@ test("a verified app's redirect is a failure: the hub's MCP call and its give-ba
   assert.deepEqual(w.elsewhere.calls, []);
 });
 
+// ---- F6: a pin dated ahead is never taken, verified app or not ----
+
+test("a verified app's pin dated ahead of the hub's clock is not taken, so another app's pin still wins the focus", async (t) => {
+  const w = await verifiedWorld(t);
+  await w.pair(w.shop);
+  await w.pair(w.market);
+  const pin = (a: FakeApp, at: string) => ({ kind: "customer", id: `${a.name}-1`, part: null, params: null, app_url: `${a.origin}/`, pinned_at: at, next: "get_figure", next_args: {} });
+  w.shop.focus = pin(w.shop, "2999-12-31T00:00:00.000Z");
+  await w.callHub("get_current_view");
+  assert.equal((await w.agent()).focus, null, "the pin dated ahead was not taken");
+  w.market.focus = pin(w.market, new Date().toISOString());
+  await w.callHub("get_current_view");
+  assert.equal((await w.agent()).focus?.app.origin, MARKET, "the other app's pin, dated now, is the focus");
+  // A pin with no real time is not taken either; one a moment ahead (clock skew) is.
+  w.shop.focus = pin(w.shop, "not a time");
+  await w.callHub("get_current_view");
+  assert.equal((await w.agent()).focus?.app.origin, MARKET);
+  w.shop.focus = pin(w.shop, new Date(Date.now() + 2_000).toISOString());
+  await w.callHub("get_current_view");
+  assert.equal((await w.agent()).focus?.app.origin, SHOP);
+});
+
 // ---- F8: secrets stay out of the logs ----
 
 test("the dock's Workers keep no invocation logs, and what the dock logs carries no secret", () => {

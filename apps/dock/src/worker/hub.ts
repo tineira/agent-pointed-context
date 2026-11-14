@@ -19,7 +19,7 @@ import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
 import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, readApcJson, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
-import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView } from "./trust.ts";
+import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView, verifiedFocus } from "./trust.ts";
 import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJoinCode, REMOVED_CLOSE } from "./devices.ts";
 import type { JoinCodes } from "./join-codes.ts";
 
@@ -1742,7 +1742,8 @@ export class Hub extends DurableObject<Env> {
     // An unverified app's view is kept only when small, and its pin only when well formed and not dated ahead (TIN-580).
     const view = p.verified ? s.view : unverifiedView(s.view);
     if (from === "view") this.sql.exec("update pairings set view = ? where id = ?", view ? JSON.stringify(view) : null, p.id);
-    const f = (p.verified ? s.focus : unverifiedFocus(s.focus, p.app_origin, Date.now())) as FocusPayload | null | undefined;
+    // A pin dated ahead of the hub's clock is not taken, verified app or not (TIN-911): newest wins, and it would win for good.
+    const f = p.verified ? verifiedFocus(s.focus, Date.now()) : unverifiedFocus(s.focus, p.app_origin, Date.now());
     if (!f || typeof f.pinned_at !== "string" || (p.taken_at && f.pinned_at <= p.taken_at)) return false;
     this.sql.exec("update pairings set taken_at = ? where id = ?", f.pinned_at, p.id);
     // One mark, one focus: the newest pin across apps wins.
