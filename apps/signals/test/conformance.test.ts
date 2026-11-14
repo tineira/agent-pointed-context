@@ -127,6 +127,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
               room,
               object: () => feed,
               restart: () => void (feed = new Feed(room.ctx, feedEnv)),
+              directGrant: () => connectOn("direct"),
             }),
           },
         }

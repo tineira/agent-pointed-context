@@ -135,6 +135,7 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
               room,
               object: () => sandbox,
               restart: () => void (sandbox = new Sandbox(room.ctx, sandboxEnv)),
+              directGrant: () => connectOn("direct"),
             }),
           },
         }

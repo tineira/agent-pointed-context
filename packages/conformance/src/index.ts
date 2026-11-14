@@ -249,6 +249,12 @@ export interface ApcDockLifecycleAdapter {
   owner: ApcDockOwnerEndpoints;
   /** The same app with pairing disabled (its dock configuration missing): its `fetch`, for `apc.json` (M8). */
   pairingDisabled(): Promise<(request: Request) => Promise<Response>>;
+  /**
+   * A new Direct agent, made the app's way, with no pin yet (APC 0.12, M12): required of an app that offers both
+   * profiles and claims 0.12.0 or later. The suite hands its URL to the stand-in hub's `/apc/pair`, as an attacker
+   * would, and checks it never goes live as a Dock grant.
+   */
+  directGrant?(): Promise<AgentConnection>;
 }
 
 /** What the suite needs from an app. */

@@ -4,7 +4,7 @@
  * as the page sends them (the session cookie, `application/json`, the app's own `Origin`), so M6 and the routes are
  * under test too. Not a test file itself: apps/demo/test/conformance.test.ts and Signals' use it.
  */
-import type { ApcDockDropOutcome, ApcDockLifecycleAdapter, StandInHub } from "@tineira/apc-conformance";
+import type { AgentConnection, ApcDockDropOutcome, ApcDockLifecycleAdapter, StandInHub } from "@tineira/apc-conformance";
 import type { DurableObjectRoom } from "@tineira/apc-conformance/workers";
 
 type WorkerFetch = (request: Request, env: unknown) => Promise<Response>;
@@ -30,6 +30,8 @@ export interface DockLifecycleOptions {
   object: () => { advanceDockClock(ms: number): Promise<void> };
   /** The object dies and a new one starts on the same storage; it is the one `object()` and `workerEnv()` give from then on. */
   restart: () => void;
+  /** A new Direct agent, made as the page makes one (APC 0.12, M12). */
+  directGrant: () => Promise<AgentConnection>;
 }
 
 /**
@@ -148,5 +150,6 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
       cancel: { path: `/api/s/${o.sid}/hub/cancel`, body: async () => ({ grant_id: (await handoff()).grantId }) },
     },
     pairingDisabled: async () => (request) => o.worker.fetch(request, o.disabledEnv),
+    directGrant: o.directGrant,
   };
 }
