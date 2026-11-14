@@ -14,7 +14,8 @@
  *   grant). `expire()` is the pairing code's time running out: every pending pairing with a code goes, its
  *   grant given back.
  * - **A broken hub**, for the checks that an app fails closed (`mode`): `"no_ack"` answers a yes without the
- *   acknowledgement (a hub from before 0.9), `"redirect"` redirects `/apc/pair` to another host that says yes,
+ *   acknowledgement (a hub from before 0.9), `"redirect"` redirects `/apc/pair` to another host that says yes
+ *   (to a fetch with `redirect: "manual"`, a 307 with a yes in it, which the app must refuse),
  *   `"error_500"` says yes with HTTP 500.
  * - **Since 0.10**, for the checks of the hub call (M2 to M4): `"status_3xx"` answers a yes with a 307 (whatever the
  *   app's `redirect` option), `"opaque_redirect"` and `"redirected"` a yes marked as a redirect; `"slow_body"` sends
@@ -197,8 +198,15 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
         ? { ok: true, pairing_id: "pr_elsewhere", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: PAIRING_CODE_ACK }
         : { ok: true, status: "pending", agent: { name: "Agent via dock", icon: null } };
     if (mode === "redirect") {
-      // A fetch that refuses redirects (as an app's must) fails; one that follows lands on another host that says yes.
+      // A fetch that refuses redirects (as an app's must) fails ("error") or gets the 3xx back with a yes in it,
+      // which it must refuse ("manual", the mode that works on every runtime); one that follows lands on another
+      // host that says yes.
       if (redirect === "error") throw new TypeError(`redirect from ${origin}${path} refused`);
+      if (redirect === "manual") {
+        const r = json(yes, 307);
+        r.headers.set("location", `https://elsewhere.example${path}`);
+        return r;
+      }
       // A fetch that follows has sent the body (the secret MCP URL, and on /apc/pair the code) on to the target: logged where the checks see it.
       requests.push(`https://elsewhere.example${path}`);
       bodies.push({ url: `https://elsewhere.example${path}`, text: JSON.stringify(body) });

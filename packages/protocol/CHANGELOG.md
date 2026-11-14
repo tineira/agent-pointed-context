@@ -4,6 +4,13 @@ This file records the contract that an app and an agent share in Agent Pointed C
 
 The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor (or, from 1.0, a major) version. A patch (0.7.0 to 0.7.1) never changes the contract; it fixes the packages or the wording, so an app that implements 0.7.0 implements every 0.7.x.
 
+## 0.11.1 (draft, 2026-11-13)
+
+A patch: the wording of M2 and the packages; the contract an app implements is the same (TIN-880).
+
+- **M2 no longer names `redirect: "error"`, which Cloudflare Workers does not implement.** Workers throws a `TypeError` on it before anything is sent, so an app on Workers that followed the letter of M2 could never reach its hub. The rule is the same: never follow a redirect. Call the hub with `redirect: "manual"` (or `"error"` where the runtime has it), and refuse any 3xx, an `opaqueredirect` or `response.redirected` (`packages/protocol/src/dock.ts`, the spec).
+- **`pairWithHub` and `confirmWithHub` call the hub with `redirect: "manual"`.** From 0.9.0 to 0.11.0 they asked for `"error"`, so on Workers every Dock pairing and confirm failed as `hub_unreachable` before it was sent. In Node and browsers they worked. A redirect is still refused, now as `hub_refused` on every runtime (Node used to report it as `hub_unreachable`) (`packages/server/src/hub-client.ts`).
+
 ## 0.11.0 (draft, 2026-11-13)
 
 Wave 2 of the APC 1.0 track (TIN-880): the agent in the page (TIN-878), a presence kind for waits (TIN-886) and several MCP endpoints in `apc.json` (TIN-888). Each has its own subsection below.

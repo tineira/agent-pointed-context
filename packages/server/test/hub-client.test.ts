@@ -24,7 +24,7 @@ test("the acknowledgement on a 200 pairs; the call never follows a redirect and 
   const hub = hubAnswering(() => Response.json(ACK));
   assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hub.fetch }), { ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Claude via dock", icon: null } });
   assert.equal(hub.sent[0]!.url, `${HUB}/apc/pair`);
-  assert.equal(hub.sent[0]!.init.redirect, "error");
+  assert.equal(hub.sent[0]!.init.redirect, "manual");
   assert.ok(hub.sent[0]!.init.signal, "a time limit");
   assert.equal(JSON.parse(String(hub.sent[0]!.init.body)).pairing_code, "K7M4P2");
 });
@@ -59,12 +59,11 @@ test("a hub's own 400 refusal is passed on; no answer is hub_unreachable", async
     throw new TypeError("fetch failed");
   }) as typeof fetch;
   assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: down }), { ok: false, error: "hub_unreachable" });
-  // A redirect under redirect: "error" throws in a real fetch.
-  const redirecting = (async (_url: string | URL | Request, init?: RequestInit) => {
-    if (init?.redirect === "error") throw new TypeError("unexpected redirect");
-    return Response.json(ACK);
+  // A runtime that refuses the call before sending it (any thrown fetch) is no answer.
+  const refusing = (async () => {
+    throw new TypeError("unexpected redirect");
   }) as typeof fetch;
-  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: redirecting }), { ok: false, error: "hub_unreachable" });
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: refusing }), { ok: false, error: "hub_unreachable" });
   // The time limit.
   const slow = ((_url: string | URL | Request, init?: RequestInit) =>
     new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)))) as typeof fetch;
@@ -81,7 +80,7 @@ test("a confirm is believed on a 200 with ok and a known status only", async () 
   const sent = hubAnswering(() => Response.json({ ok: true, status: "paired" }));
   await confirmWithHub(HUB, confirm, { fetch: sent.fetch });
   assert.equal(sent.sent[0]!.url, `${HUB}/apc/confirm`);
-  assert.equal(sent.sent[0]!.init.redirect, "error");
+  assert.equal(sent.sent[0]!.init.redirect, "manual");
 });
 
 // #region APC 0.10: M2, M3, M4 and M9 on the hub call (TIN-883)
@@ -274,7 +273,7 @@ test("against a real HTTP server: gzip is decoded and capped, a slow body hits t
     const started = Date.now();
     assert.deepEqual(await pairWithHub(slowHub!, BODY, { timeoutMs: 200 }), { ok: false, error: "hub_unreachable" }, "headers in time, the body never ends");
     assert.ok(Date.now() - started < 3000);
-    assert.deepEqual(await pairWithHub(redirectHub!, BODY), { ok: false, error: "hub_unreachable" }, "redirect: error, as the runtime refuses it");
+    assert.deepEqual(await pairWithHub(redirectHub!, BODY), { ok: false, error: "hub_refused" }, "redirect: manual hands the 307 back, and it is refused");
   } finally {
     for (const s of servers) s.closeAllConnections();
     await Promise.all(servers.map((s) => new Promise((r) => s.close(r))));
@@ -282,3 +281,34 @@ test("against a real HTTP server: gzip is decoded and capped, a slow body hits t
 });
 
 // #endregion
+
+// Cloudflare Workers does not implement redirect: "error": `fetch` throws a TypeError before anything is sent
+// (developers.cloudflare.com/workers/runtime-apis/request). This fetch behaves like the Workers runtime, so a hub
+// call that asked for "error" never reached the dock in production (APC 0.11.1). "manual" hands the 3xx back,
+// and the client refuses it (M2).
+function workersFetch(answer: () => Response) {
+  const sent: RequestInit[] = [];
+  const f = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const mode = init?.redirect ?? "follow"; // a new Request on Workers defaults to "follow" (an incoming one is "manual")
+    if (mode !== "follow" && mode !== "manual") {
+      throw new TypeError(`Invalid redirect value, must be one of "follow" or "manual" ("error" won't be implemented since it does not make sense at the edge; use "manual" and check the response status code).`);
+    }
+    sent.push(init ?? {});
+    return answer();
+  }) as typeof fetch;
+  return { fetch: f, sent };
+}
+
+test("on the Workers runtime the hub call is sent, never follows a redirect, and refuses the 3xx (M2)", async () => {
+  const ok = workersFetch(() => Response.json(ACK));
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: ok.fetch }), { ok: true, pairing_id: ACK.pairing_id, status: "pending", agent: ACK.agent });
+  assert.equal(ok.sent.length, 1, "the pairing was sent");
+  assert.equal(ok.sent[0]!.redirect, "manual", "redirects are never followed");
+  const confirm = { ticket: BODY.ticket, agent: "ag_1", mcp_url: BODY.mcp_url };
+  const okConfirm = workersFetch(() => Response.json({ ok: true, status: "paired", agent: { name: "A", icon: null } }));
+  assert.equal((await confirmWithHub(HUB, confirm, { fetch: okConfirm.fetch })).ok, true, "the confirm was sent");
+  assert.equal(okConfirm.sent[0]!.redirect, "manual");
+  const moved = workersFetch(() => new Response(null, { status: 302, headers: { location: "https://elsewhere.test/apc/pair" } }));
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: moved.fetch }), { ok: false, error: "hub_refused" });
+  assert.deepEqual(await confirmWithHub(HUB, confirm, { fetch: moved.fetch }), { ok: false, error: "hub_refused" });
+});

@@ -499,7 +499,7 @@ class Fixture {
     try {
       // (bound_misdeclared_global: a call to a hub other than the stand-in goes out through the global fetch.)
       const send: typeof fetch = this.has("bound_misdeclared_global") && new URL(base).origin !== HUB ? (u, i) => globalThis.fetch(u, i) : this.hub.fetch;
-      const request = send(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "error", ...(this.config.abortSignalDeadline ? { signal: AbortSignal.timeout(DEADLINE_MS) } : {}) });
+      const request = send(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), redirect: follows ? "follow" : "manual", ...(this.config.abortSignalDeadline ? { signal: AbortSignal.timeout(DEADLINE_MS) } : {}) });
       const response = await Promise.race([request, this.has("no_deadline_on_headers") || noDeadline || this.config.abortSignalDeadline ? never : whole.promise]);
       // (deadline_per_part: a fresh timer for the body once the headers came, as a careless app has; deadline_short_on_body: half of one.)
       if (this.has("deadline_per_part") || this.has("deadline_short_on_body")) {
