@@ -13,20 +13,30 @@ import { presenceWaitEvent } from "./presence.ts";
  * row per grant with the holder's token and when it claimed.
  */
 export interface WaitSlot {
-  /**
-   * Takes the place, or says how many seconds until a claim would. `tookOver` (APC 0.11): the place was held by
-   * another wait, which this claim took it from; the wait events say that wait closed. A store that cannot tell
-   * leaves it out.
-   */
+  /** Takes the place, or says how many seconds until a claim would. */
   claim(): Promise<{ token: string; tookOver?: boolean } | { retryAfterS: number }>;
   /** Whether the wait that got `token` still holds the place. */
   holds(token: string): Promise<boolean>;
-  /**
-   * Gives the place up, if `token` still holds it. Since APC 0.11 it may answer whether it did (true also when the
-   * grant was forgotten while `token` held it): the wait event `closed` goes only then. A store that answers nothing
-   * is asked `holds` just before instead.
-   */
+  /** Gives the place up, if `token` still holds it. */
   release(token: string): Promise<boolean | void>;
+}
+
+/**
+ * A place for a wait that tells takeovers and releases atomically (APC 0.11): what the wait events need. Its claim
+ * says, in the same step that took the place, whether another wait held it (`tookOver`); its release says, in the
+ * same step that gave it up, whether `token` held it (true also when the grant was forgotten while it did). A store
+ * row does it with a compare-and-swap that returns the row it replaced, and a compare-and-delete that returns
+ * whether a row went. `atomic: true` marks it; `announceWaits` sends events only from such a place.
+ */
+export interface AtomicWaitSlot extends WaitSlot {
+  readonly atomic: true;
+  claim(): Promise<{ token: string; tookOver: boolean } | { retryAfterS: number }>;
+  release(token: string): Promise<boolean>;
+}
+
+/** Whether a place for a wait tells takeovers and releases atomically, so wait events from it are true. */
+export function isAtomicWaitSlot(slot: WaitSlot): slot is AtomicWaitSlot {
+  return (slot as Partial<AtomicWaitSlot>).atomic === true;
 }
 
 /** Waits of grants run in one process: the places in memory, per grant id. */
@@ -42,16 +52,17 @@ export class MemoryWaitSlots {
     this.gapMs = gapMs;
   }
 
-  /** The place of one grant. */
-  for(grantId: string): WaitSlot {
+  /** The place of one grant: atomic, since its waits all run in this process. */
+  for(grantId: string): AtomicWaitSlot {
     return {
+      atomic: true,
       claim: async () => {
         const held = this.slots.get(grantId);
         const now = this.now();
         if (held && now - held.claimedAt < this.gapMs) return { retryAfterS: Math.max(1, Math.ceil((held.claimedAt + this.gapMs - now) / 1000)) };
         const token = crypto.randomUUID();
         this.slots.set(grantId, { token, claimedAt: now });
-        return held ? { token, tookOver: true } : { token };
+        return { token, tookOver: !!held };
       },
       holds: async (token) => this.slots.get(grantId)?.token === token,
       release: async (token) => {
@@ -82,10 +93,16 @@ export class MemoryWaitSlots {
  * that takes over sends the old wait's `closed` first, then the new one's `open`; the old wait, finding later that
  * it was taken over, sends nothing. A refused claim sends nothing. `publish` failing never fails the wait.
  *
+ * **Only from an `AtomicWaitSlot`.** A place that does not tell takeovers and releases atomically is returned as it
+ * is, and no wait event is sent: checking `holds` and then releasing is two steps, and a claim between them would end
+ * the page on `closed` while a wait runs. No "waiting" on the page beats a wrong one. A release that throws still
+ * sends `closed`: the wait is ending either way.
+ *
  * `registerApcTools` uses it when the context gives `waitPresence`; a hub or an app with its own wait loop wraps
  * its slot with it.
  */
 export function announceWaits(slot: WaitSlot, grantId: string, publish: (event: PresenceWaitEvent) => void | Promise<void>): WaitSlot {
+  if (!isAtomicWaitSlot(slot)) return slot;
   const send = async (state: "open" | "closed") => {
     try {
       await publish(presenceWaitEvent({ grantId, state }));
@@ -93,7 +110,8 @@ export function announceWaits(slot: WaitSlot, grantId: string, publish: (event: 
       // Presence is for the page; a wait does not fail on it. A lost closed clears on the page by itself.
     }
   };
-  return {
+  const announced: AtomicWaitSlot = {
+    atomic: true,
     claim: async () => {
       const claim = await slot.claim();
       if ("token" in claim) {
@@ -104,12 +122,17 @@ export function announceWaits(slot: WaitSlot, grantId: string, publish: (event: 
     },
     holds: (token) => slot.holds(token),
     release: async (token) => {
-      const before = await slot.holds(token);
-      const released = await slot.release(token);
-      if (typeof released === "boolean" ? released : before) await send("closed");
+      let released = true;
+      try {
+        released = await slot.release(token);
+      } finally {
+        // On a throw the place may still be held, but the wait is ending: closed, rather than "waiting" for a minute.
+        if (released) await send("closed");
+      }
       return released;
     },
   };
+  return announced;
 }
 
 /**

@@ -198,3 +198,28 @@ test("the wait-event checks fail a takeover that opens before it closes, or whos
   });
   await assert.rejects(named(lateClosed, TAKEOVER).run(), /got \[open,closed,open,closed,closed\]/);
 });
+
+const CANCEL = "a cancelled wait publishes closed";
+const REVOKE = "a wait whose grant is revoked publishes closed";
+const REFUSED = "a refused wait publishes nothing";
+
+test("the wait-event checks fail an app that sends no closed on a cancel or a revoke (APC 0.11)", async () => {
+  const noClosed = rewrittenPresence((m) => m.filter((e) => !(e.kind === "wait" && e.state === "closed")));
+  await assert.rejects(named(noClosed, CANCEL).run(), /a cancelled wait sends open, then closed when it stops: got \[open\]/);
+  await assert.rejects(named(noClosed, REVOKE).run(), /a wait cut by a revoke sends open, then closed.*got \[open\]/);
+});
+
+test("the wait-event checks fail an app whose wait on a revoked grant sends an event (APC 0.11)", async () => {
+  // As if the revoked grant's wait claimed a place: an open after the closed.
+  const reopened = rewrittenPresence((m) => {
+    const last = m.findLastIndex((e) => e.kind === "wait" && e.state === "closed");
+    return last < 0 ? m : [...m, { ...(m[last] as PresenceWaitEvent), state: "open" }];
+  });
+  await assert.rejects(named(reopened, REVOKE).run(), /got \[open,closed,open\]/);
+});
+
+test("the wait-event checks fail an app whose refused wait sends an event (APC 0.11)", async () => {
+  // As if the refused wait sent its own open.
+  const doubled = rewrittenPresence((m) => m.flatMap((e) => (e.kind === "wait" && e.state === "open" ? [e, e] : [e])));
+  await assert.rejects(named(doubled, REFUSED).run(), /got \[open,open\]/);
+});

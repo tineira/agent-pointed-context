@@ -393,7 +393,8 @@ test("a grant forgotten during its wait still gets the closed, once (APC 0.11)",
   assert.deepEqual(states(events), ["open", "closed"]);
 });
 
-test("announceWaits on a store that says nothing of takeovers or releases asks holds instead (APC 0.11)", async () => {
+test("announceWaits sends nothing from a place that does not tell takeovers and releases atomically (APC 0.11)", async () => {
+  // A store row read with holds, then released: two steps. A claim between them would end the page on closed.
   let holder: string | null = null;
   const plain = {
     claim: async () => ((holder = crypto.randomUUID()), { token: holder }),
@@ -404,13 +405,24 @@ test("announceWaits on a store that says nothing of takeovers or releases asks h
   };
   const events: PresenceWaitEvent[] = [];
   const slot = announceWaits(plain, "g", (e) => void events.push(e));
+  assert.equal(slot, plain, "the place is returned as it is");
   const a = await slot.claim();
   const b = await slot.claim();
   assert.ok("token" in a && "token" in b);
   await slot.release(a.token);
-  assert.deepEqual(states(events), ["open", "open"], "a taken-over wait that no longer holds the place sends no closed");
   await slot.release(b.token);
-  assert.deepEqual(states(events), ["open", "open", "closed"]);
+  assert.deepEqual(states(events), [], "no wait events: no waiting on the page beats a wrong one");
+});
+
+test("a release that throws still sends closed (APC 0.11)", async () => {
+  const inner = new MemoryWaitSlots().for("g");
+  const failing = { ...inner, release: async () => Promise.reject(new Error("store down")) } as typeof inner;
+  const events: PresenceWaitEvent[] = [];
+  const slot = announceWaits(failing, "g", (e) => void events.push(e));
+  const claim = await slot.claim();
+  assert.ok("token" in claim);
+  await assert.rejects(slot.release(claim.token), /store down/);
+  assert.deepEqual(states(events), ["open", "closed"]);
 });
 
 test("a presence channel that throws does not fail the wait (APC 0.11)", async () => {

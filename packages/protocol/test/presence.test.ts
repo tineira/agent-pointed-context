@@ -4,7 +4,7 @@ import { isPresenceWaitEvent, parsePresenceWaitEvent, WAIT_CEILING_DEFAULT_S, WA
 
 const open = { v: 1, grant_id: "g_1", at: "2026-11-13T10:00:00.000Z", kind: "wait", state: "open" };
 
-test("a wait event parses only with its five keys, v 1, an ISO time and state open or closed", () => {
+test("a wait event parses with its five keys strict, v 1, an ISO time and state open or closed", () => {
   assert.deepEqual(parsePresenceWaitEvent(open), open);
   assert.deepEqual(parsePresenceWaitEvent({ ...open, state: "closed" }), { ...open, state: "closed" });
   assert.equal(isPresenceWaitEvent(open), true);
@@ -19,13 +19,15 @@ test("a wait event parses only with its five keys, v 1, an ISO time and state op
     { ...open, at: "2026-11-13 10:00:00" },
     { ...open, grant_id: "" },
     { ...open, grant_id: 7 },
-    { ...open, targets: [] },
-    { ...open, tool: "wait_for_focus" },
     { v: 1, grant_id: "g_1", at: open.at, kind: "wait" },
   ]) {
     assert.equal(parsePresenceWaitEvent(bad), null, JSON.stringify(bad));
     assert.equal(isPresenceWaitEvent(bad), false);
   }
+});
+
+test("a key it does not know is dropped, not refused: the event only drives a display", () => {
+  assert.deepEqual(parsePresenceWaitEvent({ ...open, ttl_s: 50, tool: "x" }), open);
 });
 
 test("a call event is not a wait event", () => {

@@ -1,5 +1,5 @@
 import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@tineira/apc-protocol";
-import { createViewReporter, enablePinning, flashTargets, foldWaitEvent, initials as initialsOf, loadApcProfiles, markState, mergePins, NO_OPEN_WAITS, waitOpen, type DockUnsupported, type OpenWaits } from "@tineira/apc-web";
+import { createViewReporter, enablePinning, flashTargets, dropExpiredWaits, foldWaitEvent, initials as initialsOf, loadApcProfiles, markState, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type DockUnsupported, type OpenWaits } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LAST_MONTH, MONTHS, PLANS, REGIONS, type Plan, type Region } from "../model/seed.ts";
 import { demoDataset } from "../model/demo-world.ts";
@@ -180,9 +180,17 @@ function Sandbox({ sid }: { sid: string }) {
         } else {
           void refresh();
         }
-      }, () => setOpenWaits(NO_OPEN_WAITS)),
+      }),
     [api, refresh],
   );
+  // A lost closed runs out at the ceiling plus the margin (APC 0.11): a timer at the next such moment drops it and redraws.
+  useEffect(() => {
+    const at = nextWaitExpiry(openWaits);
+    if (at === null) return;
+    const id = setTimeout(() => setOpenWaits((w) => dropExpiredWaits(w)), Math.max(0, at - Date.now()) + 50);
+    return () => clearTimeout(id);
+  }, [openWaits]);
+
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 15_000);
     return () => clearInterval(id);
@@ -280,7 +288,7 @@ function Sandbox({ sid }: { sid: string }) {
     return motionFor({
       connected: !!g?.client_name,
       // Only while a wait is open (APC 0.11): never a dock grant's (its agent waits on the hub), and an open whose
-      // closed was lost stops after Pulse's ceiling (50 s, the default) plus the margin; the 15 s tick redraws it.
+      // closed was lost stops after Pulse's ceiling (50 s, the default) plus the margin, when the timer above drops it.
       waiting: waitOpen(openWaits, grantId, { path: (state?.hub_links ?? []).some((l) => l.grant_id === grantId) ? "dock" : "direct" }),
       busy: !!pulse[grantId] && Date.now() - pulse[grantId]! < 1500,
       seenAt: seenAt[grantId],

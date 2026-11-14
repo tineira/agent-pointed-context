@@ -592,6 +592,56 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed,open,closed", `open, then at the takeover closed and open, then closed: got [${states.join()}]`);
     }),
 
+    check("a cancelled wait publishes closed (APC 0.11)", async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }).catch(() => null);
+      await sleep(300);
+      // MCP's cancel, in a POST of its own, as a client of a stateless server sends it (the core's cancel check).
+      expect((await notify(app, conn, "notifications/cancelled", { requestId: 1, reason: "apc-conformance" })) < 300, "notifications/cancelled was not accepted");
+      await waiting;
+      await sleep(300);
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "open,closed", `a cancelled wait sends open, then closed when it stops: got [${states.join()}]`);
+    }),
+
+    check("a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const waiting = send(app, conn, "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 10 } }).catch(() => null);
+      await sleep(300);
+      expect(await app.page.revoke(conn.grantId), "the app refused to revoke");
+      await waiting;
+      // A wait on the revoked grant is answered revoked: it claims no place, so it sends nothing.
+      await send(app, conn, "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 2 } }).catch(() => null);
+      await sleep(300);
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "open,closed", `a wait cut by a revoke sends open, then closed, and a wait on the revoked grant nothing: got [${states.join()}]`);
+    }),
+
+    check("a refused wait publishes nothing (APC 0.11)", async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const running = call(app, conn, "wait_for_focus", { timeout_s: 2 });
+      await sleep(200);
+      const refused = data(await call(app, conn, "wait_for_focus", { timeout_s: 2 }));
+      expect(typeof refused.retry_after_s === "number", `the second wait is refused with retry_after_s: ${JSON.stringify(refused).slice(0, 200)}`);
+      const during = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(during.join() === "open", `the refused wait claimed no place, so the page has only the first wait's open: got [${during.join()}]`);
+      await running;
+      const after = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(after.join() === "closed", `then only the first wait's closed: got [${after.join()}]`);
+    }),
+
     check("revoke from the app cuts that agent at once, and only that agent", async () => {
       const a = await app.connect();
       const b = await app.connect();

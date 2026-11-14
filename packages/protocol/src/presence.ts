@@ -8,7 +8,10 @@
  *
  * **When a wait event is sent.** `open` when a `wait_for_focus` claims the grant's one place for a wait (APC 0.8);
  * `closed` when the wait gives it up: on return (a pin, a timeout, a closed page), on cancel, or when the grant is
- * revoked or deleted. A wait refused within `WAIT_CLAIM_GAP_S` claims nothing and sends nothing.
+ * revoked or deleted. A wait refused (within `WAIT_CLAIM_GAP_S`, or on a revoked grant) claims nothing and sends
+ * nothing. Only an app whose place for a wait tells takeovers and releases atomically sends wait events at all
+ * (`AtomicWaitSlot` in `@tineira/apc-server`): checking and then releasing in two steps could end the page on `closed`
+ * while a wait runs, and no "waiting" beats a wrong one.
  *
  * **A takeover** sends the old wait's `closed`, then the new wait's `open`, both when the new wait claims the place.
  * The old wait sends nothing when it later finds it was taken over: its place was already given up. So the last wait
@@ -19,7 +22,8 @@
  * its own) plus `WAIT_EVENT_MARGIN_S`, counted on the page's own clock from when the event arrived (never from `at`,
  * which is the server's clock). A wait never holds its place past its timeout by more than one poll and its last
  * checks; the margin covers that, so a live wait is never shown closed early, and a lost `closed` leaves the page
- * "waiting" for at most a minute.
+ * "waiting" for at most a minute. An `open` for a wait the page already has open (a replay after a reconnect) keeps
+ * the first arrival; a page that first hears of a wait from a replay counts from then, up to twice that.
  *
  * **Dock grants.** A Dock agent waits on the hub, not on the app: the waits an app sees on a dock grant are the hub's
  * relays, not the agent listening. A page shows no "waiting" for a dock grant, whatever its wait events say.
@@ -52,13 +56,16 @@ export const WAIT_CEILING_DEFAULT_S = 50;
 export const WAIT_EVENT_MARGIN_S = 10;
 
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
-const WAIT_KEYS = "at,grant_id,kind,state,v";
 
-/** A wait event, exactly: those five keys and nothing else, `v` 1, an ISO time, `state` open or closed. Null for anything else. */
+/**
+ * A wait event as a page reads it: the five keys required and strict (`v` 1, a grant id, an ISO time, `kind` "wait",
+ * `state` open or closed), and only those five returned. A key it does not know is dropped, not refused, so a later
+ * version that adds one still shows waiting on a 0.11 page: the event only drives a display. What an app may send is
+ * checked by the conformance suite, which takes exactly the five keys. Null for anything else.
+ */
 export function parsePresenceWaitEvent(value: unknown): PresenceWaitEvent | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const e = value as Record<string, unknown>;
-  if (Object.keys(e).sort().join() !== WAIT_KEYS) return null;
   if (e.v !== 1 || e.kind !== "wait" || (e.state !== "open" && e.state !== "closed")) return null;
   if (typeof e.grant_id !== "string" || !e.grant_id || e.grant_id.length > 200) return null;
   if (typeof e.at !== "string" || !ISO_TIME.test(e.at) || !Number.isFinite(Date.parse(e.at))) return null;

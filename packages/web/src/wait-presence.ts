@@ -13,11 +13,14 @@ export const NO_OPEN_WAITS: OpenWaits = new Map();
 
 /**
  * Folds one presence message into the open waits. Anything that is not a wait event (a call event, junk) leaves them
- * as they were, the same object. `receivedAt` is when the page got the message, on its own clock.
+ * as they were, the same object, and so does an `open` for a grant already open: the first arrival is kept. `receivedAt` is
+ * when the page got the message, on its own clock.
  */
 export function foldWaitEvent(open: OpenWaits, message: unknown, receivedAt: number = Date.now()): OpenWaits {
   const event = parsePresenceWaitEvent(message);
   if (!event) return open;
+  // An open for a wait already open (a replay to a page that reconnected) keeps the first arrival: its clock never restarts.
+  if (event.state === "open" && open.has(event.grant_id)) return open;
   const next = new Map(open);
   if (event.state === "open") next.set(event.grant_id, receivedAt);
   else next.delete(event.grant_id);
@@ -54,4 +57,14 @@ export function nextWaitExpiry(open: OpenWaits, ceilingS?: number): number | nul
     if (soonest === null || at < soonest) soonest = at;
   }
   return soonest;
+}
+
+/**
+ * The open waits without those past the rule (the ceiling plus the margin): the same object when none is. A page calls
+ * it on a timer set at `nextWaitExpiry`, so it redraws when a lost `closed` runs out, and the next timer is the next one.
+ */
+export function dropExpiredWaits(open: OpenWaits, now: number = Date.now(), ceilingS?: number): OpenWaits {
+  const limit = waitOpenLimitMs(ceilingS);
+  const kept = [...open].filter(([, since]) => now - since < limit);
+  return kept.length === open.size ? open : new Map(kept);
 }

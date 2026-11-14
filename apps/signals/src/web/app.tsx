@@ -7,7 +7,7 @@
  * Direct profile's list from @tineira/apc-web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, formatPairingCode, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { createViewReporter, enablePinning, foldWaitEvent, loadApcProfiles, mergePins, NO_OPEN_WAITS, waitOpen, type AgentDrag, type BarAgent, type OpenWaits } from "@tineira/apc-web";
+import { createViewReporter, dropExpiredWaits, enablePinning, foldWaitEvent, loadApcProfiles, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type AgentDrag, type BarAgent, type OpenWaits } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_SEED, MONTHS } from "../../../demo/src/model/seed.ts";
 import type { Post } from "../../../demo/src/model/market.ts";
@@ -166,12 +166,13 @@ function Feed({ sid }: { sid: string }) {
   stateRef.current = state;
   // The agents with a wait_for_focus open (APC 0.11), from the wait events on the presence channel.
   const [openWaits, setOpenWaits] = useState<OpenWaits>(NO_OPEN_WAITS);
-  const [, tick] = useState(0);
+  // A lost closed runs out at the ceiling plus the margin (APC 0.11): a timer at the next such moment drops it and redraws.
   useEffect(() => {
-    // An open whose closed was lost stops showing after the ceiling plus the margin: look again now and then.
-    const id = setInterval(() => tick((n) => n + 1), 15_000);
-    return () => clearInterval(id);
-  }, []);
+    const at = nextWaitExpiry(openWaits);
+    if (at === null) return;
+    const id = setTimeout(() => setOpenWaits((w) => dropExpiredWaits(w)), Math.max(0, at - Date.now()) + 50);
+    return () => clearTimeout(id);
+  }, [openWaits]);
 
   const refresh = useCallback(() => void call<FeedState>(`${base}/state`).then(setState), [base]);
   useEffect(() => {
@@ -180,11 +181,7 @@ function Feed({ sid }: { sid: string }) {
     let closed = false;
     const open = () => {
       ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
-      ws.onopen = () => {
-        // A new connection: what was open may have closed meanwhile; the feed sends the waits open now (APC 0.11).
-        setOpenWaits(NO_OPEN_WAITS);
-        ws?.send("ping");
-      };
+      ws.onopen = () => ws?.send("ping");
       ws.onmessage = (e) => {
         if (e.data === "pong") return;
         // Presence (APC 0.2): this page draws only the waits (APC 0.11); a call needs no new state.

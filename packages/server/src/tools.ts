@@ -29,7 +29,8 @@ export interface ApcToolContext {
   waitSlot: WaitSlot;
   /**
    * The wait events (APC 0.11): the grant's id and where its presence goes (the person's page). With it, a wait sends
-   * `open` when it claims its place and `closed` when it gives it up (`announceWaits`). Left out, no wait events.
+   * `open` when it claims its place and `closed` when it gives it up (`announceWaits`). Only when `waitSlot` is an
+   * `AtomicWaitSlot` (`MemoryWaitSlots` is): with another, no wait events. Left out, no wait events.
    */
   waitPresence?: { grantId: string; publish(event: PresenceWaitEvent): void | Promise<void> };
   /** The HTTP request's signal, when the host has one: a client that hangs up cancels the wait. */

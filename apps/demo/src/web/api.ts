@@ -83,8 +83,7 @@ export function createApi(sid: string) {
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
-    /** `onOpen`: each (re)connection, before its first message; the sandbox then sends the waits open now (APC 0.11). */
-    connect(onMessage: (message: ServerMessage) => void, onOpen?: () => void): () => void {
+    connect(onMessage: (message: ServerMessage) => void): () => void {
       let socket: WebSocket | null = null;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let closed = false;
@@ -94,7 +93,6 @@ export function createApi(sid: string) {
         socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
         socket.onopen = () => {
           delay = 2000;
-          onOpen?.();
           // The heartbeat: the sandbox counts this page as open only while its pings are answered.
           const ws = socket;
           ws?.send("ping");
