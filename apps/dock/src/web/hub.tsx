@@ -10,13 +10,12 @@
  * A request whose app sent a pairing code (APC 0.9, TIN-859) is approved with that code: typed on the dock's
  * page or an agent's page (pairing-request.tsx); Float, the strip and the pets send the person to the dock.
  */
-import { APC_AGENT_TYPE, agentDragPayload } from "@tineira/apc-web";
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
-import { askYourAgentPrompt } from "../../../demo/src/web/qr.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPet } from "./apc-pet.tsx";
+import { canDrag, dragTitle, fillAgentDrag } from "./agent-drag.ts";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
@@ -437,26 +436,22 @@ export function HubDock() {
   /** What is on its way for a request: Approve off while a yes is, both off while a Deny is (request-state.ts). */
   const inFlight = (p: { id: string }) => inFlightOf(deciding.get(p.id));
   const dragProps = (a: DockAgent) => ({
-    draggable: true,
-    title: a.client_name ? `Drag ${a.name} onto anything in an APC app to point it there (or to pair it with that app)` : `Drag ${a.name} into your agent's chat: it pastes the prompt that connects it`,
+    // An agent not connected yet does not drag (TIN-908): Connect this agent, under its tile, connects it.
+    draggable: canDrag(a),
+    title: dragTitle(a),
     onDragStart: (e: React.DragEvent<HTMLElement>) => startDrag(e.nativeEvent, a.id),
     onDragEnd: () => endDrag(a.id),
   });
   function startDrag(e: DragEvent, agentId: string) {
-    // Not connected yet (TIN-408): the drag is the connect prompt, to drop into the agent's chat. It
-    // carries the agent's MCP URL, so only until the agent connects; then it is the APC payload,
-    // which never carries a URL. (A demo choice: with OAuth the prompt would hold no secret.)
+    // Only a connected agent drags, as the APC payload (agent-drag.ts): never its MCP URL, nor the prompt
+    // that holds it (TIN-908). Any other drag is cancelled, so nothing reaches the page it would be dropped on.
     const agent = state?.agents.find((a) => a.id === agentId);
-    if (agent && !agent.client_name) {
-      e.dataTransfer?.setData("text/plain", askYourAgentPrompt(agent.mcp_url, "APC"));
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
-      setDragging(agentId);
-      return;
-    }
     const t = tickets.current.get(agentId);
     const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
-    e.dataTransfer?.setData(APC_AGENT_TYPE, agentDragPayload(agentId, fresh));
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "link";
+    if (!fillAgentDrag(e.dataTransfer, agent, fresh)) {
+      e.preventDefault();
+      return;
+    }
     // The drag image is the character itself (not the whole tile), held where the person grabbed it.
     const pet = (e.currentTarget as HTMLElement | null)?.querySelector(".apc-pet");
     if (pet && e.dataTransfer) {
@@ -639,7 +634,7 @@ export function HubDock() {
                       : {a.focus.label} · {a.focus.seen ? <span className="read">read ✓</span> : "not read yet"}
                     </>
                   ) : !connected ? (
-                    "not connected yet: drag me into your agent's chat"
+                    "not connected yet: connect it below"
                   ) : a.waiting ? (
                     "waiting for you to point"
                   ) : paired.length ? (
@@ -1138,8 +1133,8 @@ function FloatAgents(props: {
           <div
             key={a.id}
             className="float-agent"
-            draggable
-            title={`Drag ${a.name} onto an app`}
+            draggable={canDrag(a)}
+            title={dragTitle(a, "an app")}
             onDragStart={(e) => {
               setDragging(a.id);
               d.startDrag(e.nativeEvent);

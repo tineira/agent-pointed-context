@@ -12,6 +12,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { DockAgent } from "./agent-page.tsx";
 import type { Marks } from "./float-marks.ts";
 import { AgentPet } from "./apc-pet.tsx";
+import { canDrag, dragTitle } from "./agent-drag.ts";
 import { READER_NOTICE } from "../worker/reading.ts";
 import type { UnverifiedAction } from "./unverified.tsx";
 import type { InFlight } from "./request-state.ts";
@@ -138,8 +139,8 @@ export function PetView(props: {
     <PetFrame where={where} name={a.name} beside={requests} moved={(s) => setSide(s)}>
       <div
         className="pet-logo"
-        draggable
-        title={a.client_name ? `Drag ${a.name} onto an app to point it` : `Drag ${a.name} into your agent's chat to connect it`}
+        draggable={canDrag(a)}
+        title={dragTitle(a, "an app")}
         onDragStart={(e) => {
           setDragging(true);
           props.startDrag(e.nativeEvent);
