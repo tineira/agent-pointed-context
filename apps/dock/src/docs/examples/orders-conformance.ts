@@ -153,6 +153,8 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
       const off = new OrdersApp({ ...config, hubs: [], store: newOrdersStore() });
       return (request) => off.fetch(request);
     },
+    // A Direct agent (APC 0.12): the suite hands its URL to the hub's /apc/pair and checks it never goes live.
+    directGrant: () => connect("direct"),
   };
   // #endregion
 
