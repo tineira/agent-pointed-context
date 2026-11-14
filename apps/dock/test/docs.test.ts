@@ -7,8 +7,10 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { exampleRegion, fragmentTarget, headingIds, linksOf, parseInline, parseMarkdown, REPO, repoPath, resolveHref, slugify, type Block } from "../src/docs/markdown.ts";
+import { exampleRegion, fragmentTarget, headingIds, linksOf, parseInline, parseMarkdown, REPO, repoPath, resolveHref, slugify, type Block, type Inline } from "../src/docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, isDocsPath, SITE_PATHS } from "../src/docs/pages.ts";
+import { docHtmlFile, docMarkdownPath, docPageMarkdown, staticDocFiles } from "../src/docs/static.ts";
+import { readdirSync } from "node:fs";
 
 const root = new URL("../../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
@@ -173,8 +175,12 @@ test("the docs and their examples name the packages as published: @tineira/apc-*
   for (const file of [...DOC_PAGES.filter((p) => p.file.startsWith("apps/dock/")).map((p) => p.file), ...examples, "apps/dock/src/web/docs.tsx"]) {
     assert.doesNotMatch(read(file), /@apc\//, `${file} still names @apc/`);
   }
-  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server@next/);
-  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance@next https:\/\/\S+ --grant /);
+  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server @modelcontextprotocol/);
+  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance https:\/\/\S+ --grant /);
+  // No install line on a dist-tag (TIN-914): both tags carry the same release, and the minor version is the standard's.
+  for (const file of ["apps/dock/src/docs/pages/integrate.md", "apps/dock/src/docs/pages/conformance.md", "README.md", ...["protocol", "server", "web", "conformance"].map((p) => `packages/${p}/README.md`)]) {
+    assert.doesNotMatch(read(file), /@tineira\/apc-[a-z]+@next/, `${file} still installs @next`);
+  }
 });
 
 test("the docs page has a source for every page, and says on every page that the standard is a draft", () => {
@@ -198,4 +204,91 @@ test("the docs are static assets, and the assets keep their frame protection", (
   assert.match(headers, /^\/\*$/m);
   assert.match(headers, /Content-Security-Policy: frame-ancestors 'none'/);
   assert.match(headers, /X-Frame-Options: DENY/);
+});
+
+// The docs without JavaScript (TIN-914): what the build writes beside index.html. scripts/dock-pairing.mjs GETs
+// the built pages in workerd too.
+const SHELL = '<!doctype html><html><head><title>Agent dock</title><script type="module" src="/assets/x.js"></script></head><body><div id="root"></div></body></html>';
+const sources = Object.fromEntries(DOC_PAGES.map((p) => [p.path, read(p.file)]));
+const examplesDir = new URL(`${EXAMPLES_DIR}/`, root);
+const examples = Object.fromEntries(readdirSync(examplesDir).filter((f) => f.endsWith(".ts")).map((f) => [f, readFileSync(new URL(f, examplesDir), "utf8")]));
+const built = new Map(staticDocFiles(SHELL, sources, examples).map((f) => [f.file, f.content]));
+/** What a reader with no JavaScript sees of an HTML page: its text, tags left out. */
+const textOf = (html: string) =>
+  html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+const inlineText = (nodes: Inline[]): string => nodes.map((n) => ("v" in n ? n.v : inlineText(n.c))).join("");
+
+for (const { page, blocks } of pages) {
+  test(`${page.path} reads with a plain GET: its whole text in the HTML, and its Markdown beside it`, () => {
+    const html = built.get(docHtmlFile(page));
+    assert.ok(html, `no ${docHtmlFile(page)} in the build`);
+    assert.ok(html.includes('<div id="root"><main class="docs">'), "the text is in #root");
+    assert.ok(html.includes('<script type="module" src="/assets/x.js"></script>'), "the page's script stays, so it still renders itself");
+    assert.ok(html.includes(`<link rel="alternate" type="text/markdown" href="${docMarkdownPath(page)}" />`), "the page names its Markdown");
+    const text = textOf(html);
+    const missing: string[] = [];
+    const walk = (list: Block[]) => {
+      for (const b of list) {
+        if (b.t === "heading" || b.t === "para") {
+          const want = squash(inlineText(b.c));
+          if (want && !text.includes(want)) missing.push(want.slice(0, 60));
+        } else if (b.t === "list") {
+          for (const item of b.items) if (!text.includes(squash(inlineText(item)))) missing.push(squash(inlineText(item)).slice(0, 60));
+        } else if (b.t === "quote") walk(b.c);
+        else if (b.t === "include") {
+          if (!text.includes(squash(exampleRegion(examples[b.file] ?? "", b.region)!))) missing.push(`include ${b.file}#${b.region}`);
+        }
+      }
+    };
+    walk(blocks);
+    assert.deepEqual(missing, []);
+    const title = blocks.find((b) => b.t === "heading" && b.level === 1);
+    assert.ok(title?.t === "heading" && textOf(html.split("</title>")[0]!.split("<title>")[1]!) === `${inlineText(title.c)} · APC docs`, "the page's own title");
+    const md = built.get(docMarkdownPath(page).slice(1));
+    assert.ok(md !== undefined && md.startsWith("# "), `no ${docMarkdownPath(page)} in the build`);
+    assert.ok(!/<!--\s*include/.test(md), "every include is replaced by its code");
+    for (const b of blocks) if (b.t === "include") assert.ok(md.includes(exampleRegion(examples[b.file] ?? "", b.region)!), `${b.file}#${b.region} in the Markdown`);
+  });
+}
+
+test("the static pages escape the text, and /llms.txt names every page's Markdown", () => {
+  const page = DOC_PAGES[0]!;
+  const hostile = "# A <b>&</b>\n\n<script>alert(1)</script> [x](javascript:alert) $& $'";
+  const html = staticDocFiles(SHELL, { ...sources, [page.path]: hostile }, examples).find((f) => f.file === docHtmlFile(page))!.content;
+  const body = html.split('<article class="docs-body">')[1]!.split("</article>")[0]!;
+  assert.ok(!/<script|<b>|href="javascript/.test(body), "nothing from the text becomes markup");
+  assert.ok(body.includes("&lt;script&gt;alert(1)&lt;/script&gt; <span>x</span> $&amp; $&#39;"), "the text is escaped, and $ patterns stay text");
+  const llms = built.get("llms.txt")!;
+  for (const p of DOC_PAGES) assert.ok(llms.includes(`(${docMarkdownPath(p)})`), `llms.txt names ${docMarkdownPath(p)}`);
+  assert.throws(() => staticDocFiles("<html><body></body></html>", sources, examples), /index\.html has no empty/);
+  // The asset server answers /docs with docs.html and /docs/spec with docs/spec.html.
+  assert.deepEqual(DOC_PAGES.map(docHtmlFile).slice(0, 2), ["docs.html", "docs/spec.html"]);
+  assert.match(read("apps/dock/vite.config.ts"), /plugins: \[[^\]]*staticDocs\(\)/, "the dock's build writes the static docs");
+});
+
+test("each static page has its own description, from its first paragraph, escaped (TIN-914 review)", () => {
+  const withMeta = SHELL.replace("</title>", '</title><meta name="description" content="Agent dock" />');
+  const files = new Map(staticDocFiles(withMeta, sources, examples).map((f) => [f.file, f.content]));
+  const descriptions = DOC_PAGES.map((p) => files.get(docHtmlFile(p))!.match(/<meta name="description" content="([^"]*)"/g) ?? []);
+  for (const found of descriptions) assert.equal(found.length, 1, "one description, the dock's replaced");
+  assert.equal(new Set(descriptions.map((d) => d[0])).size, DOC_PAGES.length, "a different one per page");
+  assert.ok(!descriptions.some((d) => d[0]!.includes("Agent dock")));
+  const page = DOC_PAGES[0]!;
+  const one = staticDocFiles(withMeta, { ...sources, [page.path]: '# T\n\nSay "hi" & <go>.' }, examples).find((f) => f.file === docHtmlFile(page))!.content;
+  assert.ok(one.includes('<meta name="description" content="Say &quot;hi&quot; &amp; &lt;go&gt;." />'));
+});
+
+test("the Markdown leaves code alone: a link written in a code span or a code block is not rewritten (TIN-914 review)", () => {
+  const page = DOC_PAGES.find((p) => p.path === "/docs/changelog")!;
+  const md = docPageMarkdown(page, "# T\n\nSee [the root](../../CHANGELOG.md) and `[x](../../CHANGELOG.md)` as written.\n\n```md\n[y](../y.md)\n```\n", examples);
+  assert.ok(md.includes(`See [the root](${REPO}/blob/main/CHANGELOG.md) and \`[x](../../CHANGELOG.md)\` as written.`));
+  assert.ok(md.includes("```md\n[y](../y.md)\n```"));
 });

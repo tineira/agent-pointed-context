@@ -29,10 +29,10 @@ import {
   type OpenWaits,
 } from "@tineira/apc-web";
 import type { AgentRow, Order } from "./orders-app.ts";
-// #endregion
 
 const post = async (path: string, body: unknown = {}): Promise<Record<string, unknown>> =>
   (await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+// #endregion
 
 // #region markup
 /** Anything the person may point at carries data-focus: here, a row per order, and its total as a part. */

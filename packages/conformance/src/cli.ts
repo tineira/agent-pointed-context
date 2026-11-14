@@ -2,8 +2,8 @@
 /**
  * `apc-conformance`: the HTTP conformance checks (`http.ts`) against a live app, from a terminal.
  *
- *   npx @tineira/apc-conformance@next https://pulse.example --grant https://pulse.example/mcp/<sid>/<secret>
- *   APC_TOKEN=… npx @tineira/apc-conformance@next https://app.example --grant https://app.example/api/mcp --bearer-env APC_TOKEN
+ *   npx @tineira/apc-conformance https://pulse.example --grant https://pulse.example/mcp/<sid>/<secret>
+ *   APC_TOKEN=… npx @tineira/apc-conformance https://app.example --grant https://app.example/api/mcp --bearer-env APC_TOKEN
  *
  * PASS, FAIL or SKIP per check; exit 1 on any FAIL, 2 on a usage error; `--json` for the report as JSON.
  */

@@ -45,14 +45,14 @@ Measurements (load test up to 150 visitors at once, CPU per request) are in [DES
 
 The standard's docs are at [apc.tineira.com/docs](https://apc.tineira.com/docs): the spec, a step-by-step integration guide (Direct, then Dock) whose code is type-checked and passes the conformance suite, conformance, and what an agent sees. A proposal to change the contract is a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
 
-The packages go to npm as 0.x pre-releases on the `next` tag ([Using the packages](#using-the-packages)); in this workspace the apps use their TypeScript sources. They are small, so copying them is fine too.
+The packages go to npm as 0.x pre-releases ([Using the packages](#using-the-packages)); in this workspace the apps use their TypeScript sources. They are small, so copying them is fine too.
 
 | Package | What it gives you |
 |---|---|
 | [`@tineira/apc-protocol`](packages/protocol) | wire types, the target grammar (kinds, parts, key-only params), `data-focus` attributes |
 | [`@tineira/apc-server`](packages/server) | `registerApcTools` (`get_current_view`, `wait_for_focus`), `attachAttention` for the envelope, `registerApcPrompts` (the `guide` prompt), `presenceEvent`; the Direct profile (`newDirectGrant`, `directMcpUrl`, `initializeOf`, `parseProfiles`), `apc_link` (`ApcLinks`, `registerApcLinkTool`, `sqlKv`) and `apc.json` (`apcManifest`, `apcJsonResponse`) |
 | [`@tineira/apc-web`](packages/web) | `enablePinning` (drag a mark onto anything with `data-focus`; on a Direct-only app, the answer to a dock agent's drop), `flashTargets` for presence, `createViewReporter`, the agent pet (`createPet`, `<apc-pets>`, `petState`, the wait helpers `waitOpen` and `agentWaitOpen`), the agent bar `<apc-agents>` with Revoke, paths, Unlink and the dock hint, and the Direct agent list `<apc-direct-agents>` with the connect instructions (`connectPrompt`) |
-| [`@tineira/apc-conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint, in your tests or live with `npx @tineira/apc-conformance@next <app-origin>` |
+| [`@tineira/apc-conformance`](packages/conformance) | the conformance suite: checks any APC app against the core of the standard through its MCP endpoint, in your tests or live with `npx @tineira/apc-conformance <app-origin>` |
 
 On the server, register the two APC tools next to your own and attach the envelope to every result while a pin is unread:
 
@@ -125,12 +125,12 @@ The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) 
 
 ## Using the packages
 
-`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together, as 0.x pre-releases. A release publishes on the `next` dist-tag; while the standard is 0.x, `latest` is then moved to the same version by hand (`npm dist-tag add @tineira/apc-<pkg>@<version> latest`, with a maintainer's login: trusted publishing covers only `npm publish`), since npm keeps a `latest` and it would otherwise stay on the first publish. Their version follows the standard's: 0.10.x ships APC 0.10 (`APC_STANDARD_VERSION`).
+`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together, as 0.x pre-releases. A release publishes on the `next` dist-tag; while the standard is 0.x, `latest` is then moved to the same version by hand (`npm dist-tag add @tineira/apc-<pkg>@<version> latest`, with a maintainer's login: trusted publishing covers only `npm publish`), since npm keeps a `latest` and it would otherwise stay on the first publish. Their minor version is the standard's: 0.N.x ships APC 0.N (`APC_STANDARD_VERSION`). Install them without a tag: `latest` is the release.
 
 ```sh
-npm i @tineira/apc-protocol@next @tineira/apc-web@next                                # the page
-npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod                  # the server (the SDK and zod are peers)
-npx @tineira/apc-conformance@next https://your.app --grant <an agent's MCP URL>   # check a live app
+npm i @tineira/apc-protocol @tineira/apc-web                                 # the page
+npm i @tineira/apc-server @modelcontextprotocol/sdk zod                      # the server (the SDK and zod are peers)
+npx @tineira/apc-conformance https://your.app --grant <an agent's MCP URL>   # check a live app
 ```
 
 They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-web` have no Node imports (`@tineira/apc-web` is browser code for any bundler); `@tineira/apc-server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@tineira/apc-conformance` needs Node 22.15+. Each package's README has a minimal example; the docs are at https://apc.tineira.com/docs.

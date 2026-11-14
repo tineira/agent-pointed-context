@@ -19,10 +19,12 @@ import {
   isUnread,
   presenceEvent,
   registerApcTools,
+  revokedResponse,
   thenApplies,
   thenBytes,
   toolError,
   toolResult,
+  unknownBearerResponse,
 } from "../src/index.ts";
 
 const focus: FocusPayload = {
@@ -78,6 +80,38 @@ test("apcManifest with mcp.endpoints (APC 0.11): it builds only a file readers t
     assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], mcpPath: mcpPath as never, endpoints: endpoints as never }), Error, why);
   }
   assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["dock"] }).mcp, { path: "/mcp/" }, "without endpoints, as before");
+});
+
+test("apcManifest says how to fix an mcpPath that does not start and end with / (TIN-914), with endpoints or without", () => {
+  const origin = "https://orders.test";
+  const shared = [{ path: "/mcp", profiles: ["direct"] }] as const;
+  assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct"], mcpPath: "/mcp", endpoints: shared }), /mcpPath "\/mcp" must start and end with \/.*write "\/mcp\/"/);
+  assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct"], mcpPath: "/mcp" }), /must start and end with \/.*write "\/mcp\/"/, "without endpoints too: never a file readers refuse");
+  assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct"], mcpPath: "mcp/" }), /must start and end with \//);
+  assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct"], mcpPath: "/a/../mcp/" }), /must start and end with \//);
+  // The fix it names works: /mcp/ with the exact endpoint /mcp under it.
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["direct"], mcpPath: "/mcp/", endpoints: shared }).mcp, { path: "/mcp/", endpoints: [{ path: "/mcp", profiles: ["direct"] }] });
+});
+
+test("revokedResponse: 403 with a secret URL, 401 with the Bearer challenge for a bearer token; an unknown token a plain 401 (TIN-914)", async () => {
+  const secret = revokedResponse("orders.test", "2026-11-14T00:00:00.000Z");
+  assert.equal(secret.status, 403);
+  assert.equal(secret.headers.get("www-authenticate"), null);
+  const bearer = revokedResponse("orders.test", "2026-11-14T00:00:00.000Z", { bearer: true });
+  assert.equal(bearer.status, 401);
+  assert.equal(bearer.headers.get("www-authenticate"), 'Bearer error="invalid_token"');
+  assert.equal(bearer.headers.get("cache-control"), "no-store");
+  const body = (await bearer.json()) as Record<string, unknown>;
+  assert.equal(body.error, "revoked");
+  assert.equal(body.revoked_by, "orders.test");
+  assert.equal(body.revoked_at, "2026-11-14T00:00:00.000Z");
+  const unknown = unknownBearerResponse();
+  assert.equal(unknown.status, 401);
+  assert.equal(unknown.headers.get("www-authenticate"), 'Bearer error="invalid_token"');
+  assert.notEqual(((await unknown.json()) as Record<string, unknown>).error, "revoked", "no RevokedAnswer: gone, not taken back");
+  const missing = unknownBearerResponse({ missing: true });
+  assert.equal(missing.status, 401);
+  assert.equal(missing.headers.get("www-authenticate"), "Bearer", "no token sent: the bare challenge, no error code (RFC 6750)");
 });
 
 test("the pin is unread until a read after it was dropped", () => {

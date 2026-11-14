@@ -25,6 +25,7 @@ export type ApcMcpDeclaration = { mcpPath?: string; endpoints?: undefined } | { 
  * be empty.
  */
 export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; connect?: string } & ApcMcpDeclaration): ApcManifest {
+  if (typeof o.mcpPath === "string") checkMcpPath(o.mcpPath);
   const mcp: ApcManifest["mcp"] = {};
   if (o.endpoints) {
     // Given on purpose, also from plain JavaScript: a path for older readers, or null to leave it out.
@@ -36,6 +37,17 @@ export function apcManifest(o: { name: string; origin: string; profiles: readonl
   const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp };
   if (o.profiles.includes("direct")) manifest.direct = { connect: new URL(o.connect ?? "/", o.origin).href };
   return manifest;
+}
+
+/**
+ * `mcp.path` is a prefix that starts and ends with `/` (APC 0.5): every grant's MCP URL starts with origin + path.
+ * Said here, at start, in words that name the fix, rather than as a file every reader refuses.
+ */
+function checkMcpPath(path: string): void {
+  if (!path.startsWith("/") || !path.endsWith("/") || path.length > 200 || path.split("/").some((s) => s === "." || s === "..")) {
+    const fix = path.startsWith("/") && !path.endsWith("/") ? `: write "${path}/". An exact endpoint at "${path}" (a URL every grant shares, a bearer token naming the grant) is still covered: list it in endpoints, or serve it at mcpPath without its last /` : "";
+    throw new Error(`apcManifest: mcpPath "${path}" must start and end with / (it is a prefix: every grant's MCP URL starts with origin + mcpPath)${fix}`);
+  }
 }
 
 function checkEndpoints(origin: string, mcp: ApcManifest["mcp"]): void {

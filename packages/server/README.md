@@ -5,10 +5,10 @@ Agent Pointed Context (APC) for an app's server: the two core MCP tools (`get_cu
 ## Install
 
 ```sh
-npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod
+npm i @tineira/apc-server @modelcontextprotocol/sdk zod
 ```
 
-Pre-releases go out on the `next` tag while the standard is 0.x. `@modelcontextprotocol/sdk` (^1.32.1) and `zod` (^4) are peer dependencies; `@tineira/apc-protocol` comes with it.
+Its minor version is the standard's: 0.N.x ships APC 0.N (`APC_STANDARD_VERSION`), and a patch never changes the contract. Install the `@tineira/apc-*` packages at the same version. `@modelcontextprotocol/sdk` (^1.32.1) and `zod` (^4) are peer dependencies; `@tineira/apc-protocol` comes with it.
 
 The `@tineira/apc-*` packages are ESM only: an `import` export, no `require` build. From CommonJS, load them with `await import("@tineira/apc-server")`; on Node 20.19+ or 22.12+ a plain `require()` works too, since they use no top-level await. A CommonJS test runner needs the same: Jest in its default mode cannot load them, so run it with `NODE_OPTIONS=--experimental-vm-modules` and an ESM config, or let its transform handle them (`transformIgnorePatterns: ["node_modules/(?!@tineira/)"]`); Vitest and `node --test` load them as they are.
 
@@ -47,6 +47,12 @@ app.get("/.well-known/apc.json", (c) =>
 );
 ```
 
+Build it once, when the app starts: `apcManifest` throws on a declaration readers would refuse, an `mcpPath` that does not start and end with `/` included (a grant URL shared by every grant, `/mcp`, is declared as `mcpPath: "/mcp/"` and, since 0.11, the exact endpoint `{ path: "/mcp", profiles: ["direct"] }`).
+
+## Revoke
+
+A revoked grant answers every request with `revokedResponse(host, revokedAt)`: the `RevokedAnswer` with 403, for a secret URL. With a bearer token, `revokedResponse(host, revokedAt, { bearer: true })`: 401 with `WWW-Authenticate: Bearer error="invalid_token"`. A token the app does not know is `unknownBearerResponse()`, a plain 401 with no `RevokedAnswer` (a secret URL's unknown grant is a 404); a request with no token at all is `unknownBearerResponse({ missing: true })`, with the bare `Bearer` challenge. A call already running when its grant is revoked ends with `revokedToolResult(host, revokedAt)`.
+
 ## Dock helpers (APC 0.10)
 
 For an app on the Dock profile, the helpers that carry pairing and grant security. They fail closed.
@@ -64,6 +70,6 @@ For an app on the Dock profile, the helpers that carry pairing and grant securit
 - **`toolError` fills `structuredContent`** with `{ error, message }`. MCP SDK clients check `structuredContent` against a tool's `outputSchema` even on errors. So a tool that declares an `outputSchema` must admit that shape, or the client rejects the error. With a JSON Schema, use `{ type: "object", anyOf: [yours, { type: "object", properties: { error: { type: "string" }, message: { type: "string" } }, required: ["error", "message"] }] }` (MCP needs `type: "object"` at the root; leave extra keys allowed). With a raw zod shape, make its fields optional and add optional `error` and `message`. The same goes for the core tools' idle shapes.
 - **The derived-secret recipe** (optional): `deriveDockSecret(key, appTag, grantId, salt)`, `newDockSalt()` and `dockSecretHash(secret)`. Store only the hash and the salt.
 
-Then check it with [`@tineira/apc-conformance`](https://www.npmjs.com/package/@tineira/apc-conformance): `npx @tineira/apc-conformance@next https://your.app`.
+Then check it with [`@tineira/apc-conformance`](https://www.npmjs.com/package/@tineira/apc-conformance): `npx @tineira/apc-conformance https://your.app`.
 
 Source, the worked examples (Pulse and Signals) and the changelog: https://github.com/tineira/agent-pointed-context. MIT.
