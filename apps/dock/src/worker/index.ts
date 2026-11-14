@@ -12,6 +12,7 @@ import { DOCK_TTL_MS, NOT_OWNER, type Env, type Hub, type OwnerMethod } from "./
 import { deviceLabel, normalizeJoinCode } from "./devices.ts";
 import { DIRECTORY } from "./join-codes.ts";
 import { withByteRanges } from "./range.ts";
+import { loggable } from "./redact.ts";
 
 /** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */
 function hubManifest(origin: string): ApcManifest {
@@ -45,7 +46,8 @@ app.use("*", async (c, next) => {
 /** A computer removed while its request ran (Hub.asOwner, TIN-909) is answered as one whose cookie no longer opens the dock. */
 app.onError((err, c) => {
   if (err instanceof Error && err.message.includes(NOT_OWNER)) return c.json({ error: "dock_expired" }, 404);
-  console.error(err);
+  // Never the secret an error may quote (TIN-911): an MCP URL, a grant URL, a ticket or a token.
+  console.error(loggable(err));
   return c.text("Internal Server Error", 500);
 });
 
