@@ -43,7 +43,6 @@ import {
   compareStandard,
   describeMcpCoverage,
   mcpUrlCoverage,
-  isRevokedAnswer,
   normalizePairingCode,
   PAIRING_CODE_MAX_ATTEMPTS,
   parseApcManifest,
@@ -54,7 +53,7 @@ import {
   type PresenceMessage,
   type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkMcpEndpoints, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, REVOKED_PROBES, attentionOf, checkCoreToolList, checkNothingButGrants, checkFocusShape, checkMcpEndpoints, checkRevokedBody, checkView, data, expect, isObject, resultKey, rpcBody, sameJson, standardSupport, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHub } from "./hub.ts";
 import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
@@ -63,6 +62,9 @@ export { standInHub, type StandInHold, type StandInHub, type StandInHubMode, typ
 export {
   HttpConformanceUsageError,
   IN_PROCESS_ONLY,
+  IN_PROCESS_REASON,
+  coverageLines,
+  coverageOf,
   httpConformance,
   redactGrantUrl,
   redactSecrets,
@@ -71,6 +73,7 @@ export {
   type HttpCheckResult,
   type HttpConformanceOptions,
   type HttpConformanceReport,
+  type HttpCoverage,
 } from "./http.ts";
 
 /**
@@ -315,6 +318,17 @@ export interface ConformanceReport {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * How soon "at once" and "as soon as" are taken to be: a wait returns within this of a pin, a revoke or a takeover
+ * (the reference polls every 2 s; this leaves room for a slower poll and a loaded test machine). The spec gives no
+ * number; see the conformance page.
+ */
+const SOON_MS = 8700;
+/** How late past its `timeout_s` a wait with no pin may return (one poll and its last checks). */
+const TIMEOUT_LATE_MS = 4000;
+/** The keys of a `RevokedAnswer`: a revoked tool error carries these and no app data. */
+const REVOKED_KEYS: readonly string[] = ["error", "revoked_by", "revoked_at", "message"];
+
 /** One JSON-RPC request over Streamable HTTP, stateless, as a dock's hub sends it: the HTTP status and the reply. */
 async function send(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<{ status: number; body: unknown; headers: Headers }> {
   const request = new Request(to.mcpUrl, {
@@ -379,8 +393,9 @@ function checkRevoked(conn: AgentConnection, status: number, body: unknown, what
   const expected = bearer ? REVOKED_HTTP_STATUS_BEARER : REVOKED_HTTP_STATUS;
   expect(status === expected, `${what} on a revoked grant: HTTP ${status}, expected ${expected}`);
   if (bearer) expect(/^bearer\b.*error="?invalid_token"?/i.test(headers.get("www-authenticate") ?? ""), `${what} on a revoked bearer grant: no WWW-Authenticate: Bearer error="invalid_token"`);
-  expect(isRevokedAnswer(body) && body.revoked_by.length > 0 && ISO.test(body.revoked_at), `${what} on a revoked grant answers { error: "revoked", revoked_by, revoked_at }: ${JSON.stringify(body).slice(0, 200)}`);
+  checkRevokedBody(body, new URL(conn.mcpUrl).host, what);
 }
+
 
 /** A focus in the core's format, naming `target`. */
 function checkFocus(focus: unknown, target: FocusTarget, where: string): Record<string, unknown> {
@@ -420,6 +435,19 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
   const app: ApcAppAdapter = live(adapter, { page: live(adapter.page, { takePresence }) });
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
+  /**
+   * The grant pinned now and its pin read (so no pin is unread): with the page open, every later result on it is one
+   * then rides on (APC 0.8: pinned in the last 30 minutes), so a check that a result carries no then means something.
+   * On the other target than the check pins next: an app may take a drop on the target already pinned as no new pin.
+   */
+  const pinnedAndRead = async (conn: AgentConnection, target: FocusTarget) => {
+    expect(await app.page.pin(conn.grantId, target), "the app refused the pin");
+    const read = await call(app, conn, "get_current_view");
+    expect(!read.isError, "get_current_view failed");
+  };
+  /** A `wait_for_focus` result with no focus ends the loop: no then, structured or in the text (spec: then). */
+  const noThen = (r: ToolCallResult, where: string) =>
+    expect(resultKey(r, "then").value === undefined && text(r).then === undefined, `${where} came back with no focus, and carries then: a result with no focus ends the loop`);
   /**
    * Whether the app claims 0.11.0, asked once per run, with one short wait on the first wait-event check's agent so the
    * page has had a chance to get a wait event. A probe that fails fails that check; the others then say so in a note,
@@ -510,6 +538,21 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       if (notes.length) return { note: notes.join("; ") };
     }),
 
+    check("nothing but grants is served under a {secret} entry of mcp.endpoints: a child that names no grant is not served (APC 0.11)", async () => {
+      const conn = await app.connect();
+      const origin = new URL(conn.mcpUrl).origin;
+      const send = (request: Request) => (app.fetch ? app.fetch(request) : fetch(request));
+      const response = await send(new Request(`${origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } }));
+      const parsed = parseApcManifest(await response.json().catch(() => null), origin);
+      if (!parsed.ok) return { note: "not checked: apc.json did not parse (the apc.json check says why)" };
+      const checked = await checkNothingButGrants(origin, parsed.manifest, async (url, init) => {
+        const r = await send(new Request(url, init));
+        await r.body?.cancel().catch(() => {});
+        return r.status;
+      });
+      if (checked === null) return { note: "not checked: apc.json declares no {secret} entry in mcp.endpoints" };
+    }),
+
     check("lists the core tools, with their arguments", async () => {
       const conn = await app.connect();
       checkCoreToolList(await result(app, conn, "tools/list"), CORE_TOOLS);
@@ -565,7 +608,7 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       const d = data(r);
       expect(d.timed_out === false, "a wait that got a pin did not time out");
       checkFocus(d.focus, second, "wait_for_focus");
-      expect(ms < 9000, `it returned at ${ms} ms, not soon after the pin`);
+      expect(ms < 300 + SOON_MS, `it returned at ${ms} ms, not soon after the pin`);
       const after = await call(app, conn, app.probe.tool, app.probe.args);
       expect(attentionOf(after) === undefined, "the wait marks the pin seen");
     }),
@@ -573,14 +616,16 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
     check("wait_for_focus times out cleanly", async () => {
       const conn = await app.connect();
       await app.page.setOpen(true);
+      // Pinned lately and read, with the page open: then rides on this grant's results, so its absence below is the rule's.
+      await pinnedAndRead(conn, first);
       const { value: r, ms } = await timed(call(app, conn, "wait_for_focus", { timeout_s: 1 }));
       expect(!r.isError, "wait_for_focus failed");
       const d = data(r);
       expect(d.focus === null && d.timed_out === true, `a wait with no pin times out: ${JSON.stringify(d)}`);
       expect(typeof d.note === "string" && d.note.length > 0, "a wait with no pin carries a note for the agent");
       expect(d.page_open === undefined || d.page_open === true, "the page is open, so page_open is true or left out");
-      expect(ms >= 900 && ms < 5000, `it took ${ms} ms for timeout_s 1`);
-      expect(text(r).then === undefined && d.then === undefined, "a wait that came back empty ends the loop: no then");
+      expect(ms >= 900 && ms < 1000 + TIMEOUT_LATE_MS, `it took ${ms} ms for timeout_s 1`);
+      noThen(r, "a wait that timed out");
     }),
 
     check("wait_for_focus ends when the person has no page open", async () => {
@@ -725,6 +770,20 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
         }
         checkRevoked(a, response.status, body, method, response.headers);
       }
+      // Whatever the JSON-RPC method, a notification, or a body that does not parse: an answer that serves any of them
+      // tells the caller the grant's secret is still known.
+      for (const [what, raw] of REVOKED_PROBES) {
+        const request = new Request(a.mcpUrl, { method: "POST", headers: { ...a.headers, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" }, body: raw });
+        const response = await (app.fetch ? app.fetch(request) : fetch(request));
+        const text = await response.text();
+        let body: unknown = null;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          // not JSON
+        }
+        checkRevoked(a, response.status, body, what, response.headers);
+      }
       expect(!(await app.page.pin(a.grantId, second)), "a revoked agent cannot be pinned");
       const other = await call(app, b, "get_current_view");
       expect(!other.isError && "view" in data(other), "another agent is not touched");
@@ -741,34 +800,44 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       expect(r.isError === true, `the wait ends as an error: ${JSON.stringify(r).slice(0, 200)}`);
       const d = text(r);
       expect(d.error === REVOKED_ERROR, `its error is "revoked": ${JSON.stringify(d).slice(0, 200)}`);
-      expect(!("focus" in d) && !("view" in d) && r.structuredContent === undefined, "it carries no focus, view or other data");
-      expect(ms < 9000, `it ended at ${ms} ms, not soon after the revoke`);
+      // The RevokedAnswer and nothing else: in the text, and in structuredContent when there is one (an MCP SDK client
+      // validates structuredContent even on isError, as with the pairing and idle errors).
+      const extra = Object.keys(d).filter((k) => !REVOKED_KEYS.includes(k));
+      expect(extra.length === 0, `it carries no focus, view or other data: ${extra.join(", ")}`);
+      expect(r.structuredContent === undefined || sameJson(r.structuredContent, d), `its structuredContent, when there, is the same RevokedAnswer as the text: ${String(JSON.stringify(r.structuredContent)).slice(0, 200)}`);
+      expect(ms < 300 + SOON_MS, `it ended at ${ms} ms, not soon after the revoke`);
     }),
     check("one wait per grant: a newer wait takes over, and the older one delivers nothing (APC 0.8)", async () => {
       const conn = await app.connect();
       if (!(await claims(conn, "0.8.0"))) return NOT_08;
       await app.page.setOpen(true);
+      await pinnedAndRead(conn, second);
       const older = call(app, conn, "wait_for_focus", { timeout_s: 10 });
       await sleep((WAIT_CLAIM_GAP_S + 0.3) * 1000);
       const newer = timed(call(app, conn, "wait_for_focus", { timeout_s: 10 }));
-      const old = data(await older);
+      const taken = await older;
+      const old = data(taken);
       expect(old.focus === null && old.timed_out === false && typeof old.note === "string", `the wait a newer one took over ends with focus null, timed_out false and a note: ${JSON.stringify(old).slice(0, 200)}`);
+      noThen(taken, "the wait a newer one took over");
       expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
       const { value: got, ms } = await newer;
       checkFocus(data(got).focus, first, "the newer wait");
-      expect(ms < 9000, `the newer wait returned at ${ms} ms, not soon after the pin`);
+      expect(ms < SOON_MS, `the newer wait returned at ${ms} ms, not soon after the pin`);
     }),
 
     check("a second wait started right after the first is refused with retry_after_s, and the first still delivers (APC 0.8)", async () => {
       const conn = await app.connect();
       if (!(await claims(conn, "0.8.0"))) return NOT_08;
       await app.page.setOpen(true);
+      await pinnedAndRead(conn, first);
       const running = call(app, conn, "wait_for_focus", { timeout_s: 10 });
       await sleep(200);
-      const refused = data(await call(app, conn, "wait_for_focus", { timeout_s: 10 }));
+      const refusedResult = await call(app, conn, "wait_for_focus", { timeout_s: 10 });
+      const refused = data(refusedResult);
       expect(refused.focus === null && refused.timed_out === false, `the second wait is refused: ${JSON.stringify(refused).slice(0, 200)}`);
       expect(typeof refused.retry_after_s === "number" && refused.retry_after_s >= 1 && refused.retry_after_s <= WAIT_CLAIM_GAP_S + 1, `with retry_after_s, 1 to ${WAIT_CLAIM_GAP_S + 1}: ${JSON.stringify(refused).slice(0, 200)}`);
       expect(typeof refused.note === "string" && refused.note.length > 0, "and a note");
+      noThen(refusedResult, "the refused wait");
       expect(await app.page.pin(conn.grantId, second), "the app refused the pin");
       checkFocus(data(await running).focus, second, "the first wait, still running");
     }),
@@ -778,6 +847,7 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
         const conn = await app.connect();
         if (!(await claims(conn, "0.8.0"))) return NOT_08;
         await app.page.setOpen(true);
+        await pinnedAndRead(conn, second);
         const controller = new AbortController();
         // Not awaited before the pin: a handler that ignores the cancel would still be waiting, and would take the pin.
         const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }, how === "an HTTP abort" ? controller.signal : undefined).catch(() => null);
@@ -795,7 +865,9 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
         const again = data(await call(app, conn, "wait_for_focus", { timeout_s: 2 }));
         expect(again.retry_after_s === undefined, `a cancelled wait frees its place at once: ${JSON.stringify(again).slice(0, 200)}`);
         checkFocus(again.focus, first, "the next wait gets the pin");
-        await Promise.race([waiting, sleep(11_000)]);
+        // A cancelled wait that still answers (nothing obliges a client to stop reading) answers with no focus, so with no then.
+        const late = await Promise.race([waiting, sleep(11_000).then(() => null)]);
+        if (late && data(late).focus === null) noThen(late, "the cancelled wait");
       }),
     ),
     ...mobileChecks(app, app.page.mobile),
@@ -923,7 +995,66 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
       const listed = await send(app, conn, "tools/list", {});
       expect(listed.status === 200, `the paired grant answers tools/list with HTTP ${listed.status}`);
     }),
+
+    consentCheck(app, dock),
   ];
+}
+
+/**
+ * Consent in the app (APC 0.7): the server answers `consent_required` with a nonce and makes a grant only for an Allow
+ * that brings it back; the nonce works once, for its own agent. Through the owner's endpoints of `dock.lifecycle`
+ * (APC 0.10): an Allow is `owner.allow.body()`, and the members it has that a drop (`owner.drop.body()`) lacks carry the
+ * nonce. An Allow pairs when the app sends the hub `/apc/pair`; so does none of these: the nonce left out, a forged one,
+ * another agent's, and the same Allow again once it paired. The right Allow must pair, or the refusals prove nothing.
+ */
+function consentCheck(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): ConformanceCheck {
+  return noted(`${app.name} (dock): consent: an Allow pairs only with its own consent's nonce, once: not with none, a forged one, another agent's, or one already used`, async () => {
+    if (!dock) return;
+    const life = dock.lifecycle;
+    if (!life) return { note: "not checked: the consent's nonce is reached through dock.lifecycle.owner (APC 0.10), which the adapter does not give" };
+    const { origin, session, allow, drop } = life.owner;
+    const hub = dock.hub;
+    const fromPairing = hub.pairings.length;
+    const post = async (body: unknown) => {
+      const before = hub.received.length;
+      const request = new Request(new URL(allow.path, origin), { method: "POST", headers: { ...session, "content-type": "application/json", origin, "sec-fetch-site": "same-origin" }, body: JSON.stringify(body) });
+      const response = await (app.fetch ? app.fetch(request) : fetch(request));
+      await response.text().catch(() => "");
+      return hub.received.length > before;
+    };
+    try {
+      // A consent of its own for each probe: an app may drop a consent that saw a bad Allow, and an Allow with no
+      // nonce is a drop, which replaces the agent's consent (one pending pairing). The right one stays untouched.
+      const bodies: unknown[] = [await drop.body()];
+      for (let i = 0; i < 5; i++) bodies.push(await allow.body());
+      if (!bodies.every(isObject)) return { note: "not checked: owner.drop.body() or owner.allow.body() is not a JSON object" };
+      const [fields, right, forgedOn, other, mine, bare] = bodies as Array<Record<string, unknown>> as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+      const nonceKeys = Object.keys(right).filter((k) => !(k in fields));
+      if (!nonceKeys.length) return { note: "not checked: owner.allow.body() has no member the drop's body lacks, so the suite cannot tell where the nonce goes" };
+      const nonceOf = (body: Record<string, unknown>) => Object.fromEntries(nonceKeys.map((k) => [k, body[k]]));
+      const forged = Object.fromEntries(nonceKeys.map((k) => [k, typeof forgedOn[k] === "string" ? randomLike(forgedOn[k] as string) : "apc-conformance-forged-nonce-0000"]));
+      expect(!(await post({ ...forgedOn, ...forged })), "an Allow with a forged nonce paired: the app sent the hub /apc/pair");
+      const notes: string[] = [];
+      // Another agent's nonce: only when the Allow names its agent; an Allow that carries the consent alone has no agent to mismatch.
+      if ("agent" in mine && "agent" in other && mine.agent !== other.agent) {
+        expect(!(await post({ ...mine, ...nonceOf(other) })), "an Allow with another agent's nonce paired: a nonce works only for the dock and the agent it was given for");
+      } else notes.push("another agent's nonce not checked: the Allow does not name its agent (the consent alone carries it)");
+      const without = Object.fromEntries(Object.entries(bare).filter(([k]) => !nonceKeys.includes(k)));
+      expect(!(await post(without)), `an Allow with no nonce (${nonceKeys.join(", ")} left out) paired: the app sent the hub /apc/pair`);
+      expect(await post(right), "the Allow with its own consent's nonce did not pair (the app sent the hub no /apc/pair): the refusals above prove nothing");
+      expect(!(await post(right)), "the same Allow, sent again once it paired, paired again: a nonce works once");
+      if (notes.length) return { note: `not checked: ${notes.join("; ")}` };
+    } finally {
+      // Every pairing the check made, given back.
+      for (const p of hub.pairings.slice(fromPairing)) await hub.decide(p.id, "deny").catch(() => {});
+    }
+  });
+}
+
+/** A string of the same length and alphabet class as `like`, random: a forged nonce the app's parser takes as one. */
+function randomLike(like: string): string {
+  const alphabet = /^[0-9a-f]+$/.test(like) ? "0123456789abcdef" : "abcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from(crypto.getRandomValues(new Uint8Array(Math.max(like.length, 16))), (x) => alphabet[x % alphabet.length]).join("");
 }
 
 /** The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin. */
