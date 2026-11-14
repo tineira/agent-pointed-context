@@ -1,5 +1,5 @@
 /**
- * The APC docs at /docs (TIN-611): the standard's overview, spec, integration guide, conformance, a page for
+ * The APC docs at /docs (TIN-611): the standard's overview, spec, integration guide, UX guide, conformance, a page for
  * agents and the standard's changelog. Markdown files in the repo (src/docs/pages, packages/protocol/CHANGELOG.md),
  * bundled as text and rendered here as React elements; code samples come from the type-checked, tested examples
  * in src/docs/examples. Static, like the landing: the Worker never runs for /docs. The build also writes each page
@@ -15,6 +15,7 @@ import spec from "../docs/pages/spec.md?raw";
 import integrate from "../docs/pages/integrate.md?raw";
 import conformance from "../docs/pages/conformance.md?raw";
 import agents from "../docs/pages/agents.md?raw";
+import ux from "../docs/pages/ux.md?raw";
 import changelog from "../../../../packages/protocol/CHANGELOG.md?raw";
 
 const SOURCES: Record<string, string> = {
@@ -23,6 +24,7 @@ const SOURCES: Record<string, string> = {
   "/docs/integrate": integrate,
   "/docs/conformance": conformance,
   "/docs/agents": agents,
+  "/docs/ux": ux,
   "/docs/changelog": changelog,
 };
 

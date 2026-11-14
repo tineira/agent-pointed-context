@@ -51,8 +51,8 @@ An app offers one profile or both. Pulse (`apps/demo`) and Signals (`apps/signal
 
 On a phone there is no dock window, browser extension or desktop pet to drag an agent from, so the agent in the app's own page is the only way the person can point it. In a viewport that matches `APC_MOBILE_MEDIA` (`(pointer: coarse), (max-width: 640px)`), on both profiles, an app ([`src/core.ts`](src/core.ts)):
 
-- **shows its agents in the page**, each with its mark visible and usable for pinning. The Dock profile's rule that the agent bar may collapse does not apply there, and the bar is never collapsed or hidden; it stays reachable while the page scrolls without covering content the person needs;
-- **lets a finger pin**, with no mouse drag (phone browsers do no HTML5 drag and drop): touching the agent's mark and then a target ("tap to pin", with a clear state and a way to cancel), or dragging the mark with a finger by pointer events. The pin is the same `FocusTarget` as a mouse drag's. Unpin and Revoke work by touch, with finger-sized targets.
+- **shows its agents in the page**, each with its mark visible and usable for pinning. The Dock profile's rule that the agent bar may collapse does not apply there, and the bar is never collapsed or hidden;
+- **lets a finger pin**, with no mouse drag (phone browsers do no HTML5 drag and drop): touching the agent's mark and then a target ("tap to pin"), or dragging the mark with a finger by pointer events. The pin is the same `FocusTarget` as a mouse drag's. Unpin and Revoke work by touch. Where the bar sits, its reachability while scrolling, the look of "tap to pin" and finger-sized targets are [the UX guide's](https://apc.tineira.com/docs/ux#phones).
 
 `@tineira/apc-web` does both (`<apc-agents>`, `enablePinning`). `APC_MOBILE_VIEWPORT` (375 x 812) is the reference viewport; `@tineira/apc-conformance` checks it through the adapter's `page.mobile`.
 

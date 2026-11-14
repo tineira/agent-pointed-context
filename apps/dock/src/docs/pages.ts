@@ -21,6 +21,7 @@ export const DOC_PAGES: readonly DocPage[] = [
   { path: "/docs", nav: "Overview", file: "apps/dock/src/docs/pages/overview.md" },
   { path: "/docs/spec", nav: "Spec", file: "apps/dock/src/docs/pages/spec.md" },
   { path: "/docs/integrate", nav: "Integrate", file: "apps/dock/src/docs/pages/integrate.md" },
+  { path: "/docs/ux", nav: "UX guide", file: "apps/dock/src/docs/pages/ux.md" },
   { path: "/docs/conformance", nav: "Conformance", file: "apps/dock/src/docs/pages/conformance.md" },
   { path: "/docs/agents", nav: "For agents", file: "apps/dock/src/docs/pages/agents.md" },
   { path: "/docs/changelog", nav: "Changelog", file: "packages/protocol/CHANGELOG.md" },

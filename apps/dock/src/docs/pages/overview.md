@@ -37,6 +37,7 @@ You can try both at [apc.tineira.com](/): open your [dock](/dock), or connect di
 
 - [The spec](/docs/spec): the core, the two profiles, `apc_link`, `apc.json`, the hub's trust model, and how versions work.
 - [Integrate your app in an afternoon](/docs/integrate): Direct first, then Dock, with code that compiles against the packages.
+- [The UX guide](/docs/ux): how the reference software shows agents in a page (the pet, the pin badge, the pairing cards). Non-normative.
 - [Conformance](/docs/conformance): what the suite checks, and how to run it.
 - [For agents](/docs/agents): instructions, tools, `then`, `attention`, and untrusted marking.
 - [The standard's changelog](/docs/changelog): every change to the contract, version by version.
