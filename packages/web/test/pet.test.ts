@@ -9,7 +9,8 @@ import { test } from "node:test";
 import { defined, doc, El, locale, visible } from "./fake-dom.ts";
 
 const { petState, PET_STATES } = await import("../src/pet-state.ts");
-const { petLayout, PET_MAX, defineHeaderPets } = await import("../src/header-pets.ts");
+const { petLayout, PET_MAX, defineHeaderPets, HEADER_PETS_CSS } = await import("../src/header-pets.ts");
+const { enablePinning } = await import("../src/pinning.ts");
 const { petPalette, petFill, petHex, resolvePetScheme, PET_DARK_BODY } = await import("../src/pet-scheme.ts");
 const { BODY, BODY_GREY, frameAt, POSES, FX, stilled } = await import("../src/pet-pose.ts");
 const { createPet, petPhase, drawBadge } = await import("../src/pet.ts");
@@ -19,6 +20,10 @@ const { DEFAULT_PETS_STRINGS } = await import("../src/strings.ts");
 
 /** The window the pets run in: frames are counted, never run, unless a test runs them. */
 const frames: Array<(ms: number) => void> = [];
+/** How each frame was asked for ("raf" or "timeout", the slow loop), and what was cancelled, by handle. */
+const kinds: string[] = [];
+const cancelled: Array<[string, number]> = [];
+let handles = 0;
 let reduce = false;
 let dark = false;
 const media = new Map<string, Set<() => void>>();
@@ -26,10 +31,10 @@ const win = globalThis.window as unknown as Record<string, unknown>;
 Object.assign(win, {
   document: doc,
   performance: { now: () => 0 },
-  requestAnimationFrame: (fn: (ms: number) => void) => (frames.push(fn), frames.length),
-  cancelAnimationFrame: () => {},
-  setTimeout: (fn: () => void) => (frames.push(() => fn()), frames.length),
-  clearTimeout: () => {},
+  requestAnimationFrame: (fn: (ms: number) => void) => (frames.push(fn), kinds.push("raf"), ++handles),
+  cancelAnimationFrame: (h: number) => void cancelled.push(["raf", h]),
+  setTimeout: (fn: () => void) => (frames.push(() => fn()), kinds.push("timeout"), ++handles),
+  clearTimeout: (h: number) => void cancelled.push(["timeout", h]),
   matchMedia: (q: string) => ({
     get matches() {
       return q.includes("reduced-motion") ? reduce : q.includes("color-scheme") ? dark : false;
@@ -238,12 +243,12 @@ test("<apc-pets>: three pets as marks, +N, a popover with every agent, and apc-o
   assert.equal(more.hidden, false);
   assert.equal(more.textContent, "+2");
   assert.equal(more.getAttribute("aria-label"), "2 more agents");
-  // The popover lists all five; a pin opens.
+  // The popover lists all five; a pin opens. Only the list button opens it.
   const popover = el.elements().find((e) => e.className === "apc-pets__popover")!;
   assert.equal(popover.hidden, true);
-  pets[0]!.fire("click");
+  more.fire("click");
   assert.equal(popover.hidden, false);
-  assert.equal(pets[0]!.getAttribute("aria-expanded"), "true");
+  assert.equal(more.getAttribute("aria-expanded"), "true");
   assert.equal(popover.elements().filter((e) => e.tagName === "LI").length, 5);
   const opened: string[] = [];
   el.addEventListener("apc-open", (e) => opened.push((e as CustomEvent<{ id: string }>).detail.id));
@@ -254,12 +259,13 @@ test("<apc-pets>: three pets as marks, +N, a popover with every agent, and apc-o
   more.fire("click");
   for (const fn of doc.listeners.get("keydown") ?? []) fn({ key: "Escape" });
   assert.equal(popover.hidden, true);
-  // Fewer agents: the pets that left go, +N hides; the pet that stays is the same element (its motion goes on).
+  // Fewer agents: the pets that left go, +N turns into the list button; the pet that stays is the same element (its motion goes on).
   el.agents = agents.slice(0, 2);
   const after = el.elements().filter((e) => e.className === "apc-pets__pet");
   assert.equal(after.length, 2);
   assert.equal(after[0], pets[0]);
-  assert.equal(more.hidden, true);
+  assert.equal(more.textContent, "▾");
+  assert.equal(more.getAttribute("aria-label"), "Show the agents");
   el.agents = [];
   assert.equal(el.hidden, true);
 
@@ -267,9 +273,11 @@ test("<apc-pets>: three pets as marks, +N, a popover with every agent, and apc-o
   const used = new Set<string>();
   el.strings = locale(DEFAULT_PETS_STRINGS, used);
   el.agents = agents;
-  el.elements().find((e) => e.className === "apc-pets__pet")!.fire("click");
-  for (const t of visible(el)) if (!["×", "z", "+2", "Claude", "Codex", "Gemini", "Kimi", "Grok"].includes(t)) assert.ok(t.includes("«"), `"${t}" is not from the strings option`);
-  for (const key of Object.keys(DEFAULT_PETS_STRINGS)) assert.ok(used.has(key) || visible(el).some((t) => t.includes(`«${key}»`)), `${key} is never shown`);
+  const shownTexts = visible(el);
+  el.agents = agents.slice(0, 3);
+  shownTexts.push(...visible(el));
+  for (const t of shownTexts) if (!["×", "z", "+2", "▾", "Claude", "Codex", "Gemini", "Kimi", "Grok"].includes(t)) assert.ok(t.includes("«"), `"${t}" is not from the strings option`);
+  for (const key of Object.keys(DEFAULT_PETS_STRINGS)) assert.ok(used.has(key) || shownTexts.some((t) => t.includes(`«${key}»`)), `${key} is never shown`);
   el.remove();
   await flushMicrotasks();
 });
@@ -294,4 +302,143 @@ test("<apc-pin> wears the agent's badge when it has no icon, and badges on one t
   assert.deepEqual(["a", "b", "c"].map((id) => pinStackIndex(pins, id)), [0, 0, 1]);
   assert.equal(pinStackIndex(pins, "zz"), 0);
   assert.equal(PIN_STACK_STEP, 30);
+});
+
+/** A fresh <apc-pets> with some agents, in the page. */
+function mountPets(agents: unknown[]) {
+  defineHeaderPets();
+  const el = new (defined.get("apc-pets")!)() as El & { agents: unknown };
+  doc.body.append(el);
+  el.agents = agents;
+  const find = (cls: string) => el.elements().filter((e) => e.className === cls);
+  return { el, find, popover: find("apc-pets__popover")[0]!, more: find("apc-pets__more")[0]! };
+}
+
+test("A tap, click or Enter on a pet arms it for pinning and never opens the popover (review P2-1)", async () => {
+  reduce = true;
+  const { el, find, popover } = mountPets([
+    { id: "g1", name: "Claude", state: "idle" },
+    { id: "g2", name: "Codex", state: "idle" },
+  ]);
+  const stop = enablePinning({ root: doc.body as unknown as HTMLElement, onPin: () => {} });
+  const pet = find("apc-pets__pet")[0]!;
+  // The keyboard (a click with detail 0): armed, and the popover stays shut.
+  pet.fire("click", { detail: 0 });
+  assert.equal(doc.documentElement.getAttribute("data-apc-armed"), "g1");
+  assert.equal(popover.hidden, true, "the popover must not cover the target the person is about to choose");
+  for (const fn of doc.listeners.get("keydown") ?? []) fn({ key: "Escape" });
+  // A mouse click or a tap: still not the popover.
+  pet.fire("click", { detail: 1 });
+  assert.equal(popover.hidden, true);
+  stop();
+  doc.documentElement.removeAttribute("data-apc-armed");
+  el.remove();
+  await flushMicrotasks();
+});
+
+test("The open popover updates in place: a row and its button survive a new agents list (review P2-2)", async () => {
+  reduce = true;
+  const agents = [
+    { id: "g1", name: "Claude", state: "idle", pin: { label: "order 7", seen: false, here: true } },
+    { id: "g2", name: "Codex", state: "calling", pin: { label: "order 9", seen: false, here: true } },
+  ];
+  const { el, find, popover, more } = mountPets(agents);
+  more.fire("click");
+  const button = find("apc-pets__open")[1]!;
+  const li = button.parentElement!;
+  // Presence: the app sets agents again, a new array of new objects, and Codex read its pin.
+  el.agents = agents.map((a) => ({ ...a, pin: { ...a.pin, seen: a.id === "g2" } }));
+  assert.equal(find("apc-pets__open")[1], button, "the same button, so focus and a press on it survive");
+  assert.equal(button.parentElement, li);
+  assert.ok(button.isConnected);
+  assert.match(button.textContent, /order 9, read/);
+  assert.equal(popover.hidden, false);
+  // A row that left goes; the one that stays is the same element.
+  el.agents = [agents[1]];
+  const rows = popover.elements().filter((e) => e.tagName === "LI");
+  assert.deepEqual(rows, [li]);
+  el.remove();
+  await flushMicrotasks();
+});
+
+test("The popover moves right into the viewport when the pets sit near the left edge", async () => {
+  reduce = true;
+  const { el, popover, more } = mountPets([{ id: "g1", name: "Claude", state: "idle" }]);
+  (popover as unknown as { getBoundingClientRect: () => { left: number } }).getBoundingClientRect = () => ({ left: -40 });
+  more.fire("click");
+  assert.equal(popover.style.right, "-48px");
+  el.remove();
+  await flushMicrotasks();
+});
+
+test("The loop: slow once calm, halted while hidden, resumed when shown, cancelled on destroy", async () => {
+  reduce = false;
+  frames.length = 0;
+  kinds.length = 0;
+  cancelled.length = 0;
+  const pet = createPet({ state: "idle", label: "A" }, doc as unknown as Document);
+  assert.deepEqual(kinds, ["raf"]);
+  frames.shift()!(1000);
+  frames.shift()!(12_000); // the state has stayed put for 11 s: calm
+  assert.equal(kinds.at(-1), "timeout", "a calm loop runs on a 50 ms timer, not every frame");
+  const slowHandle = handles;
+  const visibility = (state: string) => {
+    (doc as { visibilityState: string }).visibilityState = state;
+    for (const fn of doc.listeners.get("visibilitychange") ?? []) fn({});
+  };
+  visibility("hidden");
+  assert.deepEqual(cancelled.at(-1), ["timeout", slowHandle], "a hidden page stops the loop");
+  const asked = kinds.length;
+  visibility("visible");
+  assert.equal(kinds.length, asked + 1, "shown again, the loop resumes");
+  pet.destroy();
+  assert.deepEqual(cancelled.at(-1), ["timeout", handles], "the last pet gone, the slow timer is cancelled");
+  frames.length = 0;
+  await flushMicrotasks();
+});
+
+test("update({ phase }) moves the pet's clock after it was made", async () => {
+  reduce = false;
+  frames.length = 0;
+  const late = createPet({ state: "idle", label: "A", phase: 0 }, doc as unknown as Document);
+  const early = createPet({ state: "idle", label: "B", phase: 5 }, doc as unknown as Document);
+  late.update({ phase: 5 });
+  frames.shift()!(2000);
+  const d = (p: { element: unknown }) => part(p.element as El, "body").getAttribute("d");
+  assert.equal(d(late), d(early));
+  late.destroy();
+  early.destroy();
+  frames.length = 0;
+  await flushMicrotasks();
+});
+
+test("The header's styles: hidden hides it, the font is valid, and on a phone the pets do not overlap and taps are 44 px", () => {
+  assert.match(HEADER_PETS_CSS, /apc-pets\[hidden\] \{ display: none; \}/);
+  // `inherit` is not a family inside the font shorthand: such a declaration is dropped whole.
+  assert.doesNotMatch(HEADER_PETS_CSS, /font: \d[^;]*inherit/);
+  const phone = HEADER_PETS_CSS.slice(HEADER_PETS_CSS.indexOf("@media"));
+  assert.match(phone, /\.apc-pets__pet \+ \.apc-pets__pet \{ margin-left: 0; \}/);
+  assert.match(phone, /min-height: 44px; min-width: 44px/);
+  assert.match(HEADER_PETS_CSS, /\.apc-pets__pet \{[^}]*width: 44px; height: 44px/);
+});
+
+test("Brand names match whole words only", () => {
+  const known: Array<[string, string]> = [
+    ["grok-validator", "grok"],
+    ["connectors-manager", "grok"],
+    ["xAI", "grok"],
+    ["claude-code", "claude"],
+    ["claude-ai", "claude"],
+    ["codex-mcp-client", "openai"],
+    ["dots", "openai"],
+    ["cursor-vscode", "cursor"],
+    ["Cursor", "cursor"],
+    ["gemini-cli-mcp-client", "gemini"],
+    ["agy", "antigravity"],
+    ["zcode", "zai"],
+    ["Z.ai", "zai"],
+    ["kimi-cli", "kimi"],
+  ];
+  for (const [name, id] of known) assert.equal(brandFor(name)?.id, id, name);
+  for (const name of ["maxai", "foxaid", "mycursor", "claudette", "codexample", "nodots", "gemininet", "akimi"]) assert.equal(brandFor(name), null, name);
 });

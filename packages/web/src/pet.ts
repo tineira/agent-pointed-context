@@ -273,7 +273,7 @@ export function createPet(options: PetOptions, doc: Document = document): PetHan
     return { ...(t?.body?.trim() ? { body: t.body } : {}), ...(t?.line?.trim() ? { line: t.line } : {}) };
   };
 
-  const phase = opts.phase ?? 0;
+  const phase = () => opts.phase ?? 0;
   let stop = () => {};
   const run = () => {
     stop();
@@ -281,8 +281,8 @@ export function createPet(options: PetOptions, doc: Document = document): PetHan
     if (still()) paint(parts, sim.still(opts.state), palette);
     else
       stop = loopOf(win).add({
-        tick: (t, dt) => paint(parts, sim.step(opts.state, t + phase, dt), palette),
-        calm: (t) => sim.calm(t + phase),
+        tick: (t, dt) => paint(parts, sim.step(opts.state, t + phase(), dt), palette),
+        calm: (t) => sim.calm(t + phase()),
       });
   };
   const restyle = () => {
@@ -291,7 +291,7 @@ export function createPet(options: PetOptions, doc: Document = document): PetHan
   };
   dress();
   // The first frame now, before the browser paints (no blank frame).
-  if (!still()) paint(parts, sim.snap(opts.state, phase), palette);
+  if (!still()) paint(parts, sim.snap(opts.state, phase()), palette);
   run();
   reduced?.addEventListener?.("change", run);
   dark?.addEventListener?.("change", restyle);
@@ -350,6 +350,13 @@ export function definePet(tag = "apc-pet"): void {
       if (name === "label") this.set({ label: value ?? "" });
     }
     connectedCallback() {
+      if (!document.getElementById("apc-pet-style")) {
+        const style = document.createElement("style");
+        style.id = "apc-pet-style";
+        // A bare <apc-pet> is 2.5rem square unless the app sets --apc-pet-size.
+        style.textContent = `${tag} { display: inline-block; width: var(--apc-pet-size, 2.5rem); height: var(--apc-pet-size, 2.5rem); vertical-align: middle; } ${tag} > .apc-pet { display: block; overflow: visible; }`;
+        document.head.append(style);
+      }
       if (this.pet) return;
       this.pet = createPet(this.opts, this.ownerDocument);
       this.append(this.pet.element);

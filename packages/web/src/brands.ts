@@ -24,16 +24,27 @@ export interface ApcBrand {
 
 const mark = (d: string, viewBox: string, fill: string | null = null): ApcLogo => ({ viewBox, parts: [{ d, fill }] });
 
+/**
+ * A brand's names as whole words of a client's name, case aside: a name matches only where it is not part
+ * of a longer word ("xai" is not in "maxai", "cursor" not in "mycursor"). `-`, `_`, `.`, a space or the
+ * name's ends are the edges. Known client names: grok-validator, connectors-manager, claude-code,
+ * claude-ai, codex-mcp-client, cursor-vscode, gemini-cli-mcp-client, antigravity, zcode.
+ */
+const words = (...names: string[]) => new RegExp(`(?<![a-z0-9])(?:${names.join("|")})(?![a-z0-9])`, "i");
+/** A name that must start the client's name (`dots`, `agy`): too short to trust anywhere else. */
+const leading = (name: string) => new RegExp(`^${name}(?![a-z0-9])`, "i");
+const either = (...res: RegExp[]) => new RegExp(res.map((r) => r.source).join("|"), "i");
+
 /** Order matters: the first match wins. */
 export const APC_BRANDS: readonly ApcBrand[] = [
-  { id: "grok", name: "Grok", match: /grok|xai|^connectors-manager$/i, logo: mark(BRAND_PATHS.grok, "0 0 1024 1024") },
-  { id: "claude", name: "Claude", match: /claude|anthropic/i, logo: mark(BRAND_PATHS.claude, "0 0 24 24", "#D97757") },
-  { id: "openai", name: "ChatGPT", match: /openai|chatgpt|codex|^dots\b/i, logo: mark(BRAND_PATHS.openai, "180 180 356 356") },
-  { id: "antigravity", name: "Antigravity", match: /antigravity|^agy\b/i, logo: { image: ANTIGRAVITY_PNG } },
-  { id: "gemini", name: "Gemini", match: /gemini/i, ua: /^Google\b/, logo: { image: GEMINI_PNG } },
-  { id: "cursor", name: "Cursor", match: /cursor/i, logo: mark(BRAND_PATHS.cursor, "0 0 24 24") },
-  { id: "kimi", name: "Kimi", match: /kimi|moonshot/i, logo: mark(BRAND_PATHS.kimi, "0 0 24 24") },
-  { id: "zai", name: "Z.ai", match: /z\.ai|zhipu|\bglm\b|\bz[- ]?code\b/i, logo: mark(BRAND_PATHS.zai, "0 0 24 24") },
+  { id: "grok", name: "Grok", match: words("grok", "xai", "connectors-manager"), logo: mark(BRAND_PATHS.grok, "0 0 1024 1024") },
+  { id: "claude", name: "Claude", match: words("claude", "anthropic"), logo: mark(BRAND_PATHS.claude, "0 0 24 24", "#D97757") },
+  { id: "openai", name: "ChatGPT", match: either(words("openai", "chatgpt", "codex"), leading("dots")), logo: mark(BRAND_PATHS.openai, "180 180 356 356") },
+  { id: "antigravity", name: "Antigravity", match: either(words("antigravity"), leading("agy")), logo: { image: ANTIGRAVITY_PNG } },
+  { id: "gemini", name: "Gemini", match: words("gemini"), ua: /^Google(?![a-z0-9])/i, logo: { image: GEMINI_PNG } },
+  { id: "cursor", name: "Cursor", match: words("cursor"), logo: mark(BRAND_PATHS.cursor, "0 0 24 24") },
+  { id: "kimi", name: "Kimi", match: words("kimi", "moonshot"), logo: mark(BRAND_PATHS.kimi, "0 0 24 24") },
+  { id: "zai", name: "Z.ai", match: words("z\\.ai", "zhipu", "glm", "z[- ]?code"), logo: mark(BRAND_PATHS.zai, "0 0 24 24") },
 ];
 
 /** The brand of a client: by its name first, then by its user agent. Null for an unknown client. */

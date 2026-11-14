@@ -92,8 +92,8 @@ The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims
 How an app shows each connected agent inside its page (since 0.11). These are SHOULDs: an app may keep its own mark for agents, but an app that shows a pet **SHOULD** show this one, the character the dock draws. `@tineira/apc-web` ships it: `createPet` and `<apc-pet>`, the header `<apc-pets>`, the pin badge `<apc-pin>`, the brand logos and `petState`.
 
 - **The pet.** One character for every agent: a soft blob with two eyes, with the agent's logo as a badge at its bottom right. It is APC's own; no vendor's character is drawn or animated.
-- **The header.** The pets sit in the app's header, next to the person's account, up to 3 of them, then "+N". A click on a pet or on "+N" opens a popover with every agent: what it is doing, where its pin is (a click goes there) and whether it read it. A pet whose pin is on another page wears a dot.
-- **The pin badge.** Where an agent is pinned, the element wears the agent's logo, with × to unpin. Several agents on one element each keep a badge, side by side, every × reachable.
+- **The header.** The pets sit in the app's header, next to the person's account, up to 3 of them, then one button: "+N" for the rest, or a list button when all show. That button opens a popover with every agent: what it is doing, where its pin is (a click goes there) and whether it read it. A pet whose pin is on another page wears a dot. A pet is only a mark: a click, a tap or Enter on it is pinning's (it arms the agent), never the popover's, so the popover never covers the target the person is about to tap.
+- **The pin badge.** Where an agent is pinned, the element wears the agent's logo, with × to unpin. Several agents on one element each keep a badge: the app places them side by side, so every × stays reachable (the package gives each badge its place, `pinStackIndex`, and the step, `PIN_STACK_STEP`).
 - **Marks.** A pet and a pin badge are marks: they carry `data-apc-mark` and `data-grant`, so the person drags them (or taps them, then a target) to point the agent, as with the agent bar.
 
 **States.** The pet has 8 states. The app drives each one from data it has, and shows a state only when that data says so; nothing is guessed from timing:
@@ -113,7 +113,7 @@ The first state that holds, top to bottom, is shown (`petState`).
 
 **Motion.** One `requestAnimationFrame` loop per window drives every pet in it. It stops while the page is hidden and slows down (20 frames a second) once every pet has kept its state for 10 s. With `prefers-reduced-motion: reduce`, each pet is a still pose of its state.
 
-**Phone.** In a viewport that matches `APC_MOBILE_MEDIA`, the pets stay in the header, side by side, and every tap target (a pet, "+N", ×, the popover's links) is at least 44 px.
+**Phone.** In a viewport that matches `APC_MOBILE_MEDIA`, the pets stay in the header, side by side, and every tap target (a pet, the list button, ×, the popover's links) is at least 44 px.
 
 **Logos.** A badge is the brand's logo (`brandFor` the client's declared name), else the icon the client sent, else a neutral mark in a colour of the agent's own. Brands only: never a vendor's mascot. A logo says which agent is connected, never that it is verified.
 

@@ -117,7 +117,7 @@ On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, a
 
 ### The agent in the page
 
-To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3 and then "+N", with a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page)). Each pet is a mark, so `enablePinning` drags it like the bar's. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
+To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3, then a "+N" (or list) button that opens a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page)). Each pet is a mark and only a mark, so `enablePinning` drags it like the bar's, and a tap or Enter on it arms the agent. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
 
 <!-- include orders-page.ts#pets -->
 

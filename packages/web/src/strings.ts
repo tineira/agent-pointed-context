@@ -129,6 +129,8 @@ export interface PetsStrings {
   markAria(name: string, doing: string): string;
   /** The "+N" button's `aria-label`. */
   moreAria(count: number): string;
+  /** The list button's `aria-label` when every agent shows (no "+N"). */
+  listAria: string;
   /** The popover's line for an agent's pin: where it points and whether it read it. */
   pinned(label: string, seen: boolean): string;
   /** The popover's line for an agent with no pin. */
@@ -155,6 +157,7 @@ export const DEFAULT_PETS_STRINGS: PetsStrings = {
   markTitle: (name) => `${name}. Drag onto anything to point this agent.`,
   markAria: (name, doing) => `${name}, ${doing}`,
   moreAria: (count) => `${count} more ${count === 1 ? "agent" : "agents"}`,
+  listAria: "Show the agents",
   pinned: (label, seen) => `Pinned to ${label}, ${seen ? "read" : "not read yet"}`,
   notPinned: "Not pinned",
   offPage: "Its pin is on another page",
