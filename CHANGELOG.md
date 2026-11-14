@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Removing a computer from the dock gives every agent a new MCP URL (2026-11-14, TIN-909)
+
+- **A computer removed from a dock, or one that leaves it, can no longer use the agents' MCP URLs it saw.** Every agent gets a new secret, the old URLs answer 404 `unknown_agent`, requests still running on them are cut, drag tickets go, pairings stay, and the dock asks the person to reconnect each connected agent with its new URL; every owner route checks the computer again in the same step as its call, so one removed meanwhile gets nothing. Found by the APC 1.0 security review; the contract does not change. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/web/setup.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/web/computers.tsx`, `apps/dock/test/rotate-on-remove.test.ts`, `apps/dock/test/computers.test.ts`, `DESIGN.md`)
+
 ### An agent not connected yet no longer drags its MCP URL (2026-11-14, TIN-908)
 
 - **The dock never puts an agent's MCP URL on a drag: an agent not connected yet does not drag at all.** Its tile, Float logo and Dock for Windows pet used to drag the connect prompt as `text/plain`, with the secret URL in it, readable by any page it was dropped on; now they are not draggable until the agent connects (no grab cursor; a click on its pet opens the dock), and the URL, the prompt and the QR stay under **Connect this agent**, each with its own Copy. Found by the APC 1.0 security review; the contract does not change. (`apps/dock/src/web/agent-drag.ts`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/pet.tsx`, `apps/dock/src/web/setup.tsx`, `apps/dock/src/web/dock.css`, `apps/dock/test/agent-drag.test.ts`, `DESIGN.md`, `README.md`)

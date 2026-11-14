@@ -84,6 +84,21 @@ export function ConnectAgent(props: { agent: SetupAgent }) {
 }
 
 /**
+ * A computer was removed from the dock, or left it (TIN-909): every agent got a new MCP URL, since that computer
+ * saw the old ones. Until the agent connects with the new one, the dock says so, with the new URL and prompt.
+ */
+export function ReconnectAgent(props: { agent: SetupAgent & { reconnect?: boolean } }) {
+  if (!props.agent.reconnect) return null;
+  return (
+    <details className="tile-details reconnect" open>
+      <summary role="status">Reconnect {props.agent.name}: its connection changed</summary>
+      <p>A computer was removed from this dock or left it, so every agent's MCP URL was replaced and the old one stopped working. Your apps stay paired. Replace the "APC" server in your agent with this new URL, or paste the prompt to it.</p>
+      <ConnectAgent agent={props.agent} />
+    </details>
+  );
+}
+
+/**
  * The APC dock for Windows (#84) loads the dock in its own windows: the dock, marked by a script the
  * app runs on every load (so it holds through Start over), which needs no Install or Float, and each
  * agent as a desktop pet with ?view=pet&agent=<id> (TIN-479, pet.tsx). Its builds before the pets

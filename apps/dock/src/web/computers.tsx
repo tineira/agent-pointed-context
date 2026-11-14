@@ -323,7 +323,7 @@ export function JoinPanel(props: { initialCode: string; desktop: boolean; leavin
 export function ComputersPanel(props: { state: DockState; base: string; back: () => void; link: () => void; refresh: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const remove = (d: DockDevice) => {
-    if (!confirm(`Remove ${d.label} from this dock? It stops opening this dock. Your agents, their connection and the other computers stay. Every browser extension sending page readings is unpaired too, so each asks once again on its next drop.`)) return;
+    if (!confirm(`Remove ${d.label} from this dock? It stops opening this dock. Your agents, their apps and the other computers stay, but each agent gets a new connection URL, since that computer saw the old ones: reconnect your agents from the dock afterwards. Every browser extension sending page readings is unpaired too, so each asks once again on its next drop.`)) return;
     setError(null);
     void call<{ ok?: boolean }>(`${props.base}/devices/${d.id}/remove`, {})
       .then((r) => r?.ok === false && setError("Could not remove it: it may be gone already."))
@@ -359,7 +359,7 @@ export function ComputersPanel(props: { state: DockState; base: string; back: ()
       </button>
       <div className="join-note">
         <p>
-          <b>Remove</b> signs that computer out of this dock. Your agents, their connection and the other computers stay as they are.
+          <b>Remove</b> signs that computer out of this dock. Your agents, their apps and the other computers stay; each agent gets a new connection URL, which the dock shows for you to reconnect it.
         </p>
         <p>
           <b>Start over</b> (in ⋯) erases the dock on every computer.

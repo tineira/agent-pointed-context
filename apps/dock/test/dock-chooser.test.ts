@@ -31,6 +31,12 @@ function world() {
       get: (name: string) => ({
         isOwner: async (secret: string) => docks.get(name) === secret,
         state: async () => ({ agents: [] }),
+        // The owner routes go through asOwner (TIN-909): the computer checked again, then the method.
+        asOwner: async (secret: string, method: string) => {
+          if (docks.get(name) !== secret) throw new Error("not_owner");
+          if (method !== "state") throw new Error(`not in this stand-in: ${method}`);
+          return { agents: [] };
+        },
         init: async (did: string) => {
           calls.init++;
           const owner = "e".repeat(32);

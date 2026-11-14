@@ -22,7 +22,7 @@ import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-
 import { marked, noneSelected, NONE_SELECTED, readUnmarked, setMarks, writeUnmarked, type Marks } from "./float-marks.ts";
 import { openOutcome } from "./open-outcome.ts";
 import { floatApp, PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
-import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
+import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, ReconnectAgent, Setup } from "./setup.tsx";
 import { setupProgress } from "../onboarding.ts";
 import { DownloadItems } from "./downloads.tsx";
 import { DockMenu } from "./dock-menu.tsx";
@@ -644,6 +644,7 @@ export function HubDock() {
                 </span>
               </div>
               {float && <FloatMark agent={a} float={float} />}
+              <ReconnectAgent agent={a} />
               {connected ? (
                 <a
                   className="tile-more"

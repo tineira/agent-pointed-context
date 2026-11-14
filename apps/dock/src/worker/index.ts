@@ -8,7 +8,7 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
-import { DOCK_TTL_MS, type Env, type Hub } from "./hub.ts";
+import { DOCK_TTL_MS, NOT_OWNER, type Env, type Hub, type OwnerMethod } from "./hub.ts";
 import { deviceLabel, normalizeJoinCode } from "./devices.ts";
 import { DIRECTORY } from "./join-codes.ts";
 import { withByteRanges } from "./range.ts";
@@ -40,6 +40,13 @@ app.use("*", async (c, next) => {
   const res = new Response(c.res.body, c.res);
   for (const [k, v] of Object.entries(NO_FRAMING)) res.headers.set(k, v);
   c.res = res;
+});
+
+/** A computer removed while its request ran (Hub.asOwner, TIN-909) is answered as one whose cookie no longer opens the dock. */
+app.onError((err, c) => {
+  if (err instanceof Error && err.message.includes(NOT_OWNER)) return c.json({ error: "dock_expired" }, 404);
+  console.error(err);
+  return c.text("Internal Server Error", 500);
 });
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -174,77 +181,82 @@ app.use("/api/d/:did/*", async (c, next) => {
   await next();
 });
 
-const stub = (c: { env: Env; var: Vars }) => stubFor(c.env, c.var.did);
+/**
+ * An owner method of the dock the cookie opens. The middleware's isOwner ran in a call of its own; asOwner checks
+ * the computer again in the same step as the method (TIN-909), so one removed meanwhile reads and does nothing.
+ */
+const owned = <M extends OwnerMethod>(c: { env: Env; var: Vars }, method: M, ...args: Parameters<Hub[M]>): Promise<Awaited<ReturnType<Hub[M]>>> =>
+  (stubFor(c.env, c.var.did) as unknown as Pick<Hub, "asOwner">).asOwner(c.var.owner, method, args);
 app.get("/api/d/:did/state", async (c) => {
   keepCookie(c, c.var.did, c.var.owner);
-  return c.json(await stub(c).state(new URL(c.req.url).origin, c.var.owner));
+  return c.json(await owned(c, "state", new URL(c.req.url).origin, c.var.owner));
 });
 /** Link another computer (TIN-838): a new code, kept in the directory for as long as it lives. */
 app.post("/api/d/:did/link", async (c) => {
-  const made = await stub(c).newLink();
+  const made = await owned(c, "newLink");
   if (!made.ok) return c.json(made, 400);
   if (made.dropped.length) await directory(c.env).drop(made.dropped);
   // A code already someone's (45 bits: next to never) is let go and the person asks again.
   if (!(await directory(c.env).put(made.code, c.var.did, made.expires_at))) {
-    await stub(c).cancelLink(made.code);
+    await owned(c, "cancelLink", made.code);
     return c.json({ ok: false, error: "try_again" }, 400);
   }
   return c.json({ ok: true, code: made.code, expires_at: made.expires_at }, 200, { "cache-control": "no-store" });
 });
 app.post("/api/d/:did/link/cancel", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { code?: unknown };
-  const result = await stub(c).cancelLink(body.code);
+  const result = await owned(c, "cancelLink", body.code);
   if (result.ok && typeof body.code === "string") await directory(c.env).drop([body.code]);
   return c.json(result);
 });
 app.post("/api/d/:did/joins/:jid", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
-  const result = await stub(c).decideJoin(c.req.param("jid"), body.action);
+  const result = await owned(c, "decideJoin", c.req.param("jid"), body.action);
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/d/:did/devices/:id/remove", async (c) => {
-  const result = await stub(c).removeDevice(c.req.param("id"), c.var.owner);
+  const result = await owned(c, "removeDevice", c.req.param("id"), c.var.owner);
   return c.json(result, result.ok ? 200 : 400);
 });
-app.post("/api/d/:did/agents", async (c) => c.json(await stub(c).addAgent()));
-app.post("/api/d/:did/kept", async (c) => c.json(await stub(c).keptAtHand()));
+app.post("/api/d/:did/agents", async (c) => c.json(await owned(c, "addAgent")));
+app.post("/api/d/:did/kept", async (c) => c.json(await owned(c, "keptAtHand")));
 /** Start over (TIN-411): the dock gives its grants back and forgets everything, and its cookie goes. */
 app.post("/api/d/:did/reset", async (c) => {
-  await stub(c).reset();
+  await owned(c, "reset");
   deleteCookie(c, COOKIE, { path: "/" });
   return c.json({ ok: true });
 });
 app.post("/api/d/:did/agents/:aid/ticket", async (c) => {
-  const t = await stub(c).ticket(c.req.param("aid"));
+  const t = await owned(c, "ticket", c.req.param("aid"));
   return t ? c.json(t) : c.json({ error: "unknown_agent" }, 404);
 });
 app.post("/api/d/:did/agents/:aid/badge", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { badge?: unknown };
-  const result = await stub(c).setBadge(c.req.param("aid"), body.badge);
+  const result = await owned(c, "setBadge", c.req.param("aid"), body.badge);
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/d/:did/agents/:aid/remove", async (c) => {
-  const result = await stub(c).removeAgent(c.req.param("aid"));
+  const result = await owned(c, "removeAgent", c.req.param("aid"));
   return c.json(result, result.ok ? 200 : 404);
 });
 /** What an agent did (TIN-419), for its page in the dock. */
 app.get("/api/d/:did/agents/:aid/calls", async (c) => {
-  const result = await stub(c).calls(c.req.param("aid"));
+  const result = await owned(c, "calls", c.req.param("aid"));
   return result ? c.json(result) : c.json({ error: "unknown_agent" }, 404);
 });
 app.post("/api/d/:did/agents/:aid/clear", async (c) => {
-  await stub(c).clearFocus(c.req.param("aid"));
+  await owned(c, "clearFocus", c.req.param("aid"));
   return c.json({ ok: true });
 });
 /** Clear on the agent's page (TIN-422): its list of readings, and what the hub still keeps of them. */
 app.post("/api/d/:did/agents/:aid/readings/clear", async (c) => {
-  const result = await stub(c).clearReadings(c.req.param("aid"));
+  const result = await owned(c, "clearReadings", c.req.param("aid"));
   return c.json(result, result.ok ? 200 : 404);
 });
 app.post("/api/d/:did/pairings/:pid", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown; code?: unknown };
   // The pairing code (APC 0.9): what the dock owner typed, compared in the hub and then dropped.
-  const result = await stub(c).decide(c.req.param("pid"), body.action, body.code);
+  const result = await owned(c, "decide", c.req.param("pid"), body.action, body.code);
   return c.json(result, result.ok ? 200 : 400);
 });
 app.get("/api/d/:did/ws", async (c) => {
