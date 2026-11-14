@@ -17,7 +17,7 @@ How they are checked does not change what they mean. The conformance suite check
 
 ## What 1.0 freezes
 
-1.0 freezes the pairing contract between an app, an agent and a hub: [the core](#the-core), [the Direct profile](#the-direct-profile), [the Dock profile](#the-dock-profile) with the hub's duties toward apps (H1 to H8), [`apc_link`](#apc_link), [`apc.json`](#apcjson), the rules of [the hub's trust model](#the-hubs-trust-model) on which apps pair and on marking what an unverified app gives, and [reading what you do not know](#reading-what-you-do-not-know). The hub's tools for agents are **not** frozen by 1.0: its `get_current_view` with `views[]`, its one `wait_for_focus` across apps, `list_app_tools` and `call_app_tool`, the `<app>__<tool>` relay, the shape of the untrusted envelope and labels it marks an unverified app's content with (the marking itself is frozen), and the browser extension's `page_reading` focus with `page__get_reading`'s `page_text`. How an app presents its agents (the pet, the cards, wording, colours, motion) is not in the contract either: it is [the UX guide](/docs/ux), non-normative. They stay non-normative until a later minor version states them; until then [the hub's tools](#the-hubs-tools) describes the reference hub, and any minor version may change them. An agent reads them as it reads any MCP server's tools: by their descriptions.
+1.0 freezes the pairing contract between an app, an agent and a hub: [the core](#the-core), [the Direct profile](#the-direct-profile), [the Dock profile](#the-dock-profile) with the hub's duties toward apps (H1 to H8), [`apc_link`](#apc_link), [`apc.json`](#apcjson), the rules of [the hub's trust model](#the-hubs-trust-model) on which apps pair and on marking what an unverified app gives, and [reading what you do not know](#reading-what-you-do-not-know). The hub's tools for agents are **not** frozen by 1.0: its `get_current_view` with `views[]`, its one `wait_for_focus` across apps, `list_app_tools` and `call_app_tool`, the `<app>__<tool>` relay, the shape of the untrusted envelope and labels it marks an unverified app's content with (the marking itself is frozen), and the browser extension's `page_reading` focus with `page__get_reading`'s `page_text`. They stay non-normative until a later minor version states them; until then [the hub's tools](#the-hubs-tools) describes the reference hub, and any minor version may change them. An agent reads them as it reads any MCP server's tools: by their descriptions. How an app presents its agents (the pet, the cards, wording, colours, motion) is not in the contract either: it is [the UX guide](/docs/ux), non-normative.
 
 ## Reading what you do not know
 
@@ -118,7 +118,7 @@ Every agent in the app's agent bar, Direct or Dock, has Revoke. It holds in the 
 On a phone there is no dock window, extension or desktop pet to drag from, so the agent in the app's page is the only way to point it. In a viewport that matches `(pointer: coarse), (max-width: 640px)` (`APC_MOBILE_MEDIA`), on both profiles:
 
 - The app shows all its agents in the page, each mark visible and usable for pinning. The agent bar is never collapsed or hidden there.
-- A finger can pin without a mouse drag (phones do no HTML5 drag and drop): tap the agent's mark, then the target, or drag the mark with pointer events. It makes the same pin. Unpin and Revoke work by touch.
+- A finger can pin without a mouse drag (phones do no HTML5 drag and drop): tap the agent's mark, then the target, or drag the mark with pointer events. It makes the same pin. While an agent is armed the page **SHOULD** show that it is and give a way to cancel, so a stray tap pins nothing. Unpin and Revoke work by touch.
 
 The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims 0.6.0 or later **MUST** give the conformance suite its page on a phone.
 
@@ -126,12 +126,13 @@ This is interoperability, not presentation: with no mouse and no dock window, a 
 
 ### The agent in the page
 
-How an app shows each connected agent inside its page is the app's own choice. [The UX guide](/docs/ux) describes the reference pattern (the pet, the header, the pin badge, the states, motion, colour, phones, the pairing cards); it is non-normative, nothing in it is required to interoperate, and `@tineira/apc-web` is its reference implementation. Whatever an app draws, four rules about what its page shows bind it:
+How an app shows each connected agent inside its page is the app's own choice. [The UX guide](/docs/ux) describes the reference pattern (the pet, the header, the pin badge, the states, motion, colour, phones, the pairing cards); it is non-normative, nothing in it is required to interoperate, and `@tineira/apc-web` is its reference implementation. Whatever an app draws, these bind it:
 
-- **Marks.** A pet, a pin badge and the agent bar's mark are marks: they carry `data-apc-mark` and `data-grant`, so the person drags them (or taps them, then a target) to point the agent.
-- **States are not guessed.** A page shows an agent's state only when the app's data says so, and nothing is guessed from timing. In particular a page shows an agent as waiting only from the page-readable wait signal ([wait events](#wait-events-since-011)), never from how recently the agent called.
-- **A logo is not a verification.** A badge says which agent is connected, never that it is verified. Brands only: a page never draws or animates a vendor's mascot.
-- **Revoke is in the bar.** See [Revoke from the app](#revoke-from-the-app).
+- **Marks.** A pet, a pin badge and the agent bar's mark **MUST** carry `data-apc-mark` and `data-grant`, so the person drags them (or taps them, then a target) to point the agent. The browser extension finds an APC app by them and steps back from its marks, so an app that leaves them off is treated as a page without APC.
+- **States are not guessed.** A page **MUST NOT** show an agent's state that the app's data does not give, and **MUST NOT** guess one from timing. In particular a page **MUST** show an agent as waiting only from the page-readable wait signal ([wait events](#wait-events-since-011)), never from how recently the agent called.
+- **A logo is not a verification.** A badge **MUST NOT** suggest that an agent is verified: it says which agent is connected. A page **MUST NOT** draw or animate a vendor's mascot; brands only.
+- **Revoke is in the bar.** The app's agent bar **MUST** offer Revoke for every agent it shows (see [Revoke from the app](#revoke-from-the-app)).
+- **The bar for a Direct agent.** The agent bar **MUST NOT** be collapsed or hidden while it shows a Direct agent, on any viewport: the app's page is the only place the person sees and points one (see also [Mobile](#mobile)).
 
 ## The Direct profile
 
@@ -142,7 +143,7 @@ The agent connects to the app's own MCP endpoint.
 - **A bearer token** (OAuth 2.1, or a token the app issues): every grant shares one MCP URL, and the token names the grant. A revoked token answers 401 with the `RevokedAnswer` body, so the client does not just authorize again. The grant's id is random and stays the same for the grant's whole life; it is never derived from the token. [A complete Direct app with a bearer token](/docs/integrate#a-complete-direct-app-with-a-bearer-token) shows one.
 - **Hosts with no long-lived process** (stateless functions and a database) still bound `wait_for_focus` by their function's time limit (their own ceiling for `timeout_s`), tell a closed page from a heartbeat the page sends, and check the grant before and after each tool call.
 - **The agent list**: where the person makes and names agents and copies the URL, or a prompt that asks the agent to add it (`<apc-direct-agents>` in `@tineira/apc-web`). An agent names itself on `initialize` (`clientInfo.name`) until the person renames it.
-- **The agent bar**: the app's page is the only place the person sees and points a Direct agent, so it shows them all (see [Mobile](#mobile); the reference bar is in [the UX guide](/docs/ux#the-agent-in-the-page)).
+- **The agent bar** **MUST NOT** be collapsed or hidden while it shows a Direct agent, on any viewport: the app's page is the only place the person sees and points one ([the agent in the page](#the-agent-in-the-page); the reference bar is in [the UX guide](/docs/ux#the-agent-in-the-page)).
 
 ## The Dock profile
 
@@ -154,7 +155,7 @@ The dock puts the agent on a drag with the type `application/x-apc-agent` and th
 
 ### Consent in the app
 
-Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent with that nonce (its words are the app's own; [the UX guide](/docs/ux#pairing-and-consent-cards) gives an example), and the Allow sends it back. The server **MUST** make a grant only for a request that brings back the nonce of a consent it gave for that dock and that agent, and **MUST** accept each nonce only once. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress` (see [one pending pairing](#one-pending-pairing)).
+Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent with that nonce, and the Allow sends it back. The consent **SHOULD** name the hub's host from the drop (the one the app will call), the host the person has to check before the Allow; its other words are the app's own ([the UX guide](/docs/ux#pairing-and-consent-cards) gives an example). The server **MUST** make a grant only for a request that brings back the nonce of a consent it gave for that dock and that agent, and **MUST** accept each nonce only once. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress` (see [one pending pairing](#one-pending-pairing)).
 
 Since 0.9 the consent shows a [pairing code](#the-pairing-code), and the server answers `consent_required` with both: `{ consent, pairing_code }`. The reference apps hold the code on the page and show it only after the Allow, in the handoff card that takes the consent's place ([the UX guide](/docs/ux#the-handoff-card)). That is how the reference apps do it, not a rule: the rules are in the next section.
 
@@ -166,7 +167,7 @@ A drag can be put on any page, and anyone who runs a dock can make tickets for t
 - The hub keeps it with the pending pairing and **MUST NOT** show it: not in the dock's state, not in what it sends the dock's pages, not in any answer. The dock owner types it to approve; the hub compares it in constant time with what the app sent, ignoring case, spaces and dashes (O reads as 0, I and L as 1). A missing or malformed code is refused and not counted. A wrong one counts (`wrong_pairing_code`, with `attempts_left`); the fifth removes the request and gives the grant back (`pairing_code_refused`). A request with a code that nobody approves goes after two minutes, its grant given back. A match clears the code. Deny and unpair need no code.
 - The app **MUST** keep the grant only when the hub acknowledges the code (below), and delete it, before it answers its page, on any other answer: a hub that does not check codes never holds a grant.
 - The reference hub requires the code: it refuses a pairing without one (`pairing_code_required`). Other hubs **SHOULD** require it too.
-- After the Allow the reference apps keep the code on the page, with a Cancel (the app's revoke), until the hub connects (its first `initialize` on the grant) or the grant goes; what the card says is in [the UX guide](/docs/ux#the-handoff-card).
+- Where an app shows the code it **SHOULD** tell the person to type it only in their own dock and never give it to anyone, and to Cancel if their dock does not ask for it: the code's resistance to phishing lives in the person having read that. The reference apps keep the code on the page, with a Cancel (the app's revoke), until the hub connects (its first `initialize` on the grant) or the grant goes; the card's wording is in [the UX guide](/docs/ux#the-handoff-card).
 
 ### Pairing: `POST {hub}/apc/pair`
 
@@ -312,7 +313,7 @@ The Dock's security is the 0.9 pairing code plus a secret URL over TLS. There is
 
 The pairing code gates the honest hub's approval, and that hub's `initialize` is the owner's yes (H1). The code never gates the app's data path. Against a hub that breaks H1, or against someone holding the URL, the URL is the credential, as in 0.9. No app can detect a breach of H1: hub conformance and the operator's allowlist are the controls.
 
-Since 0.12 [the binding](#the-binding) ties the hub's `initialize` to the app's own `/apc/pair` call for that agent, so a URL the app did not hand to that pairing (a Direct grant, another pairing's grant, a copied URL) never goes live at an app that implements 0.12. It does not stop a drop's ticket being relayed through a real account on the app: someone who holds an account there can take a drop on their own page through the app's own consent and show its code elsewhere, and the binding then passes, since the app itself made the call. The dock shows the app's host on every request, and the person types a code only from their own account there. Closing the relay is planned before 1.0.
+Since 0.12 [the binding](#the-binding) ties the hub's `initialize` to the app's own `/apc/pair` call for that agent, so a URL the app did not hand to that pairing (a Direct grant, another pairing's grant, a copied URL) never goes live at an app that implements 0.12. It does not stop a drop's ticket being relayed through a real account on the app: someone who holds an account there can take a drop on their own page through the app's own consent and show its code elsewhere, and the binding then passes, since the app itself made the call. The dock **MUST** show the app's host on every request, and the person types a code only from their own account there. Closing the relay is planned before 1.0.
 
 The page never sees the MCP URL or the secret, and the code is shown only on the owner's page and sent only in `/apc/pair`. APC covers pointing only: confirmations and approvals of what an agent does are outside the standard.
 
@@ -350,7 +351,7 @@ Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`,
 - `direct.connect` (with `"direct"`): the page on the same origin where the person connects an agent directly.
 - `direct.auth` and `direct.resource_metadata` (optional, information only): how agents authenticate (`"url"`, `"oauth"`) and, with OAuth, the protected-resource metadata URL on the origin. A reader never requires them.
 
-A dock agent dropped on an app that offers only Direct is answered, never lost: the page tells the person that it connects agents directly, and pairs nothing (the reference sentence, `directOnlyNote`, is in [the UX guide](/docs/ux#notes-when-a-drop-cannot-pair)). A page that cannot read its own `apc.json` pairs nothing either.
+A dock agent dropped on an app that offers only Direct is answered, never lost: the page tells the person that it connects agents directly and links its connect page (`direct.connect`), and pairs nothing (the reference sentence, `directOnlyNote`, is in [the UX guide](/docs/ux#notes-when-a-drop-cannot-pair)). A page that cannot read its own `apc.json` pairs nothing either.
 
 ### `mcp.endpoints` (0.11)
 
@@ -488,7 +489,7 @@ A hub may block domains (a domain covers its subdomains): a blocked app cannot p
 
 ## The browser extension
 
-With the APC browser extension the person can drop a dock agent on any web page, APC or not. Everything the person can see in the region they drop on (a block of text, a form's question or a whole form; the extension outlines it while they drag, see [the UX guide](/docs/ux#on-any-page-the-extensions-outline)), including what they typed there, and their selection, is read on the drop, and only then, and handed to the hub as a page reading, with `untrusted: true`: what a page says is data from that page, never instructions. Card, account and id numbers go only as the person set in the extension; passwords and one-time codes never. This is the extension's, for pages without APC: an APC app decides itself what it exposes to an agent, through its own tools. On a Direct-only app that does not answer dock drops itself, the extension tells the person to connect directly.
+With the APC browser extension the person can drop a dock agent on any web page, APC or not. Everything the person can see in the region the extension outlines while they drag (a block of text, a form's question or a whole form; what is outlined is what is read, see [the UX guide](/docs/ux#on-any-page-the-extensions-outline)), including what they typed there, and their selection, is read on the drop, and only then, and handed to the hub as a page reading, with `untrusted: true`: what a page says is data from that page, never instructions. Card, account and id numbers go only as the person set in the extension; passwords and one-time codes never. This is the extension's, for pages without APC: an APC app decides itself what it exposes to an agent, through its own tools. On a Direct-only app that does not answer dock drops itself, the extension tells the person to connect directly.
 
 ## Error codes
 

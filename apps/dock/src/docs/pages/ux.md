@@ -4,14 +4,15 @@ How the reference software shows agents in a page, and why: the pet, the header,
 
 ## What this guide is
 
-Presentation moved out of [the spec](/docs/spec) so that the contract holds only what interoperability and security depend on. Four presentation rules stayed in the spec because something else relies on them. Follow them whatever you draw:
+Presentation moved out of [the spec](/docs/spec) so that the contract holds only what interoperability and security depend on. Some presentation rules stayed in the spec, with their force words, because something else relies on them. Whatever you draw, [the spec](/docs/spec#the-agent-in-the-page) binds you to these:
 
-- **Marks carry `data-apc-mark` and `data-grant`.** A pet, a pin badge and the bar's mark are what the person drags (or taps, then a target) to point an agent, and `enablePinning` finds them by those attributes ([the agent in the page](/docs/spec#the-agent-in-the-page)).
+- **Marks carry `data-apc-mark` and `data-grant`.** A pet, a pin badge and the bar's mark are what the person drags (or taps, then a target) to point an agent, `enablePinning` finds them by those attributes, and the browser extension steps back from an APC app by them.
 - **A state is shown only when the app's data says so.** Never guessed from timing, and `waiting` only from the wait signal ([states](#states)).
 - **A logo says which agent is connected, never that it is verified.** No vendor's mascot is drawn ([logos](#logos)).
+- **Revoke is in the agent bar, and the bar is never collapsed or hidden while it shows a Direct agent.**
 - **On a phone the agents are in the page and a finger can pin and unpin.** Mobile is interoperability, not presentation: the conformance suite checks it ([phones](#phones), [Mobile](/docs/spec#mobile)).
 
-The pairing rules that look like screen rules but are security rules (the code is shown only on the app owner's page, the dock names the host on a request, an unverified app's warning defaults to Deny, what an unverified app gives is marked untrusted) are in the spec too, in [the Dock profile](/docs/spec#the-dock-profile) and [the hub's trust model](/docs/spec#the-hubs-trust-model).
+The pairing rules that look like screen rules but are security rules (the code is shown only on the app owner's page, the dock names the app's host on a request, the consent names the hub's host, an unverified app's warning names the domain first and defaults to Deny, what an unverified app gives is marked untrusted) are in the spec too, in [the Dock profile](/docs/spec#the-dock-profile) and [the hub's trust model](/docs/spec#the-hubs-trust-model).
 
 ## The agent in the page
 
@@ -30,15 +31,7 @@ How an app shows each connected agent inside its page. An app may keep its own m
 
 Where an agent is pinned, the element wears the agent's logo, with × to unpin: `<apc-pin>`. It shows a dashed, breathing ring while the agent has not read the pin and a check once it has, with the agent's name as its tooltip. Where it goes is the app's: Pulse floats badges over their targets, Signals puts them inline.
 
-```ts
-import { definePinBadge, agentBadge, type ApcPinElement } from "@tineira/apc-web";
-
-definePinBadge();
-const pin = document.createElement("apc-pin") as ApcPinElement;
-pin.agent = { id: grantId, name: "Claude", seen: false, badge: agentBadge({ clientName: "Claude", key: grantId }) };
-pin.addEventListener("apc-unpin", () => void unpin(grantId));
-row.append(pin);
-```
+<!-- include ux-snippets.ts#pin -->
 
 - **Several agents on one element each keep a badge**, side by side, so every × stays reachable. `pinStackIndex` gives each badge its place and `PIN_STACK_STEP` (30 px), or `PIN_STACK_STEP_TOUCH` (72 px) on touch, is the step.
 - **On touch the × sits beside the mark, never over it**, so a tap on the mark never unpins.
@@ -92,12 +85,7 @@ The rule that matters is the spec's [Mobile](/docs/spec#mobile): the agents are 
 - **The bar.** `<apc-agents>` stays in the page, uncollapsed, at the bottom of the viewport: reachable while the page scrolls, without covering the content a person is about to point at.
 - **Tap to pin.** Tap the agent's mark, then the target. Say what to do while an agent is armed ("Tap what you want Claude to look at") and give a way to cancel. `createTapPin` is the same state machine without the note, for a page that draws its own.
 
-```ts
-enablePinning({
-  onPin: (grantId, target) => void post(`/api/agents/${grantId}/pin`, { target }),
-  strings: { tapPrompt: (name) => `Tap what you want ${name} to look at.`, cancel: "Cancel" },
-});
-```
+<!-- include ux-snippets.ts#tap -->
 
 Check the page with touch emulation, as `scripts/mobile-e2e.mjs` does for Pulse and Signals, or give the suite's `page.mobile` adapter ([conformance](/docs/conformance#run-it-from-code)).
 
@@ -107,7 +95,7 @@ What the person sees from the drop to the dock's yes. The mechanics (the nonce, 
 
 ### The consent card
 
-The page shows the consent when the server answers `consent_required`: "Let your agent from the dock at *host* read *Orders*?" The host is the hub's, from the drop, never typed by the page's own script, so the person sees which dock is asking. Before the Allow it says only that the dock will ask for a code: "After Allow, your dock will ask for a code." The code is not shown yet. These are example words; the app's own are as good.
+The page shows the consent when the server answers `consent_required`: "Let your agent from the dock at *host* read *Orders*?" The host is the hub origin from the drag payload, which is the hub the app will call, so the person sees which dock is asking (the spec's [consent](/docs/spec#consent-in-the-app) says the consent should name it). Before the Allow it says only that the dock will ask for a code: "After Allow, your dock will ask for a code." The code is not shown yet. These are example words; the app's own are as good.
 
 ### The handoff card
 
@@ -116,23 +104,16 @@ After the Allow, the code is the one thing the person carries to another window,
 - the code **large**, in a monospaced face, formatted `K7M-4P2` (`formatPairingCode`), with a **copy** button;
 - the time left, as `m:ss`;
 - **Cancel**, which takes the access back (the app's revoke);
-- under the code, **required copy for the reference pattern**: "Type it only in your own dock; never give it to anyone. Whoever types it gets this access." The code's resistance to phishing lives in the person having read this, so an app that follows the card keeps the sentence;
+- under the code, the sentence the spec's [pairing code](/docs/spec#the-pairing-code) asks for, in the reference's words: "Type it only in your own dock; never give it to anyone. Whoever types it gets this access." (`HandoffStrings.typeItOnlyInYourDock`; the rule is the spec's, only the words are the guide's);
 - and "If your dock doesn't ask for this code, the agent wasn't yours: Cancel."
 
-```ts
-defineHandoff();
-const card = document.createElement("apc-handoff") as ApcHandoffElement;
-card.host = new URL(drag.hub).host;
-card.pairing = { code: answer.pairing_code, expires_at: stored.expires_at }; // the app's stored expiry
-card.addEventListener("apc-cancel", () => void post("/api/cancel", { grant_id }));
-consentSlot.replaceChildren(card);
-```
+<!-- include ux-snippets.ts#handoff -->
 
 The card follows the **app's stored expiry**: the countdown stops at zero, the code goes, and it says the dock did not finish in time. It offers no "New code": a new code needs a new consent, so it asks the person to drop the agent again. Once the dock took the code and is connecting, it says so and hides the code (set `pairing` to `null`). A page that holds a code before it knows when it ends shows no countdown, never a guessed one.
 
 ### The dock's warning
 
-An unverified app's request shows the dock's own warning, which an app's page cannot draw (the dock is the hub's page). The spec fixes the gate and **Deny** as the default; the reference's layout puts the **domain first**, then **Not verified**, what the app calls itself as its own word ("calls itself *Orders*"), and the risk: your agent will read whatever this app tells it, which could lead it to move data out of your other apps. The risk sentence is content worth keeping; its place and weight are the dock's choice.
+An unverified app's request shows the dock's own warning, which an app's page cannot draw (the dock is the hub's page). The spec fixes what it says ([the warning](/docs/spec#the-warning)): the **domain first**, **Not verified**, what the app calls itself as its own word ("calls itself *Orders*"), the risk (your agent will read whatever this app tells it, which could lead it to move data out of your other apps), and **Deny** as the default button. Only placement and weight are layout, and they are the dock's choice.
 
 ### Notes when a drop cannot pair
 

@@ -262,13 +262,15 @@ export function isRevokedAnswer(body: unknown): body is RevokedAnswer {
  * - **The agents are shown in the page**, all of them, each with its mark visible and usable for
  *   pinning. This holds whatever the app's profiles, and whatever the agent bar does elsewhere: the
  *   Dock profile's rule that the bar may collapse to a small indicator does not apply, and the bar is
- *   never hidden or collapsed. It stays reachable while the page scrolls, without covering content
- *   the person needs.
+ *   never hidden or collapsed.
  * - **The person can pin with a finger, with no mouse drag.** Browsers on phones do not do HTML5
  *   drag and drop, so the app takes a touch alternative: touching the agent's mark and then a target
- *   ("tap to pin": a clear state, a way to cancel), or dragging the mark with a finger with pointer
- *   events. The result is the same pin (`FocusTarget`) as a mouse drag. Removing the pin (unpin) and
- *   Revoke work by touch too, with targets large enough for a finger.
+ *   ("tap to pin"), or dragging the mark with a finger with pointer events. The result is the same pin
+ *   (`FocusTarget`) as a mouse drag. Removing the pin (unpin) and Revoke work by touch too.
+ *
+ * How the bar sits on a phone, that it stays reachable while the page scrolls, how "tap to pin" shows its
+ * state and cancels, and the size of a finger target are the UX guide's (apc.tineira.com/docs/ux#phones),
+ * not the contract's.
  *
  * `APC_MOBILE_VIEWPORT` is the reference viewport the conformance suite and the apps are checked at.
  */
@@ -282,8 +284,8 @@ export const APC_MOBILE_VIEWPORT = { width: 375, height: 812 } as const;
  *
  * - **The app makes it** with its consent nonce: `PAIRING_CODE_LENGTH` characters of `PAIRING_CODE_ALPHABET`
  *   (Crockford base32, 30 bits), new for every consent (`newPairingCode` and `DockConsent` in
- *   `@tineira/apc-server`), and shows it on its consent card, formatted `K7M-4P2` (`formatPairingCode`). After
- *   the Allow, the app sends it raw (`K7M4P2`) in `pairing_code` of `POST {hub}/apc/pair` (`DockPairRequest`).
+ *   `@tineira/apc-server`), and shows it after the Allow (the reference apps in a handoff card), formatted `K7M-4P2` (`formatPairingCode`). The app
+ *   sends it raw (`K7M4P2`) in `pairing_code` of `POST {hub}/apc/pair` (`DockPairRequest`).
  *   An app that implements 0.9 **must** send it. It never goes anywhere else: not over MCP, not in a URL,
  *   not to `/apc/confirm`.
  * - **The hub keeps it** with the pending pairing, never shows it (not in the dock's state, not in a
