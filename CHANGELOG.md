@@ -22,6 +22,10 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 - **Conformance checks the grant for its profile (`--profile direct|dock`), and fails entries readers drop or ignore.** It also fails an empty list, a profile offered with no entry, and a near-miss key. An entry for a profile not offered right now passes (M8) (`packages/conformance/src/http.ts`, `packages/conformance/src/shared.ts`, `packages/conformance/src/index.ts`, `packages/conformance/src/cli.ts`).
 - **The docs' table renderer reads a row as GitHub does: `\|` is a pipe (in code too), `\\` an escaped backslash before a border, and an escaped pipe at the end of a row is no border** (`apps/dock/src/docs/markdown.ts`).
 
+### The integrate guide gains "Operating APC on stateless hosts" (2026-11-13, TIN-887)
+
+- **Seven traps from running APC on Vercel and Postgres, written down.** Waits kept as a row per grant, cancellation across requests (keys, early-cancel markers, Vercel's `supportsCancellation`), trim never fail, mark seen only after delivery, lock order on revoke, migration ship and rollback order, and presence over a private realtime channel; guidance from Autio and Surplus, no new rules. (`apps/dock/src/docs/pages/integrate.md`)
+
 ### The 0.10 conformance checks close the reviews' gaps (2026-11-13, TIN-894)
 
 - **M2, M3 and M4 hold on `/apc/confirm` too.** The stand-in hub breaks `/apc/confirm` with `confirmMode`; a drop of a grant in handoff (and once of a paired grant) against a redirecting, stalling or oversized confirm answer must refuse it within the deadline, call nothing past the hub, pin nothing and wake nothing. (`packages/conformance/src/hub.ts`, `packages/conformance/src/dock-lifecycle.ts`)

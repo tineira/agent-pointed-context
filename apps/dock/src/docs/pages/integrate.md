@@ -177,6 +177,72 @@ Run the conformance suite against your app before you ship: see [Conformance](/d
 
 Localizing changes no protocol text, the tools or conformance: [Conformance](/docs/conformance) passes in any language.
 
+## Operating APC on stateless hosts
+
+The Orders sample keeps its state in one process, as a Durable Object does. Many apps have no such process: a function per request (Vercel, say) and a Postgres database (Supabase, say). Two apps built that way, Autio (its dealer and personal MCPs) and Surplus, rewrote the server side and met the same traps. This section is what they learned. It is guidance, not rules: the [spec](/docs/spec) says what must hold, and this says what it took to hold on a host with no memory between requests. The ids in parentheses are the issues where each point was found.
+
+### A wait is a row
+
+Keep one row per grant: the holder's token, when it claimed, when it expires. Autio calls the table `apc_wait`, Surplus `ledger.agent_wait`.
+
+- **Claim under a lock.** The claim takes a per-grant advisory lock (`pg_advisory_xact_lock`), deletes the grant's expired rows and writes a fresh holder token. The newest wait takes the slot over (Autio TIN-807). A claim made less than 2 s after the last is refused with `retry_after_s`, the real time left, so two waits fired together do not take the slot from each other in a loop (Autio TIN-844). Surplus also sets a `lock_timeout` of 2.5 s on the claim, so a stuck lock ends the call and not the pool (Surplus TIN-846).
+- **The old wait finds out by itself.** It keeps polling until its own timeout. Each poll asks whether its token still holds the slot, and a wait that lost it answers no focus and marks nothing. Giving the slot up answers whether it was still held, and only a wait that held it delivers (Autio TIN-807, Surplus TIN-846).
+- **Poll every 2 s, each poll in its own short transaction.** Nothing is held across the sleep: no lock, no open transaction. Each poll checks that the grant is still live, so a revoke ends the wait at its next poll (Surplus TIN-847).
+- **Default 45 s, and set the route's time limit above the longest wait.** Autio accepts 1 to 60 s with a route limit of 120 s; Surplus accepts 1 to 50 s with 60 s (Autio TIN-822).
+- **Tell the agent what happened.** At the timeout: `timed_out: true` and `page_open: true`. A wait taken over: `focus: null` and a note. A page that closed: `page_open: false`. When the wait cannot run at all, answer that last shape with a note, never a tool error (Autio TIN-797).
+
+### Cancellation arrives in another request
+
+A stateless server is new for every POST. MCP's `notifications/cancelled` comes in a POST of its own, to a server that never saw the call, so the SDK cannot deliver it. The database has to.
+
+- **Key the wait by (grant, request key).** The grant comes from the credential, never from the body. The request key is the JSON-RPC id of the `wait_for_focus` call, normalized the same way on the claim and on the cancel: `n:<integer>` for a safe integer, `s:<string>` for a well-formed string of 1 to 128 characters, and nothing else is a key. `7` and `"7"` are two keys, and id `0` is valid (`request-key.ts` in both apps, Autio TIN-844).
+- **A cancel deletes the slot that holds that key.** A cancel from another grant touches nothing. Answer the notification `202` with an empty body, after a bounded transaction; a cancel that fails is logged by code and still answers `202` (Autio TIN-844, Surplus TIN-846).
+- **Plant an early-cancel marker for a cancel that overtook its call.** Two requests are in flight, and the cancel can win. When no slot matches, store the key in a marker for the grant: at most 8 keys, 10 s. A claim whose key is in the marker consumes it and answers `cancelled`. Both run under the same per-grant lock, so they always see each other's rows. Without a marker that cancel is lost, and the wait that follows runs for a client that has gone (Autio TIN-844, Surplus TIN-846).
+- **Only waits are keyed.** A cancel for any other call, or one that arrives after the final answer, finds nothing to stop. The standard allows that window.
+- **Vercel: `request.signal` is off unless you turn it on.** A client hang-up fires `request.signal` only for a function with `supportsCancellation` (in `vercel.json`, per route file), and Vercel then ends that function, except for work held by `waitUntil`. Surplus turns it on for exactly its MCP routes and its REST `wait_for_focus` route, and splits that route out of its catch-all so that no REST write is on a cancellable function (Surplus TIN-866).
+- **Hold the work before the handler starts.** Register a promise with `after()` (that is `waitUntil`) first, and release it in a `finally` once the handler settled. A tool's write then finishes even when the client is gone. If the hold cannot be registered, fail closed: answer 503 and run nothing. Hold deferred work (audit rows, presence) the same way, even when it is registered after the client left. Read the signal only where stopping is safe, the wait loop and the delivery step, never in a write (Surplus TIN-866).
+
+### Trim, never fail
+
+One bad item must not fail the whole view read.
+
+- **Check each item on its own.** The view's selection, a filter's id, the pin: each goes through its own check, and an item whose check throws is hidden, never shown unchecked. The rest of the state still answers. Surplus does this in TypeScript (`guardedAccess`); Autio does it in SQL (`apc_record_check_or_hidden`), where an unreadable pin reads as no pin and a filter that cannot be checked is dropped (Autio TIN-797).
+- **Hide only what is a defect, and fail on the rest.** Autio hides on a closed list of SQLSTATEs (42703 undefined column, 42P01 undefined table, 42883 undefined function, 22P02 invalid text) and logs a warning with the code and the kind, nothing else. Anything else is raised again: an auth failure (42501) must still fail the whole read closed. Hiding is the narrowest answer, so nothing becomes visible that the check would not allow (Autio TIN-797).
+- **An applied migration does not prove every branch.** PL/pgSQL resolves a query only when its branch runs. Autio shipped a check whose personal `car` branch read a column that does not exist. The migration applied cleanly; the first view with a car pin then failed the whole state, and both core tools answered unavailable (Autio TIN-797, TIN-794). Call each branch of a check function once in a test: one call per target kind.
+- **Say why a read is empty.** A null view or focus carries a `note`. Log the cause as a code (`rpc_<code>`, `timeout`, `throw`), never an id or a value (Autio TIN-797).
+
+### Mark seen only after delivery
+
+A pin is lost if you mark it seen on a read the client never receives.
+
+- **No read marks.** Not `get_current_view`'s read, not a wait's poll, not the envelope's read: a read can time out or be thrown away.
+- **Mark once the body is final.** Build the whole answer first, with `attention` and `then`. Then mark that exact pin by the `pinned_at` the database sent, with all its microseconds, so a newer pin is never marked by mistake. In a wait, mark after the slot is cleared. Skip the mark when the request was aborted. If the mark fails or times out, return the body anyway: a pin delivered twice is safe, a pin lost is not (Autio TIN-674, Surplus TIN-846).
+
+### Revoke, and the order of locks
+
+- **Lock the grant row first, then its children.** A transaction that touches a grant and the rows that point to it (tokens, codes, pin, wait rows) locks the grant row first, then the children in one fixed order (Surplus: codes, links, pin, wait). A revoke deletes the grant's pin and wait rows in its own transaction, and a pin re-checks that the grant is live under the grant's lock, so a pin can never land after a revoke (Surplus TIN-847, Autio `apc_pin` and `apc_grant_revoked_cleanup`).
+- **`FOR NO KEY UPDATE`, not `FOR UPDATE`, for a grant writer.** A child insert (a token, a wait claim) takes a `KEY SHARE` lock on its grant through the foreign key. `FOR UPDATE` blocks it; `FOR NO KEY UPDATE` does not, and still keeps grant writers in line. Nobody changes a grant's id, so it is enough. The owner's pin takes `FOR SHARE`, so a pin and a revoke run one after the other: the pin commits first and the revoke deletes it, or the pin fails (Surplus TIN-847).
+- **A job that touches several grants locks them in one order.** Surplus's page heartbeat locks the owner's dock grants with `order by id for no key update` before it writes any of them, as revoke-all does. Two transactions that take the same rows in different orders can deadlock. The heartbeat also retries once on a deadlock (40P01) or a serialization loss (40001), logs the SQLSTATE if that fails too, and never fails the page for it (Surplus TIN-847, TIN-850).
+- **Prove it on two real connections.** Surplus has tests that run two transactions at once on the real migrations (`ledger-grant-children-concurrency`, `ledger-dock-concurrency`). A mock cannot show a deadlock.
+
+### Ship order, and rollback order
+
+Every grant check reads the grant's columns, on every request. So a migration that adds a grant column ships **before** the build that reads it. If the build goes first, every agent gets a 401 until the migration lands (Surplus TIN-850, the dock grants migration).
+
+- **Roll back in the opposite order.** Revert the app to a build that does not read the columns, then run the rollback migration. Keep that rollback as a file next to the migration.
+- **Do not fall back on a missing column.** Surplus's token lookup does not catch 42703. The grant checks after it read the same columns, so a fallback would only move the failure. Failing closed is right.
+- **Or make the change safe in either order.** Autio added a parameter to `apc_wait_claim` with `default null`, so the build from before the migration still resolves the function and the migration can go first (Autio TIN-844).
+
+### Presence over a private realtime channel
+
+The reference examples send presence on a page event stream. Without a long-lived process, use a private channel of your database's realtime service instead (Supabase Realtime in both apps).
+
+- **Ids only.** The event is APC's `PresenceEvent`: the grant, the tool, read or write, and at most 20 targets as `{kind, id}`. Never a name, an amount or free text (Surplus TIN-847).
+- **Owner-only, private.** One topic per person (`apc-user:{user_id}` in Autio, `agents:{user_id}` in Surplus): a private channel, a policy that lets only that person read it, and no client may write to it. An agent token never listens. Surplus sends the event from the server through Realtime's broadcast endpoint, as private only. Autio sends it from a database function that runs for the agent's own grant (`apc_publish_presence`), which publishes nothing unless the person's page heartbeat is fresh (Autio TIN-670).
+- **Send after a successful call, and never let it fail one.** A missing function, an error or a read over 3 s leaves the tool's body as it is. Hold the send like the rest of the deferred work (see above).
+- **The same channel carries the revoke.** Both apps broadcast an event when a grant ends, so every tab and device drops the agent's mark without a reload. Autio wraps only the send in its revoke triggers, so a failed broadcast can never fail a revoke (Autio TIN-815, Surplus TIN-847).
+- **Do not infer "waiting".** A page cannot read the wait row, so it should not guess a waiting state from recent calls. Both apps did guess it (a call heard in the last 75 s, or the last call being a wait), and that shows "waiting" when no wait is running. Show no waiting state unless the app sends the presence `wait` events of APC 0.11, which only an app that claims and releases a wait atomically may send; a row lock taken and then released in separate statements is not that (Autio TIN-795, Surplus TIN-877, TIN-886).
+
 ## Checklist
 
 - `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`. If the origin serves other MCP endpoints too, it lists the APC ones in `mcp.endpoints` (0.11; [the spec](/docs/spec#mcpendpoints-011)): exact paths, and `/{secret}` last for one URL per grant. Keep fixed routes out of a `{secret}` parent, and keep `mcp.path` for readers before 0.11. `declaresMcpUrl` now takes the profile (`{ profile: "dock" }`, or `{ profile: "direct", shared: true }` for an exact endpoint whose grants share the URL).
