@@ -90,6 +90,56 @@ export function allowedOrigin(entry: string): string {
   }
 }
 
+/**
+ * A verified app's name as the dock shows it (F10, TIN-910): the operator's pin, or the name in the app's own
+ * `apc.json`, never the request's. Control, format, line and paragraph separators go; any other space is one
+ * space; at most 40 code points (never a split surrogate pair). Empty when nothing is left.
+ */
+export function verifiedName(raw: string): string {
+  const clean = raw.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "").replace(/\p{Zs}+/gu, " ").trim();
+  return Array.from(clean).slice(0, 40).join("").trim();
+}
+
+/** A pinned verified app: the tool prefix (`app_id`) and the name the operator gave it, either may be absent. */
+export interface AppPin {
+  id: string | null;
+  name: string | null;
+}
+
+/** A pinned app id: what `appIdFor` makes (lower-case letters and digits, at most 14), never `page`. */
+const PIN_ID = /^[a-z0-9]{1,14}$/;
+
+/**
+ * The operator's pins in `APP_ORIGINS` (TIN-910), by origin. An entry may carry them in its URL fragment, so a
+ * reader that knows only the origin (`allowedOrigin`, `new URL(entry).origin`) reads the same list:
+ * `https://pulse.apc.tineira.com/#id=pulse&name=Pulse`. The fragment is form-encoded (`%2C` for a comma, which
+ * would split the list). A pin that is malformed (an `id` that is not `[a-z0-9]{1,14}` or is `page`, a name that
+ * is empty or changes when cleaned, by `verifiedName`) is ignored, and so is a second pin of the same id: the
+ * entry stays verified, unpinned. An entry with no fragment has no pin.
+ */
+export function appPins(entries: readonly string[]): Map<string, AppPin> {
+  const pins = new Map<string, AppPin>();
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    const origin = allowedOrigin(entry);
+    const hash = entry.trim().split("#")[1];
+    if (!origin || hash === undefined || pins.has(origin)) continue;
+    let params: URLSearchParams;
+    try {
+      params = new URLSearchParams(hash);
+    } catch {
+      continue;
+    }
+    const rawId = params.get("id");
+    const rawName = params.get("name");
+    const id = rawId !== null && PIN_ID.test(rawId) && rawId !== "page" && !ids.has(rawId) ? rawId : null;
+    const name = rawName !== null && rawName.length > 0 && verifiedName(rawName) === rawName ? rawName : null;
+    if (id) ids.add(id);
+    if (id || name) pins.set(origin, { id, name });
+  }
+  return pins;
+}
+
 /** Whether the app's origin is on the blocklist we operate: its host, or any domain above it. */
 export function isBlocked(origin: string, blocked: readonly string[]): boolean {
   let host: string;

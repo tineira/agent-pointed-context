@@ -3,7 +3,7 @@
  * HTTP, no session (APC apps are stateless). The app's grant is the secret in its MCP URL, kept by
  * the hub only.
  */
-import { APC_AGENT_CLIENT_META, APC_JSON_MAX_BYTES, APC_JSON_PATH } from "@tineira/apc-protocol";
+import { APC_AGENT_CLIENT_META, APC_AGENT_META, APC_JSON_MAX_BYTES, APC_JSON_PATH, APC_PAIRING_ID_META } from "@tineira/apc-protocol";
 import { LIMITS } from "./trust.ts";
 
 export interface AppToolResult {
@@ -177,8 +177,12 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
  * "<name> via dock" with its icon, a small PNG, in clientInfo.icons as MCP defines it. With the
  * agent's own MCP client in `_meta` (APC 0.4, `APC_AGENT_CLIENT_META`), so an app the agent also
  * reaches directly can offer to show it as one agent (apc_link). The hub names it to verified apps only.
+ *
+ * The binding (H8, APC 0.12): every `initialize` names the pairing, `APC_PAIRING_ID_META` (the `pairing_id` the
+ * hub answered on `/apc/pair`) and `APC_AGENT_META` (its agent's handle), to every app, verified or not. An app
+ * on 0.12 serves it only on the grant it handed to that pairing (M11), and refuses it on any other (M12).
  */
-export async function initializeApp(mcpUrl: string, title: string, icon: string | null, transport: AppTransport = STRICT, agentClient: string | null = null): Promise<void> {
+export async function initializeApp(mcpUrl: string, title: string, icon: string | null, transport: AppTransport = STRICT, agentClient: string | null = null, binding: { pairingId: string; agent: string }): Promise<void> {
   const icons = icon ? [{ src: icon, mimeType: "image/png", sizes: ["64x64"] }] : undefined;
   await rpc(
     mcpUrl,
@@ -187,7 +191,7 @@ export async function initializeApp(mcpUrl: string, title: string, icon: string 
       protocolVersion: PROTOCOL,
       capabilities: {},
       clientInfo: { name: "apc-hub", title, version: "0.1.0", ...(icons ? { icons } : {}) },
-      ...(agentClient ? { _meta: { [APC_AGENT_CLIENT_META]: agentClient } } : {}),
+      _meta: { [APC_PAIRING_ID_META]: binding.pairingId, [APC_AGENT_META]: binding.agent, ...(agentClient ? { [APC_AGENT_CLIENT_META]: agentClient } : {}) },
     },
     LIMITS.initializeMs,
     transport,

@@ -262,7 +262,7 @@ test("the payloads are Pulse's real output for the March bar, and the hub's real
   // Pulse is verified on apc.tineira.com (APP_ORIGINS), so nothing marks it untrusted; its id is "pulse".
   assert.deepEqual(hubFocus(FOCUS_EXAMPLE, { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" }), DOCK_FOCUS_EXAMPLE);
   assert.equal(hubFocus(FOCUS_EXAMPLE, { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" }, true).next, "pulse__get_figure", "the prefixed name the page mentions");
-  assert.match(read("apps/dock/wrangler.jsonc"), /"APP_ORIGINS": "https:\/\/pulse\.apc\.tineira\.com,/);
+  assert.match(read("apps/dock/wrangler.jsonc"), /"APP_ORIGINS": "https:\/\/pulse\.apc\.tineira\.com\/#id=pulse&name=Pulse,/);
 });
 
 test("/build/both: the profiles, apc_link, the bar and the dock hint, in code the repo runs", () => {
