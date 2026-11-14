@@ -26,5 +26,6 @@
   ],
   "routes": [{ "pattern": "pulse.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
-  "observability": { "enabled": true }
+  // No invocation logs (TIN-911): they record each request URL, and an agent's or a grant's MCP URL holds its secret.
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } }
 }

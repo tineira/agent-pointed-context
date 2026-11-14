@@ -192,7 +192,7 @@ On a drop of an agent it already holds a grant for, the app asks the hub whether
 
 ### The hub gives a grant back: `POST {app}/apc/revoke`
 
-When the person unpairs an app in the dock, denies its request, types the fifth wrong code, lets the request expire, or drops the agent again before approving (H3), the hub sends `{ mcp_url }` to the app's `/apc/revoke`, and the app ends that grant and deletes its pin. This is the hub's side; the app's own Revoke is core and needs no hub.
+When the person unpairs an app in the dock, denies its request, types the fifth wrong code, lets the request expire, or drops the agent again before approving (H3), the hub sends `{ mcp_url }` to the app's `/apc/revoke`, and the app ends that grant and deletes its pin. This is the hub's side; the app's own Revoke is core and needs no hub. The reference hub tries a give-back the app did not take again, a few times over half a day, and gives every grant back before a dock's data is deleted.
 
 Since 0.10 (M7) `/apc/revoke` is public and **MUST** answer the same HTTP 200 to any input, with its body capped. It ends a grant whose secret hash matches and that is in any state but revoked or ended, in flight included; that grant then answers 404. On a revoked or already ended grant it does nothing: revoked stays revoked.
 
@@ -463,7 +463,7 @@ What an unverified app gives reaches the agent marked:
 
 ### Limits
 
-The reference hub reads at most 1 MiB of each answer from a verified app and 256 KiB from an unverified one, with a time limit that covers the body; it keeps an unverified app's view only under 8 KB, its tool schemas under 8 KB, its descriptions cut at 1 KB, 32 tools at most; it takes its pin only when well formed, on its own origin and not dated ahead; and it holds 20 app pairings per dock at most (`too_many_apps`).
+The reference hub reads at most 1 MiB of each answer from a verified app and 256 KiB from an unverified one, with a time limit that covers the body; it keeps an unverified app's view only under 8 KB, its tool schemas under 8 KB, its descriptions cut at 1 KB, 32 tools at most; it takes its pin only when well formed and on its own origin; it takes no app's pin dated ahead of its clock, verified or not; it follows no app's redirect; and it holds 20 app pairings per dock at most (`too_many_apps`).
 
 ### The blocklist and the kill switch
 

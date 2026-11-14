@@ -8,10 +8,11 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
-import { DOCK_TTL_MS, NOT_OWNER, type Env, type Hub, type OwnerMethod } from "./hub.ts";
+import { DOCK_TTL_MS, NOT_OWNER, OWNER_HEADER, type Env, type Hub, type OwnerMethod } from "./hub.ts";
 import { deviceLabel, normalizeJoinCode } from "./devices.ts";
 import { DIRECTORY } from "./join-codes.ts";
 import { withByteRanges } from "./range.ts";
+import { loggable } from "./redact.ts";
 
 /** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */
 function hubManifest(origin: string): ApcManifest {
@@ -45,7 +46,9 @@ app.use("*", async (c, next) => {
 /** A computer removed while its request ran (Hub.asOwner, TIN-909) is answered as one whose cookie no longer opens the dock. */
 app.onError((err, c) => {
   if (err instanceof Error && err.message.includes(NOT_OWNER)) return c.json({ error: "dock_expired" }, 404);
-  console.error(err);
+  // Nothing from an agent's MCP request (TIN-911): the platform stamps the record with the request URL, which holds the
+  // secret. Elsewhere, never the secret an error may quote: an MCP URL, a grant URL, a ticket or a token.
+  if (!new URL(c.req.url).pathname.startsWith("/mcp/")) console.error(loggable(err));
   return c.text("Internal Server Error", 500);
 });
 
@@ -147,7 +150,7 @@ app.post("/api/dock/join", async (c) => {
   const label = labelOf(c, body?.desktop);
   const asked = await stubFor(c.env, found.did).askJoin(code, label);
   if (!asked.ok) return c.json(asked, 400);
-  return c.json({ ok: true, claim: `${found.did}.${asked.claim}`, label }, 200, { "cache-control": "no-store" });
+  return c.json({ ok: true, claim: `${found.did}.${asked.claim}`, label, check: asked.check }, 200, { "cache-control": "no-store" });
 });
 
 /**
@@ -261,7 +264,7 @@ app.post("/api/d/:did/pairings/:pid", async (c) => {
 });
 app.get("/api/d/:did/ws", async (c) => {
   const headers = new Headers(c.req.raw.headers);
-  headers.set("x-apc-owner", c.var.owner);
+  headers.set(OWNER_HEADER, c.var.owner);
   return stubFor(c.env, c.var.did).fetch(new Request(c.req.raw, { headers }));
 });
 
@@ -349,8 +352,17 @@ app.post("/apc/reading/log/clear", async (c) => {
 });
 
 app.all("/mcp/:did/:secret", async (c) => {
-  if (!/^[0-9a-f]{32}$/.test(c.req.param("did"))) return c.json({ error: "not_found" }, 404);
-  return stubFor(c.env, c.req.param("did")).fetch(c.req.raw);
+  // An agent's MCP URL and nothing else (TIN-911): never a path the dock's own object answers otherwise, such as its socket.
+  if (!/^[0-9a-f]{32}$/.test(c.req.param("did")) || !/^[0-9a-f]{32}$/.test(c.req.param("secret"))) return c.json({ error: "not_found" }, 404);
+  // The header the owner's socket carries is the Worker's word alone: never one a caller sent.
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete(OWNER_HEADER);
+  // A failure here is a bare 500, logged nowhere (TIN-911): any log record of this invocation carries the URL, and its secret.
+  try {
+    return await stubFor(c.env, c.req.param("did")).fetch(new Request(c.req.raw, { headers }));
+  } catch {
+    return c.json({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "internal error" } }, 500);
+  }
 });
 
 /**
