@@ -112,6 +112,7 @@ const brokenConsent: Array<[FixtureBreak, RegExp]> = [
   ["nonce_unchecked", /an Allow with a forged nonce paired/],
   ["nonce_any_agent", /an Allow with another agent's nonce paired/],
   ["nonce_reusable", /the same Allow, sent again once it paired, paired again: a nonce works once/],
+  ["nonce_optional", /an Allow with no nonce \(consent left out\) paired/],
 ];
 for (const [brk, message] of brokenConsent) {
   test(`a broken Dock app (${brk}) fails the consent check`, async () => {
