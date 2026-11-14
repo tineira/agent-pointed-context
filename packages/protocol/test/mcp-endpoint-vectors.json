@@ -1,0 +1,648 @@
+{
+  "files": {
+    "shared-urls": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://www.cars.example",
+      "profiles": [
+        "direct"
+      ],
+      "mcp": {
+        "path": "/api/",
+        "endpoints": [
+          {
+            "path": "/api/mcp",
+            "profiles": [
+              "direct"
+            ]
+          },
+          {
+            "path": "/api/ops/mcp",
+            "profiles": [
+              "direct"
+            ]
+          }
+        ]
+      },
+      "direct": {
+        "connect": "https://www.cars.example/connect"
+      }
+    },
+    "split": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://ledger.example",
+      "profiles": [
+        "direct",
+        "dock"
+      ],
+      "mcp": {
+        "path": "/mcp/",
+        "endpoints": [
+          {
+            "path": "/mcp",
+            "profiles": [
+              "direct"
+            ]
+          },
+          {
+            "path": "/mcp/{secret}",
+            "profiles": [
+              "dock"
+            ]
+          }
+        ]
+      },
+      "direct": {
+        "connect": "https://ledger.example/connect"
+      }
+    },
+    "split-not-pairing": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://ledger.example",
+      "profiles": [
+        "direct"
+      ],
+      "mcp": {
+        "path": "/mcp/",
+        "endpoints": [
+          {
+            "path": "/mcp",
+            "profiles": [
+              "direct"
+            ]
+          },
+          {
+            "path": "/mcp/{secret}",
+            "profiles": [
+              "dock"
+            ]
+          }
+        ]
+      },
+      "direct": {
+        "connect": "https://ledger.example/connect"
+      }
+    },
+    "named-siblings": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://ops.example",
+      "profiles": [
+        "direct",
+        "dock"
+      ],
+      "mcp": {
+        "endpoints": [
+          {
+            "path": "/mcp/operations-console",
+            "profiles": [
+              "direct"
+            ]
+          },
+          {
+            "path": "/mcp/tenant-admin-console/mcp",
+            "profiles": [
+              "direct"
+            ]
+          },
+          {
+            "path": "/mcp/future-console-entry/",
+            "profiles": [
+              "direct"
+            ]
+          },
+          {
+            "path": "/mcp/later-feature-route",
+            "profiles": [
+              "direct"
+            ],
+            "methods": [
+              "POST"
+            ]
+          },
+          {
+            "path": "/mcp/{secret}",
+            "profiles": [
+              "dock"
+            ]
+          }
+        ]
+      },
+      "direct": {
+        "connect": "https://ops.example/connect"
+      }
+    },
+    "direct-template": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://orders.example",
+      "profiles": [
+        "direct",
+        "dock"
+      ],
+      "mcp": {
+        "endpoints": [
+          {
+            "path": "/mcp/{secret}",
+            "profiles": [
+              "direct"
+            ]
+          }
+        ]
+      },
+      "direct": {
+        "connect": "https://orders.example/connect"
+      }
+    },
+    "unknown-key": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://orders.example",
+      "profiles": [
+        "direct",
+        "dock"
+      ],
+      "mcp": {
+        "endpoints": [
+          {
+            "path": "/mcp/{secret}",
+            "profiles": [
+              "dock"
+            ],
+            "requires": "pairing_code"
+          }
+        ]
+      },
+      "direct": {
+        "connect": "https://orders.example/connect"
+      }
+    },
+    "path-only": {
+      "name": "Example",
+      "standard": "0.11.0",
+      "origin": "https://ledger.example",
+      "profiles": [
+        "direct",
+        "dock"
+      ],
+      "mcp": {
+        "path": "/mcp/"
+      },
+      "direct": {
+        "connect": "https://ledger.example/connect"
+      }
+    }
+  },
+  "vectors": [
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": true,
+      "why": "a grant's secret under the dock template"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": true,
+      "why": "the shared Direct URL, with a bearer"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp",
+      "profile": "direct",
+      "shared": false,
+      "covered": false,
+      "why": "an exact endpoint covers a shared URL only"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "the hub never pairs a shared URL"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "direct",
+      "shared": false,
+      "covered": false,
+      "why": "the template serves dock only"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": null,
+      "shared": false,
+      "covered": false,
+      "why": "no profile given covers nothing"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv/x",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a secret is one segment"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnO",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "15 characters is too short for a secret"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "129 characters is too long for a secret"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/abcdefgh.ijklmnop",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "no dot in a secret"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/abcdefgh~ijklmnop",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "no tilde in a secret"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv?",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "an empty query"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv#",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "an empty fragment"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv?a=1",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a query"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv/",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a trailing slash"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv;x=1",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a matrix parameter"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv|",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a pipe"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example//mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a double slash"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/./AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a dot segment"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/%41AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "any percent-encoding"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv/..%2f",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "encoded traversal"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp/%2e%2e%2fadminabcdefghij",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "encoded dots and slash"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/mcp\\AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a backslash"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example/Mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "the path is case-sensitive"
+    },
+    {
+      "file": "split",
+      "url": "https://LEDGER.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "an upper-case host is not written as parsed"
+    },
+    {
+      "file": "split",
+      "url": "https://ledger.example:443/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a written default port"
+    },
+    {
+      "file": "split",
+      "url": "https://u:p@ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "credentials"
+    },
+    {
+      "file": "split",
+      "url": "blob:https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a blob: URL has the origin, not the scheme"
+    },
+    {
+      "file": "split",
+      "url": "https://evil.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "another origin"
+    },
+    {
+      "file": "split",
+      "url": "not a url",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "not a URL"
+    },
+    {
+      "file": "split-not-pairing",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "the top level does not list dock: not pairing right now"
+    },
+    {
+      "file": "split-not-pairing",
+      "url": "https://ledger.example/mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": true,
+      "why": "Direct still covered"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": true,
+      "why": "the personal endpoint"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/ops/mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": true,
+      "why": "the ops endpoint"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp/public",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "not declared, although mcp.path /api/ holds it"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp/",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "a trailing slash is another URL"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/API/mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "the path is case-sensitive"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp?x=1",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "a query"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api//mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "a double slash"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp;x",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "a matrix parameter"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp",
+      "profile": "direct",
+      "shared": false,
+      "covered": false,
+      "why": "an exact endpoint covers a shared URL only"
+    },
+    {
+      "file": "shared-urls",
+      "url": "https://www.cars.example/api/mcp",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "the app does not offer dock"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": true,
+      "why": "a grant's secret"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/operations-console",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "exact wins: a sibling the file names"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/Operations-Console",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "exact wins without ASCII case"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/tenant-admin-console",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "exact wins: the fixed parent of a deeper entry"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/future-console-entry",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "exact wins: named by an entry this reader drops (trailing slash)"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/later-feature-route",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "exact wins: named by an entry this reader drops (unknown key)"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/operations-console",
+      "profile": "direct",
+      "shared": true,
+      "covered": true,
+      "why": "the exact endpoint itself"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/later-feature-route",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "an entry with an unknown key covers nothing"
+    },
+    {
+      "file": "named-siblings",
+      "url": "https://ops.example/mcp/future-console-entry/",
+      "profile": "direct",
+      "shared": true,
+      "covered": false,
+      "why": "an exact path ending in / is not understood in 0.11"
+    },
+    {
+      "file": "direct-template",
+      "url": "https://orders.example/mcp/0123456789abcdef0123456789abcdef",
+      "profile": "direct",
+      "shared": false,
+      "covered": true,
+      "why": "a Direct secret URL"
+    },
+    {
+      "file": "direct-template",
+      "url": "https://orders.example/mcp/0123456789abcdef0123456789abcdef",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "a Direct-only template never pairs"
+    },
+    {
+      "file": "unknown-key",
+      "url": "https://orders.example/mcp/AbCdEfGhIjKlMnOpQrStUv",
+      "profile": "dock",
+      "shared": false,
+      "covered": false,
+      "why": "an entry with an unknown key is dropped whole"
+    },
+    {
+      "file": "path-only",
+      "url": "https://ledger.example/mcp/AbCdEfGhIjKlMnOpQrStUv?a=1",
+      "profile": "dock",
+      "shared": false,
+      "covered": true,
+      "why": "no endpoints: the 0.10 rule under mcp.path, unchanged"
+    },
+    {
+      "file": "path-only",
+      "url": "https://ledger.example/mcp",
+      "profile": "direct",
+      "shared": true,
+      "covered": true,
+      "why": "no endpoints: the 0.8 shared allowance, unchanged"
+    }
+  ]
+}

@@ -14,6 +14,17 @@ for (const profile of ["direct", "dock"] as const) {
   for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, check.run);
 }
 
+test("Orders declares its MCP endpoint exactly (APC 0.11): the suite checks each profile's grant against mcp.endpoints", async () => {
+  for (const profile of ["direct", "dock"] as const) {
+    const { app } = ordersUnderTest(profile);
+    const raw = (await (await app.fetch(new Request("https://orders.test/.well-known/apc.json"))).json()) as { mcp: unknown };
+    assert.deepEqual(raw.mcp, { path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] });
+    const served = named(ordersChecks(profile), "serves apc.json");
+    await served.run();
+    assert.match(served.note ?? "", /\/mcp\/\{secret\} declares every child of \/mcp\//, profile);
+  }
+});
+
 test("a page whose stream died is dropped, and the tool call that published to it still answers", async () => {
   const origin = "https://orders.test";
   const app = new OrdersApp({ origin, profiles: ["direct"] });
