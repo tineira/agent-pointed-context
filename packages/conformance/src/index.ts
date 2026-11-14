@@ -401,17 +401,22 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
    * presence goes through here, so an app that sends wait events on some path only is still seen to send them.
    */
   let sawWait = false;
-  const app: ApcAppAdapter = {
-    ...adapter,
-    page: {
-      ...adapter.page,
-      takePresence: () => {
-        const messages = adapter.page.takePresence();
-        if (messages.some((m) => m.kind === "wait")) sawWait = true;
-        return messages;
+  // The adapter itself, read live (an app's test may swap `fetch` after building the checks), with the drain tracked.
+  // A method is called on the adapter's own object, so a class adapter with private fields still works.
+  const live = <T extends object>(target: T, own: Partial<Record<keyof T, unknown>>): T =>
+    new Proxy(target, {
+      get(t, key) {
+        if (Object.prototype.hasOwnProperty.call(own, key)) return own[key as keyof T];
+        const value = Reflect.get(t, key, t) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(t) : value;
       },
-    },
+    });
+  const takePresence = (): PresenceMessage[] => {
+    const messages = adapter.page.takePresence();
+    if (messages.some((m) => m.kind === "wait")) sawWait = true;
+    return messages;
   };
+  const app: ApcAppAdapter = live(adapter, { page: live(adapter.page, { takePresence }) });
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
   /**
