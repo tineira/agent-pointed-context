@@ -6,7 +6,7 @@
  */
 // #region imports
 import { apcConformance, runConformance, standInHub, type AgentConnection, type ApcAppAdapter, type ApcDockDropOutcome, type ApcDockLifecycleAdapter } from "@tineira/apc-conformance";
-import { LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { OrdersApp, newOrdersStore, type OrdersAppOptions } from "./orders-app.ts";
 // #endregion
@@ -159,7 +159,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
   // #region page
   /** The person's page: open is an open event stream, which also carries presence. */
   let page: { reader: ReadableStreamDefaultReader<Uint8Array>; done: Promise<void> } | null = null;
-  const presence: PresenceEvent[] = [];
+  const presence: PresenceMessage[] = [];
   async function setOpen(open: boolean): Promise<void> {
     if (open && !page) {
       const response = await app.fetch(new Request(`${ORIGIN}/api/events`, { headers: SESSION }));
@@ -173,7 +173,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
           buffer += decoder.decode(value, { stream: true });
           let end: number;
           while ((end = buffer.indexOf("\n\n")) >= 0) {
-            const message = JSON.parse(buffer.slice(6, end)) as { type: string; event?: PresenceEvent };
+            const message = JSON.parse(buffer.slice(6, end)) as { type: string; event?: PresenceMessage };
             buffer = buffer.slice(end + 2);
             if (message.type === "presence" && message.event) presence.push(message.event);
           }

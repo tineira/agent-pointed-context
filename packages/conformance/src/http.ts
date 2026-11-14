@@ -17,12 +17,14 @@ import {
   CORE_TOOLS,
   REVOKED_HTTP_STATUS,
   REVOKED_HTTP_STATUS_BEARER,
-  declaresMcpUrl,
+  describeMcpCoverage,
   isRevokedAnswer,
+  mcpUrlCoverage,
   parseApcManifest,
+  type ApcEndpointProfile,
   type ApcManifest,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkMcpEndpoints, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
 
 export interface HttpConformanceOptions {
   /** The app's origin, e.g. `https://pulse.example` (a trailing slash is fine; no path). */
@@ -38,6 +40,12 @@ export interface HttpConformanceOptions {
   revoked?: string;
   /** The revoked grant's bearer token, as `bearer` (APC 0.8). */
   revokedBearer?: string;
+  /**
+   * The profile the app serves the grant URLs on (APC 0.11): `direct` (the default; always with a bearer token,
+   * since a shared URL is never a Dock grant) or `dock`, a Dock grant's secret URL, checked exactly as a hub
+   * pairing it checks it. Under `mcp.endpoints` only an entry listing that profile covers the URL.
+   */
+  profile?: ApcEndpointProfile;
   /** Lets `http:` through, on a loopback host only (localhost, 127.0.0.1, [::1]): a dev server. */
   allowHttp?: boolean;
   /** Per request, in ms (default 15000). */
@@ -92,6 +100,12 @@ export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
   { name: "wait_for_focus ends when the person has no page open", why: "needs to open and close the person's page (the CLI accepts either outcome)" },
   { name: "then rides on results only while the person's page is open", why: "needs to open and close the person's page (the CLI checks then's shape where it appears)" },
   { name: "presence names what a read touched, with ids only", why: "presence goes to the person's page, not to the agent" },
+  { name: "a wait publishes open, then closed, on the presence channel (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
+  { name: "a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
+  { name: "a cancelled wait publishes closed (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
+  { name: "a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", why: "needs the person's Revoke during a wait, and presence goes to the page" },
+  { name: "a refused wait publishes nothing (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
+  { name: "an app whose wait-event checks were not checked sends no wait event anywhere in the run (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
   { name: "revoke from the app cuts that agent at once, and only that agent", why: "needs the person's Revoke (the CLI checks a grant you revoked, with --revoked)" },
   { name: "a call already running when the grant is revoked ends revoked, with no data", why: "needs the person's Revoke during a call" },
   { name: "mobile: every agent is shown in the page, and the agent bar cannot be collapsed", why: "needs the page on a phone (page.mobile)" },
@@ -230,6 +244,10 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
   for (const [token, what] of [[options.bearer, "the bearer token"], [options.revokedBearer, "the revoked grant's bearer token"]] as const) {
     if (token !== undefined && (!token || /[\s,"]/.test(token) || token.length > 8192)) throw new HttpConformanceUsageError(`${what} is empty or not a token (not shown)`);
   }
+  if (options.profile !== undefined && options.profile !== "direct" && options.profile !== "dock") throw new HttpConformanceUsageError(`the profile is direct or dock, not ${JSON.stringify(options.profile)}`);
+  // A shared URL (a bearer names the grant) is never a Dock grant: a hub pairs one URL per grant.
+  if (options.profile === "dock" && (options.bearer !== undefined || options.revokedBearer !== undefined)) throw new HttpConformanceUsageError("--profile dock checks a Dock grant's secret URL, which takes no bearer token: leave out --bearer-env and --revoked-bearer-env");
+  const profile: ApcEndpointProfile = options.profile ?? "direct";
   /** The credential headers of the live grant and of the revoked one (APC 0.8): the two may share one URL, so each check says which it sends. */
   const bearer = (token: string | undefined): Record<string, string> => (token ? { authorization: `Bearer ${token}` } : {});
   const liveAuth = bearer(options.bearer);
@@ -373,13 +391,26 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       },
     },
     {
+      id: "apc-json-endpoints",
+      name: "mcp.endpoints (APC 0.11), when there: every entry is one readers use, and every profile offered has one",
+      async run() {
+        if (!manifest) return "apc.json did not parse";
+        const note = checkMcpEndpoints(manifestRaw, manifest);
+        // Without mcp.endpoints only the near-miss keys are checked: a pass.
+        if (note !== null) return { note };
+      },
+    },
+    {
       id: "grant-declared",
-      name: "the grant's MCP URL lies under the origin and mcp.path its apc.json declares",
+      name: `the grant's MCP URL is covered by the apc.json of its origin, for the ${profile} profile`,
       run: withGrant(async (g) => {
         if (!manifest) return "apc.json did not parse";
-        // With a bearer token the grants may share one URL, served at mcp.path itself (APC 0.8).
-        const shared = !!options.bearer;
-        expect(declaresMcpUrl(manifest, g.href, { shared }), `the grant's MCP URL ${shown(g.href)} is not under ${origin}${manifest.mcp.path} (mcp.path)${shared ? ", nor that path itself" : ""}`);
+        // With a bearer token the grants may share one URL (APC 0.8). As --profile dock, the hub's own check.
+        // The string as given, never re-serialised: the hub checks what the app sends, and a parsed href has
+        // already lost an upper-case host, a written :443 or a dot segment that the hub refuses.
+        const covered = mcpUrlCoverage(manifest, options.grant ?? g.href, { profile, shared: !!options.bearer });
+        if (!covered.covered) throw new ConformanceError(`the grant's MCP URL ${shown(g.href)} is not covered for ${profile} by ${describeMcpCoverage(manifest)}: ${covered.reason}`);
+        return { note: `covered by ${covered.by}, for ${profile}` };
       }),
     },
     {
@@ -468,7 +499,11 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
         if (!revoked) return "give --revoked <mcp-url>: the MCP URL of a grant you revoked in the app";
         const bearer = !!options.revokedBearer;
         const expected = bearer ? REVOKED_HTTP_STATUS_BEARER : REVOKED_HTTP_STATUS;
-        if (manifest) expect(declaresMcpUrl(manifest, revoked.href, { shared: bearer }), `the revoked grant's MCP URL is not under ${origin}${manifest.mcp.path} (mcp.path)`);
+        if (manifest) {
+          // The revoked grant's own credential says whether it shares its URL; the profile is the run's.
+          const covered = mcpUrlCoverage(manifest, options.revoked ?? revoked.href, { profile, shared: bearer });
+          if (!covered.covered) throw new ConformanceError(`the revoked grant's MCP URL is not covered for ${profile} by ${describeMcpCoverage(manifest)}: ${covered.reason}`);
+        }
         for (const [method, params] of [
           ["initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "apc-conformance", version: APC_STANDARD_VERSION } }],
           ["tools/list", {}],

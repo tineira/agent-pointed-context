@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { apcConformance, standInHub, type ApcAppAdapter, type StandInHub } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { APC_JSON_PATH, formatPairingCode, type FocusTarget, type PresenceEvent } from "@tineira/apc-protocol";
+import { APC_JSON_PATH, formatPairingCode, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { demoMarket } from "../../demo/src/model/demo-world.ts";
 import { dockLifecycle, inProcessHandshake, isHandshake } from "../../demo/test/dock-conformance.ts";
@@ -157,7 +157,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
         await feed.reportView({ screen: "feed", params: { kind: "competitor_offer" }, selection: { kind: "post", id: targets[0].id } });
       },
       pin: async (grantId, target) => (await feed.pin(grantId, target, true)).ok,
-      takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceEvent),
+      takePresence: () => room.takeMessages().filter((m) => m.type === "presence").map((m) => m.event as PresenceMessage),
       revoke: async (grantId) => (await feed.revokeGrant(grantId)).ok,
       // The page on a phone (APC 0.6), modelled with @tineira/apc-web's own pieces: the bar's collapse rule on mobile and
       // the tap-to-pin controller `enablePinning` runs, which pins through the feed like the page's onPin does.
@@ -368,4 +368,20 @@ test("Signals ends the loop like Pulse: no then on a wait that came back empty",
   const { result } = (await response.json()) as { result: { structuredContent: Record<string, unknown> } };
   assert.equal(result.structuredContent.timed_out, true);
   assert.equal("then" in result.structuredContent, false);
+});
+
+test("Signals: a page that connects mid-wait is told the open first, and the state no longer counts waits (APC 0.11)", async () => {
+  const { app, feed, room } = await signals("direct");
+  room.openPage();
+  const conn = await app.connect();
+  room.takeMessages();
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "wait_for_focus", arguments: { timeout_s: 2 } } });
+  const waiting = feed.fetch(new Request(conn.mcpUrl, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body }));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(feed.waitsNow().map((m: { event: { grant_id: string; state: string } }) => [m.event.grant_id, m.event.state]), [[conn.grantId, "open"]]);
+  assert.deepEqual(feed.waitsNow(Date.now() + 61_000), [], "an open the worker never closed is not replayed past 50 s plus 10 s");
+  assert.equal(((await feed.state()).grants as Array<{ id: string; waiting?: boolean }>).find((g) => g.id === conn.grantId)?.waiting, undefined, "the page reads waits from the wait events");
+  await waiting;
+  assert.deepEqual(feed.waitsNow(), []);
+  assert.deepEqual(room.takeMessages().filter((m) => m.type === "presence" && (m.event as { kind: string }).kind === "wait").map((m) => (m.event as { state: string }).state), ["open", "closed"]);
 });

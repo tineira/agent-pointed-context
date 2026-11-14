@@ -8,7 +8,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PAIRING_CODE_TTL_MS, type ApcProfile, type FocusRow } from "@tineira/apc-protocol";
+import { PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
@@ -100,9 +100,8 @@ interface Grant {
 
 export class Feed extends DurableObject<Env> {
   private sql: SqlStorage;
-  /** Grants with a wait_for_focus in flight, for the agent bar's floating mark (memory only). */
-  /** Waits running per grant, for the page's "waiting" state: a wait taken over must not clear the newer one's (APC 0.8). */
-  private waiting = new Map<string, number>();
+  /** The open wait of each grant, from its wait events (APC 0.11): what a page that connects mid-wait is told first (memory only). */
+  private readonly openWaits = new Map<string, PresenceWaitEvent>();
   /** MCP's notifications/cancelled, which arrives in a POST of its own, reaches the call it names (APC 0.8). */
   private readonly calls = new InflightCalls();
   /** apc_link (APC 0.4): which Direct and Dock grants are one agent. */
@@ -203,6 +202,17 @@ export class Feed extends DurableObject<Env> {
     const r = this.sql.exec<{ data: string }>("select data from view_state where id = 1").toArray()[0];
     return r ? (JSON.parse(r.data) as StoredView) : null;
   }
+  /** A wait of a grant opened or closed (APC 0.11): kept for pages that connect later, and published on the presence channel. */
+  private noteWait(event: PresenceWaitEvent): void {
+    if (event.state === "open") this.openWaits.set(event.grant_id, event);
+    else this.openWaits.delete(event.grant_id);
+    this.broadcast({ type: "presence", event });
+  }
+  /** The waits open now, as the presence messages a page that just connected is sent; one past the ceiling and margin is left out. */
+  waitsNow(now: number = Date.now()): Array<{ type: "presence"; event: PresenceWaitEvent }> {
+    const limit = waitOpenLimitMs(WAIT_CEILING_S);
+    return [...this.openWaits.values()].filter((e) => now - Date.parse(e.at) < limit).map((event) => ({ type: "presence" as const, event }));
+  }
   private broadcast(message: Record<string, unknown> = { type: "state" }): void {
     const text = JSON.stringify(message);
     for (const ws of this.ctx.getWebSockets()) {
@@ -285,7 +295,6 @@ export class Feed extends DurableObject<Env> {
           icon: g.client_icon,
           // A dock agent is connected once its hub introduced itself (live); a Direct one once its client did.
           connected: path === "dock" ? (g.state ?? "live") === "live" : !!(g.client_title || g.client_name),
-          waiting: this.waiting.has(g.id),
           pin: this.focusRow(g.id),
           linked_with: this.links.partnerOf(g.id),
         };
@@ -594,6 +603,8 @@ export class Feed extends DurableObject<Env> {
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
       pair[1].serializeAttachment({ accepted_at: Date.now() });
+      // A wait already open (APC 0.11): the new page hears its open first, as if it had been there.
+      for (const message of this.waitsNow()) pair[1].send(JSON.stringify(message));
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     const match = url.pathname.match(/^\/mcp\/[0-9a-f]{32}\/([0-9a-f]{32})$/);
@@ -706,6 +717,8 @@ export class Feed extends DurableObject<Env> {
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
       pageOpen: async () => (this.holds(grant.secret) ? this.pageOpen() : false),
       waitSlot: this.waitSlots.for(grant.id),
+      // The wait events (APC 0.11): the page shows the agent listening while a wait holds its place, and only then.
+      waitPresence: { grantId: grant.id, publish: (event) => this.noteWait(event) },
       signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       waitCeilingS: WAIT_CEILING_S,
@@ -775,22 +788,8 @@ export class Feed extends DurableObject<Env> {
         const before = cut();
         if (before) return before;
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grantId);
-        const waits = name === "wait_for_focus";
-        if (waits) {
-          this.waiting.set(grantId, (this.waiting.get(grantId) ?? 0) + 1);
-          this.broadcast();
-        }
-        let result: ToolResult;
-        try {
-          result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
-        } finally {
-          if (waits) {
-            const left = (this.waiting.get(grantId) ?? 1) - 1;
-            if (left > 0) this.waiting.set(grantId, left);
-            else this.waiting.delete(grantId);
-            this.broadcast();
-          }
-        }
+        // The page's "waiting" comes from the wait events registerApcTools sends (APC 0.11), not from counting calls.
+        let result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
         const after = cut();
         if (after) return after;
         const row = this.focusRow(grantId);

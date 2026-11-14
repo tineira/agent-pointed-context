@@ -1,4 +1,5 @@
-import { THEN_PIN_WINDOW_MIN, WAIT_CLAIM_GAP_S } from "@tineira/apc-protocol";
+import { THEN_PIN_WINDOW_MIN, WAIT_CLAIM_GAP_S, type PresenceWaitEvent } from "@tineira/apc-protocol";
+import { presenceWaitEvent } from "./presence.ts";
 
 /**
  * One wait per grant (APC 0.8, `WaitForFocusResult` in @tineira/apc-protocol): the place a grant's
@@ -13,16 +14,36 @@ import { THEN_PIN_WINDOW_MIN, WAIT_CLAIM_GAP_S } from "@tineira/apc-protocol";
  */
 export interface WaitSlot {
   /** Takes the place, or says how many seconds until a claim would. */
-  claim(): Promise<{ token: string } | { retryAfterS: number }>;
+  claim(): Promise<{ token: string; tookOver?: boolean } | { retryAfterS: number }>;
   /** Whether the wait that got `token` still holds the place. */
   holds(token: string): Promise<boolean>;
   /** Gives the place up, if `token` still holds it. */
-  release(token: string): Promise<void>;
+  release(token: string): Promise<boolean | void>;
+}
+
+/**
+ * A place for a wait that tells takeovers and releases atomically (APC 0.11): what the wait events need. Its claim
+ * says, in the same step that took the place, whether another wait held it (`tookOver`); its release says, in the
+ * same step that gave it up, whether `token` held it (true also when the grant was forgotten while it did). A store
+ * row does it with a compare-and-swap that returns the row it replaced, and a compare-and-delete that returns
+ * whether a row went. `atomic: true` marks it; `announceWaits` sends events only from such a place.
+ */
+export interface AtomicWaitSlot extends WaitSlot {
+  readonly atomic: true;
+  claim(): Promise<{ token: string; tookOver: boolean } | { retryAfterS: number }>;
+  release(token: string): Promise<boolean>;
+}
+
+/** Whether a place for a wait tells takeovers and releases atomically, so wait events from it are true. */
+export function isAtomicWaitSlot(slot: WaitSlot): slot is AtomicWaitSlot {
+  return (slot as Partial<AtomicWaitSlot>).atomic === true;
 }
 
 /** Waits of grants run in one process: the places in memory, per grant id. */
 export class MemoryWaitSlots {
   private readonly slots = new Map<string, { token: string; claimedAt: number }>();
+  /** Tokens that held a place when its grant was forgotten: their release still says they held it (APC 0.11). */
+  private readonly forgotten = new Set<string>();
   private readonly now: () => number;
   private readonly gapMs: number;
 
@@ -31,28 +52,87 @@ export class MemoryWaitSlots {
     this.gapMs = gapMs;
   }
 
-  /** The place of one grant. */
-  for(grantId: string): WaitSlot {
+  /** The place of one grant: atomic, since its waits all run in this process. */
+  for(grantId: string): AtomicWaitSlot {
     return {
+      atomic: true,
       claim: async () => {
         const held = this.slots.get(grantId);
         const now = this.now();
         if (held && now - held.claimedAt < this.gapMs) return { retryAfterS: Math.max(1, Math.ceil((held.claimedAt + this.gapMs - now) / 1000)) };
         const token = crypto.randomUUID();
         this.slots.set(grantId, { token, claimedAt: now });
-        return { token };
+        return { token, tookOver: !!held };
       },
       holds: async (token) => this.slots.get(grantId)?.token === token,
       release: async (token) => {
-        if (this.slots.get(grantId)?.token === token) this.slots.delete(grantId);
+        if (this.forgotten.delete(token)) return true;
+        if (this.slots.get(grantId)?.token !== token) return false;
+        this.slots.delete(grantId);
+        return true;
       },
     };
   }
 
   /** Forget a grant's place (the grant was revoked or deleted). */
   forget(grantId: string): void {
+    const held = this.slots.get(grantId);
+    if (held) this.forgotten.add(held.token);
     this.slots.delete(grantId);
   }
+
+  /** Whether a wait of the grant holds its place now. */
+  held(grantId: string): boolean {
+    return this.slots.has(grantId);
+  }
+}
+
+/**
+ * The wait events of a grant (APC 0.11, `presence.ts` in @tineira/apc-protocol), from its place for a wait: `slot`
+ * as before, sending `publish` an `open` when a wait claims the place and a `closed` when it gives it up. A claim
+ * that takes over sends the old wait's `closed` first, then the new one's `open`; the old wait, finding later that
+ * it was taken over, sends nothing. A refused claim sends nothing. `publish` failing never fails the wait.
+ *
+ * **Only from an `AtomicWaitSlot`.** A place that does not tell takeovers and releases atomically is returned as it
+ * is, and no wait event is sent: checking `holds` and then releasing is two steps, and a claim between them would end
+ * the page on `closed` while a wait runs. No "waiting" on the page beats a wrong one. A release that throws still
+ * sends `closed`: the wait is ending either way.
+ *
+ * `registerApcTools` uses it when the context gives `waitPresence`; a hub or an app with its own wait loop wraps
+ * its slot with it.
+ */
+export function announceWaits(slot: WaitSlot, grantId: string, publish: (event: PresenceWaitEvent) => void | Promise<void>): WaitSlot {
+  if (!isAtomicWaitSlot(slot)) return slot;
+  const send = async (state: "open" | "closed") => {
+    try {
+      await publish(presenceWaitEvent({ grantId, state }));
+    } catch {
+      // Presence is for the page; a wait does not fail on it. A lost closed clears on the page by itself.
+    }
+  };
+  const announced: AtomicWaitSlot = {
+    atomic: true,
+    claim: async () => {
+      const claim = await slot.claim();
+      if ("token" in claim) {
+        if (claim.tookOver) await send("closed");
+        await send("open");
+      }
+      return claim;
+    },
+    holds: (token) => slot.holds(token),
+    release: async (token) => {
+      let released = true;
+      try {
+        released = await slot.release(token);
+      } finally {
+        // On a throw the place may still be held, but the wait is ending: closed, rather than "waiting" for a minute.
+        if (released) await send("closed");
+      }
+      return released;
+    },
+  };
+  return announced;
 }
 
 /**

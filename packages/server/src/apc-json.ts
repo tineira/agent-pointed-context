@@ -1,14 +1,58 @@
-import { APC_DEFAULT_MCP_PATH, APC_JSON_PAIRING_MAX_AGE_S, APC_STANDARD_VERSION, type ApcManifest, type ApcProfile } from "@tineira/apc-protocol";
+import { APC_DEFAULT_MCP_PATH, APC_JSON_PAIRING_MAX_AGE_S, APC_STANDARD_VERSION, endpointRule, parseApcManifest, type ApcEndpointProfile, type ApcManifest, type ApcProfile } from "@tineira/apc-protocol";
+
+/** An entry of `mcp.endpoints` an app declares (APC 0.11): an exact path, or one ending in `/{secret}`, and its profiles. */
+export interface ApcEndpointDeclaration {
+  path: string;
+  profiles: readonly ApcEndpointProfile[];
+}
+
+/**
+ * Where the app's MCP URLs live. Either `mcpPath` alone (APC 0.5; `/mcp/` when left out), or `endpoints` (APC 0.11)
+ * with `mcpPath` given on purpose: the path older readers still go by, every endpoint inside it, or `null` to serve
+ * the endpoints alone (readers before 0.11 then refuse the file).
+ */
+export type ApcMcpDeclaration = { mcpPath?: string; endpoints?: undefined } | { endpoints: readonly ApcEndpointDeclaration[]; mcpPath: string | null };
 
 /**
  * An app's `apc.json` (APC 0.5, `ApcManifest` in @tineira/apc-protocol), from what it already declares: its
  * name, its origin, the profiles it offers (`parseProfiles(env.APC_PROFILES)`), where its MCP URLs
  * live, and, with the Direct profile, the page where the person connects an agent directly.
+ *
+ * With `endpoints` (APC 0.11) it checks what the caller wrote and throws rather than serve a file a reader would
+ * refuse or read otherwise: an endpoint outside `mcpPath`, a path listed twice, an entry no 0.11 reader would use
+ * (another path form), a profile word it does not know, or `dock` on a path without `{secret}`. The profiles
+ * offered right now play no part: an entry may list `dock` while the app is not pairing (M8), and `profiles` may
+ * be empty.
  */
-export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; mcpPath?: string; connect?: string }): ApcManifest {
-  const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp: { path: o.mcpPath ?? APC_DEFAULT_MCP_PATH } };
+export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; connect?: string } & ApcMcpDeclaration): ApcManifest {
+  const mcp: ApcManifest["mcp"] = {};
+  if (o.endpoints) {
+    // Given on purpose, also from plain JavaScript: a path for older readers, or null to leave it out.
+    if (o.mcpPath === undefined) throw new Error("apcManifest: with endpoints, give mcpPath: the path readers before 0.11 go by, or null to leave it out");
+    if (o.mcpPath !== null) mcp.path = o.mcpPath;
+    mcp.endpoints = o.endpoints.map((e) => ({ ...e, profiles: [...e.profiles] }));
+    checkEndpoints(o.origin, mcp);
+  } else mcp.path = o.mcpPath ?? APC_DEFAULT_MCP_PATH;
+  const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp };
   if (o.profiles.includes("direct")) manifest.direct = { connect: new URL(o.connect ?? "/", o.origin).href };
   return manifest;
+}
+
+function checkEndpoints(origin: string, mcp: ApcManifest["mcp"]): void {
+  if (mcp.endpoints!.length === 0) throw new Error("apcManifest: endpoints is empty: the file would cover no MCP URL, mcpPath or not");
+  // The rest of the file as a reader would see it, with every profile, so only what the caller wrote is judged.
+  const probe = parseApcManifest({ name: "probe", standard: APC_STANDARD_VERSION, origin, profiles: ["dock"], mcp }, origin);
+  if (!probe.ok) throw new Error(`apcManifest: ${probe.detail}`);
+  for (const entry of mcp.endpoints!) {
+    const extra = Object.keys(entry).filter((k) => k !== "path" && k !== "profiles");
+    if (extra.length) throw new Error(`apcManifest: ${entry.path} has ${extra.join(", ")}: an entry is path and profiles only`);
+    const rule = endpointRule(entry);
+    if (!rule) throw new Error(`apcManifest: ${entry.path} is not an endpoint a 0.11 reader uses (an exact path, or one ending in /{secret}, with no trailing /)`);
+    if (!entry.profiles.length) throw new Error(`apcManifest: ${entry.path} lists no profile`);
+    for (const p of entry.profiles) {
+      if (!rule.profiles.includes(p as ApcEndpointProfile)) throw new Error(`apcManifest: ${entry.path} lists ${p}, which readers ignore there (dock needs a path ending in /{secret})`);
+    }
+  }
 }
 
 /**

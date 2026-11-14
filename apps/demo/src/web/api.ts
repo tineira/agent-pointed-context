@@ -1,4 +1,4 @@
-import type { ApcProfile, FocusRow, FocusTarget, PresenceEvent } from "@tineira/apc-protocol";
+import type { ApcProfile, FocusRow, FocusTarget, PresenceMessage } from "@tineira/apc-protocol";
 import type { Region } from "../model/seed.ts";
 import type { CompatRow } from "../worker/compat.ts";
 import { HEARTBEAT_MS } from "../worker/page.ts";
@@ -45,10 +45,10 @@ export interface SandboxState {
 }
 
 export type ServerMessage =
-  | { type: "presence"; event: PresenceEvent }
+  /** A call, or (APC 0.11) a wait opening or closing. */
+  | { type: "presence"; event: PresenceMessage }
   | { type: "pin"; grant_id: string; pin: FocusRow | null }
   | { type: "grants" }
-  | { type: "waiting"; grant_id: string; on: boolean }
   | { type: "activity" };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {

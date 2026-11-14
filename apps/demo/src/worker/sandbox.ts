@@ -6,7 +6,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
+import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type FocusTarget, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
@@ -121,8 +121,8 @@ export class Sandbox extends DurableObject<Env> {
   private readonly waitSlots = new MemoryWaitSlots();
   /** MCP's notifications/cancelled, which arrives in a POST of its own, reaches the call it names (APC 0.8). */
   private readonly calls = new InflightCalls();
-  /** Waits running per grant, for the page's "waiting" state: a wait taken over must not clear the newer one's. */
-  private readonly waitingCount = new Map<string, number>();
+  /** The open wait of each grant, from its wait events (APC 0.11): what a page that connects mid-wait is told first. */
+  private readonly openWaits = new Map<string, PresenceWaitEvent>();
   /** Consent in the app, checked here (APC 0.7): the nonce the page shows its consent with. In the same table as the links. */
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
@@ -331,6 +331,23 @@ export class Sandbox extends DurableObject<Env> {
   /** pageOpen as the agents may learn it: null while the person does not share their view (page.ts). */
   private attendance(): boolean | null {
     return attendance(this.meta("share_view") !== "0", () => this.pageOpen());
+  }
+  /** A wait of a grant opened or closed (APC 0.11): kept for pages that connect later, and published on the presence channel. */
+  private noteWait(event: PresenceWaitEvent): void {
+    if (event.state === "open") this.openWaits.set(event.grant_id, event);
+    else this.openWaits.delete(event.grant_id);
+    this.broadcast({ type: "presence", event });
+  }
+  /**
+   * The waits open now, as the presence messages a page that just connected is sent, so it shows an agent already
+   * listening. One older than the ceiling plus the margin is left out: a worker that died mid-wait sent no closed.
+   */
+  waitsNow(now: number = Date.now()): Array<{ type: "presence"; event: PresenceWaitEvent }> {
+    const limit = waitOpenLimitMs(this.waitCeilingS());
+    return [...this.openWaits.values()].filter((e) => now - Date.parse(e.at) < limit).map((event) => ({ type: "presence" as const, event }));
+  }
+  private waitCeilingS(): number {
+    return Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S;
   }
   private broadcast(message: Record<string, unknown>): void {
     const text = JSON.stringify(message);
@@ -888,6 +905,8 @@ export class Sandbox extends DurableObject<Env> {
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
       pair[1].serializeAttachment({ accepted_at: Date.now() });
+      // A wait already open (APC 0.11): the new page hears its open first, as if it had been there.
+      for (const message of this.waitsNow()) pair[1].send(JSON.stringify(message));
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     const match = url.pathname.match(/^\/mcp\/([^/]+)\/([0-9a-f]{32})$/);
@@ -1051,9 +1070,11 @@ export class Sandbox extends DurableObject<Env> {
       // A grant revoked during a wait ends it at the next poll, as a closed page does; instrument() then answers "revoked".
       pageOpen: async () => (this.holds(grant.secret) ? this.attendance() : false),
       waitSlot: this.waitSlots.for(grant.id),
+      // The wait events (APC 0.11): the page shows the agent listening while a wait holds its place, and only then.
+      waitPresence: { grantId: grant.id, publish: (event) => this.noteWait(event) },
       signal: AbortSignal.any([request.signal, inflight.signal]),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      waitCeilingS: Number(this.env.WAIT_CEILING_S) || WAIT_CEILING_S,
+      waitCeilingS: this.waitCeilingS(),
     });
     registerPulseTools(server, data, grant, origin, this.env.APC_V2 === "1" ? demoMarket().signupCodes : undefined);
     // The agent introduces itself (TIN-356). The person's own name for it stays on top.
@@ -1129,29 +1150,10 @@ export class Sandbox extends DurableObject<Env> {
         call.tool = tool;
         // A link code is a one-time secret: the log says it came, never what it was.
         this.log("inbound", grant.id, { tool, args: tool === APC_LINK_TOOL ? { code: "(hidden)" } : args });
-        // The page animates an agent's icon while it waits (TIN-350): only the start and the end, no content.
-        const waiting = tool === "wait_for_focus";
-        if (waiting) {
-          const n = (this.waitingCount.get(grant.id) ?? 0) + 1;
-          this.waitingCount.set(grant.id, n);
-          if (n === 1) this.broadcast({ type: "waiting", grant_id: grant.id, on: true });
-        }
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grant.id);
 
-        let result: ToolResult;
-        try {
-          result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
-        } finally {
-          if (waiting) {
-            // Counted: a wait taken over or refused ends while the newer one still runs.
-            const n = (this.waitingCount.get(grant.id) ?? 1) - 1;
-            if (n > 0) this.waitingCount.set(grant.id, n);
-            else {
-              this.waitingCount.delete(grant.id);
-              this.broadcast({ type: "waiting", grant_id: grant.id, on: false });
-            }
-          }
-        }
+        // The page animates an agent's icon while it waits (TIN-350) from the wait events registerApcTools sends (APC 0.11).
+        let result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
         const after = cut();
         if (after) return after;
 

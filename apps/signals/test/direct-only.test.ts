@@ -234,6 +234,10 @@ test("the page reads its own apc.json as the hub does: no redirect, a time limit
     }) as typeof fetch;
   const file = { name: "Signals", standard: "0.5.0", origin: "https://a.test", profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: "https://a.test/?connect" } };
   assert.deepEqual(await loadApcProfiles("https://a.test", serve(() => Response.json(file))), ["direct"]);
+  // APC 0.11: mcp.endpoints alone, or entries this reader drops, still give the profiles.
+  for (const [origin, mcp] of [["https://e1.test", { endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }] }], ["https://e2.test", { endpoints: [{ path: "/mcp/{sid}/{secret}", profiles: ["direct"] }] }]] as const) {
+    assert.deepEqual(await loadApcProfiles(origin, serve(() => Response.json({ ...file, origin, mcp, direct: { connect: `${origin}/?connect` } }))), ["direct"], JSON.stringify(mcp));
+  }
   assert.equal(asked[0]?.redirect, "error", "no redirect followed");
   assert.equal(asked[0]?.credentials, "omit");
   assert.ok(asked[0]?.signal instanceof AbortSignal, "with a time limit");

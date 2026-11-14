@@ -6,6 +6,22 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The agent in the page, packaged (2026-11-13, TIN-878)
+
+- **`@tineira/apc-web` ships the agent pet, and the dock draws its pets with it, unchanged.** `createPet` and `<apc-pet>`, the header pets `<apc-pets>` (3 + N, with a popover), the brand logos, `petState` (waiting only when the app says a wait is open), light and dark pets (`scheme`, `tint`), and a `badge` on `<apc-pin>`. (`packages/web/src/pet.ts`, `packages/web/src/pet-state.ts`, `packages/web/src/pet-pose.ts`, `packages/web/src/pet-scheme.ts`, `packages/web/src/brands.ts`, `packages/web/src/header-pets.ts`, `packages/web/src/pin-badge.ts`, `apps/dock/src/web/apc-pet.tsx`, `apps/dock/src/docs/pages/spec.md`, `apps/dock/src/docs/pages/integrate.md`)
+
+### The agent's "waiting" comes from wait events, not a guess (2026-11-13, TIN-886)
+
+- **Pulse, Signals and the dock show an agent waiting only while a `wait_for_focus` holds its place, and never a dock grant in an app.** Apps publish a wait's `open` and `closed` on the presence channel (APC 0.11), their pages fold them with `waitOpen` (an `open` with no `closed` stops after the ceiling plus 10 s), a page that connects mid-wait is told first, and the hub's `waiting` follows the same events, so a wait taken over stops counting at the takeover. Events go only from a place that tells takeovers and releases atomically (`AtomicWaitSlot`), and they are optional: an app that sends none passes the wait-event checks with a note, and any wait event seen anywhere in the run holds the app to every rule (a last check fails a run whose wait-event checks passed as not checked); conformance also checks the cancel, revoke and refused paths. (`packages/protocol/src/presence.ts`, `packages/server/src/waits.ts`, `packages/server/src/tools.ts`, `packages/web/src/wait-presence.ts`, `packages/conformance/src/index.ts`, `apps/demo/src/worker/sandbox.ts`, `apps/demo/src/web/App.tsx`, `apps/signals/src/worker/feed.ts`, `apps/signals/src/web/app.tsx`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/docs/examples/orders-app.ts`)
+
+### `apc.json` declares several MCP endpoints on one origin (2026-11-13, TIN-888)
+
+- **`mcp.endpoints` lists an origin's APC endpoints exactly, and the hub pairs only a `{secret}` entry that lists `dock`.** Anything else on the origin is not APC for a 0.11 reader, even inside `mcp.path`. The match is by string: no `?`, `#` or `%`, the URL as its parser writes it, and exact wins over a template (`packages/protocol/src/manifest.ts`, `apps/dock/src/worker/hub.ts`, `apps/dock/src/docs/pages/spec.md`).
+- **`declaresMcpUrl` requires the profile, and the hub's copy of a file is `{ v: 2, manifest }`.** A row an older hub wrote is read again (`packages/protocol/src/manifest.ts`, `apps/dock/src/worker/hub.ts`).
+- **`apcManifest` takes `endpoints` with an explicit `mcpPath`, and throws on a file readers would read otherwise; Orders serves `/mcp/{secret}`** (`packages/server/src/apc-json.ts`, `apps/dock/src/docs/examples/orders-app.ts`).
+- **Conformance checks the grant for its profile (`--profile direct|dock`), and fails entries readers drop or ignore.** It also fails an empty list, a profile offered with no entry, and a near-miss key. An entry for a profile not offered right now passes (M8) (`packages/conformance/src/http.ts`, `packages/conformance/src/shared.ts`, `packages/conformance/src/index.ts`, `packages/conformance/src/cli.ts`).
+- **The docs' table renderer reads a row as GitHub does: `\|` is a pipe (in code too), `\\` an escaped backslash before a border, and an escaped pipe at the end of a row is no border** (`apps/dock/src/docs/markdown.ts`).
+
 ### The integrate guide gains "Operating APC on stateless hosts" (2026-11-13, TIN-887)
 
 - **Seven traps from running APC on Vercel and Postgres, written down.** Waits kept as a row per grant, cancellation across requests (keys, early-cancel markers, Vercel's `supportsCancellation`), trim never fail, mark seen only after delivery, lock order on revoke, migration ship and rollback order, and presence over a private realtime channel; guidance from Autio and Surplus, no new rules. (`apps/dock/src/docs/pages/integrate.md`)

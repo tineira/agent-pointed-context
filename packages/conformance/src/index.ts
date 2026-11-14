@@ -41,7 +41,8 @@ import {
   WAIT_CLAIM_GAP_S,
   canonicalTarget,
   compareStandard,
-  declaresMcpUrl,
+  describeMcpCoverage,
+  mcpUrlCoverage,
   isRevokedAnswer,
   normalizePairingCode,
   PAIRING_CODE_MAX_ATTEMPTS,
@@ -50,8 +51,10 @@ import {
   type ApcProfile,
   type FocusTarget,
   type PresenceEvent,
+  type PresenceMessage,
+  type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkFocusShape, checkMcpEndpoints, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHub } from "./hub.ts";
 import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
@@ -269,8 +272,8 @@ export interface ApcAppAdapter {
     showView(): Promise<void>;
     /** The person drops the agent's mark on a target; false when the app refuses the pin. */
     pin(grantId: string, target: FocusTarget): Promise<boolean>;
-    /** The presence events the app published to the person's page since the last call, oldest first. */
-    takePresence(): PresenceEvent[];
+    /** The presence messages the app published to the person's page since the last call, oldest first: calls and (APC 0.11) waits. */
+    takePresence(): PresenceMessage[];
     /** The person's Revoke in the agent bar; false when the app refuses. */
     revoke(grantId: string): Promise<boolean>;
     /** The page on a phone (APC 0.6). Left out: the mobile checks are skipped. */
@@ -339,6 +342,20 @@ async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, p
 
 /** What a check of a 0.8 rule says of an app that claims an earlier standard: passed, not checked. */
 const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
+const NOT_011 = { note: "not checked: the app's apc.json claims a standard before 0.11.0, which has no wait events" };
+const NO_WAIT_EVENTS = { note: "not checked: the app sends no wait events (APC 0.11: optional, and only for an app that claims and releases its place for a wait atomically), so its page shows no waiting" };
+const PROBE_FAILED = { note: "not checked: the wait-event probe failed in an earlier check, which reports why" };
+const DOCK_WAITS = { note: "not checked on the Dock profile: a dock agent waits on the hub, so the page shows no waiting for a dock grant (APC 0.11)" };
+
+/** The wait events of one grant among presence messages, checked for their exact shape (APC 0.11), oldest first. */
+function waitEventsOf(messages: PresenceMessage[], grantId: string): Array<PresenceWaitEvent["state"]> {
+  const waits = messages.filter((m) => m.grant_id === grantId && m.kind === "wait") as PresenceWaitEvent[];
+  for (const e of waits) {
+    expect(Object.keys(e).sort().join() === "at,grant_id,kind,state,v", `a wait event is { v, grant_id, at, kind, state }, ids only: ${Object.keys(e).join()}`);
+    expect(e.v === 1 && ISO.test(e.at) && (e.state === "open" || e.state === "closed"), `a wait event is v 1, with an ISO time and state open or closed: ${JSON.stringify(e)}`);
+  }
+  return waits.map((e) => e.state);
+}
 
 async function result(app: ApcAppAdapter, to: AgentConnection, method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const { status, body } = await send(app, to, method, params, signal);
@@ -379,9 +396,77 @@ async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
 }
 
 /** The checks of the core, in order. Each makes its own agents, so any one can run alone. */
-export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
+export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
+  /**
+   * Any wait event the page got anywhere in the run, on any agent, in any check (APC 0.11). Every drain of the page's
+   * presence goes through here, so an app that sends wait events on some path only is still seen to send them.
+   */
+  let sawWait = false;
+  // The adapter itself, read live (an app's test may swap `fetch` after building the checks), with the drain tracked.
+  // A method is called on the adapter's own object, so a class adapter with private fields still works.
+  const live = <T extends object>(target: T, own: Partial<Record<keyof T, unknown>>): T =>
+    new Proxy(target, {
+      get(t, key) {
+        if (Object.prototype.hasOwnProperty.call(own, key)) return own[key as keyof T];
+        const value = Reflect.get(t, key, t) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(t) : value;
+      },
+    });
+  const takePresence = (): PresenceMessage[] => {
+    const messages = adapter.page.takePresence();
+    if (messages.some((m) => m.kind === "wait")) sawWait = true;
+    return messages;
+  };
+  const app: ApcAppAdapter = live(adapter, { page: live(adapter.page, { takePresence }) });
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
+  /**
+   * Whether the app claims 0.11.0, asked once per run, with one short wait on the first wait-event check's agent so the
+   * page has had a chance to get a wait event. A probe that fails fails that check; the others then say so in a note,
+   * rather than report the same error four more times.
+   */
+  let probe: Promise<boolean> | null = null;
+  let probeFailed = false;
+  const probeWaits = (conn: AgentConnection): Promise<boolean> =>
+    (probe ??= (async () => {
+      if (!(await claims(conn, "0.11.0"))) return false;
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      await call(app, conn, "wait_for_focus", { timeout_s: 1 });
+      await sleep(300);
+      app.page.takePresence();
+      return true;
+    })().catch((error: unknown) => {
+      probeFailed = true;
+      throw error;
+    }));
+  /** A wait-event check passed with a note because the app had sent no wait event by then: the last check holds it to that. */
+  let waitSkipped = false;
+  /**
+   * A wait-event check: Direct, an app that claims 0.11.0 and has sent a wait event somewhere in the run (APC 0.11: the
+   * events are a MAY, and an app that sends any follows every rule). Its one agent is revoked when it ends, so the
+   * checks stay under an app's cap on agents (Signals keeps at most 20 Direct ones).
+   */
+  const waitCheck = (name: string, run: (conn: AgentConnection) => Promise<void | { note: string }>): ConformanceCheck =>
+    check(name, async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      if (probeFailed) return PROBE_FAILED;
+      const conn = await app.connect();
+      try {
+        if (!(await probeWaits(conn))) return NOT_011;
+        if (!sawWait) {
+          waitSkipped = true;
+          return NO_WAIT_EVENTS;
+        }
+        return await run(conn);
+      } finally {
+        try {
+          await app.page.revoke(conn.grantId);
+        } catch {
+          // A revoke that fails here must not hide the check's own result.
+        }
+      }
+    });
   /** Whether the app's apc.json claims `version` or later: a rule added in a version is checked only of apps that claim it. */
   const claims = async (conn: AgentConnection, version: string): Promise<boolean> => {
     const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
@@ -416,9 +501,13 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       if (app.link) expect(m.profiles.includes("direct") && m.profiles.includes("dock"), `profiles ${JSON.stringify(m.profiles)}: an app that links both paths offers both`);
       // A Direct app whose grants share one URL (a bearer token names the grant) may serve it at mcp.path itself (APC 0.8).
       const shared = app.profile === "direct" && sharesUrl(conn);
-      expect(declaresMcpUrl(m, conn.mcpUrl, { shared }), `the grant's MCP URL is not under ${origin}${m.mcp.path} (mcp.path)${shared ? ", nor that path itself" : ""}`);
+      // The profile the adapter serves, exactly as a hub pairing a Dock app checks it (APC 0.11).
+      const covered = mcpUrlCoverage(m, conn.mcpUrl, { profile: app.profile, shared });
+      expect(covered.covered, `the grant's MCP URL is not covered for ${app.profile} by ${describeMcpCoverage(m)}${covered.covered ? "" : `: ${covered.reason}`}`);
       if (m.profiles.includes("direct")) expect(m.direct && new URL(m.direct.connect).origin === origin, "direct.connect is the app's own page");
-      if (support.note) return { note: support.note };
+      const endpoints = checkMcpEndpoints(body, m);
+      const notes = [support.note, endpoints].filter((n): n is string => !!n);
+      if (notes.length) return { note: notes.join("; ") };
     }),
 
     check("lists the core tools, with their arguments", async () => {
@@ -537,7 +626,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       app.page.takePresence();
       const read = await call(app, conn, focus.next as string, focus.next_args as Record<string, unknown>);
       expect(!read.isError, "next failed");
-      const events = app.page.takePresence().filter((e) => e.grant_id === grantId && e.tool === focus.next);
+      const events = app.page.takePresence().filter((e): e is PresenceEvent => e.grant_id === grantId && e.kind !== "wait" && e.tool === focus.next);
       expect(events.length === 1, `one presence event for the read, got ${events.length}`);
       const e = events[0]!;
       expect(Object.keys(e).sort().join() === "at,count,grant_id,kind,targets,tool,v", `presence carries ids only: ${Object.keys(e).join()}`);
@@ -545,6 +634,72 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(Array.isArray(e.targets) && e.targets.length <= 20 && e.count >= e.targets.length, "at most 20 targets, and count covers them");
       expect(e.targets.every((t) => Object.keys(t).sort().join() === "id,kind"), "a presence target is { kind, id }");
       if (first.id) expect(e.targets.some((t) => t.kind === first.kind && t.id === first.id), `the read of ${first.kind}:${first.id} names it`);
+    }),
+
+    waitCheck("a wait publishes open, then closed, on the presence channel (APC 0.11)", async (conn) => {
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const waiting = call(app, conn, "wait_for_focus", { timeout_s: 2 });
+      await sleep(400);
+      expect(waitEventsOf(app.page.takePresence(), conn.grantId).join() === "open", "while the wait runs, the page has its open, and only that");
+      const done = data(await waiting);
+      expect(done.focus === null, "no pin, no focus");
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "closed", `once the wait returned, the page has its closed, and only that: got [${states.join()}]`);
+    }),
+
+    waitCheck("a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", async (conn) => {
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const older = call(app, conn, "wait_for_focus", { timeout_s: 10 });
+      await sleep((WAIT_CLAIM_GAP_S + 0.3) * 1000);
+      const newer = call(app, conn, "wait_for_focus", { timeout_s: 2 });
+      await older;
+      await newer;
+      // The old wait, finding it was taken over, sends nothing: its place was given up when the newer one claimed it.
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "open,closed,open,closed", `open, then at the takeover closed and open, then closed: got [${states.join()}]`);
+    }),
+
+    waitCheck("a cancelled wait publishes closed (APC 0.11)", async (conn) => {
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }).catch(() => null);
+      await sleep(300);
+      // MCP's cancel, in a POST of its own, as a client of a stateless server sends it (the core's cancel check).
+      expect((await notify(app, conn, "notifications/cancelled", { requestId: 1, reason: "apc-conformance" })) < 300, "notifications/cancelled was not accepted");
+      await waiting;
+      await sleep(300);
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "open,closed", `a cancelled wait sends open, then closed when it stops: got [${states.join()}]`);
+    }),
+
+    waitCheck("a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", async (conn) => {
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const waiting = send(app, conn, "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 10 } }).catch(() => null);
+      await sleep(300);
+      expect(await app.page.revoke(conn.grantId), "the app refused to revoke");
+      await waiting;
+      // A wait on the revoked grant is answered revoked: it claims no place, so it sends nothing.
+      await send(app, conn, "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 2 } }).catch(() => null);
+      await sleep(300);
+      const states = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(states.join() === "open,closed", `a wait cut by a revoke sends open, then closed, and a wait on the revoked grant nothing: got [${states.join()}]`);
+    }),
+
+    waitCheck("a refused wait publishes nothing (APC 0.11)", async (conn) => {
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      const running = call(app, conn, "wait_for_focus", { timeout_s: 2 });
+      await sleep(200);
+      const refused = data(await call(app, conn, "wait_for_focus", { timeout_s: 2 }));
+      expect(typeof refused.retry_after_s === "number", `the second wait is refused with retry_after_s: ${JSON.stringify(refused).slice(0, 200)}`);
+      const during = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(during.join() === "open", `the refused wait claimed no place, so the page has only the first wait's open: got [${during.join()}]`);
+      await running;
+      const after = waitEventsOf(app.page.takePresence(), conn.grantId);
+      expect(after.join() === "closed", `then only the first wait's closed: got [${after.join()}]`);
     }),
 
     check("revoke from the app cuts that agent at once, and only that agent", async () => {
@@ -647,6 +802,13 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     ...(app.profile === "dock" ? dockChecks(app, app.dock) : []),
     ...(app.profile === "dock" ? dockLifecycleChecks(app, app.dock) : []),
     ...(app.link ? linkChecks(app, app.link) : []),
+
+    // Last, after every check that can make the app send a wait event (a takeover, a cancel, a revoke, a longer wait).
+    check("an app whose wait-event checks were not checked sends no wait event anywhere in the run (APC 0.11)", async () => {
+      app.page.takePresence();
+      if (!waitSkipped) return;
+      expect(!sawWait, "the app sent wait events in this run, so it is held to every wait-event rule, but the wait-event checks ran before any came and passed as not checked: an app that sends any wait event sends them on every wait");
+    }),
   ];
 }
 

@@ -1,7 +1,14 @@
 export * from "./pinning.ts";
 export * from "./presence.ts";
+export * from "./wait-presence.ts";
 export * from "./view.ts";
 export * from "./agents-bar.ts";
 export * from "./pin-badge.ts";
 export * from "./direct-agents.ts";
 export * from "./strings.ts";
+export * from "./pet-state.ts";
+export * from "./pet-scheme.ts";
+export * from "./brands.ts";
+export * from "./pet.ts";
+export * from "./header-pets.ts";
+export { PetSim, POSES as PET_POSES, FX as PET_FX, stilled as stilledPose, frameAt as petFrameAt, type Pose as PetPose, type Fx as PetFx, type Frame as PetFrame } from "./pet-pose.ts";

@@ -17,6 +17,16 @@ import {
   type ApcDirectAgentsElement,
   type PinningStrings,
   formatPageTime,
+  agentBadge,
+  defineHeaderPets,
+  petState,
+  agentWaitOpen,
+  dropExpiredWaits,
+  foldWaitEvent,
+  nextWaitExpiry,
+  NO_OPEN_WAITS,
+  type ApcPetsElement,
+  type OpenWaits,
 } from "@tineira/apc-web";
 import type { AgentRow, Order } from "./orders-app.ts";
 // #endregion
@@ -63,6 +73,7 @@ async function refresh(): Promise<void> {
   bar.agents = rows.map((a) => ({ id: a.id, name: a.name, state: "idle", paths: a.paths, pin: a.pin ? { ...a.pin, here: true } : null }));
   direct.agents = rows.filter((a) => a.url).map((a) => ({ id: a.id, name: a.name, url: a.url!, connected: a.client !== null, client: a.client, linked: a.paths.length === 2 }));
   showWaiting(rows);
+  showPets(rows);
 }
 // #endregion
 
@@ -113,7 +124,7 @@ direct.addEventListener("apc-add", () => void post("/api/agents").then(refresh))
 // #endregion
 
 // #region events
-/** The page's stream: an open page (what `then` and wait_for_focus look at), presence, and changes. */
+/** The page's stream: an open page (what `then` and wait_for_focus look at), presence, and changes. flashTargets ignores a wait event (APC 0.11). */
 const events = new EventSource("/api/events");
 events.onmessage = (message) => {
   const data = JSON.parse(message.data as string) as { type: string; event?: Parameters<typeof flashTargets>[0] };
@@ -133,6 +144,52 @@ async function heartbeat(): Promise<void> {
   setTimeout(() => void heartbeat(), Math.max(1000, idleMs / 4));
 }
 void heartbeat();
+// #endregion
+
+// #region pets
+/**
+ * The agent in the page: each agent a pet in the header, up to 3 and then "+N", the same character the dock draws.
+ * A pet is a mark too: drag it onto a row to point the agent. Its state comes only from what the page knows: an
+ * unread pin, a call presence just reported, a wait open (APC 0.11, from the wait events), a pairing waiting on the
+ * person. Never a guess from timing.
+ */
+defineHeaderPets();
+const pets = document.querySelector("apc-pets") as ApcPetsElement;
+pets.scheme = "auto"; // follow the page's prefers-color-scheme; an app with a theme switch passes "light" or "dark"
+const heard = new Map<string, number>(); // grant id -> when presence last reported a call
+let openWaits: OpenWaits = NO_OPEN_WAITS; // the waits open now, from the wait events (APC 0.11)
+let expiry: ReturnType<typeof setTimeout> | undefined;
+events.addEventListener("message", (message) => {
+  const data = JSON.parse(message.data as string) as { type: string; event?: { grant_id: string; kind?: string } };
+  if (data.type !== "presence" || !data.event) return;
+  if (data.event.kind === "wait") {
+    openWaits = foldWaitEvent(openWaits, data.event);
+    // A closed that never came runs out at the ceiling plus the margin: look again then.
+    clearTimeout(expiry);
+    const at = nextWaitExpiry(openWaits);
+    if (at !== null) expiry = setTimeout(() => ((openWaits = dropExpiredWaits(openWaits)), showPets()), Math.max(0, at - Date.now()) + 50);
+  } else heard.set(data.event.grant_id, Date.now());
+  showPets();
+  setTimeout(() => showPets(), 4000);
+});
+let petRows: AgentRow[] = [];
+function showPets(rows: AgentRow[] = petRows): void {
+  petRows = rows;
+  pets.agents = rows.map((a) => ({
+    id: a.id,
+    name: a.name,
+    badge: agentBadge({ clientName: a.client, key: a.id }),
+    pin: a.pin ? { ...a.pin, here: true } : null,
+    // An open wait_for_focus shows as `waiting` only from the wait events, and only on a Direct grant: a dock agent waits on the hub.
+    state: petState({
+      connected: a.client !== null,
+      waiting: agentWaitOpen(openWaits, a.grants.map((id, i) => ({ id, path: a.paths[i] ?? a.paths[0]! }))),
+      busy: Date.now() - (heard.get(a.id) ?? 0) < 4000,
+      pin: a.pin && !a.pin.seen ? "unread" : "none",
+      requests: a.waiting === "code" ? 1 : 0,
+    }),
+  }));
+}
 // #endregion
 
 // #region pinning

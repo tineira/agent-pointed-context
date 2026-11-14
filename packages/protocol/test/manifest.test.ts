@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { APC_JSON_PATH, compareStandard, declaresMcpUrl, directOnlyNote, parseApcManifest, urlOnOrigin } from "../src/index.ts";
 
 const O = "https://signals.example";
+// Under mcp.path alone the profile plays no part (the 0.10 rule): these checks stand as they were.
+const LEGACY = { profile: "dock" } as const;
 const app = (over: Record<string, unknown> = {}) => ({ name: "Signals", standard: "0.5.0", origin: O, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${O}/?connect` }, ...over });
 
 test("apc.json lives at /.well-known/apc.json and reads back as a manifest (APC 0.5)", () => {
@@ -46,33 +48,33 @@ test("an apc.json that names another origin is refused as such; anything else wr
 
 test("an MCP URL is declared when it is on the origin and under mcp.path", () => {
   const m = (parseApcManifest(app(), O) as { manifest: Parameters<typeof declaresMcpUrl>[0] }).manifest;
-  assert.equal(declaresMcpUrl(m, `${O}/mcp/abc/def`), true);
-  assert.equal(declaresMcpUrl(m, `${O}/mcp/`), false, "the path itself is no grant");
-  assert.equal(declaresMcpUrl(m, `${O}/tenant/mcp/abc`), false);
-  assert.equal(declaresMcpUrl(m, `https://evil.example/mcp/abc`), false);
-  assert.equal(declaresMcpUrl(m, `https://u:p@signals.example/mcp/abc`), false);
-  assert.equal(declaresMcpUrl(m, "not a url"), false);
+  assert.equal(declaresMcpUrl(m, `${O}/mcp/abc/def`, LEGACY), true);
+  assert.equal(declaresMcpUrl(m, `${O}/mcp/`, LEGACY), false, "the path itself is no grant");
+  assert.equal(declaresMcpUrl(m, `${O}/tenant/mcp/abc`, LEGACY), false);
+  assert.equal(declaresMcpUrl(m, `https://evil.example/mcp/abc`, LEGACY), false);
+  assert.equal(declaresMcpUrl(m, `https://u:p@signals.example/mcp/abc`, LEGACY), false);
+  assert.equal(declaresMcpUrl(m, "not a url", LEGACY), false);
   // Encoded traversal, which a server may decode after the hub checked the path: never declared.
   for (const sneaky of ["/mcp/%2e%2e%2fadmin", "/mcp/..%2f..%2fadmin", "/mcp/%2E%2E/admin", "/mcp/%252e%252e%252fadmin", "/mcp/abc%2f..%2fdef", "/mcp/abc%5c..%5cdef", "/mcp/a/%2e/b", "/mcp/abc%25"]) {
-    assert.equal(declaresMcpUrl(m, `${O}${sneaky}`), false, sneaky);
+    assert.equal(declaresMcpUrl(m, `${O}${sneaky}`, LEGACY), false, sneaky);
   }
-  assert.equal(declaresMcpUrl(m, `${O}/mcp/../admin`), false, "a literal .. is resolved by the parser, out of the path");
-  assert.equal(declaresMcpUrl(m, `${O}/mcp/abc%20def/x`), true, "other encodings are a server's own business");
-  assert.equal(declaresMcpUrl(m, `blob:${O}/mcp/abc`), false, "a blob: URL has the origin, not the scheme");
+  assert.equal(declaresMcpUrl(m, `${O}/mcp/../admin`, LEGACY), false, "a literal .. is resolved by the parser, out of the path");
+  assert.equal(declaresMcpUrl(m, `${O}/mcp/abc%20def/x`, LEGACY), true, "other encodings are a server's own business");
+  assert.equal(declaresMcpUrl(m, `blob:${O}/mcp/abc`, LEGACY), false, "a blob: URL has the origin, not the scheme");
 });
 
 test("a Direct endpoint whose grants share one URL may be mcp.path itself, only when asked for (APC 0.8)", () => {
   const m = (parseApcManifest({ ...app(), mcp: { path: "/api/mcp/" } }, O) as { manifest: Parameters<typeof declaresMcpUrl>[0] }).manifest;
   for (const url of [`${O}/api/mcp`, `${O}/api/mcp/`]) {
-    assert.equal(declaresMcpUrl(m, url, { shared: true }), true, url);
-    assert.equal(declaresMcpUrl(m, url), false, `${url}: a hub pairing a Dock app still wants one URL per grant`);
+    assert.equal(declaresMcpUrl(m, url, { profile: "direct", shared: true }), true, url);
+    assert.equal(declaresMcpUrl(m, url, LEGACY), false, `${url}: a hub pairing a Dock app still wants one URL per grant`);
   }
-  assert.equal(declaresMcpUrl(m, `${O}/api/mcp/admin`, { shared: true }), true, "another endpoint under the path, by role");
-  assert.equal(declaresMcpUrl(m, `${O}/api/mcpx`, { shared: true }), false);
-  assert.equal(declaresMcpUrl(m, `${O}/api`, { shared: true }), false);
-  assert.equal(declaresMcpUrl(m, `${O}/api/mcp%2f`, { shared: true }), false, "no encoded slash");
+  assert.equal(declaresMcpUrl(m, `${O}/api/mcp/admin`, { profile: "direct", shared: true }), true, "another endpoint under the path, by role");
+  assert.equal(declaresMcpUrl(m, `${O}/api/mcpx`, { profile: "direct", shared: true }), false);
+  assert.equal(declaresMcpUrl(m, `${O}/api`, { profile: "direct", shared: true }), false);
+  assert.equal(declaresMcpUrl(m, `${O}/api/mcp%2f`, { profile: "direct", shared: true }), false, "no encoded slash");
   const root = (parseApcManifest({ ...app(), mcp: { path: "/" } }, O) as { manifest: Parameters<typeof declaresMcpUrl>[0] }).manifest;
-  assert.equal(declaresMcpUrl(root, `${O}/`, { shared: true }), false, "never the origin's root");
+  assert.equal(declaresMcpUrl(root, `${O}/`, { profile: "direct", shared: true }), false, "never the origin's root");
 });
 
 test("direct.auth and direct.resource_metadata are kept as information when well formed, and never refuse a file (APC 0.8)", () => {

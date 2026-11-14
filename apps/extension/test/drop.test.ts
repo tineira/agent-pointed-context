@@ -102,6 +102,10 @@ test("a dock agent dropped on a Direct-only APC app gets the answer from its apc
   assert.equal(directOnlyAnswer(signals(["direct"]), "https://other.example"), null, "a file that names another origin is not this app's");
   assert.equal(directOnlyAnswer(signals(["direct"], { direct: { connect: "https://phish.example/connect" } }), origin), null, "a connect page off its origin is never linked");
   assert.equal(directOnlyAnswer({ name: "x" }, origin), null);
+  // APC 0.11: a file with mcp.endpoints alone, or with every entry one this reader drops, still gives the answer.
+  const exact = { endpoints: [{ path: "/api/mcp", profiles: ["direct"] }] };
+  assert.equal(directOnlyAnswer(signals(["direct"], { mcp: exact }), origin)?.connect, `${origin}/?connect`, "mcp.endpoints alone");
+  assert.equal(directOnlyAnswer(signals(["direct"], { mcp: { endpoints: [{ path: "/mcp/{sid}/{secret}", profiles: ["direct"] }] } }), origin)?.connect, `${origin}/?connect`, "an entry from a later version, dropped");
 
   const asked: Array<[string, RequestInit | undefined]> = [];
   const serve = (body: string, status = 200) =>

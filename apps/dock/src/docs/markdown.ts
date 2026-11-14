@@ -29,19 +29,35 @@ const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 const startsBlock = (line: string) => FENCE.test(line) || HEADING.test(line) || ITEM.test(line) || line.startsWith(">") || INCLUDE.test(line) || COMMENT.test(line) || line.trimStart().startsWith("|");
 
 function cells(line: string): string[] {
-  const inner = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  // A pipe inside `code` is not a cell border.
+  // As GitHub reads a row: a pipe inside `code` is not a cell border; `\|` is a pipe (in code too); `\\` is an
+  // escaped backslash, so a `|` after it is a border. A closing border is a last `|` that is not escaped.
+  const chars = [...line.trim().replace(/^\|/, "")];
   const out: string[] = [];
   let cell = "";
   let code = false;
-  for (const ch of inner) {
+  let border = false;
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i]!;
+    border = false;
+    if (ch === "\\" && chars[i + 1] === "|") {
+      cell += "|";
+      i++;
+      continue;
+    }
+    if (ch === "\\" && chars[i + 1] === "\\") {
+      // One backslash shown, as GitHub does; both kept inside code, where Markdown escapes nothing.
+      cell += code ? "\\\\" : "\\";
+      i++;
+      continue;
+    }
     if (ch === "`") code = !code;
     if (ch === "|" && !code) {
       out.push(cell.trim());
       cell = "";
+      border = true;
     } else cell += ch;
   }
-  out.push(cell.trim());
+  if (!border) out.push(cell.trim());
   return out;
 }
 

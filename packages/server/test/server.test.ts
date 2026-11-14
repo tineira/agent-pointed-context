@@ -3,13 +3,14 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { FocusPayload, FocusRow, PresenceEvent } from "@tineira/apc-protocol";
+import { parseApcManifest, type FocusPayload, type FocusRow, type PresenceEvent, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import {
   THEN_NOTE,
   MemoryWaitSlots,
   WAIT_PAGE_CLOSED_NOTE,
   WAIT_TAKEN_OVER_NOTE,
   WAIT_TIMED_OUT_NOTE,
+  announceWaits,
   apcJsonResponse,
   apcManifest,
   attachAttention,
@@ -49,6 +50,34 @@ test("apc.json may be cached a minute at most (M8, APC 0.10)", () => {
   const response = apcJsonResponse(apcManifest({ name: "Orders", origin: "https://orders.test", profiles: ["dock"] }));
   assert.equal(response.headers.get("cache-control"), "public, max-age=60");
   assert.equal(response.headers.get("access-control-allow-origin"), "*");
+});
+
+test("apcManifest with mcp.endpoints (APC 0.11): it builds only a file readers take as written, and never judges the profiles offered now", () => {
+  const origin = "https://orders.test";
+  const split = [{ path: "/mcp", profiles: ["direct"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] as const;
+  const both = apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], connect: "/agents", mcpPath: "/mcp/", endpoints: split });
+  assert.deepEqual(both.mcp, { path: "/mcp/", endpoints: [{ path: "/mcp", profiles: ["direct"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] });
+  assert.ok(parseApcManifest(both, origin).ok);
+  const alone = apcManifest({ name: "Orders", origin, profiles: ["dock"], mcpPath: null, endpoints: split });
+  assert.deepEqual(alone.mcp, { endpoints: [{ path: "/mcp", profiles: ["direct"] }, { path: "/mcp/{secret}", profiles: ["dock"] }] }, "null leaves mcp.path out");
+  // M8: an app that is not pairing right now, or offers nothing at the moment, still serves its endpoints.
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["direct"], connect: "/agents", mcpPath: "/mcp/", endpoints: split }).mcp.endpoints?.length, 2);
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: [], mcpPath: "/mcp/", endpoints: split }).profiles, []);
+  for (const [endpoints, mcpPath, why] of [
+    [[{ path: "/api/mcp", profiles: ["direct"] }], "/mcp/", "outside mcpPath"],
+    [[{ path: "/mcp/", profiles: ["direct"] }], null, "a trailing slash"],
+    [[{ path: "/mcp/{sid}/{secret}", profiles: ["direct"] }], null, "two variables"],
+    [[{ path: "/mcp", profiles: ["dock"] }], null, "dock on an exact path"],
+    [[{ path: "/mcp/{secret}", profiles: ["hub"] }], null, "a word readers ignore"],
+    [[{ path: "/mcp/{secret}", profiles: [] }], null, "no profile"],
+    [[{ path: "/mcp/{secret}", profiles: ["dock"] }, { path: "/mcp/{secret}", profiles: ["direct"] }], null, "a path twice"],
+    [[], "/mcp/", "an empty list"],
+    [[{ path: "/mcp/{secret}", profiles: ["dock"] }], undefined, "endpoints without mcpPath (plain JavaScript)"],
+    [[{ path: "/mcp/{secret}", profiles: ["dock"], note: "x" }], null, "a key other than path and profiles"],
+  ] as const) {
+    assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], mcpPath: mcpPath as never, endpoints: endpoints as never }), Error, why);
+  }
+  assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["dock"] }).mcp, { path: "/mcp/" }, "without endpoints, as before");
 });
 
 test("the pin is unread until a read after it was dropped", () => {
@@ -186,7 +215,7 @@ test("the tools teach the loop: instructions and descriptions name wait_for_focu
 });
 
 /** A fake grant with a pin store the test drives, for the APC 0.8 rules. */
-async function grantWithPins(slots = new MemoryWaitSlots(), grantId = "g") {
+async function grantWithPins(slots = new MemoryWaitSlots(), grantId = "g", events?: PresenceWaitEvent[]) {
   const pin: { at: string | null; seenAt: string | null } = { at: null, seenAt: null };
   const marked: string[] = [];
   const server = new McpServer({ name: "t", version: "0" });
@@ -200,6 +229,7 @@ async function grantWithPins(slots = new MemoryWaitSlots(), grantId = "g") {
     },
     pageOpen: async () => true,
     waitSlot: slots.for(grantId),
+    ...(events ? { waitPresence: { grantId, publish: (e: PresenceWaitEvent) => void events.push(e) } } : {}),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     pollMs: 20,
     waitCeilingS: 5,
@@ -319,4 +349,115 @@ test("notifications/cancelled in a POST of its own aborts the call it names, on 
   assert.equal(batch.signal.aborted, true);
   other.done();
   batch.done();
+});
+
+/** The wait events of a grant, as open/closed words, oldest first. */
+const states = (events: PresenceWaitEvent[]) => events.map((e) => e.state);
+
+test("a wait sends open when it claims its place and closed when it gives it up, ids only (APC 0.11)", async () => {
+  const events: PresenceWaitEvent[] = [];
+  const g = await grantWithPins(new MemoryWaitSlots(), "g_w", events);
+  const waiting = wait(g.client, 1);
+  await sleep(40);
+  assert.deepEqual(states(events), ["open"], "open while the wait runs");
+  const done = await waiting;
+  assert.equal(done.structuredContent.timed_out, true);
+  assert.deepEqual(states(events), ["open", "closed"], "closed on the timeout");
+  for (const e of events) assert.deepEqual(Object.keys(e).sort(), ["at", "grant_id", "kind", "state", "v"]);
+  assert.ok(events.every((e) => e.v === 1 && e.kind === "wait" && e.grant_id === "g_w"));
+});
+
+test("a wait that delivers a pin sends closed before its result goes out (APC 0.11)", async () => {
+  const events: PresenceWaitEvent[] = [];
+  const g = await grantWithPins(new MemoryWaitSlots(), "g", events);
+  const waiting = wait(g.client, 3);
+  await sleep(40);
+  g.drop("2026-11-13T10:00:00.000Z");
+  const got = await waiting;
+  assert.equal(got.structuredContent.focus?.pinned_at, "2026-11-13T10:00:00.000Z");
+  assert.deepEqual(states(events), ["open", "closed"]);
+});
+
+test("a takeover sends the old wait's closed, then the new one's open; the old wait sends nothing later (APC 0.11)", async () => {
+  let clock = 0;
+  const events: PresenceWaitEvent[] = [];
+  const g = await grantWithPins(new MemoryWaitSlots(() => clock), "g", events);
+  const older = wait(g.client, 3);
+  await sleep(40);
+  clock = 2500; // past the claim gap
+  const newer = wait(g.client, 1);
+  await older;
+  assert.deepEqual(states(events), ["open", "closed", "open"], "the old wait, finding it was taken over, sent no second closed");
+  await newer;
+  assert.deepEqual(states(events), ["open", "closed", "open", "closed"]);
+});
+
+test("a refused wait sends nothing; a cancelled one sends closed (APC 0.11)", async () => {
+  const events: PresenceWaitEvent[] = [];
+  const g = await grantWithPins(new MemoryWaitSlots(), "g", events);
+  const controller = new AbortController();
+  const first = wait(g.client, 3, controller.signal).catch((e: unknown) => e);
+  await sleep(40);
+  const refused = await wait(g.client, 2);
+  assert.ok(refused.structuredContent.retry_after_s);
+  assert.deepEqual(states(events), ["open"], "the refused wait claimed nothing");
+  controller.abort();
+  await first;
+  await sleep(60);
+  assert.deepEqual(states(events), ["open", "closed"]);
+});
+
+test("a grant forgotten during its wait still gets the closed, once (APC 0.11)", async () => {
+  const slots = new MemoryWaitSlots();
+  const events: PresenceWaitEvent[] = [];
+  const slot = announceWaits(slots.for("g"), "g", (e) => void events.push(e));
+  const claim = await slot.claim();
+  assert.ok("token" in claim);
+  assert.equal(slots.held("g"), true);
+  slots.forget("g");
+  assert.equal(slots.held("g"), false);
+  assert.equal(await slot.release(claim.token), true);
+  assert.equal(await slot.release(claim.token), false, "a second release is not a second closed");
+  assert.deepEqual(states(events), ["open", "closed"]);
+});
+
+test("announceWaits sends nothing from a place that does not tell takeovers and releases atomically (APC 0.11)", async () => {
+  // A store row read with holds, then released: two steps. A claim between them would end the page on closed.
+  let holder: string | null = null;
+  const plain = {
+    claim: async () => ((holder = crypto.randomUUID()), { token: holder }),
+    holds: async (token: string) => holder === token,
+    release: async (token: string) => {
+      if (holder === token) holder = null;
+    },
+  };
+  const events: PresenceWaitEvent[] = [];
+  const slot = announceWaits(plain, "g", (e) => void events.push(e));
+  assert.equal(slot, plain, "the place is returned as it is");
+  const a = await slot.claim();
+  const b = await slot.claim();
+  assert.ok("token" in a && "token" in b);
+  await slot.release(a.token);
+  await slot.release(b.token);
+  assert.deepEqual(states(events), [], "no wait events: no waiting on the page beats a wrong one");
+});
+
+test("a release that throws still sends closed (APC 0.11)", async () => {
+  const inner = new MemoryWaitSlots().for("g");
+  const failing = { ...inner, release: async () => Promise.reject(new Error("store down")) } as typeof inner;
+  const events: PresenceWaitEvent[] = [];
+  const slot = announceWaits(failing, "g", (e) => void events.push(e));
+  const claim = await slot.claim();
+  assert.ok("token" in claim);
+  await assert.rejects(slot.release(claim.token), /store down/);
+  assert.deepEqual(states(events), ["open", "closed"]);
+});
+
+test("a presence channel that throws does not fail the wait (APC 0.11)", async () => {
+  const slot = announceWaits(new MemoryWaitSlots().for("g"), "g", () => {
+    throw new Error("page gone");
+  });
+  const claim = await slot.claim();
+  assert.ok("token" in claim);
+  assert.equal(await slot.release(claim.token), true);
 });

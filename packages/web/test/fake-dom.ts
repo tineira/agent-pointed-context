@@ -77,6 +77,26 @@ export class El {
   appendChild(n: El) {
     this.append(n);
   }
+  insertBefore(n: El, ref: El | null) {
+    if (!ref) return this.append(n);
+    n.remove();
+    n.parentElement = this;
+    this.children.splice(this.children.indexOf(ref), 0, n);
+    if (this.isConnected) n.connect();
+  }
+  removeChild(n: El) {
+    n.remove();
+  }
+  get firstChild(): El | Text | null {
+    return this.children[0] ?? null;
+  }
+  contains(n: unknown): boolean {
+    for (let x = n as El | null; x; x = x.parentElement) if (x === this) return true;
+    return false;
+  }
+  get ownerDocument() {
+    return doc;
+  }
   replaceChildren(...nodes: Array<El | Text>) {
     this.children = [];
     this.own = "";
@@ -160,6 +180,11 @@ export const doc = {
     return e;
   },
   createTextNode: (data: string) => new Text(data),
+  /** SVG elements: the same fake element, its tag as given (lower case kept in localName). */
+  createElementNS: (_ns: string, tag: string) => Object.assign(new El(tag), { localName: tag }),
+  listeners: new Map<string, Array<(e: unknown) => void>>(),
+  addEventListener: (t: string, fn: (e: unknown) => void) => doc.listeners.set(t, [...(doc.listeners.get(t) ?? []), fn]),
+  removeEventListener: (t: string, fn: (e: unknown) => void) => doc.listeners.set(t, (doc.listeners.get(t) ?? []).filter((f) => f !== fn)),
   querySelectorAll: (selector: string): El[] => doc.documentElement.querySelectorAll(selector),
   elementFromPoint: (): El | null => hovered,
 };

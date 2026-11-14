@@ -29,7 +29,8 @@
  *    pin per grant (`FocusRow`) and gives it as `FocusPayload`, with `next` and `next_args`, the
  *    call that reads it. While the pin is unread, every tool result carries `attention`.
  * 3. **Presence**: after each successful tool call the app publishes a `PresenceEvent` (ids only) to
- *    the person's page; a read of a target names it in `targets`.
+ *    the person's page; a read of a target names it in `targets`. Since APC 0.11 it also publishes when a
+ *    wait opens and closes (`PresenceWaitEvent`, `presence.ts`), so the page knows the agent is listening.
  * 4. **The focus format**: `FocusPayload`, from the grammar in `target.ts`.
  * 5. **`get_current_view` and `wait_for_focus`**, the two core tools (`CORE_TOOLS`), with the loop
  *    hint `then` while a page of the person's is open and the grant was pinned lately (APC 0.8), at most
@@ -190,7 +191,8 @@ export const WAIT_CLAIM_GAP_S = 2;
  * Two bindings are described:
  *
  * - **The secret URL** (the reference apps; `newDirectGrant` and `directMcpUrl` in `@tineira/apc-server`):
- *   one MCP URL per grant, under `apc.json`'s `mcp.path`; whoever holds the URL holds the grant. Revoked is
+ *   one MCP URL per grant, under `apc.json`'s `mcp.path` (or, since 0.11, a `mcp.endpoints` entry ending in
+ *   `/{secret}`); whoever holds the URL holds the grant. Revoked is
  *   HTTP 403 with `RevokedAnswer`; an unknown or expired grant is 404.
  * - **OAuth 2.1**: one MCP URL shared by every grant, the bearer token naming the grant. Revoked is HTTP
  *   401 with `WWW-Authenticate: Bearer error="invalid_token"` and the `RevokedAnswer` body, so the client

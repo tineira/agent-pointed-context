@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WAIT_CLAIM_GAP_S, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
+import { WAIT_CEILING_DEFAULT_S, WAIT_CLAIM_GAP_S, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
 import { z } from "zod";
 import { toolResult } from "./envelope.ts";
-import type { WaitSlot } from "./waits.ts";
+import { announceWaits, type WaitSlot } from "./waits.ts";
 
 /** What the host gives the APC tools, already trimmed to the calling grant. */
 export interface ApcToolContext {
@@ -27,10 +27,16 @@ export interface ApcToolContext {
   pageOpen?(): Promise<boolean | null>;
   /** The grant's one place for a wait (APC 0.8): `MemoryWaitSlots.for(grantId)`, or the app's own store. */
   waitSlot: WaitSlot;
+  /**
+   * The wait events (APC 0.11): the grant's id and where its presence goes (the person's page). With it, a wait sends
+   * `open` when it claims its place and `closed` when it gives it up (`announceWaits`). Only when `waitSlot` is an
+   * `AtomicWaitSlot` (`MemoryWaitSlots` is): with another, no wait events. Left out, no wait events.
+   */
+  waitPresence?: { grantId: string; publish(event: PresenceWaitEvent): void | Promise<void> };
   /** The HTTP request's signal, when the host has one: a client that hangs up cancels the wait. */
   signal?: AbortSignal;
   sleep(ms: number): Promise<void>;
-  /** Longest wait_for_focus may hold a request; the paper's host allowed 50 s. */
+  /** Longest wait_for_focus may hold a request (`WAIT_CEILING_DEFAULT_S`, 50, unless set); the paper's host allowed 50 s. A page needs it for the wait events' expiry. */
   waitCeilingS?: number;
   pollMs?: number;
 }
@@ -70,7 +76,8 @@ interface Extra {
 }
 
 export function registerApcTools(server: McpServer, ctx: ApcToolContext): void {
-  const ceiling = ctx.waitCeilingS ?? 50;
+  const ceiling = ctx.waitCeilingS ?? WAIT_CEILING_DEFAULT_S;
+  const waitSlot = ctx.waitPresence ? announceWaits(ctx.waitSlot, ctx.waitPresence.grantId, (event) => ctx.waitPresence!.publish(event)) : ctx.waitSlot;
   const pollMs = ctx.pollMs ?? 2000;
   const fallback = Math.min(WAIT_DEFAULT_S, ceiling);
   const cancelled = (extra: Extra | undefined) => !!(extra?.signal?.aborted || ctx.signal?.aborted);
@@ -109,25 +116,25 @@ export function registerApcTools(server: McpServer, ctx: ApcToolContext): void {
       annotations: { readOnlyHint: true },
     },
     async ({ timeout_s }: { timeout_s?: number }, extra?: Extra) => {
-      const claim = await ctx.waitSlot.claim();
+      const claim = await waitSlot.claim();
       if (!("token" in claim)) return toolResult({ focus: null, timed_out: false, retry_after_s: claim.retryAfterS, note: waitBusyNote(claim.retryAfterS) });
       const { token } = claim;
       let released = false;
       const release = async () => {
         if (released) return;
         released = true;
-        await ctx.waitSlot.release(token);
+        await waitSlot.release(token);
       };
       try {
         const deadline = Date.now() + (timeout_s ?? fallback) * 1000;
         for (;;) {
           if (cancelled(extra)) return toolResult({ focus: null, timed_out: false, note: WAIT_CANCELLED_NOTE });
-          if (!(await ctx.waitSlot.holds(token))) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
+          if (!(await waitSlot.holds(token))) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
           if (await ctx.focusUnread()) {
             const focus = await ctx.readFocus();
             if (focus) {
               // Give the place up first, then one last check: a taken-over or cancelled wait marks nothing.
-              const still = await ctx.waitSlot.holds(token);
+              const still = await waitSlot.holds(token);
               await release();
               if (!still) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
               const result = toolResult({ focus, timed_out: false });

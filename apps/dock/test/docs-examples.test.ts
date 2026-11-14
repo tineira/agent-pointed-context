@@ -7,11 +7,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MCP_BODY_MAX_BYTES, OrdersApp } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
+import type { PresenceMessage, PresenceWaitEvent } from "@tineira/apc-protocol";
 import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
 for (const profile of ["direct", "dock"] as const) {
   for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, check.run);
 }
+
+test("Orders declares its MCP endpoint exactly (APC 0.11): the suite checks each profile's grant against mcp.endpoints", async () => {
+  for (const profile of ["direct", "dock"] as const) {
+    const { app } = ordersUnderTest(profile);
+    const raw = (await (await app.fetch(new Request("https://orders.test/.well-known/apc.json"))).json()) as { mcp: unknown };
+    assert.deepEqual(raw.mcp, { path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] });
+    const served = named(ordersChecks(profile), "serves apc.json");
+    await served.run();
+    assert.match(served.note ?? "", /\/mcp\/\{secret\} declares every child of \/mcp\//, profile);
+  }
+});
 
 test("a page whose stream died is dropped, and the tool call that published to it still answers", async () => {
   const origin = "https://orders.test";
@@ -149,4 +161,145 @@ test("Orders: agent traffic stamps nothing: ping and tools/list in handoff, and 
   const after = JSON.parse(snapshot(live.mcpUrl)) as Record<string, unknown>;
   assert.equal(after.lastWake, was.lastWake, "agent traffic is not a wake action");
   assert.equal(after.state, was.state);
+});
+
+/** Orders with what its page hears rewritten: a broken app, as the wait-event checks (APC 0.11) must catch it. */
+function rewrittenPresence(rewrite: (messages: PresenceMessage[]) => PresenceMessage[]) {
+  const { adapter } = ordersUnderTest("direct");
+  const take = adapter.page.takePresence.bind(adapter.page);
+  return apcConformance({ ...adapter, page: { ...adapter.page, takePresence: () => rewrite(take()) } });
+}
+const WAITS = "a wait publishes open, then closed";
+const TAKEOVER = "a takeover publishes the old wait's closed";
+
+test("an app that sends no wait events passes every wait-event check with a note: they are optional (APC 0.11)", async () => {
+  const checks = rewrittenPresence((m) => m.filter((e) => e.kind !== "wait"));
+  const names = [WAITS, TAKEOVER, "a cancelled wait publishes closed", "a wait whose grant is revoked publishes closed", "a refused wait publishes nothing"];
+  const waitChecks = names.map((n) => named(checks, n));
+  for (const c of waitChecks) {
+    await c.run();
+    assert.match(c.note ?? "", /not checked: the app sends no wait events/, c.name);
+  }
+});
+
+test("an app that sends open but never closed is held to the rules and fails (APC 0.11)", async () => {
+  const openOnly = rewrittenPresence((m) => m.filter((e) => !(e.kind === "wait" && e.state === "closed")));
+  await assert.rejects(named(openOnly, WAITS).run(), /has its closed, and only that: got \[\]/);
+  await assert.rejects(named(openOnly, "a cancelled wait publishes closed").run(), /got \[open\]/);
+});
+
+test("the wait-event checks fail an app whose wait events carry more than ids, or another shape (APC 0.11)", async () => {
+  const withTool = rewrittenPresence((m) => m.map((e) => (e.kind === "wait" ? ({ ...e, tool: "wait_for_focus" } as unknown as PresenceMessage) : e)));
+  await assert.rejects(named(withTool, WAITS).run(), /ids only/);
+  const badState = rewrittenPresence((m) => m.map((e) => (e.kind === "wait" ? ({ ...e, state: "waiting" } as unknown as PresenceMessage) : e)));
+  await assert.rejects(named(badState, WAITS).run(), /state open or closed/);
+});
+
+test("the wait-event checks fail an app that never sends closed, or sends it twice (APC 0.11)", async () => {
+  const noClosed = rewrittenPresence((m) => m.filter((e) => !(e.kind === "wait" && e.state === "closed")));
+  await assert.rejects(named(noClosed, WAITS).run(), /has its closed, and only that/);
+  const twice = rewrittenPresence((m) => m.flatMap((e) => (e.kind === "wait" && e.state === "closed" ? [e, e] : [e])));
+  await assert.rejects(named(twice, WAITS).run(), /has its closed, and only that/);
+});
+
+test("the wait-event checks fail a takeover that opens before it closes, or whose old wait closes late (APC 0.11)", async () => {
+  // The newer wait's open before the older one's closed: a page folding them in order would end up not waiting.
+  const openFirst = rewrittenPresence((m) => {
+    const out = [...m];
+    const i = out.findIndex((e, k) => k > 0 && e.kind === "wait" && e.state === "closed");
+    if (i >= 0 && out[i + 1]?.kind === "wait") [out[i], out[i + 1]] = [out[i + 1]!, out[i]!];
+    return out;
+  });
+  await assert.rejects(named(openFirst, TAKEOVER).run(), /got \[open,open,closed,closed\]/);
+  // The old wait sends its own closed when it finds it was taken over, after the newer one's open.
+  const lateClosed = rewrittenPresence((m) => {
+    const out = [...m];
+    const i = out.findIndex((e, k) => k > 0 && e.kind === "wait" && e.state === "open");
+    if (i >= 0) out.splice(i + 1, 0, { ...(out[i] as PresenceWaitEvent), state: "closed" });
+    return out;
+  });
+  await assert.rejects(named(lateClosed, TAKEOVER).run(), /got \[open,closed,open,closed,closed\]/);
+});
+
+const CANCEL = "a cancelled wait publishes closed";
+const REVOKE = "a wait whose grant is revoked publishes closed";
+const REFUSED = "a refused wait publishes nothing";
+
+test("the wait-event checks fail an app that sends no closed on a cancel or a revoke (APC 0.11)", async () => {
+  const noClosed = rewrittenPresence((m) => m.filter((e) => !(e.kind === "wait" && e.state === "closed")));
+  await assert.rejects(named(noClosed, CANCEL).run(), /a cancelled wait sends open, then closed when it stops: got \[open\]/);
+  await assert.rejects(named(noClosed, REVOKE).run(), /a wait cut by a revoke sends open, then closed.*got \[open\]/);
+});
+
+test("the wait-event checks fail an app whose wait on a revoked grant sends an event (APC 0.11)", async () => {
+  // As if the revoked grant's wait claimed a place: an open after the closed.
+  const reopened = rewrittenPresence((m) => {
+    const last = m.findLastIndex((e) => e.kind === "wait" && e.state === "closed");
+    return last < 0 ? m : [...m, { ...(m[last] as PresenceWaitEvent), state: "open" }];
+  });
+  await assert.rejects(named(reopened, REVOKE).run(), /got \[open,closed,open\]/);
+});
+
+test("the wait-event checks fail an app whose refused wait sends an event (APC 0.11)", async () => {
+  // As if the refused wait sent its own open.
+  const doubled = rewrittenPresence((m) => m.flatMap((e) => (e.kind === "wait" && e.state === "open" ? [e, e] : [e])));
+  await assert.rejects(named(doubled, REFUSED).run(), /got \[open,open\]/);
+});
+
+const GUARD = "an app whose wait-event checks were not checked sends no wait event anywhere in the run";
+
+test("an app that sends wait events only on a takeover cannot pass as not checked: the last check fails it (APC 0.11)", async () => {
+  // Wait events kept only in a drain that holds a takeover (a closed right before an open): the probe and a plain wait see none.
+  const takeoverOnly = rewrittenPresence((m) => {
+    const waits = m.filter((e) => e.kind === "wait");
+    const takeover = waits.some((e, i) => e.state === "closed" && waits[i + 1]?.state === "open");
+    return takeover ? m : m.filter((e) => e.kind !== "wait");
+  });
+  const skipped = named(takeoverOnly, WAITS);
+  await skipped.run();
+  assert.match(skipped.note ?? "", /the app sends no wait events/, "skipped while it had sent none");
+  await named(takeoverOnly, "one wait per grant: a newer wait takes over").run();
+  await assert.rejects(named(takeoverOnly, GUARD).run(), /the app sent wait events in this run/);
+});
+
+test("an app that sends no wait events passes the last check too (APC 0.11)", async () => {
+  const none = rewrittenPresence((m) => m.filter((e) => e.kind !== "wait"));
+  await named(none, WAITS).run();
+  await named(none, "one wait per grant: a newer wait takes over").run();
+  await named(none, GUARD).run();
+});
+
+test("a revoke that throws while a wait-event check gives its agent back does not hide the check's result (APC 0.11)", async () => {
+  const { adapter } = ordersUnderTest("direct");
+  const take = adapter.page.takePresence.bind(adapter.page);
+  const checks = apcConformance({
+    ...adapter,
+    page: {
+      ...adapter.page,
+      takePresence: () => take().filter((e) => !(e.kind === "wait" && e.state === "closed")),
+      revoke: async () => {
+        throw new Error("revoke broke");
+      },
+    },
+  });
+  await assert.rejects(named(checks, "a cancelled wait publishes closed").run(), /got \[open\]/);
+});
+
+test("the wait-event probe runs once per run, and each check makes one agent (APC 0.11)", async () => {
+  const { adapter } = ordersUnderTest("direct");
+  let probes = 0;
+  let agents = 0;
+  const checks = apcConformance({
+    ...adapter,
+    connect: async () => (agents++, adapter.connect()),
+    fetch: async (request) => {
+      const body = request.method === "POST" ? await request.clone().text() : "";
+      if (body.includes('"wait_for_focus"') && body.includes('"timeout_s":1}')) probes++;
+      return adapter.fetch!(request);
+    },
+  });
+  await named(checks, WAITS).run();
+  await named(checks, "a cancelled wait publishes closed").run();
+  assert.equal(probes, 1);
+  assert.equal(agents, 2);
 });

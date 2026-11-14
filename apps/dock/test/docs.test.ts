@@ -27,12 +27,19 @@ test("the renderer reads the Markdown the docs use", () => {
     { t: "link", href: "/h#i", c: [{ t: "text", v: "f " }, { t: "code", v: "g" }] },
     { t: "text", v: " 2 * 3 snake_case" },
   ]);
-  const blocks = parseMarkdown("# T\n\n## `apc.json` (0.5)\n\npara\nmore\n\n- one\n  cont\n- two\n\n1. a\n2. b\n\n| x | `a|b` |\n|---|---|\n| 1 | 2 |\n\n```ts\ncode\n```\n\n> quote\n\n<!-- include f.ts#r -->\n<!-- a comment -->\n## `apc.json` (0.5)");
+  const blocks = parseMarkdown("# T\n\n## `apc.json` (0.5)\n\npara\nmore\n\n- one\n  cont\n- two\n\n1. a\n2. b\n\n| x | `a|b` |\n|---|---|\n| `c\\|d` | e\\|f |\n\n```ts\ncode\n```\n\n> quote\n\n<!-- include f.ts#r -->\n<!-- a comment -->\n## `apc.json` (0.5)");
   assert.deepEqual(blocks.map((b) => b.t), ["heading", "heading", "para", "list", "list", "table", "code", "quote", "include", "heading"]);
   assert.deepEqual(headingIds(blocks), ["t", "apcjson-05", "apcjson-05-1"]);
   assert.deepEqual((blocks[3] as Extract<Block, { t: "list" }>).items, [[{ t: "text", v: "one cont" }], [{ t: "text", v: "two" }]]);
   assert.equal((blocks[4] as Extract<Block, { t: "list" }>).ordered, true);
   assert.deepEqual((blocks[5] as Extract<Block, { t: "table" }>).head[1], [{ t: "code", v: "a|b" }]);
+  assert.deepEqual((blocks[5] as Extract<Block, { t: "table" }>).rows[0], [[{ t: "code", v: "c|d" }], [{ t: "text", v: "e|f" }]], "\\| is a pipe, in code or not");
+  // As GitHub reads them: an escaped pipe at the end of a row with no closing border, and \\ before a border.
+  const rowOf = (row: string) => (parseMarkdown(`| h | h |\n|---|---|\n${row}`)[0] as Extract<Block, { t: "table" }>).rows[0]!.map((c) => c.map((x) => ("v" in x ? x.v : "")).join(""));
+  assert.deepEqual(rowOf("| a | b\\|"), ["a", "b|"], "a trailing \\| is a pipe, not the border");
+  assert.deepEqual(rowOf("| a | c\\\\| d |"), ["a", "c\\", "d"], "\\\\ is one backslash, and the | after it a border");
+  assert.deepEqual(rowOf("| a | `c\\\\` | d |"), ["a", "c\\\\", "d"], "inside code both backslashes stay");
+  assert.deepEqual(rowOf("| a |  |"), ["a", ""], "an empty last cell before the closing border");
   assert.deepEqual(blocks[8], { t: "include", file: "f.ts", region: "r" });
 });
 

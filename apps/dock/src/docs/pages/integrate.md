@@ -22,7 +22,7 @@ They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-w
 |---|---|
 | `@tineira/apc-protocol` | the types, the target grammar (`parseTarget`), `focusAttrs`, `apc.json` |
 | `@tineira/apc-server` | the two APC tools, `attention` and `then`, presence, grants, revoke, consent, `apc_link`, `apc.json` |
-| `@tineira/apc-web` | pinning (drag and tap), the agent bar `<apc-agents>`, the Direct agent list, presence, the view reporter |
+| `@tineira/apc-web` | pinning (drag and tap), the agent bar `<apc-agents>`, the Direct agent list, presence, the view reporter, the agent pet (`createPet`, `<apc-pets>`, `petState`) and the wait helpers (`waitOpen`, `agentWaitOpen`) |
 | `@tineira/apc-conformance` | the suite that checks your app |
 
 The server's imports:
@@ -93,7 +93,7 @@ This is where APC rides on your results. Every tool, the two APC tools included,
 
 - ends the call `revoked` if its grant was revoked, before or while it ran;
 - puts `attention` on the result while the grant's pin is unread;
-- publishes presence to the person's page, naming what a read touched;
+- publishes presence to the person's page, naming what a read touched (and, since APC 0.11, `registerApcTools` sends a wait's `open` and `closed` there itself when you give it `waitPresence`);
 - puts `then` on the result while a page of the person's is open and the grant was pinned in the last 30 minutes (`thenApplies`), but never on a wait that came back empty;
 - carries an `apc_link` offer, once per session, when the same agent is connected both ways.
 
@@ -114,6 +114,17 @@ The page's event stream is how the server knows a page is open, and how presence
 <!-- include orders-page.ts#pinning -->
 
 On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile)).
+
+### The agent in the page
+
+To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3, then a "+N" (or list) button that opens a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page)). Each pet is a mark and only a mark, so `enablePinning` drags it like the bar's, and a tap or Enter on it arms the agent. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
+
+<!-- include orders-page.ts#pets -->
+
+- **Colours.** `scheme = "auto"` follows `prefers-color-scheme`. With your own theme switch, set `scheme` to `"light"` or `"dark"` when it changes. To tint the pet to a strict palette, set `tint` (`{ body, line }`, hex) or the custom properties `--apc-pet-body` and `--apc-pet-line`.
+- **Size.** `--apc-pets-size` (36 px by default) sizes the pets; each stays a 44 px target. A lone pet anywhere else is `createPet({ state, badge, label })` (or `<apc-pet>`), sized by `size` or `--apc-pet-size`.
+- **Logos.** `agentBadge({ clientName, key })` gives the brand's logo, else the client's icon, else a neutral mark in the agent's own colour. `<apc-pin>` wears the same badge when you set `badge` on its agent; `pinStackIndex` places several badges on one element.
+- **Words.** `<apc-pets>` takes `strings` (`PetsStrings`) like the other components.
 
 ## 10. Revoke
 
@@ -230,15 +241,16 @@ The reference examples send presence on a page event stream. Without a long-live
 - **Owner-only, private.** One topic per person (`apc-user:{user_id}` in Autio, `agents:{user_id}` in Surplus): a private channel, a policy that lets only that person read it, and no client may write to it. An agent token never listens. Surplus sends the event from the server through Realtime's broadcast endpoint, as private only. Autio sends it from a database function that runs for the agent's own grant (`apc_publish_presence`), which publishes nothing unless the person's page heartbeat is fresh (Autio TIN-670).
 - **Send after a successful call, and never let it fail one.** A missing function, an error or a read over 3 s leaves the tool's body as it is. Hold the send like the rest of the deferred work (see above).
 - **The same channel carries the revoke.** Both apps broadcast an event when a grant ends, so every tab and device drops the agent's mark without a reload. Autio wraps only the send in its revoke triggers, so a failed broadcast can never fail a revoke (Autio TIN-815, Surplus TIN-847).
-- **Do not infer "waiting".** A page cannot read the wait row, so it should not guess a waiting state from recent calls. Both apps did guess it (a call heard in the last 75 s, or the last call being a wait), and that shows "waiting" when no wait is running. Show no waiting state until the app sends the presence `wait` event that APC 0.11 adds (Autio TIN-795, Surplus TIN-877, TIN-886).
+- **Do not infer "waiting".** A page cannot read the wait row, so it should not guess a waiting state from recent calls. Both apps did guess it (a call heard in the last 75 s, or the last call being a wait), and that shows "waiting" when no wait is running. Show no waiting state unless the app sends the presence `wait` events of APC 0.11, which only an app that claims and releases a wait atomically may send (Autio TIN-795, Surplus TIN-877, TIN-886).
 
 ## Checklist
 
-- `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`.
+- `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`. If the origin serves other MCP endpoints too, it lists the APC ones in `mcp.endpoints` (0.11; [the spec](/docs/spec#mcpendpoints-011)): exact paths, and `/{secret}` last for one URL per grant. Keep fixed routes out of a `{secret}` parent, and keep `mcp.path` for readers before 0.11. `declaresMcpUrl` now takes the profile (`{ profile: "dock" }`, or `{ profile: "direct", shared: true }` for an exact endpoint whose grants share the URL).
 - Every pointable element has `data-focus`; targets carry ids and keys only.
 - `get_current_view` and `wait_for_focus` are registered on every grant.
 - Every tool runs inside the wrapper: revoke check, `attention`, presence, `then`.
 - The agent bar is on every page, with Revoke; on a phone it stays in the page.
+- If you show agents as pets: `<apc-pets>` in the header, its states fed only by what the page knows, its colours following the page's scheme.
 - Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token); an unknown grant 404.
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
 - Dock: every drop goes to the server; the hub is on your allowlist, checked on the drop and on the Allow (`parseDockDrop`); consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
