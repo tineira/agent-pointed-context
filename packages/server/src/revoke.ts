@@ -1,12 +1,29 @@
-import { REVOKED_HTTP_STATUS, revokedAnswer } from "@tineira/apc-protocol";
+import { REVOKED_HTTP_STATUS, REVOKED_HTTP_STATUS_BEARER, revokedAnswer } from "@tineira/apc-protocol";
 import type { ToolResult } from "./envelope.ts";
 
 /**
  * Revoke from the app (APC 0.2, `RevokedAnswer` in @tineira/apc-protocol): what a revoked grant's MCP URL
  * answers to every request, whatever the method. `host` is the app's own host, as the person knows it.
+ *
+ * The status is the binding's (APC 0.8): 403 with a secret URL (the default), and with a bearer token
+ * (`{ bearer: true }`) 401 with `WWW-Authenticate: Bearer error="invalid_token"`, so an OAuth client tells
+ * "taken back by the person" (this body) from an expired token and does not just authorize again.
  */
-export function revokedResponse(host: string, revokedAt: string): Response {
-  return Response.json(revokedAnswer(host, revokedAt), { status: REVOKED_HTTP_STATUS, headers: { "cache-control": "no-store" } });
+export function revokedResponse(host: string, revokedAt: string, options: { bearer?: boolean } = {}): Response {
+  const headers: Record<string, string> = { "cache-control": "no-store" };
+  if (options.bearer) headers["www-authenticate"] = BEARER_INVALID_TOKEN;
+  return Response.json(revokedAnswer(host, revokedAt), { status: options.bearer ? REVOKED_HTTP_STATUS_BEARER : REVOKED_HTTP_STATUS, headers });
+}
+
+/** The challenge of a bearer token the app does not take (RFC 6750): on a revoked grant's 401, and on a plain 401 for an unknown token. */
+export const BEARER_INVALID_TOKEN = 'Bearer error="invalid_token"';
+
+/**
+ * A bearer token the app does not know, or none (APC 0.8): a plain 401 with no `RevokedAnswer`, so the holder
+ * tells "gone" from "taken back". The bearer binding's counterpart of a secret URL's 404.
+ */
+export function unknownBearerResponse(): Response {
+  return Response.json({ error: "invalid_token" }, { status: REVOKED_HTTP_STATUS_BEARER, headers: { "cache-control": "no-store", "www-authenticate": BEARER_INVALID_TOKEN } });
 }
 
 /** What a call that was already running when its grant was revoked returns: the same answer, as a tool error, with no app data. */

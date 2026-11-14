@@ -2,12 +2,14 @@
  * The APC docs at /docs (TIN-611): the standard's overview, spec, integration guide, conformance, a page for
  * agents and the standard's changelog. Markdown files in the repo (src/docs/pages, packages/protocol/CHANGELOG.md),
  * bundled as text and rendered here as React elements; code samples come from the type-checked, tested examples
- * in src/docs/examples. Static, like the landing: the Worker never runs for /docs.
+ * in src/docs/examples. Static, like the landing: the Worker never runs for /docs. The build also writes each page
+ * as HTML with its text in it, and as Markdown at /docs/<page>.md, so the docs read without JavaScript (src/docs/static.ts).
  */
 import { useEffect, useMemo, type ReactNode } from "react";
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { exampleRegion, fragmentTarget, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "../docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, type DocPage } from "../docs/pages.ts";
+import { docMarkdownPath } from "../docs/static.ts";
 import overview from "../docs/pages/overview.md?raw";
 import spec from "../docs/pages/spec.md?raw";
 import integrate from "../docs/pages/integrate.md?raw";
@@ -132,7 +134,7 @@ export function Docs({ path }: { path: string }) {
       <footer className="docs-foot">
         <p>
           The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT.
-          {page && <> Source of this page: <a href={`${REPO}/blob/main/${page.file}`}>{page.file}</a>.</>}
+          {page && <> Source of this page: <a href={`${REPO}/blob/main/${page.file}`}>{page.file}</a>. This page as Markdown: <a href={docMarkdownPath(page)}>{docMarkdownPath(page)}</a>.</>}
         </p>
         <p>
           <a href="/">Home</a> · <a href="/v1/">Version 1, as described in the paper</a>

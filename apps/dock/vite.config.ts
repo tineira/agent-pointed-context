@@ -1,13 +1,15 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import react from "@vitejs/plugin-react";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { readExtensionVersion } from "../../scripts/lib/extension-version.mjs";
 import { zipDirectory } from "../../scripts/lib/zip.mjs";
+import { DOC_PAGES, EXAMPLES_DIR } from "./src/docs/pages.ts";
+import { staticDocFiles } from "./src/docs/static.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -64,10 +66,32 @@ function extensionZip(): Plugin {
   };
 }
 
+/**
+ * The docs without JavaScript (TIN-914): each /docs page as HTML with its text in it (docs.html, docs/spec.html…,
+ * which the asset server answers at /docs and /docs/spec), its Markdown at /docs/<page>.md, and /llms.txt,
+ * written next to the client build's index.html from the same sources the page renders (src/docs/static.ts).
+ */
+function staticDocs(): Plugin {
+  return {
+    name: "apc-static-docs",
+    applyToEnvironment: (environment) => environment.name === "client",
+    writeBundle(options) {
+      const dir = options.dir!;
+      const sources = Object.fromEntries(DOC_PAGES.map((p) => [p.path, readFileSync(join(root, p.file), "utf8")]));
+      const examplesDir = join(root, EXAMPLES_DIR);
+      const examples = Object.fromEntries(readdirSync(examplesDir).filter((f) => f.endsWith(".ts")).map((f) => [f, readFileSync(join(examplesDir, f), "utf8")]));
+      for (const { file, content } of staticDocFiles(readFileSync(join(dir, "index.html"), "utf8"), sources, examples)) {
+        mkdirSync(dirname(join(dir, file)), { recursive: true });
+        writeFileSync(join(dir, file), content);
+      }
+    },
+  };
+}
+
 // The dock page reuses Pulse's agent icons (apps/demo/src/web/agent-icon.tsx); the Worker is the hub (src/worker).
 export default defineConfig({
   // No inspector: Pulse's dev server holds port 9229 when the three apps run side by side.
-  plugins: [extensionZip(), react(), cloudflare({ inspectorPort: false })],
+  plugins: [extensionZip(), staticDocs(), react(), cloudflare({ inspectorPort: false })],
   define: { __APC_EXTENSION_LATEST__: JSON.stringify(latest) },
   server: { port: 5200, strictPort: true },
 });

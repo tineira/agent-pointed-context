@@ -130,6 +130,7 @@ export interface OrdersStore {
 export const newOrdersStore = (): OrdersStore => ({ grants: new Map(), revoked: new Map(), pins: new Map(), kv: memoryKv() });
 // #endregion
 
+// #region app
 /** What the person's page shows of each agent, for the agent bar and the Direct agent list. */
 export interface AgentRow {
   id: string;
@@ -249,6 +250,7 @@ export class OrdersApp {
     // apc_link sees the grants an agent can read with: a Direct one, or a Dock one its hub connected.
     this.links = new ApcLinks(this.store.kv, { appName: "Orders", now, grants: () => this.live().filter((g) => g.state === "live").map((g) => ({ id: g.id, path: g.path })) });
   }
+  // #endregion
 
   // #region routes
   async fetch(request: Request): Promise<Response> {

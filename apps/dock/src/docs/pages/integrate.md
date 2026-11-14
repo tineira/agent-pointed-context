@@ -1,17 +1,19 @@
 # Integrate your app in an afternoon
 
-This guide builds **Orders**, a small app with a list of a shop's orders, into a complete APC app: Direct first (an agent connects to the app's own MCP URL), then Dock (an agent dragged from a dock). Every sample on this page is a region of three real files in the repo, [orders-app.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-app.ts) (the server), [orders-page.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-page.ts) (the page) and [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts) (the test). They type-check against the current packages on every build, and the conformance suite passes against them on both profiles.
+This guide builds **Orders**, a small app with a list of a shop's orders, into a complete APC app: Direct first (an agent connects to the app's own MCP URL), then Dock (an agent dragged from a dock). Every Orders sample on this page is an **excerpt**: a region of one of three real files in the repo, [orders-app.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-app.ts) (the server), [orders-page.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-page.ts) (the page) and [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts) (the test). Each name an excerpt uses is imported from a package (the imports are shown first) or defined in another excerpt on this page; the server's excerpts from step 3 on are parts of one class, `OrdersApp`, so `this.` names a member shown in [the app object](#3-grants-and-apcjson). They type-check against the current packages on every build, and the conformance suite passes against them on both profiles.
+
+Want one file to copy instead? [A complete Direct app](#a-complete-direct-app-with-a-bearer-token) is shown whole below: a server, its page and its conformance test, with nothing left out, whose agents use a bearer token. [The minimum for the Dock profile](#the-minimum-for-the-dock-profile) lists what a Dock app adds.
 
 The server is plain Web standard `Request` and `Response`, so it runs on Node, Deno, Bun or a Cloudflare Worker; the page is plain DOM, so it fits React, Vue or none. State is kept in memory, for one person, so the APC parts stay in sight: your app keeps grants, pins and the view in its own database, per person, and puts the person's routes behind its own sign-in.
 
 ## 1. Install
 
-The packages are 0.x pre-releases on npm: the `next` dist-tag carries the newest release, and `latest` can trail it by one while the standard is 0.x. Their version follows the standard's: 0.10.x ships APC 0.10.
+The packages are 0.x pre-releases on npm, released together. Their minor version is the standard's: `@tineira/apc-server@0.N.x` ships APC 0.N (`APC_STANDARD_VERSION`), and a patch never changes the contract. Install all four at the same version; `npm i` without a tag records `^0.N.x`, which stays on that minor.
 
 ```sh
-npm i @tineira/apc-server@next @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
-npm i @tineira/apc-protocol@next @tineira/apc-web@next         # the page
-npm i -D @tineira/apc-conformance@next                         # the tests
+npm i @tineira/apc-server @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
+npm i @tineira/apc-protocol @tineira/apc-web               # the page
+npm i -D @tineira/apc-conformance                          # the tests
 ```
 
 The packages are on npm, so these lines work as written. The sources are also in the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
@@ -35,7 +37,9 @@ Pick the things a person would ask about: here, an order, and its total as a par
 
 <!-- include orders-app.ts#data -->
 
-In the page, every pointable element carries `data-focus`, made by `focusAttrs`:
+In the page, every pointable element carries `data-focus`, made by `focusAttrs`. The page's imports, and `post`, the JSON `POST` every later page excerpt sends:
+
+<!-- include orders-page.ts#imports -->
 
 <!-- include orders-page.ts#markup -->
 
@@ -45,9 +49,16 @@ Each agent gets its own **grant**: an id, and a secret that is the last segment 
 
 <!-- include orders-app.ts#grant -->
 
+The app object: what the page is told about each agent (`AgentRow`), the options, the messages the page's stream carries (`PageMessage`), the cap on an MCP request's body (`MCP_BODY_MAX_BYTES`, read by `cappedText`), and the members every later excerpt uses: `this.hubs` (the hub allowlist), `this.send` (the `fetch` the server calls hubs with), `this.pages` (the person's open pages) and the rest.
+
+<!-- include orders-app.ts#app -->
+
 The app's routes: `apc.json`, the MCP URLs, the hub's give-back (Dock), and the person's own routes. `apcManifest` builds the `apc.json` from what the app offers; `apcJsonResponse` serves it as public JSON.
 
 <!-- include orders-app.ts#routes -->
+
+- **`mcp.path` starts and ends with `/`.** It is a prefix: every grant's MCP URL starts with your origin plus it (`/mcp/` here, each grant at `/mcp/{secret}`). An app whose grants share one URL, `/mcp` with a bearer token, still declares `mcpPath: "/mcp/"`; the shared URL is covered as `mcp.path` without its last `/`, and since 0.11 as an exact entry of `mcp.endpoints` (`{ path: "/mcp", profiles: ["direct"] }`). `apcManifest` throws on any other `mcpPath`, and says how to fix it.
+- **Build `apc.json` once, when the app starts**, not per request, as [the complete Direct app](#a-complete-direct-app-with-a-bearer-token) does: a mistake then fails at start instead of answering every reader with HTTP 500.
 
 The person's routes need their session, and every change is a JSON `POST` checked against the origin you configured, never one read from the request ([M6](/docs/spec#the-app-and-the-hub-call)): another site's page cannot drop, allow or cancel for them, and a client that is not a browser is taken on its session.
 
@@ -55,7 +66,7 @@ The person's routes need their session, and every change is a JSON `POST` checke
 
 ## 4. Direct: an agent per grant
 
-The person makes an agent on the page, and copies its URL into their agent as a remote MCP server (Streamable HTTP, no OAuth: the access is in the URL).
+The person makes an agent on the page, and copies its URL into their agent as a remote MCP server (Streamable HTTP, no OAuth: the access is in the URL). An app whose agents authenticate with a bearer token on one shared URL instead is [the complete Direct app](#a-complete-direct-app-with-a-bearer-token) below.
 
 <!-- include orders-app.ts#direct -->
 
@@ -158,9 +169,60 @@ The hub reads your `apc.json` before it pairs: it must list `"dock"`, name your 
 
 With both profiles, the same agent connected both ways is offered `apc_link` and shows once in your bar: the `ApcLinks` calls above (`arrived` on `initialize`, `offer` around every tool, `registerApcLinkTool`) are all it takes.
 
+### The minimum for the Dock profile
+
+What an app that offers only Dock must have, and nothing more. Orders has all of it (the regions above); the [conformance suite](/docs/conformance#the-dock-profile-as-built-010) checks each route.
+
+| Route | Who calls it | What it does | Helper |
+|---|---|---|---|
+| `GET /.well-known/apc.json` | the hub, before it pairs | lists `"dock"` while you can pair (M8), names your origin, covers `/{secret}` MCP URLs (`mcp.path`, or an `mcp.endpoints` entry ending in `/{secret}` that lists `dock`) | `apcManifest`, `apcJsonResponse` |
+| `POST {mcp.path}{secret}` (and any other method) | the hub, for the agent | the grant's MCP endpoint: `dockGrantGate` answers by the grant's state first; the hub's first `initialize` makes it live; only then your wrapper and tools | `dockGrantGate`, `registerApcTools` |
+| `POST /apc/revoke` | the hub, when the person unpairs | ends the grant whose MCP URL it names; the same 200 to anything | `handleDockGiveBack` |
+| the drop, and its Allow | the person's page | checks the hub (`parseDockDrop`), asks for consent with a pairing code (`DockConsent`), and on the Allow pairs (`pairWithHub`); a drop of an agent that has a grant asks the hub (`confirmWithHub`) and pins | `parseDockDrop`, `DockConsent`, `pairWithHub`, `confirmWithHub` |
+| Cancel | the person's page | revokes a grant still in handoff | |
+| the heartbeat | the person's page, every `T_idle / 4` | the person is here: wakes a dormant grant. An app that never sleeps still serves it (it then changes nothing) | |
+
+The drop and the Allow may be one route, as in Orders (`/api/drop`, the Allow carrying the consent's nonce). The four owner routes take the person's session and the [M6](/docs/spec#the-app-and-the-hub-call) checks (`refuseOwner` above). What the app keeps per Dock grant: its state (in flight, handoff, live), when it was allowed, acknowledged and last woken, the pairing code and its expiry, and the hash of every revoked secret; all of it in storage that outlives the process, every time limit read through one clock (`now`). That is what lets the conformance adapter's `dock.lifecycle` move time, fail a write and restart the app ([how to wire it](/docs/conformance#wiring-docklifecycle)).
+
+### A Dock grant on localhost
+
+Two ways to pair while you build, with no public hub:
+
+- **In your tests, with no network:** `standInHub` from `@tineira/apc-conformance` is a hub in your own process. Give it an `https:` origin that is never resolved (`https://dock.test`), put that origin in your app's `hubs`, and give your app `hub.fetch` as the `fetch` it calls hubs with (`pairWithHub(…, { fetch: hub.fetch })`, `this.send` in Orders). `hub.ticket(agent)` makes a drag's ticket, `hub.decide(pairing.id, "approve", code)` is the person typing the code in their dock, and its `initialize` then makes the grant live at `pairing.mcp_url`. [Conformance](/docs/conformance#run-it-from-code) shows it wired into Orders.
+- **With a real dock, on your machine:** run the reference dock from the repo (`pnpm install`, then `pnpm dev` in `apps/dock`: it serves `http://localhost:5200`). Under its dev server it pairs with apps on `http://localhost:<port>`. Allow it in your app with `parseDockDrop(body, { hubs: [], localDevHubs: ["http://localhost:5200"] })`: `localDevHubs` takes loopback origins only, over `http:`, and is for development; leave it out in production. Then drag an agent from the local dock onto your local page. The command line checks that grant's URL with `--profile dock --allow-http`.
+
 ## 13. Test it
 
 Run the conformance suite against your app before you ship: see [Conformance](/docs/conformance), whose adapter for Orders is the third file of this guide.
+
+## A complete Direct app with a bearer token
+
+Tickets, a help desk's tickets, is the smallest complete Direct app, in three files shown whole: nothing on them is left out, and every name is defined in them or exported by a package. Its agents authenticate with a bearer token on one MCP URL that every grant shares (the [OAuth binding](/docs/spec#the-direct-profile)); swap the token for a secret URL and it is the Orders way. The conformance suite passes against it in process, and the command line's checks pass over HTTP, with a live token and a revoked one.
+
+How the bearer binding answers, all done by the server below:
+
+- **The token names the grant.** `newDirectGrant()` gives a random grant id (`g_…`, stable for the grant's life, what pins and presence name) and a 128-bit secret, used as the token. The app keeps only the token's SHA-256 (`secretHash`), and finds the grant by it.
+- **No token, or one the app does not know: a plain 401** with `WWW-Authenticate: Bearer error="invalid_token"` and no `RevokedAnswer` (`unknownBearerResponse()`), the bearer counterpart of a secret URL's 404.
+- **A revoked token: 401 with the `RevokedAnswer`** (`{ error: "revoked", revoked_by, revoked_at, message }`) and the same `WWW-Authenticate`, to every method, before anything else: `revokedResponse(host, revokedAt, { bearer: true })`. A secret URL's revoked answer is the same body with 403 (`revokedResponse(host, revokedAt)`).
+- **The person pastes two things into their agent:** the MCP URL and the header `Authorization: Bearer <token>`, shown once. A full OAuth 2.1 server issuing the tokens fits the same answers; this file mints them on the page to stay small.
+
+The server:
+
+<!-- include tickets-app.ts -->
+
+The page (bundle it with any bundler):
+
+<!-- include tickets-page.ts -->
+
+The conformance test: `connect` gives each agent's token in `headers`, and `page.mobile` models the page on a phone with `@tineira/apc-web`'s own pieces.
+
+<!-- include tickets-conformance.ts -->
+
+Over HTTP, with the app running: make two agents, revoke one in the page, then run the command line once with the live one and the revoked one (see [Conformance](/docs/conformance#run-it-from-the-command-line)):
+
+```sh
+APC_TOKEN=… APC_REVOKED_TOKEN=… npx @tineira/apc-conformance https://tickets.example --grant https://tickets.example/mcp --bearer-env APC_TOKEN --revoked https://tickets.example/mcp --revoked-bearer-env APC_REVOKED_TOKEN
+```
 
 ## Localize the page
 
@@ -245,13 +307,13 @@ The reference examples send presence on a page event stream. Without a long-live
 
 ## Checklist
 
-- `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`. If the origin serves other MCP endpoints too, it lists the APC ones in `mcp.endpoints` (0.11; [the spec](/docs/spec#mcpendpoints-011)): exact paths, and `/{secret}` last for one URL per grant. Keep fixed routes out of a `{secret}` parent, and keep `mcp.path` for readers before 0.11. `declaresMcpUrl` now takes the profile (`{ profile: "dock" }`, or `{ profile: "direct", shared: true }` for an exact endpoint whose grants share the URL).
+- `GET /.well-known/apc.json` names your origin, your profiles and `mcp.path`, a prefix that starts and ends with `/`; build it once, at start. If the origin serves other MCP endpoints too, it lists the APC ones in `mcp.endpoints` (0.11; [the spec](/docs/spec#mcpendpoints-011)): exact paths, and `/{secret}` last for one URL per grant. Keep fixed routes out of a `{secret}` parent, and keep `mcp.path` for readers before 0.11. `declaresMcpUrl` now takes the profile (`{ profile: "dock" }`, or `{ profile: "direct", shared: true }` for an exact endpoint whose grants share the URL).
 - Every pointable element has `data-focus`; targets carry ids and keys only.
 - `get_current_view` and `wait_for_focus` are registered on every grant.
 - Every tool runs inside the wrapper: revoke check, `attention`, presence, `then`.
 - The agent bar is on every page, with Revoke; on a phone it stays in the page.
 - If you show agents as pets: `<apc-pets>` in the header, its states fed only by what the page knows, its colours following the page's scheme.
-- Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token); an unknown grant 404.
+- Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token, `revokedResponse(host, at, { bearer: true })`); an unknown grant 404 (a plain 401 with a bearer token).
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
 - Dock: every drop goes to the server; the hub is on your allowlist, checked on the drop and on the Allow (`parseDockDrop`); consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
 - Dock: a grant serves data only after the hub's `initialize` (`dockGrantGate`); `POST /apc/revoke` answers the same 200 to anything (`handleDockGiveBack`); the person's routes check `Origin`, `Sec-Fetch-Site` and the JSON media type; `apc.json` lists `dock` only while you can pair.

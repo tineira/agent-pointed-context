@@ -5,10 +5,10 @@ The contract an app and an agent share in Agent Pointed Context: wire types, the
 ## Install
 
 ```sh
-npm i @tineira/apc-protocol@next
+npm i @tineira/apc-protocol
 ```
 
-Pre-releases go out on the `next` tag while the standard is 0.x; the package's version follows the standard's (0.10.x ships APC 0.10).
+Its minor version is the standard's: 0.N.x ships APC 0.N (`APC_STANDARD_VERSION`), and a patch never changes the contract. Install the `@tineira/apc-*` packages at the same version.
 
 ```ts
 import { APC_STANDARD_VERSION, focusAttrs, parseApcManifest } from "@tineira/apc-protocol";
@@ -64,4 +64,4 @@ An app that offers both profiles shows the same agent on both paths as one ([`sr
 
 Every APC origin says what it is at `GET {origin}/.well-known/apc.json` ([`src/manifest.ts`](src/manifest.ts)): its `name`, the `standard` it implements, its `origin` (exactly the one it is served from), its `profiles` (`"direct"`, `"dock"` or both; `"hub"` alone for a dock), `mcp.path` (where its MCP URLs live) and, with Direct, `direct.connect` (its page where the person connects an agent directly). `@tineira/apc-server` builds an app's (`apcManifest`, `apcJsonResponse`). Since 0.11, `mcp.endpoints` may list the origin's APC endpoints exactly (`[{ "path": "/mcp", "profiles": ["direct"] }, { "path": "/mcp/{secret}", "profiles": ["dock"] }]`); then only they cover an MCP URL. `declaresMcpUrl(manifest, url, { profile, shared })` checks a URL (`mcpUrlCoverage` also says why not). A hub reads it before it pairs and refuses an app whose file is missing, invalid, names another origin, lists no `"dock"` or does not cover the MCP URL; a dock agent dropped on a Direct-only app is answered with how to connect directly (`directOnlyNote`), in the page and in the browser extension.
 
-To check an app against the core, run [`@tineira/apc-conformance`](../conformance) on its MCP endpoint (see the root README), or `npx @tineira/apc-conformance@next <app-origin>` against a live app.
+To check an app against the core, run [`@tineira/apc-conformance`](../conformance) on its MCP endpoint (see the root README), or `npx @tineira/apc-conformance <app-origin>` against a live app.

@@ -38,10 +38,10 @@ It does not check how the page draws presence, the agent bar's two-click Revoke 
 
 ## Run it from the command line
 
-`@tineira/apc-conformance` has a command, `apc-conformance`, that checks a live app over HTTP with no code (the package is a 0.x pre-release on npm; `next` carries the newest release):
+`@tineira/apc-conformance` has a command, `apc-conformance`, that checks a live app over HTTP with no code (the package is a 0.x pre-release on npm, at the standard's minor version):
 
 ```sh
-npx @tineira/apc-conformance@next https://orders.example --grant https://orders.example/mcp/<secret>
+npx @tineira/apc-conformance https://orders.example --grant https://orders.example/mcp/<secret>
 ```
 
 ```text
@@ -67,6 +67,10 @@ It checks what HTTP reaches:
 - **With `--grant`**: the grant's MCP URL is covered for `--profile` by the origin's `apc.json` (under `mcp.path`, or by an entry of `mcp.endpoints`, which the note names); `initialize` answers as an MCP server with tools; the core tools are listed with their arguments; `get_current_view` answers in the core's format, with `attention` and `then` the same in the structured result and the text; `wait_for_focus({ timeout_s: 1 })` with no pin times out at 1 s (900 to 5000 ms), or ends at once when no page is open, with a note and no `then`; an unknown grant answers HTTP 404 (skipped with `--bearer-env`: there the URL is shared, and an unknown token is the auth's own 401).
 - **With `--revoked`**: the revoked grant answers `{ error: "revoked", revoked_by, revoked_at }` to POST, GET and DELETE: HTTP 403, or 401 with `--revoked-bearer-env`.
 
+**A Dock grant on localhost.** The command line has no hub of its own: `--profile dock` checks the MCP URL of a grant some hub paired. To get one while you build, run the reference dock on your machine and allow it with `localDevHubs`, or pair through `standInHub` in your own process: both are in [A Dock grant on localhost](/docs/integrate#a-dock-grant-on-localhost). Then run with `--profile dock --allow-http` against your app on `http://localhost:<port>`. The checks that need the person's page and the hub's side (pairing, the lifecycle, M1 to M9) run only [from code](#run-it-from-code).
+
+**The revoked check, in order.** The revoked grant must be revoked before the run that names it, and it must not be the live one: `--grant` needs a grant that stays live. So: make two agents in your app (two grants), revoke one of them in your page, then run once with the live one as `--grant` and the revoked one as `--revoked`. With a bearer token, the URL may be the same for both: the tokens tell them apart (`--bearer-env` and `--revoked-bearer-env` each name an environment variable holding the raw token, without `Bearer `; the command adds it). [The complete Direct app](/docs/integrate#a-complete-direct-app-with-a-bearer-token) shows that run.
+
 It prints `PASS`, `FAIL` or `SKIP` per check, and exits 0 when nothing failed, 1 when a check failed and 2 on a usage error. What needs the person's page is reported `SKIP`, with why: a pin dropped (attention, `next`, a pin during a wait), the page opened or closed, presence, Revoke pressed (and a call running when it is), a phone's touch, and `apc_link`. Run those with the adapter below, in your own tests.
 
 It reads only that origin, over https, never follows a redirect, caps every answer's size, times out every request, and prints no grant secret, whatever an answer echoes: a grant URL shows with its last segment as `<secret>`.
@@ -77,11 +81,11 @@ It reads only that origin, over https, never follows a redirect, caps every answ
 
 <!-- include orders-conformance.ts#imports -->
 
-A dock's hub for the Dock profile: `standInHub` from the suite, which makes tickets, keeps the pairing code the app sends, asks for it to approve, gives the grant back after five wrong codes or when the code expires, and can play a broken hub (no acknowledgement, a redirect, a 500) for the checks that the app fails closed:
+A dock's hub for the Dock profile: `standInHub` from the suite, a hub in your own process that needs no network and no `localDevHubs`: give it an `https:` origin that is never resolved, put that origin in the app's `hubs`, and give the app `hub.fetch` as the `fetch` its `pairWithHub` and `confirmWithHub` calls use. It makes tickets, keeps the pairing code the app sends, asks for it to approve, gives the grant back after five wrong codes or when the code expires, and can play a broken hub (no acknowledgement, a redirect, a 500) for the checks that the app fails closed:
 
 <!-- include orders-conformance.ts#hub -->
 
-`connect` makes a new agent with full access, the way each profile makes one: on Direct the person makes an agent on the page; on Dock the person drops one from the dock, is asked, and allows it.
+`connect` makes a new agent with full access, the way each profile makes one: on Direct the person makes an agent on the page; on Dock the person drops one from the dock, is asked, and allows it. An app whose agents use a bearer token returns it in the connection's `headers` (`{ grantId, mcpUrl, headers: { authorization: "Bearer …" } }`), and `mcpUrl` may then be the URL every grant shares: see [the complete Direct app](/docs/integrate#a-complete-direct-app-with-a-bearer-token).
 
 <!-- include orders-conformance.ts#connect -->
 
@@ -120,6 +124,16 @@ An app that claims 0.10.0 or later on the Dock profile also gives `dock.lifecycl
 | `hubDeadlineMs` (optional) | the app's deadline on a hub call, at most 10 000 ms (the default) |
 | `owner` | the configured public origin (bare), the headers of the owner's session, and the four owner endpoints `drop`, `allow`, `heartbeat` (or `{ websocket: path }`) and `cancel`, each with a fresh body the app takes with a 2xx (Cancel's body pairs a new grant through `dock.hub` during the call) |
 | `pairingDisabled()` | the same app with its dock configuration missing: its `fetch`, for `apc.json` |
+
+#### Wiring dock.lifecycle
+
+The three members that reach inside the app need it built for them from the start; each is a few lines once it is:
+
+- **`advance(ms)`, the time seam.** Give the app one clock, `now: () => number`, and read every time limit of a Dock grant through it: `T_ack`, `T_connect`, `T_idle`, long dormancy, the pairing code's stored expiry, and the `now` of `DockConsent` and `ApcLinks`. The adapter keeps a skew and passes `now: () => Date.now() + skew`; `advance` adds to it. A time limit read from `Date.now()` directly cannot be moved, and its check fails.
+- **`failCommits(fail)`.** The write that moves a grant out of handoff on the hub's `initialize` must be able to fail, and the app must then answer it with no result (HTTP 500 or JSON-RPC -32603) and stay in handoff. With a database, wrap the store so its writes throw while the flag is on; Orders, in memory, swaps its one commit for a function that throws.
+- **`restart()`.** The process dies with its calls open and comes back on the same storage: close the page's streams, and build a new app instance on the same store. Everything a Dock grant needs (its state, its times, its code, the revoked hashes, the consents) must live in that store, not in the instance; what dies with the process (open waits, calls in flight) may live in memory.
+
+The rest is the app's own routes: `dropAgent` and `cancel` call the person's endpoints as the page does, `heartbeat` is the page's heartbeat, `owner` names the four endpoints with a fresh body each, and `pairingDisabled()` is the same app built with no hub on its allowlist. [The minimum for the Dock profile](/docs/integrate#the-minimum-for-the-dock-profile) lists those routes.
 
 Orders gives it like this: its clock is the app's `now`, a restart is a new app on the same store, its T_idle is the standard's 30 minutes, and a grant asleep 30 days ends.
 

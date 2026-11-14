@@ -25,6 +25,8 @@
  *   whole run has its own deadline (TOTAL_MS), shorter than the CI step's, so that cleanup always gets to run. A
  *   failed Start over after a pairing that passed is a warning, not a failure. No secret.
  *
+ * Before the pairing, the docs: they read with a plain GET, no JavaScript (TIN-914).
+ *
  * Exit code 0 only when the pairing passed; the last line is the summary. On a failure in GitHub Actions the first
  * failing step is also an `::error::` annotation.
  */
@@ -192,9 +194,27 @@ function newTry(n) {
 /** A well-formed code that is not this one: its first character changed (codes are digits and capitals). */
 const wrongCode = (code) => (code[0] === "0" ? "1" : "0") + code.slice(1);
 
+/**
+ * The docs read with a plain GET and no JavaScript (TIN-914): a crawler or an agent with only HTTP gets the page's
+ * text in its HTML, the page as Markdown beside it, and /llms.txt naming every page.
+ */
+async function readDocs(t) {
+  const get = async (path) => {
+    const response = await withDeadline(runtime.send(`${DOCK}${path}`, { headers: { "user-agent": USER_AGENT }, redirect: "manual" }), STEP_MS, `GET ${path}`);
+    return { status: response.status, type: response.headers.get("content-type") ?? "", text: await response.text() };
+  };
+  const html = await get("/docs/spec");
+  t.check(html.status === 200 && /<article class="docs-body"><h1 id="[^"]+">[^<]/.test(html.text) && html.text.includes('<link rel="alternate" type="text/markdown" href="/docs/spec.md"'), "a plain GET of /docs/spec has the spec's text, and names its Markdown", `HTTP ${html.status}`);
+  const md = await get("/docs/spec.md");
+  t.check(md.status === 200 && /^# \S/.test(md.text) && !md.text.includes("<div id=") && /markdown|text\/plain/.test(md.type), "/docs/spec.md is the spec as Markdown", `HTTP ${md.status} ${md.type}`);
+  const llms = await get("/llms.txt");
+  t.check(llms.status === 200 && llms.text.includes("(/docs/spec.md)") && llms.text.includes("(/docs/integrate.md)"), "/llms.txt names the docs' Markdown", `HTTP ${llms.status}`);
+}
+
 /** The pairing's steps, on one try. */
 async function pair(t) {
   const { call, rpc, check, must } = t;
+  await readDocs(t);
 
   // The dock: a new one, as its page makes it when the person presses Create a new dock (TIN-879: POST /api/dock
   // only resumes, and /api/dock/new takes only the dock's own origin), and the agent it opens with, connected.

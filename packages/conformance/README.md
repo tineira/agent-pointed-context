@@ -5,8 +5,8 @@ Checks an app against the Agent Pointed Context (APC) standard: live over HTTP f
 ## A live app, from a terminal
 
 ```sh
-npx @tineira/apc-conformance@next https://your.app
-npx @tineira/apc-conformance@next https://your.app --grant https://your.app/mcp/<…>/<secret> --revoked <the MCP URL of a grant you revoked> --json
+npx @tineira/apc-conformance https://your.app
+npx @tineira/apc-conformance https://your.app --grant https://your.app/mcp/<…>/<secret> --revoked <the MCP URL of a grant you revoked> --json
 ```
 
 It reads `https://your.app/.well-known/apc.json` (its shape, its origin, its profiles, its standard) and, with `--grant` (the MCP URL of an agent connected directly), talks to the grant as an agent does: `initialize`, `tools/list` (the core tools and their arguments), `get_current_view` (the view and focus in the core's format, `attention` and `then` the same in the structured result and the text), `wait_for_focus({ timeout_s: 1 })` (it times out at 1 s, or ends at once when no page is open, with a note and no `then`) and an unknown grant answering 404. With `--revoked` it checks the revoked answer (403 `{ error: "revoked", revoked_by, revoked_at }` to every method, POST, GET and DELETE).
@@ -24,12 +24,14 @@ import { apcConformance } from "@tineira/apc-conformance";
 for (const check of apcConformance({
   name: "My app",
   profile: "direct",
-  connect: async () => ({ mcpUrl, grantId }), // a new agent with full access, no pin yet
+  connect: async () => ({ mcpUrl, grantId }), // a new agent with full access, no pin yet; with a bearer token add headers: { authorization: `Bearer ${token}` }
   targets: [firstTarget, secondTarget], // two things the person can point at
   probe: { tool: "list_things", args: {} }, // one of your read tools
-  page: { setOpen, showView, pin, takePresence, revoke }, // your page, as your server sees it
+  page: { setOpen, showView, pin, takePresence, revoke, mobile }, // your page, as your server sees it; mobile: the page on a phone
 })) test(check.name, check.run);
 ```
+
+`page.mobile` (`ApcMobilePage`: `agentBar`, `pinByTouch`, `unpinByTouch`) is required of an app that claims 0.6.0 or later; `@tineira/apc-web`'s README shows how to build it from `barCanCollapse` and `createTapPin`. A Dock app also gives `dock` (the stand-in hub `standInHub`, the pairing code, and from 0.10 `dock.lifecycle`). The docs have two whole adapters: a Direct app with a bearer token (https://apc.tineira.com/docs/integrate#a-complete-direct-app-with-a-bearer-token) and Orders, on both profiles (https://apc.tineira.com/docs/conformance#run-it-from-code).
 
 `runConformance(adapter)` runs them all and returns a report; `httpConformance` / `runHttpConformance` are the HTTP checks as a library. `@tineira/apc-conformance/workers` runs a Cloudflare Durable Object on Node's SQLite with fake pages, so the suite can run against a Worker with no network.
 
