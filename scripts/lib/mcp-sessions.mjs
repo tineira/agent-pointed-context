@@ -7,12 +7,19 @@
 
 export const DATASET = "apc_mcp_sessions";
 
+/**
+ * MCP client names of our own checks, left out of every count (TIN-900): the deploy's pairing smoke
+ * (scripts/dock-pairing.mjs --production) connects one dock agent per try under this name. Its other half, Pulse
+ * for the standard (apc-pulse), writes no points: only V1 (apc-demo) and the dock have the dataset.
+ */
+export const OWN_CHECKS = ["apc-deploy-smoke", "apc-workerd-pairing"];
+
 export function sessionsSql(days) {
   if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error("days must be an integer from 1 to 90");
   return [
     "SELECT toStartOfInterval(timestamp, INTERVAL '1' DAY) AS day, blob8 AS source, blob2 AS client_name, index1 AS session, min(_sample_interval) AS weight",
     `FROM ${DATASET}`,
-    `WHERE timestamp > NOW() - INTERVAL '${days}' DAY AND blob1 = 'connected'`,
+    `WHERE timestamp > NOW() - INTERVAL '${days}' DAY AND blob1 = 'connected' AND blob2 NOT IN (${OWN_CHECKS.map((c) => `'${c}'`).join(", ")})`,
     "GROUP BY day, source, client_name, session",
     "ORDER BY day",
     "FORMAT JSON",

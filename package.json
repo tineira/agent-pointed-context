@@ -10,6 +10,7 @@
     "build": "node scripts/build-packages.mjs && node scripts/check-packages.mjs --dist && cd apps/v1 && node node_modules/vite/bin/vite.js build && cd ../demo && node node_modules/vite/bin/vite.js build && cd ../dock && node node_modules/vite/bin/vite.js build && cd ../signals && node node_modules/vite/bin/vite.js build && cd ../extension && node build.mjs",
     "typecheck": "tsc -p packages/protocol && tsc -p packages/server && tsc -p packages/web && tsc -p packages/conformance && tsc -p apps/v1/tsconfig.web.json && tsc -p apps/v1/tsconfig.worker.json && tsc -p apps/v1/tsconfig.test.json && tsc -p apps/demo/tsconfig.web.json && tsc -p apps/demo/tsconfig.worker.json && tsc -p apps/demo/tsconfig.test.json && tsc -p apps/dock/tsconfig.web.json && tsc -p apps/dock/tsconfig.worker.json && tsc -p apps/dock/tsconfig.test.json && tsc -p apps/dock/tsconfig.docs.json && tsc -p apps/signals/tsconfig.web.json && tsc -p apps/signals/tsconfig.worker.json && tsc -p apps/signals/tsconfig.test.json && tsc -p apps/extension && tsc -p apps/extension/tsconfig.test.json",
     "test": "node --test \"packages/*/test/*.test.ts\" \"apps/v1/test/*.test.ts\" \"apps/demo/test/*.test.ts\" \"apps/dock/test/*.test.ts\" \"apps/signals/test/*.test.ts\" \"apps/extension/test/*.test.ts\" \"scripts/test/*.test.mjs\"",
+    "test:workerd": "node scripts/dock-pairing.mjs",
     "build:packages": "node scripts/build-packages.mjs",
     "check:packages": "node scripts/check-packages.mjs"
   },

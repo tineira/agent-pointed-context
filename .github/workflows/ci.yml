@@ -27,6 +27,12 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      # One real Dock pairing in the Workers runtime (TIN-900): the built dock and Pulse in workerd (Miniflare), with real
+      # Durable Objects, pairing through /apc/pair, the owner's code, initialize and /apc/confirm. `pnpm test` runs on Node,
+      # which accepts fetch options Workers rejects (redirect: "error" broke Dock pairing in production from APC 0.9 to 0.11.0).
+      - name: Dock pairing in workerd
+        run: node scripts/dock-pairing.mjs
+        timeout-minutes: 3
 
   # The mobile rule (APC 0.6, TIN-608) in a real browser: Chrome at 375x812 with real touch events against Pulse and
   # Signals (their dev servers), running the conformance mobile checks. There is no DOM library in `pnpm test`, so the
@@ -142,7 +148,8 @@ jobs:
     needs: [check, changes, deploy]
     if: ${{ !cancelled() && needs.check.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.standard == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 10 for the builds and deploys, plus the smoke's 6.
+    timeout-minutes: 16
     concurrency:
       group: deploy-standard
       cancel-in-progress: false
@@ -185,3 +192,13 @@ jobs:
           workingDirectory: apps/dock
           packageManager: pnpm
           command: deploy
+      # A real use after the deploy (TIN-900): a new dock's agent pairs with a new Pulse sandbox through the production
+      # dock (synthetic data, no secret), reads through it, gives the grant back, and both start over. The script tries
+      # twice, 20 s apart (a new version may not have reached every edge yet), and keeps to its own 5-minute deadline,
+      # cleanup included, inside this step's 6.
+      # The deploy has ALREADY SHIPPED when this runs. Red here rolls nothing back: it marks this job failed so someone
+      # looks (README.md, "Run it": what to check, and how to roll back by hand if pairing is really broken). Nothing
+      # waits on this job: V1 deployed before it, and the desktop and extension builds are other workflows.
+      - name: Smoke after deploy (already live; red = look, no rollback) - one real Dock pairing in production
+        timeout-minutes: 6
+        run: node scripts/dock-pairing.mjs --production
