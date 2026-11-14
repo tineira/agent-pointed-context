@@ -10,8 +10,8 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
-import { APC_LINK_KEY, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type ViewPayload } from "@tineira/apc-protocol";
-import { attachAttention, attachThen, InflightCalls, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
+import { APC_LINK_KEY, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
+import { announceWaits, attachAttention, attachThen, InflightCalls, MemoryWaitSlots, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
@@ -217,9 +217,11 @@ const BUSY_TAIL_MS = 1500;
 
 export class Hub extends DurableObject<Env> {
   private sql: SqlStorage;
-  /** Agents with a wait_for_focus in flight, for the dock's icon (memory only). */
-  /** Waits running per agent; more than one only while a newer wait takes over (APC 0.8). */
-  private waiting = new Map<string, number>();
+  /**
+   * Agents whose wait_for_focus holds its place, for the dock's icon (memory only): from the wait events of the agent's
+   * place (APC 0.11, `announceWaits`), so a wait a newer one took over stops counting at the takeover, not when it ends.
+   */
+  private readonly waiting = new Set<string>();
   /** One wait_for_focus per agent (APC 0.8): a newer wait takes over, and the one it replaced delivers nothing. */
   private readonly waitSlots = new MemoryWaitSlots();
   /** MCP's notifications/cancelled, which arrives in a POST of its own, reaches the call it names (APC 0.8). */
@@ -428,6 +430,12 @@ export class Hub extends DurableObject<Env> {
   /** A call (not a wait) is in flight for the agent, or ended a moment ago. */
   private isBusy(agentId: string): boolean {
     return (this.busy.get(agentId) ?? 0) > 0 || (this.busyUntil.get(agentId) ?? 0) > Date.now();
+  }
+  /** A wait of the agent opened or closed (APC 0.11): the dock's page reads it as `waiting` in the state. */
+  private noteWait(event: PresenceWaitEvent): void {
+    if (event.state === "open") this.waiting.add(event.grant_id);
+    else this.waiting.delete(event.grant_id);
+    this.broadcast();
   }
   private broadcast(): void {
     for (const ws of this.ctx.getWebSockets()) {
@@ -2016,7 +2024,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("update agents set waits = coalesce(waits, 0) + 1 where id = ?", agentId);
       // One wait per agent (APC 0.8): a second within the claim gap is refused; otherwise the newest takes the place,
       // and the wait it replaced delivers nothing and marks nothing seen.
-      const slot = this.waitSlots.for(agentId);
+      const slot = announceWaits(this.waitSlots.for(agentId), agentId, (event) => this.noteWait(event));
       const claim = await slot.claim();
       if (!("token" in claim)) return toolResult({ focus: null, timed_out: false, retry_after_s: claim.retryAfterS, note: waitBusyNote(claim.retryAfterS) });
       const takenOver = async () => !(await slot.holds(claim.token));
@@ -2043,55 +2051,46 @@ export class Hub extends DurableObject<Env> {
         // A browser that sends page readings (TIN-421) wakes the wait too: the person may point from any web page.
         const pages = this.readers(agentId, "paired").length > 0;
         if (!apps && !pages) return toolResult({ focus: null, timed_out: false, page_open: false, note: NO_APPS_NOTE });
-        this.waiting.set(agentId, (this.waiting.get(agentId) ?? 0) + 1);
-        this.broadcast();
-        try {
-          const reading = pages ? this.nextReading(agentId, timeoutS * 1000) : null;
-          // A cancel ends the wait at once (APC 0.8): its place is freed, and nothing it later hears is delivered.
-          const aborted = new Promise<{ from: "cancel"; got: false; open: null }>((resolve) => {
-            if (!signal) return;
-            if (signal.aborted) resolve({ from: "cancel", got: false, open: null });
-            else signal.addEventListener("abort", () => resolve({ from: "cancel", got: false, open: null }), { once: true });
-          });
-          let got = false;
-          let open: boolean | null = null;
-          let allIdle = false;
-          if (apps) {
-            const fromApps = this.waitApps(agentId, timeoutS).then((r) => ({ from: "apps" as const, ...r }));
-            const first = await Promise.race([fromApps, aborted, ...(reading ? [reading.then((g) => ({ from: "page" as const, got: g, open: null }))] : [])]);
-            got = first.got;
-            open = first.open;
-            allIdle = first.from === "apps" && first.allIdle;
-            // The apps came back empty (their pages closed, or their waits ran out): a reading may still come.
-            if (!got && first.from === "apps" && reading) got = (await Promise.race([reading, aborted])) === true;
-          } else {
-            got = (await Promise.race([reading!, aborted])) === true;
-          }
-          // A wait a newer one took over, or whose request was cancelled, delivers nothing and marks nothing seen (APC 0.8).
-          if (await takenOver()) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
-          if (cancelled()) return toolResult({ focus: null, timed_out: false, note: WAIT_CANCELLED_NOTE });
-          if (got) return deliver() ?? toolResult({ focus: null, timed_out: false });
-          // The apps that are asleep now (H4): named in the answer, so the agent can tell the person.
-          const asleep = this.pairings(agentId, "paired").filter((p) => p.idle).map((p) => p.app_id);
-          const sleeping = asleep.length ? { asleep } : {};
-          const noted = (note: string) => (asleep.length ? `${note} ${asleepNote(asleep)}` : note);
-          // The extension reports no presence (13.5): with a browser paired, whether the person left is unknown.
-          if (pages) return toolResult({ focus: null, timed_out: true, ...sleeping, note: noted(WAIT_TIMED_OUT_NOTE) });
-          // Every paired app is asleep (H4): exactly the idle shape. Not "the person left; do not wait again": the apps
-          // wake when the person opens them.
-          if (allIdle) return toolResult({ ...idleWaitForFocus(ALL_IDLE_NOTE) });
-          // Some apps are asleep and no other has the person on its page (H4): not "the person left; do not wait
-          // again", which is what a closed page says. An app that is asleep says nothing of the person's page, so
-          // page_open is left out, and the note names the apps asleep, which wake when the person opens them.
-          if (open === false && asleep.length) return toolResult({ focus: null, timed_out: false, ...sleeping, note: `${MIXED_ASLEEP_NOTE} ${asleepNote(asleep)}` });
-          if (open === false) return toolResult({ focus: null, timed_out: false, page_open: false, note: WAIT_PAGE_CLOSED_NOTE });
-          return toolResult({ focus: null, timed_out: true, ...(open === null ? {} : { page_open: open }), ...sleeping, note: noted(WAIT_TIMED_OUT_NOTE) });
-        } finally {
-          // Counted, not a set: a wait that ends must not clear the newer one's state on the pet.
-          const left = (this.waiting.get(agentId) ?? 1) - 1;
-          if (left > 0) this.waiting.set(agentId, left);
-          else this.waiting.delete(agentId);
+        const reading = pages ? this.nextReading(agentId, timeoutS * 1000) : null;
+        // A cancel ends the wait at once (APC 0.8): its place is freed, and nothing it later hears is delivered.
+        const aborted = new Promise<{ from: "cancel"; got: false; open: null }>((resolve) => {
+          if (!signal) return;
+          if (signal.aborted) resolve({ from: "cancel", got: false, open: null });
+          else signal.addEventListener("abort", () => resolve({ from: "cancel", got: false, open: null }), { once: true });
+        });
+        let got = false;
+        let open: boolean | null = null;
+        let allIdle = false;
+        if (apps) {
+          const fromApps = this.waitApps(agentId, timeoutS).then((r) => ({ from: "apps" as const, ...r }));
+          const first = await Promise.race([fromApps, aborted, ...(reading ? [reading.then((g) => ({ from: "page" as const, got: g, open: null }))] : [])]);
+          got = first.got;
+          open = first.open;
+          allIdle = first.from === "apps" && first.allIdle;
+          // The apps came back empty (their pages closed, or their waits ran out): a reading may still come.
+          if (!got && first.from === "apps" && reading) got = (await Promise.race([reading, aborted])) === true;
+        } else {
+          got = (await Promise.race([reading!, aborted])) === true;
         }
+        // A wait a newer one took over, or whose request was cancelled, delivers nothing and marks nothing seen (APC 0.8).
+        if (await takenOver()) return toolResult({ focus: null, timed_out: false, note: WAIT_TAKEN_OVER_NOTE });
+        if (cancelled()) return toolResult({ focus: null, timed_out: false, note: WAIT_CANCELLED_NOTE });
+        if (got) return deliver() ?? toolResult({ focus: null, timed_out: false });
+        // The apps that are asleep now (H4): named in the answer, so the agent can tell the person.
+        const asleep = this.pairings(agentId, "paired").filter((p) => p.idle).map((p) => p.app_id);
+        const sleeping = asleep.length ? { asleep } : {};
+        const noted = (note: string) => (asleep.length ? `${note} ${asleepNote(asleep)}` : note);
+        // The extension reports no presence (13.5): with a browser paired, whether the person left is unknown.
+        if (pages) return toolResult({ focus: null, timed_out: true, ...sleeping, note: noted(WAIT_TIMED_OUT_NOTE) });
+        // Every paired app is asleep (H4): exactly the idle shape. Not "the person left; do not wait again": the apps
+        // wake when the person opens them.
+        if (allIdle) return toolResult({ ...idleWaitForFocus(ALL_IDLE_NOTE) });
+        // Some apps are asleep and no other has the person on its page (H4): not "the person left; do not wait
+        // again", which is what a closed page says. An app that is asleep says nothing of the person's page, so
+        // page_open is left out, and the note names the apps asleep, which wake when the person opens them.
+        if (open === false && asleep.length) return toolResult({ focus: null, timed_out: false, ...sleeping, note: `${MIXED_ASLEEP_NOTE} ${asleepNote(asleep)}` });
+        if (open === false) return toolResult({ focus: null, timed_out: false, page_open: false, note: WAIT_PAGE_CLOSED_NOTE });
+        return toolResult({ focus: null, timed_out: true, ...(open === null ? {} : { page_open: open }), ...sleeping, note: noted(WAIT_TIMED_OUT_NOTE) });
       } finally {
         await slot.release(claim.token);
       }

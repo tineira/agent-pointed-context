@@ -1,5 +1,5 @@
 import { canonicalTarget, parseFocusAttrs, type FocusTarget } from "@tineira/apc-protocol";
-import { createViewReporter, enablePinning, flashTargets, initials as initialsOf, loadApcProfiles, markState, mergePins, type DockUnsupported } from "@tineira/apc-web";
+import { createViewReporter, enablePinning, flashTargets, dropExpiredWaits, foldWaitEvent, initials as initialsOf, loadApcProfiles, markState, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type DockUnsupported, type OpenWaits } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LAST_MONTH, MONTHS, PLANS, REGIONS, type Plan, type Region } from "../model/seed.ts";
 import { demoDataset } from "../model/demo-world.ts";
@@ -97,8 +97,8 @@ function Sandbox({ sid }: { sid: string }) {
   const data = useMemo(demoDataset, []);
   const [{ route, filters }, setNav] = useState(readRoute);
   const [pulse, setPulse] = useState<Record<string, number>>({});
-  // When each agent started a wait_for_focus that has not ended, and when it last read a pin: what its icon does.
-  const [waitingSince, setWaitingSince] = useState<Record<string, number>>({});
+  // The agents with a wait_for_focus open (APC 0.11, from the wait events), and when each last read a pin: what its icon does.
+  const [openWaits, setOpenWaits] = useState<OpenWaits>(NO_OPEN_WAITS);
   const [seenAt, setSeenAt] = useState<Record<string, number>>({});
   // The agents whose pin has a badge on this screen (pin-badges.tsx).
   const [onScreen, setOnScreen] = useState<Set<string>>(new Set());
@@ -157,18 +157,17 @@ function Sandbox({ sid }: { sid: string }) {
       api.connect((message) => {
         setActivity((n) => n + 1);
         if (message.type === "activity") return;
-        if (message.type === "presence") {
+        if (message.type === "presence" && message.event.kind === "wait") {
+          // A wait opened or closed (APC 0.11): the icon listens while it is open, and no longer than the rule allows.
+          const event = message.event;
+          setOpenWaits((w) => foldWaitEvent(w, event));
+        } else if (message.type === "presence") {
           const effects = presenceEffects(stateRef.current?.settings);
           if (effects.pulse) {
             setPulse((p) => ({ ...p, [message.event.grant_id]: Date.now() }));
             setTimeout(() => tick((n) => n + 1), 1600);
           }
           if (effects.flash) flashTargets(message.event, initialsRef.current.get(message.event.grant_id) ?? "AG");
-        } else if (message.type === "waiting") {
-          setWaitingSince((w) => {
-            const { [message.grant_id]: _, ...rest } = w;
-            return message.on ? { ...rest, [message.grant_id]: Date.now() } : rest;
-          });
         } else if (message.type === "pin") {
           const pin = message.pin;
           if (pin?.seen_at && pin.seen_at >= pin.pinned_at) {
@@ -184,6 +183,14 @@ function Sandbox({ sid }: { sid: string }) {
       }),
     [api, refresh],
   );
+  // A lost closed runs out at the ceiling plus the margin (APC 0.11): a timer at the next such moment drops it and redraws.
+  useEffect(() => {
+    const at = nextWaitExpiry(openWaits);
+    if (at === null) return;
+    const id = setTimeout(() => setOpenWaits((w) => dropExpiredWaits(w)), Math.max(0, at - Date.now()) + 50);
+    return () => clearTimeout(id);
+  }, [openWaits]);
+
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 15_000);
     return () => clearInterval(id);
@@ -278,11 +285,11 @@ function Sandbox({ sid }: { sid: string }) {
 
   const motionOf = (grantId: string): AgentMotion => {
     const g = state?.grants.find((x) => x.id === grantId);
-    const since = waitingSince[grantId];
     return motionFor({
       connected: !!g?.client_name,
-      // A wait ends within a minute (WAIT_CEILING_S); a lost end message does not leave the icon floating.
-      waiting: since !== undefined && Date.now() - since < 70_000,
+      // Only while a wait is open (APC 0.11): never a dock grant's (its agent waits on the hub), and an open whose
+      // closed was lost stops after Pulse's ceiling (50 s, the default) plus the margin, when the timer above drops it.
+      waiting: waitOpen(openWaits, grantId, { path: (state?.hub_links ?? []).some((l) => l.grant_id === grantId) ? "dock" : "direct" }),
       busy: !!pulse[grantId] && Date.now() - pulse[grantId]! < 1500,
       seenAt: seenAt[grantId],
       now: Date.now(),

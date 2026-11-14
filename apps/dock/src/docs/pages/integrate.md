@@ -93,7 +93,7 @@ This is where APC rides on your results. Every tool, the two APC tools included,
 
 - ends the call `revoked` if its grant was revoked, before or while it ran;
 - puts `attention` on the result while the grant's pin is unread;
-- publishes presence to the person's page, naming what a read touched;
+- publishes presence to the person's page, naming what a read touched (and, since APC 0.11, `registerApcTools` sends a wait's `open` and `closed` there itself when you give it `waitPresence`);
 - puts `then` on the result while a page of the person's is open and the grant was pinned in the last 30 minutes (`thenApplies`), but never on a wait that came back empty;
 - carries an `apc_link` offer, once per session, when the same agent is connected both ways.
 

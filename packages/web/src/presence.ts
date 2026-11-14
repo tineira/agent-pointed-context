@@ -1,4 +1,4 @@
-import type { PresenceEvent } from "@tineira/apc-protocol";
+import type { PresenceMessage } from "@tineira/apc-protocol";
 
 export const IDLE_AFTER_MS = 2 * 60_000;
 export const GONE_AFTER_MS = 5 * 60_000;
@@ -33,10 +33,11 @@ export function markState(lastActiveAt: string | null, now: number = Date.now())
 /**
  * Show an agent's initials on each element its call named, for four seconds:
  * data-apc-presence is "read" (dotted) or "write" (solid). Returns how many
- * elements on the page were touched.
+ * elements on the page were touched. A message with no targets (a wait event, APC 0.11) touches none.
  */
-export function flashTargets(event: PresenceEvent, agentInitials: string, root: ParentNode = document): number {
+export function flashTargets(event: PresenceMessage, agentInitials: string, root: ParentNode = document): number {
   let touched = 0;
+  if (event.kind === "wait" || !Array.isArray(event.targets)) return 0;
   for (const target of event.targets) {
     const selector = `[data-focus="${CSS.escape(target.kind)}:${CSS.escape(target.id)}"]`;
     for (const element of root.querySelectorAll(selector)) {

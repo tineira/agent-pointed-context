@@ -1,4 +1,4 @@
-import type { PresenceEvent } from "@tineira/apc-protocol";
+import type { PresenceEvent, PresenceWaitEvent } from "@tineira/apc-protocol";
 
 export const PRESENCE_MAX_TARGETS = 20;
 
@@ -27,4 +27,9 @@ export function presenceEvent(input: {
     targets: targets.slice(0, PRESENCE_MAX_TARGETS),
     count: targets.length,
   };
+}
+
+/** A wait opened or closed (APC 0.11): ids only, for the person's page. `announceWaits` sends these for you. */
+export function presenceWaitEvent(input: { grantId: string; state: "open" | "closed"; at?: Date }): PresenceWaitEvent {
+  return { v: 1, grant_id: input.grantId, at: (input.at ?? new Date()).toISOString(), kind: "wait", state: input.state };
 }
