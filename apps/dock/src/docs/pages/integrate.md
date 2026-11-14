@@ -22,7 +22,7 @@ They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-w
 |---|---|
 | `@tineira/apc-protocol` | the types, the target grammar (`parseTarget`), `focusAttrs`, `apc.json` |
 | `@tineira/apc-server` | the two APC tools, `attention` and `then`, presence, grants, revoke, consent, `apc_link`, `apc.json` |
-| `@tineira/apc-web` | pinning (drag and tap), the agent bar `<apc-agents>`, the Direct agent list, presence, the view reporter |
+| `@tineira/apc-web` | pinning (drag and tap), the agent bar `<apc-agents>`, the Direct agent list, presence, the view reporter, the agent pet (`createPet`, `<apc-pets>`, `petState`) and the wait helpers (`waitOpen`, `agentWaitOpen`) |
 | `@tineira/apc-conformance` | the suite that checks your app |
 
 The server's imports:

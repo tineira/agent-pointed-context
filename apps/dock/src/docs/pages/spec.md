@@ -320,7 +320,7 @@ An app that offers both profiles shows the same agent on both paths as one.
 Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`, from that origin, as JSON of at most 16 KiB:
 
 ```json
-{ "name": "Orders", "standard": "0.10.0", "origin": "https://orders.example",
+{ "name": "Orders", "standard": "0.11.0", "origin": "https://orders.example",
   "profiles": ["direct", "dock"], "mcp": { "path": "/mcp/" },
   "direct": { "connect": "https://orders.example/agents" } }
 ```
@@ -328,7 +328,7 @@ Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`,
 - `standard`: the version of this standard it implements.
 - `origin`: exactly the origin it is served from; a file that names another is refused.
 - `profiles`: `"direct"`, `"dock"` or both for an app; `"hub"` alone for a hub, which then also gives `dock: { pair, confirm }`. A reader ignores words and keys it does not know. Since 0.10 an app lists `"dock"` only while it can pair, and the file is computed per request or cached 60 seconds at most (M8).
-- `mcp.path`: every grant's MCP URL on the origin starts with `origin + path`. A hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it. A Direct app whose grants share one URL (a bearer token names the grant) may serve it at `mcp.path` itself, or without its last `/` (`/api/mcp` for `"/api/mcp/"`).
+- `mcp.path`: every grant's MCP URL on the origin starts with `origin + path`. Unless `mcp.endpoints` is present (below), a hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it. A Direct app whose grants share one URL (a bearer token names the grant) may serve it at `mcp.path` itself, or without its last `/` (`/api/mcp` for `"/api/mcp/"`).
 - `mcp.endpoints` (0.11, optional): the exact MCP endpoints of the origin and the profiles each serves; when present, only they cover a URL ([below](#mcpendpoints-011)).
 - `direct.connect` (with `"direct"`): the page on the same origin where the person connects an agent directly.
 - `direct.auth` and `direct.resource_metadata` (optional, information only): how agents authenticate (`"url"`, `"oauth"`) and, with OAuth, the protected-resource metadata URL on the origin. A reader never requires them.
