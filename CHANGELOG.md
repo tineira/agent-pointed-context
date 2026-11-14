@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The dock's owner API answers only the dock's own page (2026-11-14, TIN-865)
+
+- **`/api/d/:did/*` refuses requests from another origin, sibling subdomains included, before it reads the cookie.** The dock cookie is `SameSite=Lax`, so a page on another `*.tineira.com` subdomain could send it and approve its own pairing, remove agents, reset the dock or open the owner's socket. The routes now use the same `Origin` / `Sec-Fetch-Site` guard as Create and Join. Found by the APC 1.0 security review; the contract does not change. (`apps/dock/src/worker/index.ts`, `apps/dock/test/dock-chooser.test.ts`)
+
 ### CI makes a real Dock pairing in the Workers runtime, and after each deploy (2026-11-14, TIN-900)
 
 - **CI's `check` job runs one real Dock pairing between the dock and Pulse in workerd.** After `pnpm build`, `scripts/dock-pairing.mjs` (`pnpm test:workerd`) runs the built Workers through Miniflare with real Durable Objects and their production origins, and walks the drop, Allow, `/apc/pair`, the owner's approval with the code, `initialize`, a read through the dock, `/apc/confirm` and the give-back. A hub client with `redirect: "error"` fails it with `hub_unreachable`, as production did from APC 0.9 to 0.11.0. (`scripts/dock-pairing.mjs`, `.github/workflows/ci.yml`, `package.json`, `README.md`)

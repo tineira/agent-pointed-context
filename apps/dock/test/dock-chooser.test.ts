@@ -30,6 +30,7 @@ function world() {
       idFromName: (name: string) => name,
       get: (name: string) => ({
         isOwner: async (secret: string) => docks.get(name) === secret,
+        state: async () => ({ agents: [] }),
         init: async (did: string) => {
           calls.init++;
           const owner = "e".repeat(32);
@@ -125,5 +126,43 @@ test("the page makes a chooser only from the dock's own no_dock, never from anot
   assert.deepEqual(openOutcome(200, { did: "a".repeat(32), created: false }), { kind: "dock", did: "a".repeat(32) });
   for (const [status, body] of [[404, { error: "not_found" }], [404, null], [404, "no_dock"], [500, { error: "no_dock" }], [403, { error: "no_dock" }], [200, {}], [200, null], [502, null]] as const) {
     assert.deepEqual(openOutcome(status, body), { kind: "error", status }, `${status} ${JSON.stringify(body)}`);
+  }
+});
+
+test("the owner's API refuses another site, a sibling subdomain included, before it reads the cookie (TIN-865)", async () => {
+  const { env, docks } = world();
+  const did = "a".repeat(32);
+  docks.set(did, "b".repeat(32));
+  const cookie = `apc_dock=${did}.${"b".repeat(32)}`;
+  const forged: Array<Record<string, string>> = [
+    { origin: "https://evil.example" },
+    { origin: "https://sub.dock.test" },
+    { origin: "http://dock.test" },
+    { origin: "null" },
+    { "sec-fetch-site": "same-site" },
+    { "sec-fetch-site": "cross-site" },
+  ];
+  for (const path of [`/api/d/${did}/reset`, `/api/d/${did}/pairings/p1`, `/api/d/${did}/agents/x/remove`]) {
+    for (const headers of forged) {
+      const response = await app.request(`${ORIGIN}${path}`, post({ action: "allow" }, { cookie, ...headers }), env);
+      assert.equal(response.status, 403, `${path} ${JSON.stringify(headers)}`);
+    }
+  }
+  for (const headers of forged) {
+    const response = await app.request(`${ORIGIN}/api/d/${did}/state`, { headers: { cookie, ...headers } }, env);
+    assert.equal(response.status, 403, `state ${JSON.stringify(headers)}`);
+  }
+});
+
+test("the owner's API still answers the dock's own page: same Origin, or a same-origin GET with no Origin", async () => {
+  const { env, docks } = world();
+  const did = "a".repeat(32);
+  docks.set(did, "b".repeat(32));
+  const cookie = `apc_dock=${did}.${"b".repeat(32)}`;
+  const own: Array<Record<string, string>> = [{ origin: ORIGIN }, { "sec-fetch-site": "same-origin" }, {}];
+  for (const headers of own) {
+    const response = await app.request(`${ORIGIN}/api/d/${did}/state`, { headers: { cookie, ...headers } }, env);
+    assert.equal(response.status, 200, JSON.stringify(headers));
+    assert.deepEqual(await response.json(), { agents: [] });
   }
 });
