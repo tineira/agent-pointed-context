@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Onboarding } from "../onboarding.ts";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
-import { ConnectAgent, CopyRow } from "./setup.tsx";
+import { ConnectAgent, CopyRow, ReconnectAgent } from "./setup.tsx";
 import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } from "../worker/reading.ts";
 import { NotVerified } from "./unverified.tsx";
 import { PairingRequest } from "./pairing-request.tsx";
@@ -32,6 +32,8 @@ export interface DockAgent {
   created_at: string;
   badge: string | null;
   mcp_url: string;
+  /** Its MCP URL was replaced when a computer was removed or left (TIN-909), and it has not connected with the new one yet. */
+  reconnect?: boolean;
   last_active_at: string | null;
   waiting: boolean;
   /** A call other than wait_for_focus is in flight (TIN-483): the pet's "calling tools". */
@@ -256,6 +258,7 @@ export function AgentPage(props: {
           </p>
         </div>
       </section>
+      <ReconnectAgent agent={a} />
       <dl className="facts">
         <dt>Added</dt>
         <dd>{when(a.created_at)}</dd>

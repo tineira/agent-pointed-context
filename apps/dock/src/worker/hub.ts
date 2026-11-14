@@ -24,6 +24,12 @@ import { JOIN_ANSWER_MS, JOIN_CODE_TTL_MS, LAST_USED_STEP_MS, MAX_DEVICES, newJo
 import type { JoinCodes } from "./join-codes.ts";
 
 export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
+/**
+ * How long agent traffic alone keeps a dock (TIN-909): an agent's call slides the dock's end as a computer's visit
+ * does, but never past this long after a computer last opened it. So an MCP URL no computer of the dock looks after
+ * any more cannot keep the dock, and what it reaches, alive forever.
+ */
+export const AGENT_ALONE_TTL_MS = 30 * 24 * 60 * 60_000;
 /** The shape of the apc.json copy the hub keeps (APC 0.11, TIN-888): a row without it was written by an older parser. */
 export const APC_JSON_COPY_VERSION = 2;
 const WAIT_CEILING_S = 50;
@@ -88,6 +94,8 @@ interface Agent {
   waits: number | null;
   /** The agent's mark for the apps: a 64 px PNG the dock page drew from its logo (TIN-388). */
   badge: string | null;
+  /** When its secret was replaced because a computer was removed or left (TIN-909), until it connects with the new one. */
+  reconnect_since: string | null;
 }
 
 interface Pairing {
@@ -234,6 +242,11 @@ export class Hub extends DurableObject<Env> {
   private busyUntil = new Map<string, number>();
   /** Waits in flight that a page reading ends (memory only): agent id to their wake-ups. */
   private readingWaiters = new Map<string, Set<() => void>>();
+  /**
+   * The agents' MCP requests in flight (memory only), each with its own abort: when the agents' secrets are replaced
+   * (TIN-909), every one is cut, so a request on an old URL delivers nothing, a wait included.
+   */
+  private readonly liveRequests = new Set<AbortController>();
   /** Work still running after the request that started it answered: grants given back (memory only, see `later`). */
   private running = new Set<Promise<void>>();
 
@@ -300,7 +313,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -470,9 +483,25 @@ export class Hub extends DurableObject<Env> {
   private presence(agentId: string): boolean | null {
     return combineAttendance(this.pairings(agentId, "paired").filter((p) => p.verified && !p.idle).map((p) => p.page_open));
   }
-  private async touch(): Promise<void> {
-    this.setMeta("expires_at", String(Date.now() + DOCK_TTL_MS));
+  /**
+   * The dock was used: its end slides DOCK_TTL_MS from now. A computer's visit (the default) also marks when a
+   * computer last opened it; an agent's call (TIN-909) slides it no further than AGENT_ALONE_TTL_MS after that,
+   * and never shortens it.
+   */
+  private async touch(by: "computer" | "agent" = "computer"): Promise<void> {
+    const now = Date.now();
+    if (by === "computer") this.setMeta("opened_at", String(now));
+    const cap = by === "agent" ? this.openedAt() + AGENT_ALONE_TTL_MS : Infinity;
+    const end = Math.max(Math.min(now + DOCK_TTL_MS, cap), Number(this.meta("expires_at") ?? 0));
+    this.setMeta("expires_at", String(end));
     await this.arm();
+  }
+  /** When a computer last opened the dock; a dock from before TIN-909 has no mark yet: its computers' last use, or its birth. */
+  private openedAt(): number {
+    const marked = Number(this.meta("opened_at") ?? 0);
+    if (marked) return marked;
+    const used = this.sql.exec<{ at: string | null }>("select max(coalesce(last_used_at, created_at)) as at from devices").toArray()[0]?.at;
+    return Date.parse(used ?? this.meta("created_at") ?? "") || Date.now();
   }
   /**
    * A Durable Object has one alarm: it rings for whatever is due first, the oldest reading, the oldest
@@ -835,7 +864,8 @@ export class Hub extends DurableObject<Env> {
 
   /**
    * Remove a computer from the dock, from another one (TIN-838): its secret stops opening the dock and its
-   * pages are closed. The agents, their connection and the other computers stay. Never the computer asking:
+   * pages are closed. The agents, their pairings and the other computers stay; every agent gets a new MCP URL
+   * (TIN-909), since the removed computer saw the old ones, and is reconnected from the dock. Never the computer asking:
    * it leaves by joining another dock, or with Start over.
    */
   async removeDevice(deviceId: string, callerSecret: string): Promise<{ ok: boolean; error?: string }> {
@@ -845,6 +875,7 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from devices where id = ?", deviceId);
     this.closeDevice(deviceId);
     this.dropReaders();
+    this.newAgentSecrets();
     this.broadcast();
     return { ok: true };
   }
@@ -852,7 +883,8 @@ export class Hub extends DurableObject<Env> {
   /**
    * This computer joined another dock (TIN-838) and leaves this one. A dock left with no computer and
    * nothing in it (no agent ever connected, nothing paired) goes at once; one with something in it stays
-   * for its agents until it expires, DOCK_TTL_MS after its last use.
+   * for its agents until it expires, DOCK_TTL_MS after its last use. One that stays gives its agents new MCP URLs
+   * (TIN-909): this computer saw the old ones.
    */
   async leave(secret: string): Promise<{ ok: boolean; wiped: boolean }> {
     const device = this.deviceBySecret(secret);
@@ -866,8 +898,25 @@ export class Hub extends DurableObject<Env> {
       await this.wipe();
       return { ok: true, wiped: true };
     }
+    this.newAgentSecrets();
     this.broadcast();
     return { ok: true, wiped: false };
+  }
+
+  /**
+   * A computer was removed or left (TIN-909): every agent gets a new secret, so the MCP URLs that computer saw stop
+   * working (they answer as an unknown agent's do), and every request on one still in flight is cut, a wait included.
+   * The agents keep their id, and with it their pairings, pins and readings: an app's link is the hub's grant URL at
+   * the app, and a pairing, a ticket and a reader name the agent by its id, never by its secret. Tickets for a drag
+   * go anyway, since that computer may hold one. The dock marks each connected agent until it connects with its new
+   * URL, so the person reconnects it.
+   */
+  private newAgentSecrets(): void {
+    const now = new Date().toISOString();
+    for (const a of this.agents()) this.sql.exec("update agents set secret = ?, reconnect_since = ? where id = ?", randomHex(16), a.client_name ? now : null, a.id);
+    this.sql.exec("delete from tickets");
+    for (const live of this.liveRequests) live.abort();
+    this.liveRequests.clear();
   }
 
   private insertAgent(label: string): Agent {
@@ -940,6 +989,8 @@ export class Hub extends DurableObject<Env> {
           created_at: a.created_at,
           badge: a.badge,
           mcp_url: `${origin}/mcp/${did}/${a.secret}`,
+          // Its URL changed because a computer was removed or left (TIN-909): the dock asks the person to reconnect it.
+          reconnect: !!a.reconnect_since,
           last_active_at: a.last_active_at,
           waiting: this.waiting.has(a.id),
           busy: this.isBusy(a.id),
@@ -1861,7 +1912,16 @@ export class Hub extends DurableObject<Env> {
     if (!(await this.alive())) return Response.json({ error: "dock_expired" }, { status: 404 });
     const agent = this.agents().find((a) => a.secret === secret);
     if (!agent) return Response.json({ error: "unknown_agent" }, { status: 404 });
-    await this.touch();
+    // Agent traffic alone keeps the dock only so long (TIN-909).
+    await this.touch("agent");
+    // It reconnected with its new URL: the dock stops asking.
+    if (agent.reconnect_since) {
+      this.sql.exec("update agents set reconnect_since = null where id = ? and secret = ?", agent.id, secret);
+      this.broadcast();
+    }
+    // Cut if the agents' secrets are replaced while this request runs (TIN-909).
+    const live = new AbortController();
+    this.liveRequests.add(live);
 
     try {
       const body = (await request.clone().json()) as unknown;
@@ -1904,7 +1964,7 @@ export class Hub extends DurableObject<Env> {
     server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       const name = req.params.name;
       // A client that hung up or cancelled gets nothing marked seen and frees its wait (APC 0.8).
-      const signal = AbortSignal.any([extra.signal, request.signal, inflight.signal].filter((s): s is AbortSignal => !!s));
+      const signal = AbortSignal.any([extra.signal, request.signal, inflight.signal, live.signal].filter((s): s is AbortSignal => !!s));
       const cancelled = () => signal.aborted;
       const args = (req.params.arguments ?? {}) as Record<string, unknown>;
       this.sql.exec("update agents set last_active_at = ? where id = ?", new Date().toISOString(), agent.id);
@@ -1949,9 +2009,12 @@ export class Hub extends DurableObject<Env> {
     const headers = new Headers(request.headers);
     headers.set("accept", "application/json, text/event-stream");
     try {
-      return await transport.handleRequest(new Request(request, { headers }));
+      const response = await transport.handleRequest(new Request(request, { headers }));
+      // Its secret was replaced meanwhile: the answer is an unknown agent's, never what the call found.
+      return live.signal.aborted ? Response.json({ error: "unknown_agent" }, { status: 404 }) : response;
     } finally {
       inflight.done();
+      this.liveRequests.delete(live);
     }
   }
 
