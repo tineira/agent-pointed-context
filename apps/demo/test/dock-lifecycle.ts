@@ -811,6 +811,27 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": ACK.pairing_id, "apc.tineira.com/agent": "ag_legacy" })).status, 200, "a 0.12 hub's re-introduction of it");
   });
 
+  test(name("M11: a link migrated from before 0.12 (no declared flag) keeps working: its stored id, or without one its agent, is checked mismatch-only"), async (t) => {
+    const hub = fakeHub(t);
+    hub.pair = async () => Response.json({ ...ACK, pairing_id: BOUND_ID, binding: "pairing_id" });
+    const i = await start();
+    const g = await allow(i, hub, "ag_migrated");
+    assert.equal(g.answer.ok, true, g.answer.error);
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": BOUND_ID, "apc.tineira.com/agent": "ag_migrated" })).status, 200);
+    // The row as an app before 0.12 left it: no declared flag (the column added by the migration, null).
+    i.room.db.prepare(`update ${app.row.table} set declared = null where ${app.row.id} = ?`).run(g.grantId);
+    i.room.db.prepare(`update ${app.row.table} set state = 'handoff' where ${app.row.id} = ?`).run(g.grantId);
+    assert.equal((await introduce(i, g.mcpUrl)).status, 200, "a hub before 0.12 still introduces itself: no value is served");
+    assert.equal((await i.link(g.grantId))?.state, "live");
+    mismatch(await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_migrated" }), "another pairing than the stored one");
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": BOUND_ID, "apc.tineira.com/agent": "ag_migrated" })).status, 200, "the 0.12 hub's re-introduction of it");
+    // A row with no stored id at all (Signals before 0.12): checked on its agent alone.
+    i.room.db.prepare(`update ${app.row.table} set pairing_id = null where ${app.row.id} = ?`).run(g.grantId);
+    assert.equal((await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_migrated" })).status, 200, "its own agent, any pairing: served");
+    mismatch(await introduce(i, g.mcpUrl, { "apc.tineira.com/pairing_id": OTHER_ID, "apc.tineira.com/agent": "ag_other" }), "another agent");
+    assert.equal((await i.call(g.mcpUrl, app.probe.tool, app.probe.args)).status, 200, "still live");
+  });
+
   test(name("M12: a Direct grant answers 404 to an initialize carrying either key, revoked or not; its agent's own initialize is served"), async (t) => {
     fakeHub(t);
     const i = await start();
