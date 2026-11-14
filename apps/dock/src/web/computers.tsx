@@ -73,13 +73,21 @@ export function JoinRequests(props: { state: DockState; base: string; refresh: (
             <dd>
               <b>{j.label}</b>
             </dd>
+            {j.check && (
+              <>
+                <dt>Its number</dt>
+                <dd>
+                  <b className="join-check">{j.check}</b>
+                </dd>
+              </>
+            )}
             <dt>Asked</dt>
             <dd>{j.asked_at ? agoLabel(j.asked_at, now) : "just now"}</dd>
             <dt>Answer within</dt>
             <dd>{clock((j.answer_by ?? now) - now)}</dd>
           </dl>
           <p>
-            It will use <b>every agent here</b>, point them and see where they point, and pair them with apps. Allow it only if you just entered this dock's code on a computer of yours.
+            It will use <b>every agent here</b>, point them and see where they point, and pair them with apps. Allow it only if you just entered this dock's code on a computer of yours{j.check ? <>, and that computer shows the same number, <b>{j.check}</b></> : null}.
           </p>
           <div className="row">
             <button type="button" className="primary" disabled={sending === j.id} onClick={() => decide(j.id, "approve")}>
@@ -228,7 +236,7 @@ const JOIN_ERRORS: Record<string, string> = {
  */
 export function JoinPanel(props: { initialCode: string; desktop: boolean; leaving: { agents: number } | "unknown" | null; cancel: () => void }) {
   const [code, setCode] = useState(props.initialCode);
-  const [phase, setPhase] = useState<{ kind: "idle" } | { kind: "asking" } | { kind: "waiting"; claim: string; label: string } | { kind: "failed"; reason: string }>({ kind: "idle" });
+  const [phase, setPhase] = useState<{ kind: "idle" } | { kind: "asking" } | { kind: "waiting"; claim: string; label: string; check: string | null } | { kind: "failed"; reason: string }>({ kind: "idle" });
   const [hasDock, setHasDock] = useState<boolean | null>(props.leaving === "unknown" ? null : !!props.leaving);
   useEffect(() => {
     if (props.leaving !== "unknown") return;
@@ -238,8 +246,8 @@ export function JoinPanel(props: { initialCode: string; desktop: boolean; leavin
   const join = () => {
     if (!normalizeJoinCode(code)) return setPhase({ kind: "failed", reason: "bad_code" });
     setPhase({ kind: "asking" });
-    void call<{ ok?: boolean; claim?: string; label?: string; error?: string }>("/api/dock/join", { code, desktop: props.desktop }).then(
-      (r) => setPhase(r.ok && r.claim ? { kind: "waiting", claim: r.claim, label: r.label ?? "this computer" } : { kind: "failed", reason: r.error ?? "unknown_code" }),
+    void call<{ ok?: boolean; claim?: string; label?: string; check?: string; error?: string }>("/api/dock/join", { code, desktop: props.desktop }).then(
+      (r) => setPhase(r.ok && r.claim ? { kind: "waiting", claim: r.claim, label: r.label ?? "this computer", check: r.check ?? null } : { kind: "failed", reason: r.error ?? "unknown_code" }),
       (e: unknown) => setPhase({ kind: "failed", reason: /: 429$/.test(String(e)) ? "busy" : /: 403$/.test(String(e)) ? "forbidden" : "unreachable" }),
     );
   };
@@ -280,6 +288,11 @@ export function JoinPanel(props: { initialCode: string; desktop: boolean; leavin
           <p>
             It shows there as <b>{phase.label}</b>. Answer within 2 minutes, and keep this page open until then.
           </p>
+          {phase.check && (
+            <p>
+              Your other computer shows this number with the request: <b className="join-check">{phase.check}</b>. Allow there only if it is the same.
+            </p>
+          )}
           {/* Stop waiting (Review round 1 on #158): the request on the other computer ends by itself. */}
           <div className="row">
             <button type="button" onClick={() => setPhase({ kind: "idle" })}>

@@ -230,3 +230,17 @@ test("the dock's socket answers on its own path only: never through an agent's M
   // The owner's socket refuses another origin before it reads the cookie (TIN-865).
   assert.equal((await a.send(`/api/d/${did}/ws`, undefined, { origin: "https://pulse.apc.tineira.com", upgrade: "websocket" })).status, 403);
 });
+
+test("a join request carries a number both screens show, so the person compares more than the joiner's own label", async () => {
+  const env = workerEnv();
+  const a = browser(env, "Mozilla/5.0 (Windows NT 10.0) Chrome/156.0.0.0");
+  const b = browser(env, "Mozilla/5.0 (Macintosh) Firefox/140.0");
+  const did = (await a.send("/api/dock/new", {})).json.did as string;
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code as string;
+  const asked = await b.send("/api/dock/join", { code });
+  assert.match(String(asked.json.check), /^\d{4}$/, "the joining computer shows a number");
+  const joins = (await a.send(`/api/d/${did}/state`)).json.joins as Json[];
+  assert.equal(joins[0]!.check, asked.json.check, "the request on the linked computer shows the same one");
+  assert.equal(asked.json.check === undefined, false);
+});
+

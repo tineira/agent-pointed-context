@@ -149,7 +149,7 @@ app.post("/api/dock/join", async (c) => {
   const label = labelOf(c, body?.desktop);
   const asked = await stubFor(c.env, found.did).askJoin(code, label);
   if (!asked.ok) return c.json(asked, 400);
-  return c.json({ ok: true, claim: `${found.did}.${asked.claim}`, label }, 200, { "cache-control": "no-store" });
+  return c.json({ ok: true, claim: `${found.did}.${asked.claim}`, label, check: asked.check }, 200, { "cache-control": "no-store" });
 });
 
 /**

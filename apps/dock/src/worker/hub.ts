@@ -72,6 +72,8 @@ export interface Env {
 }
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
+/** A join's check number (TIN-911): four digits, both screens show it. Not a secret: it only has to match. */
+const joinCheck = () => String(crypto.getRandomValues(new Uint32Array(1))[0]! % 10_000).padStart(4, "0");
 
 function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -205,6 +207,8 @@ interface Join {
   claim: string | null;
   asked_at: string | null;
   answer_by: number | null;
+  /** The number both screens show while the request waits (TIN-911): the joining computer's, and the request's on every linked one. */
+  check_code: string | null;
 }
 
 /** The app id and name a reader has for the agent; no app can take the id (see pair). */
@@ -315,7 +319,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -868,7 +872,7 @@ export class Hub extends DurableObject<Env> {
    * A computer claimed one of this dock's codes (the directory gave it here, once): it waits for a yes on a
    * computer already linked, JOIN_ANSWER_MS. The claim is its proof when it asks for the answer.
    */
-  async askJoin(code: string, label: string): Promise<{ ok: true; claim: string } | { ok: false; error: "unknown_code" | "dock_expired" | "too_many_devices" }> {
+  async askJoin(code: string, label: string): Promise<{ ok: true; claim: string; check: string } | { ok: false; error: "unknown_code" | "dock_expired" | "too_many_devices" }> {
     if (!(await this.alive())) return { ok: false, error: "dock_expired" };
     this.expireJoins();
     const join = this.joins().find((j) => j.code === code && j.status === "open");
@@ -876,10 +880,13 @@ export class Hub extends DurableObject<Env> {
     if (this.devices().length >= MAX_DEVICES) return { ok: false, error: "too_many_devices" };
     const claim = randomHex(16);
     const answerBy = Date.now() + JOIN_ANSWER_MS;
-    this.sql.exec("update joins set status = 'pending', label = ?, claim = ?, asked_at = ?, answer_by = ? where id = ?", label.slice(0, 60), claim, new Date().toISOString(), answerBy, join.id);
+    // A number the joining computer shows and the request shows on every linked one (TIN-911): the label is the joiner's
+    // own word, so this is what the person compares before Allow. A computer that claimed the code elsewhere shows its own.
+    const check = joinCheck();
+    this.sql.exec("update joins set status = 'pending', label = ?, claim = ?, asked_at = ?, answer_by = ?, check_code = ? where id = ?", label.slice(0, 60), claim, new Date().toISOString(), answerBy, check, join.id);
     await this.arm();
     this.broadcast();
-    return { ok: true, claim };
+    return { ok: true, claim, check };
   }
 
   /** The answer on a linked computer: allow or deny the computer that claimed a code. */
@@ -1031,7 +1038,7 @@ export class Hub extends DurableObject<Env> {
       devices: this.devices().map((d) => ({ id: d.id, label: d.label ?? "This dock's first computer", created_at: d.created_at, last_used_at: d.last_used_at, current: !!secret && d.secret === secret })),
       // The code being shown, if any, and the computers waiting for a yes (or collecting one).
       link: open ? { code: open.code, expires_at: open.expires_at } : null,
-      joins: joins.filter((j) => j.status !== "open").map((j) => ({ id: j.id, label: j.label ?? "A computer", status: j.status, asked_at: j.asked_at, answer_by: j.answer_by })),
+      joins: joins.filter((j) => j.status !== "open").map((j) => ({ id: j.id, label: j.label ?? "A computer", status: j.status, asked_at: j.asked_at, answer_by: j.answer_by, check: j.check_code })),
       // Kept for older dock clients; the checklist no longer gates the dock on this flag.
       setup_done: !!this.meta("setup_done") || this.sql.exec("select 1 from pairings limit 1").toArray().length > 0,
       onboarding: this.onboarding(),

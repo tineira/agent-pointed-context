@@ -67,6 +67,8 @@ export interface DockJoin {
   status: "pending" | "approved" | "denied";
   asked_at: string | null;
   answer_by: number | null;
+  /** The number the joining computer shows (TIN-911); null on a request from before it. */
+  check?: string | null;
 }
 
 export interface DockState {
