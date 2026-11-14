@@ -34,6 +34,12 @@ test("the renderer reads the Markdown the docs use", () => {
   assert.equal((blocks[4] as Extract<Block, { t: "list" }>).ordered, true);
   assert.deepEqual((blocks[5] as Extract<Block, { t: "table" }>).head[1], [{ t: "code", v: "a|b" }]);
   assert.deepEqual((blocks[5] as Extract<Block, { t: "table" }>).rows[0], [[{ t: "code", v: "c|d" }], [{ t: "text", v: "e|f" }]], "\\| is a pipe, in code or not");
+  // As GitHub reads them: an escaped pipe at the end of a row with no closing border, and \\ before a border.
+  const rowOf = (row: string) => (parseMarkdown(`| h | h |\n|---|---|\n${row}`)[0] as Extract<Block, { t: "table" }>).rows[0]!.map((c) => c.map((x) => ("v" in x ? x.v : "")).join(""));
+  assert.deepEqual(rowOf("| a | b\\|"), ["a", "b|"], "a trailing \\| is a pipe, not the border");
+  assert.deepEqual(rowOf("| a | c\\\\| d |"), ["a", "c\\", "d"], "\\\\ is one backslash, and the | after it a border");
+  assert.deepEqual(rowOf("| a | `c\\\\` | d |"), ["a", "c\\\\", "d"], "inside code both backslashes stay");
+  assert.deepEqual(rowOf("| a |  |"), ["a", ""], "an empty last cell before the closing border");
   assert.deepEqual(blocks[8], { t: "include", file: "f.ts", region: "r" });
 });
 

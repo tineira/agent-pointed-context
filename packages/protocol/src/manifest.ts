@@ -282,8 +282,8 @@ export type McpCoverageManifest = Pick<ApcManifest, "origin" | "mcp"> & { profil
  *    So no dot segment, backslash, upper-case host, written default port or encoding gets through.
  * 3. The top-level `profiles` and a usable entry E both list R, and either E is exact, the path equals it
  *    (case-sensitive), and the URL is `shared`; or E is `P/{secret}`, the path is `P/s` with s matching
- *    `APC_SECRET_RE`, and the path names no entry (exact wins): it neither equals any entry's path nor starts
- *    one followed by `/`, compared without ASCII case, whether or not this reader can use that entry.
+ *    `APC_SECRET_RE`, and no entry's path equals it or begins with it followed by `/` (exact wins), compared
+ *    without ASCII case, whether or not this reader can use that entry.
  *
  * **Without `endpoints`**, the 0.10 rule under `mcp.path` (`declaresMcpUrl`), where `profile` plays no part.
  */
@@ -291,6 +291,8 @@ export function mcpUrlCoverage(manifest: McpCoverageManifest, mcpUrl: string, op
   const no = (reason: string) => ({ covered: false as const, reason });
   const mcp = manifest?.mcp;
   const check: Partial<McpUrlCheck> = options ?? {};
+  // A manifest that skipped the parser, with an endpoints key that is not a list, covers nothing: never mcp.path.
+  if (mcp && Object.hasOwn(mcp, "endpoints") && !Array.isArray(mcp.endpoints)) return no("mcp.endpoints is not a list");
   if (!mcp || !Array.isArray(mcp.endpoints)) {
     if (typeof mcp?.path !== "string") return no("the manifest declares neither mcp.path nor mcp.endpoints");
     if (legacyDeclares(manifest.origin, mcp.path, mcpUrl, !!check.shared)) return { covered: true, by: `mcp.path ${mcp.path}` };

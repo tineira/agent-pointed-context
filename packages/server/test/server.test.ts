@@ -72,8 +72,10 @@ test("apcManifest with mcp.endpoints (APC 0.11): it builds only a file readers t
     [[{ path: "/mcp/{secret}", profiles: [] }], null, "no profile"],
     [[{ path: "/mcp/{secret}", profiles: ["dock"] }, { path: "/mcp/{secret}", profiles: ["direct"] }], null, "a path twice"],
     [[], "/mcp/", "an empty list"],
+    [[{ path: "/mcp/{secret}", profiles: ["dock"] }], undefined, "endpoints without mcpPath (plain JavaScript)"],
+    [[{ path: "/mcp/{secret}", profiles: ["dock"], note: "x" }], null, "a key other than path and profiles"],
   ] as const) {
-    assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], mcpPath, endpoints: endpoints as never }), Error, why);
+    assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct", "dock"], mcpPath: mcpPath as never, endpoints: endpoints as never }), Error, why);
   }
   assert.deepEqual(apcManifest({ name: "Orders", origin, profiles: ["dock"] }).mcp, { path: "/mcp/" }, "without endpoints, as before");
 });

@@ -20,7 +20,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 - **`declaresMcpUrl` requires the profile, and the hub's copy of a file is `{ v: 2, manifest }`.** A row an older hub wrote is read again (`packages/protocol/src/manifest.ts`, `apps/dock/src/worker/hub.ts`).
 - **`apcManifest` takes `endpoints` with an explicit `mcpPath`, and throws on a file readers would read otherwise; Orders serves `/mcp/{secret}`** (`packages/server/src/apc-json.ts`, `apps/dock/src/docs/examples/orders-app.ts`).
 - **Conformance checks the grant for its profile (`--profile direct|dock`), and fails entries readers drop or ignore.** It also fails an empty list, a profile offered with no entry, and a near-miss key. An entry for a profile not offered right now passes (M8) (`packages/conformance/src/http.ts`, `packages/conformance/src/shared.ts`, `packages/conformance/src/index.ts`, `packages/conformance/src/cli.ts`).
-- **The docs' table renderer reads `\|` as a pipe, in code too, as GitHub does** (`apps/dock/src/docs/markdown.ts`).
+- **The docs' table renderer reads a row as GitHub does: `\|` is a pipe (in code too), `\\` an escaped backslash before a border, and an escaped pipe at the end of a row is no border** (`apps/dock/src/docs/markdown.ts`).
 
 ### The 0.10 conformance checks close the reviews' gaps (2026-11-13, TIN-894)
 

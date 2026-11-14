@@ -142,6 +142,11 @@ test("declaresMcpUrl fails closed: no profile, an unknown one, no profiles on a 
   assert.equal(loose({ origin: m.origin, mcp: m.mcp }, url, { profile: "dock" }), false, "no top-level profiles");
   assert.equal(loose({ origin: O, mcp: {} }, url, { profile: "dock", shared: true }), false, "neither path nor endpoints");
   assert.equal(loose({ origin: O, mcp: { endpoints: [] } }, url, { profile: "dock" }), false, "an empty list");
+  // An unparsed file whose endpoints is not a list never falls back to mcp.path, which alone would cover these.
+  for (const endpoints of [null, {}, "x", 5]) {
+    assert.equal(loose({ origin: O, profiles: ["dock"], mcp: { path: "/mcp/", endpoints } }, `${O}/mcp/public/anything`, { profile: "dock" }), false, JSON.stringify(endpoints));
+  }
+  assert.equal(loose({ origin: O, profiles: ["dock"], mcp: { path: "/mcp/" } }, `${O}/mcp/public/anything`, { profile: "dock" }), true, "the same URL under mcp.path alone");
   const legacy = parsed(files["path-only"]!);
   assert.equal(loose(legacy, "https://ledger.example/mcp/abc"), true, "on a 0.10 file the old two-argument call still works");
 });

@@ -301,8 +301,10 @@ test("mcp.endpoints (APC 0.11): the hub pairs only a {secret} entry that lists d
   assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${secret}`), { ok: false, error: "mcp_url_not_declared" }, "a Direct-only template");
   w.apcJson.set(SHOP, () => Response.json(shop({ path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["dock"], requires: "x" }] })));
   assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${secret}`), { ok: false, error: "mcp_url_not_declared" }, "an entry with a key the hub does not know is dropped whole");
+  // M8: the hub's own profile check answers first (dock_not_offered); the matcher's top-level check is the
+  // protocol's vector "split-not-pairing", since the hub never reaches it with dock missing.
   w.apcJson.set(SHOP, () => Response.json(shop(split, { profiles: ["direct"] })));
-  assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${secret}`), { ok: false, error: "dock_not_offered" }, "M8: not pairing right now");
+  assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${secret}`), { ok: false, error: "dock_not_offered" }, "M8: not pairing right now, refused before the match");
   assert.deepEqual(await w.pairings(), []);
   // A file with endpoints alone (no mcp.path) pairs a grant's secret URL.
   w.apcJson.set(SHOP, () => Response.json(shop({ endpoints: [{ path: "/mcp/{secret}", profiles: ["dock"] }] })));
@@ -326,4 +328,18 @@ test("the copy the hub keeps is { v: 2, manifest }: a row an older hub wrote is 
   sql.exec("update apc_json set body = ? where origin = ?", JSON.stringify(copy.manifest), PULSE);
   assert.equal((await w.dropOnPulse()).ok, true);
   assert.equal(w.reads.get(PULSE), 2, "the old row was not used: the file was read again");
+});
+
+test("a kept { v: 2 } copy with mcp.endpoints decides within its minute as the file did: a dropped entry still covers nothing", async (t) => {
+  const w = await world(t);
+  const secret = "c".repeat(32);
+  // An entry this hub drops (a key it does not know) at /mcp/{secret}, and a usable one at /agents/{secret}.
+  const file = manifest(SHOP, { name: "Shop", profiles: ["dock"], direct: undefined, mcp: { endpoints: [{ path: "/mcp/{secret}", profiles: ["dock"], requires: "x" }, { path: "/agents/{secret}", profiles: ["dock"] }] } });
+  w.apcJson.set(SHOP, () => Response.json(file));
+  assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${secret}`), { ok: false, error: "mcp_url_not_declared" }, "read from the file");
+  assert.equal(w.reads.get(SHOP), 1);
+  assert.deepEqual(await w.shopPairs(`${SHOP}/mcp/${secret}`), { ok: false, error: "mcp_url_not_declared" }, "decided on the kept copy");
+  assert.equal(w.reads.get(SHOP), 1, "the copy was used, not the file");
+  assert.equal((await w.shopPairs(`${SHOP}/agents/${secret}`)).ok, true, "the usable entry, from the kept copy");
+  assert.equal(w.reads.get(SHOP), 1);
 });

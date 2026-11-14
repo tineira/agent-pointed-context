@@ -350,7 +350,7 @@ Each entry is a `path` and the `profiles` it serves. A path is exact. `{secret}`
 
 - `mcp` has neither `path` nor `endpoints`, or has a `path` that fails the rule above (with or without `endpoints`);
 - `endpoints` is there and is not a list, or has more than 16 entries;
-- an entry is not an object; its `path` is not a string of at most 200 characters that starts with `/`, or holds `%`, `?`, `#`, `\`, a space or a control character, or a `.` or `..` segment; its `profiles` is not a list of at most 8 strings; or two entries have the same `path`;
+- an entry is not an object; its `path` is not a string of at most 200 characters that starts with `/`, or holds `%`, `?`, `#`, `\`, whitespace, a control character or a format character (Unicode `White_Space`, `Cc`, `Cf`), or a `.` or `..` segment; its `profiles` is not a list of at most 8 strings; or two entries have the same `path`;
 - `mcp.path` is there and a usable entry lies outside it: `P/{secret}` needs `P/` to start with `mcp.path`; an exact path needs to start with `mcp.path` or to equal it without its last `/`.
 
 A reader **MUST** drop, whole, an entry it does not fully understand, and never use part of it: an entry with any key but `path` and `profiles`, or a path outside the 0.11 grammar (fixed segments of `A-Z a-z 0-9 . _ ~ ! $ & ' ( ) * + , ; = : @ -`, then at most one final `/{secret}` after at least one fixed segment; so no trailing `/`, no empty segment, no other `{…}`). A dropped entry covers nothing, but still names its path (below). Profile words other than `direct` and `dock` are left out of an entry one by one, and so is `dock` on an exact path: a Dock grant is one URL per grant. An entry may list a profile the top-level `profiles` does not (an app that is not pairing right now, M8); it covers nothing for that profile. A file left with no usable entry still parses, and covers nothing.
@@ -361,7 +361,7 @@ A reader **MUST** drop, whole, an entry it does not fully understand, and never 
 2. The string holds no `?`, `#` or `%`, and is exactly `origin + path` as a URL parser writes it back: no dot segment, backslash, upper-case host, written default port or encoding.
 3. The top-level `profiles` and a usable entry both list R, and either:
    - the entry is exact, the path equals it (case-sensitive), and the grants share the URL (a bearer token names the grant); or
-   - the entry is `P/{secret}`, the path is `P/s` where `s` is 16 to 128 of `A-Z a-z 0-9 _ -`, and the path names no entry: it neither equals the path of any entry, usable or dropped, nor starts one followed by `/`, compared without ASCII case (exact wins).
+   - the entry is `P/{secret}`, the path is `P/s` where `s` is 16 to 128 of `A-Z a-z 0-9 _ -`, and no entry's path equals it, usable or dropped, or begins with it followed by `/`, compared without ASCII case (exact wins: a sibling an entry names, or the fixed parent of a deeper entry, is never a secret).
 
 An app **MUST NOT** serve anything but its grants on a child of `P` that fits the secret, other than the exact entries it declares: `P/{secret}` claims every such child. Keep fixed routes out of a `{secret}` parent. A file that narrows does not end pairings already made; the app revokes them. `declaresMcpUrl(manifest, url, { profile, shared })` and `mcpUrlCoverage` in `@tineira/apc-protocol` implement this, and these vectors are its tests (`packages/protocol/test/mcp-endpoint-vectors.json`):
 

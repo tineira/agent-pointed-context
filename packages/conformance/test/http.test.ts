@@ -340,6 +340,12 @@ test("mcp.endpoints (APC 0.11): the grant is checked for the profile given, as a
   assert.equal(m8.failed, 0, JSON.stringify(m8.results.filter((r) => r.status === "fail"), null, 2));
   assert.equal(status(await go(file({ path: "/mcp/" })), "apc-json-endpoints"), "pass", "no mcp.endpoints: only the near-miss keys are checked");
 
+  // The URLs as given, as the hub sees what an app sends: a form the parser would tidy up still fails.
+  for (const sent of ["https://APP.example:443/mcp/./AbCdEfGhIjKlMnOpQrStUv", "https://app.example/x/../mcp/AbCdEfGhIjKlMnOpQrStUv", "https://app.example:443/mcp/AbCdEfGhIjKlMnOpQrStUv"]) {
+    assert.equal(status(await go(both, { profile: "dock", grant: sent }), "grant-declared"), "fail", sent);
+    assert.equal(status(await go(both, { profile: "dock", revoked: sent.replace("AbCdEfGhIjKlMnOpQrStUv", "ZyXwVuTsRqPoNmLkJiHgFe") }), "revoked-answers"), "fail", `revoked ${sent}`);
+  }
+
   // A Dock grant takes no bearer token; a profile is direct or dock.
   await assert.rejects(go(both, { profile: "dock", bearer: "tok" }), HttpConformanceUsageError);
   await assert.rejects(go(both, { profile: "hub" as never }), HttpConformanceUsageError);

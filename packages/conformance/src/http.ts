@@ -405,7 +405,9 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       run: withGrant(async (g) => {
         if (!manifest) return "apc.json did not parse";
         // With a bearer token the grants may share one URL (APC 0.8). As --profile dock, the hub's own check.
-        const covered = mcpUrlCoverage(manifest, g.href, { profile, shared: !!options.bearer });
+        // The string as given, never re-serialised: the hub checks what the app sends, and a parsed href has
+        // already lost an upper-case host, a written :443 or a dot segment that the hub refuses.
+        const covered = mcpUrlCoverage(manifest, options.grant ?? g.href, { profile, shared: !!options.bearer });
         if (!covered.covered) throw new ConformanceError(`the grant's MCP URL ${shown(g.href)} is not covered for ${profile} by ${describeMcpCoverage(manifest)}: ${covered.reason}`);
         return { note: `covered by ${covered.by}, for ${profile}` };
       }),
@@ -498,7 +500,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
         const expected = bearer ? REVOKED_HTTP_STATUS_BEARER : REVOKED_HTTP_STATUS;
         if (manifest) {
           // The revoked grant's own credential says whether it shares its URL; the profile is the run's.
-          const covered = mcpUrlCoverage(manifest, revoked.href, { profile, shared: bearer });
+          const covered = mcpUrlCoverage(manifest, options.revoked ?? revoked.href, { profile, shared: bearer });
           if (!covered.covered) throw new ConformanceError(`the revoked grant's MCP URL is not covered for ${profile} by ${describeMcpCoverage(manifest)}: ${covered.reason}`);
         }
         for (const [method, params] of [

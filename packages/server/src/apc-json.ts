@@ -27,8 +27,10 @@ export type ApcMcpDeclaration = { mcpPath?: string; endpoints?: undefined } | { 
 export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; connect?: string } & ApcMcpDeclaration): ApcManifest {
   const mcp: ApcManifest["mcp"] = {};
   if (o.endpoints) {
+    // Given on purpose, also from plain JavaScript: a path for older readers, or null to leave it out.
+    if (o.mcpPath === undefined) throw new Error("apcManifest: with endpoints, give mcpPath: the path readers before 0.11 go by, or null to leave it out");
     if (o.mcpPath !== null) mcp.path = o.mcpPath;
-    mcp.endpoints = o.endpoints.map((e) => ({ path: e.path, profiles: [...e.profiles] }));
+    mcp.endpoints = o.endpoints.map((e) => ({ ...e, profiles: [...e.profiles] }));
     checkEndpoints(o.origin, mcp);
   } else mcp.path = o.mcpPath ?? APC_DEFAULT_MCP_PATH;
   const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp };
@@ -42,6 +44,8 @@ function checkEndpoints(origin: string, mcp: ApcManifest["mcp"]): void {
   const probe = parseApcManifest({ name: "probe", standard: APC_STANDARD_VERSION, origin, profiles: ["dock"], mcp }, origin);
   if (!probe.ok) throw new Error(`apcManifest: ${probe.detail}`);
   for (const entry of mcp.endpoints!) {
+    const extra = Object.keys(entry).filter((k) => k !== "path" && k !== "profiles");
+    if (extra.length) throw new Error(`apcManifest: ${entry.path} has ${extra.join(", ")}: an entry is path and profiles only`);
     const rule = endpointRule(entry);
     if (!rule) throw new Error(`apcManifest: ${entry.path} is not an endpoint a 0.11 reader uses (an exact path, or one ending in /{secret}, with no trailing /)`);
     if (!entry.profiles.length) throw new Error(`apcManifest: ${entry.path} lists no profile`);
