@@ -161,6 +161,11 @@ app.post("/api/dock/join/status", async (c) => {
 });
 
 app.use("/api/d/:did/*", async (c, next) => {
+  // The owner's API answers only the dock's own page (TIN-865). The cookie is SameSite=Lax, so a page on any
+  // sibling subdomain would otherwise send it: approve its own pairing, remove agents, reset the dock, or open
+  // the socket and read the state. A browser sends Origin on every cross-origin POST and on a WebSocket, and
+  // Sec-Fetch-Site on a same-origin GET.
+  if (!fromThisSite(c)) return c.json({ error: "forbidden" }, 403);
   const current = session(getCookie(c, COOKIE));
   if (!current || current.did !== c.req.param("did")) return c.json({ error: "forbidden" }, 403);
   if (!(await stubFor(c.env, current.did).isOwner(current.owner, labelOf(c)))) return c.json({ error: "dock_expired" }, 404);
