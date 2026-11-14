@@ -123,7 +123,12 @@ export type FixtureBreak =
   | "keeps_grant_on_not_paired"
   | "ignores_stored_expiry"
   | "confirm_paired_goes_live"
-  | "stale_allow_accepted";
+  | "stale_allow_accepted"
+  // The consent's nonce (core.test.ts).
+  | "nonce_unchecked"
+  | "nonce_any_agent"
+  | "nonce_reusable"
+  | "nonce_optional";
 
 export interface FixtureOptions {
   break?: FixtureBreak;
@@ -377,12 +382,15 @@ class Fixture {
 
   private async drop(b: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.config.pairing) return { ok: false, error: "not_available" };
-    const { ticket, consent } = b;
+    const { ticket } = b;
+    let { consent } = b;
     let { agent } = b;
     // An Allow that carries no agent (allowNoAgent): the agent is the consent's.
     if (consent !== undefined && this.config.hubBoundToConsent && agent === undefined) agent = this.storage.consents.get(String(consent))?.agent;
     if (typeof agent !== "string" || typeof ticket !== "string") return { ok: false, error: "invalid" };
     const target = (b.target as FocusTarget | undefined) ?? null;
+    // (nonce_optional: a request with no nonce for an agent with a pending consent is taken as its Allow, as if the click were enough.)
+    if (consent === undefined && this.has("nonce_optional") && typeof agent === "string") consent = [...this.storage.consents].findLast(([, c]) => c.agent === agent)?.[0];
     if (consent !== undefined) {
       const nonce = String(consent);
       let hub: string | null;
@@ -456,12 +464,14 @@ class Fixture {
   private async allow(nonce: string, agent: string, ticket: string, hub: string, base: string, target: FocusTarget | null): Promise<Record<string, unknown>> {
     const triple = `${hub}|${agent}`;
     if (this.locks.has(triple) && !this.has("double_allow_not_refused")) return { ok: false, error: "pairing_in_progress" };
-    const c = this.storage.consents.get(nonce);
-    // (bound_misdeclared: the consent's hub is not compared either, so the Allow's hub is the one called.)
-    if (!c || c.agent !== agent || (c.hub !== hub && !this.unbound()) || this.now() > c.expiresAt) return { ok: false, error: "consent_expired" };
+    // (nonce_unchecked: an unknown nonce falls back to the agent's latest consent, as if the Allow's click were enough.)
+    const c = this.storage.consents.get(nonce) ?? (this.has("nonce_unchecked") ? [...this.storage.consents.values()].findLast((x) => x.agent === agent) : undefined);
+    // (bound_misdeclared: the consent's hub is not compared either, so the Allow's hub is the one called. nonce_any_agent: nor its agent.)
+    if (!c || (c.agent !== agent && !this.has("nonce_any_agent")) || (c.hub !== hub && !this.unbound()) || this.now() > c.expiresAt) return { ok: false, error: "consent_expired" };
     const held = this.lock(triple);
     try {
-      this.storage.consents.delete(nonce);
+      // (nonce_reusable: the nonce is kept, so the same Allow pairs again.)
+      if (!this.has("nonce_reusable")) this.storage.consents.delete(nonce);
       const now = this.now();
       const g: Grant = { id: `g_${random(8)}`, secret: random(22), agent, hub, state: "in_flight", allowedAt: now, ackedAt: 0, liveAt: 0, lastWake: now, served: false, code: c.code, codeExpiresAt: 0, pin: null, pinnedAt: 0, pinUnread: false, revokedAt: null };
       this.storage.grants.push(g);

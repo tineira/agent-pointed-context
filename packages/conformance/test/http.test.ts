@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { APC_STANDARD_VERSION, revokedAnswer } from "@tineira/apc-protocol";
-import { HttpConformanceUsageError, IN_PROCESS_ONLY, redactGrantUrl, redactSecrets, runHttpConformance, type HttpConformanceOptions } from "../src/index.ts";
+import { HttpConformanceUsageError, IN_PROCESS_ONLY, IN_PROCESS_REASON, coverageLines, coverageOf, redactGrantUrl, redactSecrets, runHttpConformance, type HttpCheckResult, type HttpConformanceOptions } from "../src/index.ts";
 import { standardSupport } from "../src/shared.ts";
 
 const ORIGIN = "https://app.example";
@@ -30,6 +30,12 @@ interface FakeOptions {
   /** The live and the revoked grant's URLs, when not GRANT and REVOKED. */
   grantUrl?: string;
   revokedUrl?: string;
+  /** The revoked grant still answers this (ping; a notification with 202; a body that does not parse with 400), as a live one does. */
+  revokedServes?: "ping" | "notification" | "unparsable";
+  /** The host the revoked answer names, when not the app's. */
+  revokedBy?: string;
+  /** A GET of any unknown path is the single-page app's page (HTTP 200, text/html), as a static host's fallback serves it. */
+  spaFallback?: boolean;
 }
 
 /** A small APC app behind a fetch: apc.json, one live grant and one revoked. */
@@ -51,8 +57,24 @@ function fakeApp(o: FakeOptions = {}): { fetch: (r: Request) => Promise<Response
         if (o.redirectManifest) return new Response(null, { status: 302, headers: { location: "https://elsewhere.example/apc.json" } });
         return json(o.manifest ?? { name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/?connect` } });
       }
-      if (url.href === (o.revokedUrl ?? REVOKED)) return json(revokedAnswer("app.example", "2026-11-04T10:00:00.000Z"), o.revokedStatus ?? 403);
-      if (url.href !== (o.grantUrl ?? GRANT)) return json({ error: "not_found" }, o.unknownStatus ?? 404);
+      if (url.href === (o.revokedUrl ?? REVOKED)) {
+        if (o.revokedServes && request.method === "POST") {
+          const raw = await request.clone().text();
+          let body: { id?: unknown; method?: unknown } | null = null;
+          try {
+            body = JSON.parse(raw) as { id?: unknown; method?: unknown };
+          } catch {
+            if (o.revokedServes === "unparsable") return json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
+          }
+          if (o.revokedServes === "ping" && body?.method === "ping") return json({ jsonrpc: "2.0", id: body.id, result: {} });
+          if (o.revokedServes === "notification" && body && body.id === undefined) return new Response(null, { status: 202 });
+        }
+        return json(revokedAnswer(o.revokedBy ?? "app.example", "2026-11-04T10:00:00.000Z"), o.revokedStatus ?? 403);
+      }
+      if (url.href !== (o.grantUrl ?? GRANT)) {
+        if (o.spaFallback && request.method === "GET") return new Response("<!doctype html><title>App</title>", { status: 200, headers: { "content-type": "text/html" } });
+        return json({ error: "not_found" }, o.unknownStatus ?? 404);
+      }
       if (o.echo500) return new Response(`internal error while serving ${request.url} (${request.url.toUpperCase()})`, { status: 500, headers: { "content-type": "text/plain" } });
       const rpc = (await request.json()) as { id: number; method: string; params: { name?: string; arguments?: Record<string, unknown> } };
       const reply = (result: unknown) => json({ jsonrpc: "2.0", id: rpc.id, result });
@@ -87,7 +109,17 @@ test("a conforming app passes every HTTP check, and the in-process ones are repo
   const report = await run({ then: true });
   assert.equal(report.failed, 0, JSON.stringify(report.results.filter((r) => r.status === "fail"), null, 2));
   assert.equal(report.passed, 12);
-  assert.equal(report.skipped, IN_PROCESS_ONLY.length);
+  // The in-process checks, and the {secret} one: this apc.json has no mcp.endpoints.
+  assert.equal(report.skipped, IN_PROCESS_ONLY.length + 1);
+  assert.equal(report.coverage.ran, 12);
+  assert.equal(report.coverage.total, 12 + IN_PROCESS_ONLY.length + 1);
+  assert.equal(report.coverage.in_process, IN_PROCESS_ONLY.length);
+  assert.equal(report.coverage.http_total, 13);
+  assert.equal(report.coverage.http_ran, 12);
+  // A full run (--grant and --revoked) is no "mostly skipped", however many checks need the adapter.
+  assert.equal(report.coverage.mostly_skipped, false);
+  assert.doesNotMatch(coverageLines(report.coverage).join("\n"), /WARNING|NOT a conformance pass/);
+  assert.match(coverageLines(report.coverage).join("\n"), /in-process checks run only with apcConformance\(adapter\)/);
   assert.deepEqual(report.app, { name: "Fake", standard: APC_STANDARD_VERSION, profiles: ["direct"] });
 });
 
@@ -349,4 +381,89 @@ test("mcp.endpoints (APC 0.11): the grant is checked for the profile given, as a
   // A Dock grant takes no bearer token; a profile is direct or dock.
   await assert.rejects(go(both, { profile: "dock", bearer: "tok" }), HttpConformanceUsageError);
   await assert.rejects(go(both, { profile: "hub" as never }), HttpConformanceUsageError);
+});
+
+test("the report says how much ran and why the rest was skipped, grouped, and warns when most was skipped (F7)", async () => {
+  const report = await runHttpConformance({ origin: ORIGIN, fetch: fakeApp().fetch });
+  const c = report.coverage;
+  assert.equal(c.ran + c.skipped, c.total);
+  assert.equal(c.ran, report.passed + report.failed);
+  assert.equal(c.skipped_why[0]!.why, IN_PROCESS_REASON, "the in-process checks are one group, the largest");
+  assert.equal(c.skipped_why[0]!.count, IN_PROCESS_ONLY.length);
+  assert.ok(c.skipped_why.some((g) => /give --grant/.test(g.why) && g.count > 1), "the checks waiting on --grant are one group");
+  assert.equal(c.skipped_why.reduce((n, g) => n + g.count, 0), c.skipped);
+  const lines = coverageLines(c).join("\n");
+  assert.match(lines, new RegExp(`^${c.ran} of ${c.total} checks ran \\(${c.http_ran} of the ${c.http_total} reachable over HTTP\\); ${c.skipped} skipped`));
+  assert.equal(c.mostly_skipped, true, "with no --grant, most of what HTTP reaches was skipped");
+  assert.match(lines, /WARNING: .* NOT a conformance/);
+
+  // At most half of the HTTP checks skipped: no warning. Exactly half is no majority either. In-process ones never count.
+  const r = (status: HttpCheckResult["status"], detail?: string, id = "x"): HttpCheckResult => ({ id, name: "x", status, ...(detail ? { detail } : {}) });
+  const inProcess = Array.from({ length: 10 }, () => r("skip", "page", "in-process"));
+  const half = coverageOf([r("pass"), r("fail"), r("skip", "a"), r("skip", "b"), ...inProcess]);
+  assert.equal(half.mostly_skipped, false);
+  assert.doesNotMatch(coverageLines(half).join("\n"), /WARNING/);
+  const most = coverageOf([r("pass"), r("skip", "a"), r("skip", "a"), r("skip", "b")]);
+  assert.equal(most.mostly_skipped, true);
+  assert.deepEqual(most.skipped_why, [{ why: "a", count: 2 }, { why: "b", count: 1 }]);
+  assert.deepEqual(coverageOf([r("pass")]).skipped_why, []);
+});
+
+test("the command line prints the coverage under the pass/fail line, and in --json", async () => {
+  const server = createServer((req, res) => {
+    const here = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ name: "Local", standard: APC_STANDARD_VERSION, origin: here, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${here}/` } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const runCli = (args: string[]) =>
+    new Promise<{ code: number; out: string }>((resolve) => {
+      execFile(process.execPath, [cli, ...args], { timeout: 60_000 }, (error, stdout, stderr) => resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, out: stdout + stderr }));
+    });
+  try {
+    const text = await runCli([origin, "--allow-http"]);
+    assert.equal(text.code, 0, text.out);
+    assert.match(text.out, /\d+ passed, 0 failed, \d+ skipped\r?\n\d+ of \d+ checks ran \(\d+ of the \d+ reachable over HTTP\); \d+ skipped, because:\r?\n/);
+    assert.match(text.out, /WARNING: \d+ of the \d+ checks reachable over HTTP were skipped\. This is NOT a conformance/);
+    const json = await runCli([origin, "--allow-http", "--json"]);
+    const report = JSON.parse(json.out) as { coverage: { ran: number; total: number; mostly_skipped: boolean; skipped_why: unknown[] } };
+    assert.equal(report.coverage.mostly_skipped, true);
+    assert.ok(report.coverage.ran > 0 && report.coverage.total > report.coverage.ran && report.coverage.skipped_why.length > 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("a revoked grant answers revoked to ping, a notification and a body that does not parse, naming the app's host (REV-2)", async () => {
+  assert.equal(status(await run({}), "revoked-answers"), "pass");
+  for (const serves of ["ping", "notification", "unparsable"] as const) {
+    const report = await run({ revokedServes: serves });
+    assert.equal(status(report, "revoked-answers"), "fail", serves);
+  }
+  const other = await run({ revokedBy: "elsewhere.example" });
+  assert.equal(status(other, "revoked-answers"), "fail");
+  assert.match(other.results.find((r) => r.id === "revoked-answers")!.detail!, /revoked_by is "elsewhere\.example", not the app's host app\.example/);
+});
+
+test("under a {secret} entry nothing but grants is served: a fallback page there fails (EP-5)", async () => {
+  const manifest = { name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }] }, direct: { connect: `${ORIGIN}/?connect` } };
+  const TG = `${ORIGIN}/mcp/AbCdEfGhIjKlMnOpQrStUv`;
+  const ok = await run({ manifest, grantUrl: TG }, { grant: TG, revoked: undefined });
+  assert.equal(status(ok, "apc-json-secret-children"), "pass");
+  const spa = await run({ manifest, grantUrl: TG, spaFallback: true }, { grant: TG, revoked: undefined });
+  assert.equal(status(spa, "apc-json-secret-children"), "fail");
+  assert.match(spa.results.find((r) => r.id === "apc-json-secret-children")!.detail!, /a GET of \/mcp\/<a secret no grant has> answers HTTP 200/);
+  // A 403 there serves nothing: it passes, with a note that an unknown grant answers 404 (the unknown-grant check fails it).
+  const forbidden = await run({ manifest, grantUrl: TG, unknownStatus: 403 }, { grant: TG, revoked: undefined });
+  assert.equal(status(forbidden, "apc-json-secret-children"), "pass");
+  assert.match(forbidden.results.find((r) => r.id === "apc-json-secret-children")!.note!, /answers POST 403, GET 403, not 404/);
+  assert.equal(status(forbidden, "grant-unknown-404"), "fail");
+  assert.doesNotMatch(ok.results.find((r) => r.id === "apc-json-secret-children")!.note!, /not 404/);
+  // A 5xx is a crash, not a refusal.
+  const crash = await run({ manifest, grantUrl: TG, unknownStatus: 500 }, { grant: TG, revoked: undefined });
+  assert.equal(status(crash, "apc-json-secret-children"), "fail");
+  // Without a {secret} entry there is nothing to check: skipped, never failed.
+  assert.equal(status(await run({ spaFallback: true }), "apc-json-secret-children"), "skip");
 });

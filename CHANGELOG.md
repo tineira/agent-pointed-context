@@ -6,6 +6,12 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The conformance suite checks what the 1.0 review found unchecked, and the command line says what it covered (2026-11-14, TIN-912)
+
+- **`@tineira/apc-conformance` fails apps that broke rules it used to pass unchecked.** A revoked grant must answer revoked to every request (`ping`, other methods, a notification, a body that does not parse) naming the app's host; no `wait_for_focus` result with no focus carries `then` (timeout, taken over, refused, cancelled); nothing but grants is served under a `{secret}` entry; a Dock Allow pairs only with its own consent's nonce, once. The revoked tool error may now carry `structuredContent`. APC standard 0.12.0. (`packages/conformance/src/index.ts`, `packages/conformance/src/shared.ts`, `packages/conformance/src/http.ts`, `packages/protocol/src/version.ts`, `packages/protocol/CHANGELOG.md`, `apps/dock/src/docs/pages/conformance.md`)
+- **The command line says how much it checked.** Under the pass and fail line, `N of M checks ran (H of the T reachable over HTTP); K skipped`, with the reasons grouped, and a warning that the run is not a conformance pass when more than half of the checks HTTP reaches were skipped (never on a run with `--grant` and `--revoked`); the same in `--json` as `coverage`. (`packages/conformance/src/cli.ts`, `packages/conformance/src/http.ts`, `packages/conformance/README.md`)
+- **Broken-app fixtures for the core checks.** A minimal Direct app (`core-fixture.ts`) passes every check, and an app broken in one way fails each new check and the most important core ones; the Dock fixture gets four broken nonces. (`packages/conformance/test/core-fixture.ts`, `packages/conformance/test/core.test.ts`, `packages/conformance/test/dock-fixture.ts`, `packages/conformance/test/http.test.ts`)
+
 ### The hub hardened: redirects, pins dated ahead, give-backs, logs, the socket, readers and joins (2026-11-14, TIN-911)
 
 - **The hub follows no app's redirect, verified or not.** Every MCP call and every give-back uses `redirect: "manual"` and takes a 3xx as a failure, as the app side's hub client does. (`apps/dock/src/worker/app-client.ts`, `apps/dock/test/hostile-world.ts`)
