@@ -19,6 +19,18 @@ Before, the hub's `initialize` named no pairing, so a hub could be handed, throu
 - **Compatibility.** A hub before 0.12 sends neither key and declares no binding: a 0.12 app serves it as before. An app before 0.12 ignores both: a 0.12 hub pairs it as before, unchecked. **An app that validates `params._meta` strictly must accept the two new keys**, or the 0.12 hub's `initialize` fails and the pairing ends. Apps on 0.10 and 0.11 keep pairing with the reference hub, unchecked, for at least 6 months from this release, until 2027-05-14 (longer than the 3 months proposed for 1.0, by decision): the hub only counts the standard each app claims, and refuses nothing on it; ending the window takes a later release.
 - **What it does not cover.** A drop's ticket can still be relayed through a real account on the app: someone with an account there takes the drop through the app's own consent and shows its code elsewhere. The binding passes then, since the app itself made the call. Closing that is planned before 1.0.
 
+### The conformance suite checks what the 1.0 review found unchecked (TIN-912)
+
+The rules an app implements do not change; the suite now fails an app that breaks some of them, where before it passed it. An app that met them passes as before.
+
+- **A revoked grant answers revoked to every request, checked as such.** Besides `initialize`, `tools/list`, `tools/call`, GET and DELETE, the suite sends a revoked grant `ping`, `resources/list`, `prompts/list`, a notification and a body that does not parse, in process and over HTTP (`--revoked`), and each must get the `RevokedAnswer` with the binding's status; `revoked_by` must be the app's host (the host of the grant's MCP URL) and `message` a string (`checkRevokedBody`, `REVOKED_PROBES`).
+- **No `then` on any `wait_for_focus` result with no focus.** The timeout, the wait a newer one took over, the refused wait and a cancelled wait that still answers are checked, each after a recent pin was read with the page open, so a `then` that should not ride would.
+- **Nothing but grants under `P/{secret}`.** An app whose `mcp.endpoints` has a `{secret}` entry must not serve a child there that names no grant: a JSON-RPC POST and a GET get a 4xx, never a 2xx or a redirect (in process, and `apc-json-secret-children` over HTTP, which needs no grant).
+- **The Dock consent's nonce.** Through `dock.lifecycle.owner`: an Allow with the nonce left out, a forged one or another agent's sends the hub no `/apc/pair`; the right one does, once (`consent: an Allow pairs only with its own consent's nonce, once`). Without `dock.lifecycle` it passes with a note.
+- **The revoked tool error may carry `structuredContent`.** The suite required it absent, which the spec never said and which runs against the `pairing` and `idle` errors carrying both. It now requires the `RevokedAnswer` and nothing else: in the text, and, when there, the same in `structuredContent`.
+- **The command line says what it covered.** Under the pass and fail counts, `N of M checks ran; K skipped, because:` with each reason and its count, and a warning that the run is not a conformance pass when more than half were skipped; `coverage` in the report (`ran`, `total`, `skipped`, `skipped_why`, `mostly_skipped`; `coverageOf`, `coverageLines`).
+- **The timing bounds are named.** "Soon after" a pin, a revoke or a takeover is 8.7 s and "on time" is at most 4 s past `timeout_s`, as before; the conformance page says so, since the spec gives no number.
+
 ## 0.11.2 (draft, 2026-11-14)
 
 A package patch: `@tineira/apc-web` and the wording only; the contract an app implements is the same as in 0.11.0 and 0.11.1 (TIN-903).

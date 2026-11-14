@@ -18,13 +18,12 @@ import {
   REVOKED_HTTP_STATUS,
   REVOKED_HTTP_STATUS_BEARER,
   describeMcpCoverage,
-  isRevokedAnswer,
   mcpUrlCoverage,
   parseApcManifest,
   type ApcEndpointProfile,
   type ApcManifest,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, attentionOf, checkCoreToolList, checkMcpEndpoints, checkFocusShape, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, REVOKED_PROBES, attentionOf, checkCoreToolList, checkMcpEndpoints, checkFocusShape, checkNothingButGrants, checkRevokedBody, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
 
 export interface HttpConformanceOptions {
   /** The app's origin, e.g. `https://pulse.example` (a trailing slash is fine; no path). */
@@ -76,7 +75,43 @@ export interface HttpConformanceReport {
   passed: number;
   failed: number;
   skipped: number;
+  /** How much of the suite this run covered: a run that skipped most checks is no conformance pass, whatever it failed. */
+  coverage: HttpCoverage;
   results: HttpCheckResult[];
+}
+
+/**
+ * What a run covered (integrator finding F7): `ran` of `total` checks ran (passed or failed), and why the others were
+ * skipped, grouped, most first. `mostly_skipped` is true when more than half were skipped: then the run says nothing
+ * about most of the standard, and the command line says so in a warning.
+ */
+export interface HttpCoverage {
+  ran: number;
+  total: number;
+  skipped: number;
+  skipped_why: Array<{ why: string; count: number }>;
+  mostly_skipped: boolean;
+}
+
+/** The reason a check was skipped, as grouped in the coverage: every in-process-only check under one. */
+export const IN_PROCESS_REASON = "in process only: they need the person's page, presence, a phone or a hub; run apcConformance(adapter) in the app's own tests";
+
+/** The coverage of a run's results. */
+export function coverageOf(results: ReadonlyArray<HttpCheckResult>): HttpCoverage {
+  const skipped = results.filter((r) => r.status === "skip");
+  const groups = new Map<string, number>();
+  for (const r of skipped) {
+    const why = r.id === "in-process" ? IN_PROCESS_REASON : (r.detail ?? "no reason given");
+    groups.set(why, (groups.get(why) ?? 0) + 1);
+  }
+  const total = results.length;
+  return {
+    ran: total - skipped.length,
+    total,
+    skipped: skipped.length,
+    skipped_why: [...groups].map(([why, count]) => ({ why, count })).sort((a, b) => b.count - a.count),
+    mostly_skipped: skipped.length * 2 > total,
+  };
 }
 
 export interface HttpCheck {
@@ -95,10 +130,14 @@ export interface HttpCheck {
  */
 export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
   { name: "a pin rides as attention on any result until it is read, and next reads it", why: "needs the person to drop a pin in the page" },
-  { name: "get_current_view returns the view the page reported, and no focus before a pin", why: "needs the page to report a view (the CLI checks the shape of whatever view and focus it gets)" },
+  { name: "get_current_view returns the view as identifiers, and no focus before a pin", why: "needs the page to report a view (the CLI checks the shape of whatever view and focus it gets)" },
   { name: "wait_for_focus returns a pin dropped during the wait", why: "needs the person to drop a pin during the wait" },
   { name: "wait_for_focus ends when the person has no page open", why: "needs to open and close the person's page (the CLI accepts either outcome)" },
-  { name: "then rides on results only while the person's page is open", why: "needs to open and close the person's page (the CLI checks then's shape where it appears)" },
+  { name: "then rides on results only while the person's page is open and the agent was pinned lately", why: "needs to open and close the person's page (the CLI checks then's shape where it appears)" },
+  { name: "wait_for_focus times out cleanly", why: "needs the person to pin the agent first, so a then that should not ride would (the CLI checks a timeout with no pin)" },
+  { name: "one wait per grant: a newer wait takes over, and the older one delivers nothing (APC 0.8)", why: "needs the person to drop a pin during the newer wait" },
+  { name: "a second wait started right after the first is refused with retry_after_s, and the first still delivers (APC 0.8)", why: "needs the person to drop a pin during the first wait" },
+  { name: "a pin is never lost to a cancelled wait (notifications/cancelled, an HTTP abort): it marks nothing seen and frees its place at once (APC 0.8)", why: "needs the person to drop a pin after the cancel" },
   { name: "presence names what a read touched, with ids only", why: "presence goes to the person's page, not to the agent" },
   { name: "a wait publishes open, then closed, on the presence channel (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
   { name: "a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
@@ -112,6 +151,7 @@ export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
   { name: "mobile: a person pins and unpins with a finger", why: "needs the page on a phone (page.mobile)" },
   { name: "apc_link: the offer, the code and its refusals, revoke and unlink of a linked agent", why: "needs Dock connections through a hub and the agent bar (link adapter)" },
   { name: "dock: the pairing code (APC 0.9)", why: "needs the person's drop and Allow, and a stand-in hub (dock adapter)" },
+  { name: "dock: consent: an Allow pairs only with its own consent's nonce, once", why: "needs the person's drop and Allow through the owner's endpoints, and a stand-in hub (dock.lifecycle)" },
   { name: "dock: the Dock profile as built (APC 0.10): the grant's states, the transitions, M1 to M9 and one pending pairing", why: "needs the person's drop, Allow and Cancel, the app's clock, a restart and a stand-in hub (dock.lifecycle)" },
 ];
 
@@ -401,6 +441,16 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       },
     },
     {
+      id: "apc-json-secret-children",
+      name: "nothing but grants is served under a {secret} entry of mcp.endpoints: a child that names no grant is not served (APC 0.11)",
+      async run() {
+        if (!manifest) return "apc.json did not parse";
+        const checked = await checkNothingButGrants(origin, manifest, async (url, init) => (await get(url, init, MCP_MAX_BYTES)).status);
+        if (checked === null) return "apc.json declares no {secret} entry in mcp.endpoints";
+        return { note: checked };
+      },
+    },
+    {
       id: "grant-declared",
       name: `the grant's MCP URL is covered by the apc.json of its origin, for the ${profile} profile`,
       run: withGrant(async (g) => {
@@ -494,7 +544,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
     },
     {
       id: "revoked-answers",
-      name: `a revoked grant answers { error: "revoked", revoked_by, revoked_at } to every method, POST, GET and DELETE: HTTP ${REVOKED_HTTP_STATUS} with a secret URL, ${REVOKED_HTTP_STATUS_BEARER} with a bearer token`,
+      name: `a revoked grant answers { error: "revoked", revoked_by (the app's host), revoked_at, message } to every request: any JSON-RPC method, a notification, a body that does not parse, POST, GET and DELETE: HTTP ${REVOKED_HTTP_STATUS} with a secret URL, ${REVOKED_HTTP_STATUS_BEARER} with a bearer token`,
       async run() {
         if (!revoked) return "give --revoked <mcp-url>: the MCP URL of a grant you revoked in the app";
         const bearer = !!options.revokedBearer;
@@ -512,7 +562,19 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
           const { status, body, wwwAuthenticate } = await rpc(revoked, method, params, undefined, revokedAuth);
           expect(status === expected, `${method} on the revoked grant: HTTP ${status}, expected ${expected}`);
           if (bearer) expect(INVALID_TOKEN.test(wwwAuthenticate), `${method} on the revoked grant: no WWW-Authenticate: Bearer error="invalid_token"`);
-          expect(isRevokedAnswer(body) && body.revoked_by.length > 0 && ISO.test(body.revoked_at), `${method} on the revoked grant answers ${JSON.stringify(body).slice(0, 200)}, not { error: "revoked", revoked_by, revoked_at }`);
+          checkRevokedBody(body, revoked.host, method);
+        }
+        for (const [what, raw] of REVOKED_PROBES) {
+          const r = await get(revoked.href, { method: "POST", headers: { ...revokedAuth, "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL_VERSION }, body: raw }, MCP_MAX_BYTES);
+          let body: unknown = null;
+          try {
+            body = JSON.parse(r.text);
+          } catch {
+            // not JSON
+          }
+          expect(r.status === expected, `${what} on the revoked grant: HTTP ${r.status}, expected ${expected}`);
+          if (bearer) expect(INVALID_TOKEN.test(r.wwwAuthenticate), `${what} on the revoked grant: no WWW-Authenticate: Bearer error="invalid_token"`);
+          checkRevokedBody(body, revoked.host, what);
         }
         for (const method of ["GET", "DELETE"]) {
           const r = await get(revoked.href, { method, headers: { ...revokedAuth, accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL_VERSION } }, MCP_MAX_BYTES);
@@ -524,7 +586,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
           }
           expect(r.status === expected, `${method} on the revoked grant: HTTP ${r.status}, expected ${expected}`);
           if (bearer) expect(INVALID_TOKEN.test(r.wwwAuthenticate), `${method} on the revoked grant: no WWW-Authenticate: Bearer error="invalid_token"`);
-          expect(isRevokedAnswer(body), `${method} on the revoked grant answers ${r.text.slice(0, 200)}, not { error: "revoked", ... }`);
+          checkRevokedBody(body, revoked.host, method);
         }
       },
     },
@@ -575,5 +637,23 @@ export async function runHttpConformance(options: HttpConformanceOptions): Promi
   const m = manifest();
   const app = m ? { name: m.name, standard: m.standard, profiles: [...m.profiles] } : undefined;
   const count = (s: HttpCheckStatus) => results.filter((r) => r.status === s).length;
-  return { origin, ...(app ? { app } : {}), checks_standard: APC_STANDARD_VERSION, passed: count("pass"), failed: count("fail"), skipped: count("skip"), results };
+  return { origin, ...(app ? { app } : {}), checks_standard: APC_STANDARD_VERSION, passed: count("pass"), failed: count("fail"), skipped: count("skip"), coverage: coverageOf(results), results };
+}
+
+/**
+ * What a run covered, as the command line prints it under the pass/fail line (integrator finding F7): "N of M checks
+ * ran; K skipped", why, grouped, and a warning when more than half were skipped, so such a run never reads as a pass.
+ */
+export function coverageLines(c: HttpCoverage): string[] {
+  const lines = [`${c.ran} of ${c.total} checks ran; ${c.skipped} skipped${c.skipped ? ", because:" : ""}`];
+  for (const g of c.skipped_why) lines.push(`  ${String(g.count).padStart(3)}  ${g.why}`);
+  if (c.mostly_skipped) {
+    lines.push(
+      "",
+      `WARNING: ${c.skipped} of ${c.total} checks were skipped. This is NOT a conformance pass: the run says nothing about most`,
+      "of the standard. Give --grant (and --revoked) for the MCP checks, and run apcConformance(adapter) from",
+      "@tineira/apc-conformance in the app's own tests for the checks that need the person's page.",
+    );
+  }
+  return lines;
 }
