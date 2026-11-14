@@ -33,7 +33,9 @@ export type CoreBreak =
   | "no_takeover"
   | "cancel_ignored"
   // Under P/{secret} (EP-5).
-  | "spa_fallback";
+  | "spa_fallback"
+  // An out-of-range timeout_s is refused, never clamped (APC 0.12).
+  | "timeout_clamped";
 
 export interface CoreFixtureOptions {
   break?: CoreBreak;
@@ -141,7 +143,10 @@ export function coreFixture(options: CoreFixtureOptions = {}): { adapter: ApcApp
       payload = { view, focus: g.unread ? focusOf(g) : null };
       g.unread = false;
     } else if (name === "wait_for_focus") {
-      const w = await wait(g, Math.min(Math.max(Number(args.timeout_s ?? 25), 1), 50), call, signal);
+      const t = args.timeout_s ?? 25;
+      const inRange = typeof t === "number" && Number.isInteger(t) && t >= 1 && t <= 50;
+      if (!inRange && !has("timeout_clamped")) return result({ error: "invalid_arguments", message: "timeout_s is a whole number from 1 to 50." }, true);
+      const w = await wait(g, Math.min(Math.max(Math.round(Number(t)) || 1, 1), 50), call, signal);
       if (w.isError) return revokedToolError(g);
       payload = w.payload;
       noThen = w.noFocus !== null;

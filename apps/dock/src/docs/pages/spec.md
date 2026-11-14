@@ -17,17 +17,17 @@ How they are checked does not change what they mean. The conformance suite check
 
 ## What 1.0 freezes
 
-1.0 freezes the pairing contract between an app, an agent and a hub: [the core](#the-core), [the Direct profile](#the-direct-profile), [the Dock profile](#the-dock-profile) with the hub's duties toward apps (H1 to H8), [`apc_link`](#apc_link), [`apc.json`](#apcjson), the rules of [the hub's trust model](#the-hubs-trust-model) on which apps pair, and [reading what you do not know](#reading-what-you-do-not-know). The hub's tools for agents are **not** frozen by 1.0: its `get_current_view` with `views[]`, its one `wait_for_focus` across apps, `list_app_tools` and `call_app_tool`, the `<app>__<tool>` relay and the untrusted envelope it puts relayed results in, and the browser extension's `page_reading` focus with `page__get_reading`'s `page_text`. They stay non-normative until a later minor version states them; until then [the hub's tools](#the-hubs-tools) describes the reference hub, and any minor version may change them. An agent reads them as it reads any MCP server's tools: by their descriptions.
+1.0 freezes the pairing contract between an app, an agent and a hub: [the core](#the-core), [the Direct profile](#the-direct-profile), [the Dock profile](#the-dock-profile) with the hub's duties toward apps (H1 to H8), [`apc_link`](#apc_link), [`apc.json`](#apcjson), the rules of [the hub's trust model](#the-hubs-trust-model) on which apps pair and on marking what an unverified app gives, and [reading what you do not know](#reading-what-you-do-not-know). The hub's tools for agents are **not** frozen by 1.0: its `get_current_view` with `views[]`, its one `wait_for_focus` across apps, `list_app_tools` and `call_app_tool`, the `<app>__<tool>` relay, the shape of the untrusted envelope and labels it marks an unverified app's content with (the marking itself is frozen), and the browser extension's `page_reading` focus with `page__get_reading`'s `page_text`. They stay non-normative until a later minor version states them; until then [the hub's tools](#the-hubs-tools) describes the reference hub, and any minor version may change them. An agent reads them as it reads any MCP server's tools: by their descriptions.
 
 ## Reading what you do not know
 
 So that a minor version can add without breaking anyone, every reader **MUST** ignore what it does not know:
 
 - **A key.** In `apc.json`, a target, a view, a focus, a `PresenceEvent` or `PresenceWaitEvent`, a tool result, a tool error, and a hub's answer to `/apc/pair` or `/apc/confirm`, a key the reader does not know is read as if it were not there, and the rest is read as usual.
-- **A word of an open list.** A word of `profiles` it does not know, a presence message of a `kind` it does not know (the whole message is ignored), and a tool it was not told of.
+- **A word of an open list.** A word of `profiles` it does not know (at the top level of `apc.json` and in an `mcp.endpoints` entry, where it is left out one by one and the entry stays), a presence message of a `kind` it does not know (the whole message is ignored), and a tool it was not told of.
 - **An error code.** A code it does not know reads as the request's failure or refusal, by its status and shape (HTTP 400, `isError: true`, a JSON-RPC error), never as success. [The error codes](#error-codes) lists those this version names.
 
-Ignoring never widens. Where this page says to drop something whole (an `mcp.endpoints` entry the reader does not fully understand), the reader drops it and uses no part of it. And a writer never relies on an older reader understanding what it added: what an older reader does is always what it does when it ignores it. A `standard` newer than the reader's own is read by the same rule: see [versioning and compatibility](#versioning-and-compatibility).
+Ignoring never widens. Where this page says to drop something whole (an `mcp.endpoints` entry with a key the reader does not know, or a path it does not understand), the reader drops it and uses no part of it: that is the one place an unknown key is not ignored. And a writer never relies on an older reader understanding what it added: what an older reader does is always what it does when it ignores it. A `standard` newer than the reader's own is read by the same rule: see [versioning and compatibility](#versioning-and-compatibility).
 
 ## The core
 
@@ -75,8 +75,8 @@ The page shows that an agent is listening (a drop reaches it now) from a second 
 - An app that sends them **MUST** send `open` when a `wait_for_focus` claims the grant's one place for a wait, and `closed` when the wait gives it up: on return (a pin, a timeout, a closed page), on cancel, and when the grant is revoked or deleted during it. A wait refused (within `WAIT_CLAIM_GAP_S`, or on a revoked grant) sends nothing.
 - **Atomic: what "can tell" means.** Its place for a wait says, in the step that takes it, whether another wait held it, and, in the step that gives it up, whether this wait held it (a compare-and-swap and a compare-and-delete on a store row). An app that can only check and then release, in two steps, **MUST NOT** send wait events: a claim between the two would end the page on `closed` while a wait runs, and no "waiting" beats a wrong one.
 - **A takeover** sends the old wait's `closed`, then the new wait's `open`, both when the new wait claims the place. The old wait sends nothing when it later finds it was taken over. So a grant's last wait event always says whether a wait holds its place now.
-- **The ceiling a page counts on.** A page has no way to learn an app's ceiling for `timeout_s`, so since 0.12 an app that sends wait events **MUST NOT** set its ceiling above `WAIT_CEILING_DEFAULT_S` (50 s). It may set a lower one.
-- **A `closed` that never comes.** A worker can die before it sends `closed`. A page **MUST** treat an `open` as closed once it is older than `WAIT_CEILING_DEFAULT_S` (50 s, the longest wait of an app that sends wait events) plus `WAIT_EVENT_MARGIN_S` (10 s), counted on the page's clock from when the event arrived, never from `at`. A live wait overruns its timeout by at most one poll and its last checks, which the margin covers; a lost `closed` leaves the page "waiting" for a minute at most. An app **SHOULD** tell a page that connects during a wait about it (Pulse and Signals send the open event first), and leave out one past the same limit. An `open` for a wait the page already has open keeps the first arrival, so a replay never restarts its clock; a page that first hears of a wait from a replay counts from then, so there a lost `closed` can show for up to twice the limit.
+- **The ceiling a page counts on.** A page needs the app's ceiling for `timeout_s` (its longest wait). A page the app ships itself knows it from the app's own code (`ceilingS` in `@tineira/apc-web`'s `waitOpen`, `waitOpenLimitMs(ceilingS)`); a page that does not know it counts on `WAIT_CEILING_DEFAULT_S` (50 s). So an app whose wait events a page it did not write reads **SHOULD** keep its ceiling at 50 s or less, or a wait longer than that shows closed early there.
+- **A `closed` that never comes.** A worker can die before it sends `closed`. A page **MUST** treat an `open` as closed once it is older than the app's ceiling as the page knows it (50 s, `WAIT_CEILING_DEFAULT_S`, when it does not) plus `WAIT_EVENT_MARGIN_S` (10 s), counted on the page's clock from when the event arrived, never from `at`. A live wait overruns its timeout by at most one poll and its last checks, which the margin covers; a lost `closed` leaves the page "waiting" for a minute at most. An app **SHOULD** tell a page that connects during a wait about it (Pulse and Signals send the open event first), and leave out one past the same limit. An `open` for a wait the page already has open keeps the first arrival, so a replay never restarts its clock; a page that first hears of a wait from a replay counts from then, so there a lost `closed` can show for up to twice the limit.
 - **Dock grants.** A Dock agent waits on the hub, not on the app: the waits an app sees on a dock grant are the hub's relays. A page **MUST NOT** show a dock grant as waiting, whatever its wait events say. The dock shows its own agents' waits, from the hub's place for each agent.
 - A page that reads the channel ignores a message it does not know, so a page before 0.11 is not affected (`flashTargets` ignores wait events). A page reads the five keys strictly and drops a key it does not know (the event only drives a display); an app sends exactly the five.
 
@@ -300,7 +300,7 @@ What an app **MUST** do around the drop and the hub call (`DockAppRequirement`):
 
 ### The hub's duties
 
-What a hub **MUST** do (`DockHubRequirement`; the reference hub follows them). No conformance suite checks a hub in 1.0: these rules, and the hub's other MUSTs in this page (the pairing code is never shown, the dock puts no secret in the drag, an unverified app pairs only over HTTPS on a domain name), are proven by the reference hub's own tests (`apps/dock/test`). They bind every hub all the same. The sentences of H4 about the hub's own `views[]` and `wait_for_focus` describe [the hub's tools](#the-hubs-tools), which 1.0 does not freeze; what a hub does with an app's `pairing` and `idle` answers is frozen.
+What a hub **MUST** do (`DockHubRequirement`; the reference hub follows them). No conformance suite checks a hub in 1.0: these rules, and the hub's other MUSTs in this page (the pairing code is never shown, the dock puts no secret in the drag, an unverified app pairs only over HTTPS on a domain name, what an unverified app gives reaches the agent marked), are proven by the reference hub's own tests (`apps/dock/test`). They bind every hub all the same. The sentences of H4 about the hub's own `views[]` and `wait_for_focus` describe [the hub's tools](#the-hubs-tools), which 1.0 does not freeze; what a hub does with an app's `pairing` and `idle` answers is frozen.
 
 - **H1.** The hub sends `initialize` on a grant's MCP URL only after the dock owner approved the pairing with the code, and sends no `initialize`, `tools/list` or `tools/call` before that. While approving, the dock takes no code.
 - **H2.** `/apc/confirm` expires overdue pending requests before it answers, so an expired request answers `not_paired`.
@@ -496,7 +496,7 @@ An unverified app pairs only after the person approves the dock's warning for it
 
 ### Untrusted marking
 
-What an unverified app gives reaches the agent marked. The marking is required; the shapes below (the envelope, the labels) are the hub's tools, which 1.0 does not freeze:
+A hub **MUST** mark everything an unverified app gives (its results, its errors, its view, its focus, its `attention`, its tools) so that an agent can tell it from the hub's own words, and **MUST NOT** count its `then` or `page_open`. The marking is frozen by 1.0; the shapes below (the envelope, the labels) are the reference hub's, part of its tools, which 1.0 does not freeze:
 
 - A relayed result arrives in an envelope, in the structured result and the text: `{ app, untrusted: true, note, result }` (or `text: [...]`).
 - Its entry in `views`, its focus and its `attention` carry `untrusted: true`.
@@ -518,7 +518,7 @@ With the APC browser extension the person can drop a dock agent on any web page,
 
 ## Error codes
 
-The codes this version names, in one place. Each section above says the shape and the status; a reader that meets a code not listed reads it as a refusal or a failure ([reading what you do not know](#reading-what-you-do-not-know)). A code marked *reference* is what the reference software answers there; another implementation may answer another code for the same case and still conform. The others are named by a rule of this page.
+The codes this version names, in one place. Each section above says the shape and the status; a reader that meets a code not listed reads it as a refusal or a failure ([reading what you do not know](#reading-what-you-do-not-know)). A code marked *reference* is what the reference software answers there; another implementation may answer another code for the same case and still conform. The others are named by a rule of this page. The table is not exhaustive: the dock's own pages and the reference software have codes of their own (`try_again` when a link code collides, say).
 
 **An app, to an agent on a grant** (the core, both profiles)
 
@@ -530,7 +530,7 @@ The codes this version names, in one place. Each section above says the shape an
 | `pairing_mismatch` | the body (**SHOULD**) of the HTTP 404 an `initialize` gets when it does not hold the grant's binding (M11), or names a pairing on a grant that is not a Dock grant (M12) | [the binding](#the-binding) |
 | `link_refused` | `apc_link` refused, with a `reason`: `unknown_code`, `expired`, `used`, `same_connection`, `same_path`, `not_offered` or `already_linked` | [`apc_link`](#apc_link) |
 
-An unknown or ended grant carries no code: it is a 404 (a secret URL) or a plain 401 (a bearer token).
+An unknown or ended grant carries no `RevokedAnswer`: it is a 404 (a secret URL) or a plain 401 (a bearer token). A code in its body is optional; the reference apps answer `{ "error": "unknown_grant" }`. An app whose configuration of its profiles is wrong answers its agent paths HTTP 503 with `profiles_misconfigured` (*reference*, `profilesRefusal` in `@tineira/apc-server`).
 
 **An app, to its own page, on a drop or an Allow** (Dock)
 
@@ -567,9 +567,11 @@ An unknown or ended grant carries no code: it is a 404 (a secret URL) or a plain
 
 | Code | When | Where |
 |---|---|---|
+| `pairing_code_required`, `invalid_pairing_code` | *reference*: Allow with no code, or with one that is not a code; neither counts as a wrong code | [the pairing code](#the-pairing-code) |
 | `wrong_pairing_code` | a wrong code, with `attempts_left` | [the pairing code](#the-pairing-code) |
 | `pairing_code_refused` | the fifth wrong code: the request goes and its grant is given back | [the pairing code](#the-pairing-code) |
 | `warning_required` | *reference*: an unverified app approved before its warning was | [the warning](#the-warning) |
+| `unknown_pairing` | *reference*: the request is gone (expired, replaced or decided meanwhile) | [one pending pairing](#one-pending-pairing) |
 
 **A hub, to an agent** (outside the 1.0 freeze, except H4 and H5)
 
@@ -579,13 +581,14 @@ An unknown or ended grant carries no code: it is a 404 (a secret URL) or a plain
 | `pairing_ended` | a pairing the hub introduced answered 404 (H5) | [the hub's duties](#the-hubs-duties) |
 | `app_unreachable` | *reference*: an app did not answer; for an unverified app, in the hub's own words only | [untrusted marking](#untrusted-marking) |
 | `unknown_app`, `unknown_tool`, `invalid_arguments`, `no_reading` | *reference*: the hub's own tools | [the hub's tools](#the-hubs-tools) |
+| `unknown_agent` | *reference*: HTTP 404 on an agent's MCP URL the dock no longer has (removed, or rotated when a computer left) | |
 
 ## Versioning and compatibility
 
 The standard has its own [semver](https://semver.org), `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. Every change to the contract adds an entry to the [changelog](/docs/changelog) and bumps it. The packages' TypeScript APIs, presentation (how a page draws its agents) and a hub's internals are not the contract. Why the policy is what it is: [DESIGN.md § 27](https://github.com/tineira/agent-pointed-context/blob/main/DESIGN.md#27-versioning-and-compatibility-from-10-tin-913).
 
 - **0.x, now: a draft.** Any minor release may change the contract, compatible or not; the changelog says what changed and what an app must do. A patch (0.7.0 to 0.7.1) never changes the contract.
-- **From 1.0: what breaks.** A change that can make a party that conforms to N.x fail at N.y, or misbehave against a peer at N.y, is breaking and needs a new major version: a key made required; a tool, route or event removed or renamed; an input narrowed or a result widened; a new MUST on an existing party; a code changed; a state transition changed. A minor version only adds what every reader already ignores ([reading what you do not know](#reading-what-you-do-not-know)): an optional key, a tool, an event, a profile, an error code, a SHOULD. A patch only clarifies the wording, fixes the reference software, or makes the conformance suite check a rule this page already states.
+- **From 1.0: what breaks.** A change that can make a party that conforms to N.x fail at N.y, or misbehave against a peer at N.y, is breaking and needs a new major version: a key made required; a tool, route or event removed or renamed; an input narrowed or a result widened; a new MUST on an existing party; a code changed; a state transition changed. A minor version only adds what every reader already ignores ([reading what you do not know](#reading-what-you-do-not-know)): an optional key, a tool, an event, a profile, an error code, a SHOULD. Two additions are not that, and need a major version or a gate: a key inside an `mcp.endpoints` entry, or a path form outside the 0.11 grammar, since an older reader drops the whole entry and stops covering its URLs (a minor may add one only beside an entry older readers understand, which keeps covering them); and anything that narrows what a party may do. An older reader ignores a restricting key, so a narrowing is enforced only where the older party declares that it takes it, as an app takes the binding only when the hub's acknowledgement declares `binding` (0.12); without such a declaration it is a major version. A patch only clarifies the wording, fixes the reference software, or makes the conformance suite check a rule this page already states.
 - **`standard` in `apc.json`** is the highest version whose rules the app meets. A hub or an agent **MUST NOT** refuse an app because its `standard` is an older minor version of the same major: it uses what that version defines. A `standard` that is a newer minor version of the reader's major is read by the rules the reader knows, ignoring the rest. A hub tells majors apart by the major version of that field.
 - **Apps on 0.x when 1.0 ships.** 1.0 is 0.12 frozen under that number: an app on 0.12 claims 1.0 by changing only `standard`. A 1.x hub **MUST** keep pairing and relaying apps that claim 0.10 or 0.11 for at least 6 months after 1.0; it may show them as made for an older version, and refuses nothing on that claim. The reference hub counts the `standard` each app claims, to know when the window can close; it enforces nothing on it. A 1.0 hub does not support apps below 0.10.
 - **The previous major.** When a new major version ships, the reference hub keeps serving apps of the previous one for at least 12 months.

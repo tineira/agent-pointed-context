@@ -69,7 +69,8 @@ export interface FocusAttrs {
 export function focusAttrs(target: { kind: string; id?: string | null; part?: string | null; params?: Record<string, KeyValue> | null }): FocusAttrs {
   const attrs: FocusAttrs = { "data-focus": `${target.kind}:${target.id ?? ""}` };
   if (target.part) attrs["data-focus-part"] = target.part;
-  if (target.params) attrs["data-focus-params"] = JSON.stringify(target.params);
+  // Empty params name nothing (APC 0.12): leave the attribute out rather than write one no reader takes.
+  if (target.params && Object.keys(target.params).length > 0) attrs["data-focus-params"] = JSON.stringify(target.params);
   return attrs;
 }
 

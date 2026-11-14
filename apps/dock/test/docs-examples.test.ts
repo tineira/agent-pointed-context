@@ -131,7 +131,8 @@ test("Orders: a child of /mcp/ that fits a secret but names no grant is an unkno
   const origin = "https://orders.test";
   const app = new OrdersApp({ origin, profiles: ["direct", "dock"], signedIn: () => false });
   const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
-  for (const child of ["AbCdEfGhIjKlMnOpQrStUv", "operations-console", "0".repeat(32)]) {
+  // Each fits a secret and misses the grant route ([0-9a-f]{32}), so only the {secret} rule answers it.
+  for (const child of ["AbCdEfGhIjKlMnOpQrStUv", "operations-console", "A".repeat(32)]) {
     const url = `${origin}/mcp/${child}`;
     const post = await app.fetch(new Request(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) }));
     assert.equal(post.status, 404, `POST ${child}`);

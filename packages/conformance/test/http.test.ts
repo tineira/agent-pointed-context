@@ -347,6 +347,21 @@ test("from 1.0 the suite passes a newer minor of its major with a note, checks p
   assert.equal(standardSupport("0.13.0", "0.12.0").ok, false, "at 0.x a newer minor still fails");
 });
 
+test("pre-1.0 claims stop at 0.12, the last 0.x, and only a 1.x suite checks them; another major names its suite (versioning and compatibility)", () => {
+  assert.equal(standardSupport("0.12.3", "1.0.0").ok, true);
+  for (const claimed of ["0.13.0", "0.99.0"]) {
+    const r = standardSupport(claimed, "1.0.0");
+    assert.equal(r.ok, false, `${claimed} was never a version a 1.x suite checks`);
+    assert.match("reason" in r ? r.reason : "", /0\.10\.0 to 0\.12\.x; use @tineira\/apc-conformance@0/);
+  }
+  const pre = standardSupport("0.12.0", "2.0.0");
+  assert.equal(pre.ok, false, "a 2.x suite does not check pre-1.0 claims");
+  assert.match("reason" in pre ? pre.reason : "", /@tineira\/apc-conformance@1 .* or @0/);
+  const prev = standardSupport("1.0.0", "2.0.0");
+  assert.equal(prev.ok, false, "the previous major is checked by its own suite");
+  assert.match("reason" in prev ? prev.reason : "", /apc-conformance@1/);
+});
+
 test("mcp.endpoints (APC 0.11): the grant is checked for the profile given, as a hub checks it; the file's entries are checked as readers take them", async () => {
   const TG = `${ORIGIN}/mcp/AbCdEfGhIjKlMnOpQrStUv`;
   const TR = `${ORIGIN}/mcp/ZyXwVuTsRqPoNmLkJiHgFe`;

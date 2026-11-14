@@ -363,6 +363,7 @@ async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, p
 
 /** What a check of a 0.8 rule says of an app that claims an earlier standard: passed, not checked. */
 const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
+const NOT_012 = { note: "not checked: the app's apc.json claims a standard before 0.12.0, which does not have this rule" };
 const NOT_011 = { note: "not checked: the app's apc.json claims a standard before 0.11.0, which has no wait events" };
 const NO_WAIT_EVENTS = { note: "not checked: the app sends no wait events (APC 0.11: optional, and only for an app that claims and releases its place for a wait atomically), so its page shows no waiting" };
 const PROBE_FAILED = { note: "not checked: the wait-event probe failed in an earlier check, which reports why" };
@@ -632,6 +633,20 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       expect(d.page_open === undefined || d.page_open === true, "the page is open, so page_open is true or left out");
       expect(ms >= 900 && ms < 1000 + TIMEOUT_LATE_MS, `it took ${ms} ms for timeout_s 1`);
       noThen(r, "a wait that timed out");
+    }),
+
+    check("wait_for_focus refuses a timeout_s outside its range, never clamps it", async () => {
+      const conn = await app.connect();
+      if (!(await claims(conn, "0.12.0"))) return NOT_012;
+      // 0 and 1.5 are outside "a whole number from 1 to the ceiling"; an app that clamps them waits a second or two and
+      // answers a wait, which is what this check fails.
+      for (const timeout_s of [0, 1.5]) {
+        const { status, body } = await send(app, conn, "tools/call", { name: "wait_for_focus", arguments: { timeout_s } });
+        const rpcError = isObject(body) && "error" in body && !!body.error;
+        const r = isObject(body) ? (body as { result?: unknown }).result : undefined;
+        const toolError = isObject(r) && (r as { isError?: unknown }).isError === true;
+        expect(status !== 200 || rpcError || toolError, `wait_for_focus({ timeout_s: ${timeout_s} }) is refused as invalid arguments (a JSON-RPC error or a tool error), never clamped: it answered ${JSON.stringify(r ?? body).slice(0, 200)}`);
+      }
     }),
 
     check("wait_for_focus ends when the person has no page open", async () => {

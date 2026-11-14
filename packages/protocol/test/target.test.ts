@@ -21,6 +21,12 @@ test("an empty params names nothing: a target with no id needs at least one key 
   assert.deepEqual(parseTarget({ kind: "customer", id: "cus_0042", params: {} })?.id, "cus_0042", "with an id it still names the row");
 });
 
+test("focusAttrs writes no empty params, so a row with params: {} stays pointable (APC 0.12)", () => {
+  const attrs = focusAttrs({ kind: "customer", id: "cus_0042", params: {} });
+  assert.deepEqual(attrs, { "data-focus": "customer:cus_0042" });
+  assert.equal(parseFocusAttrs(attrs["data-focus"], null, attrs["data-focus-params"] ?? null)?.id, "cus_0042");
+});
+
 test("keys only: amounts, free text and nested objects are refused", () => {
   assert.equal(parseParams({ mrr: 1234.57 }), null, "a number is an amount");
   assert.equal(parseParams({ mrr: "1234.57" }), null, "a numeric string is an amount too");

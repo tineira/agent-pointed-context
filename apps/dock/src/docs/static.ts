@@ -7,7 +7,7 @@
  * `staticDocFiles` returns next to its index.html (vite.config.ts), and test/docs.test.ts checks it.
  */
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
-import { exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "./markdown.ts";
+import { ANCHOR_ALIASES, exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "./markdown.ts";
 import { DOC_PAGES, EXAMPLES_DIR, type DocPage } from "./pages.ts";
 
 /** Where a page's Markdown is served: /docs/spec.md for /docs/spec, /docs/overview.md for /docs itself. */
@@ -43,7 +43,9 @@ function blocks(list: Block[], file: string, examples: Record<string, string>): 
         case "heading": {
           const level = Math.min(b.level, 4);
           const anchor = b.level > 1 ? `<a class="docs-anchor" href="#${escapeHtml(b.id)}" aria-label="${escapeHtml(`Link to ${plainText(b.c)}`)}">#</a>` : "";
-          return `<h${level} id="${escapeHtml(b.id)}">${inlines(b.c, file)}${anchor}</h${level}>`;
+          // A renamed heading keeps its old id on a mark before it, so an old link lands here with no script.
+          const old = Object.keys(ANCHOR_ALIASES).filter((from) => ANCHOR_ALIASES[from] === b.id).map((from) => `<span id="${escapeHtml(from)}"></span>`).join("");
+          return `${old}<h${level} id="${escapeHtml(b.id)}">${inlines(b.c, file)}${anchor}</h${level}>`;
         }
         case "para":
           return `<p>${inlines(b.c, file)}</p>`;

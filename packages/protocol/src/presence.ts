@@ -17,11 +17,13 @@
  * The old wait sends nothing when it later finds it was taken over: its place was already given up. So the last wait
  * event of a grant always says whether a wait holds the place now.
  *
- * **The ceiling.** A page cannot learn an app's ceiling for `timeout_s`, so an app that sends wait events never sets
- * it above `WAIT_CEILING_DEFAULT_S` (APC 0.12); a lower one is fine.
+ * **The ceiling.** A page the app ships itself knows the app's ceiling for `timeout_s` from the app's own code
+ * (`waitOpenLimitMs(ceilingS)`, `ceilingS` in `@tineira/apc-web`); a page that does not know it counts on
+ * `WAIT_CEILING_DEFAULT_S`, so an app whose wait events a page it did not write reads should keep its ceiling at
+ * 50 s or less (APC 0.12).
  *
  * **A `closed` that never comes.** A worker can die before it sends `closed`. A page treats an `open` as closed once
- * it is older than `WAIT_CEILING_DEFAULT_S` (the longest wait of an app that sends wait events) plus
+ * it is older than the app's ceiling as the page knows it (`WAIT_CEILING_DEFAULT_S` when it does not) plus
  * `WAIT_EVENT_MARGIN_S`, counted on the page's own clock from when the event arrived (never from `at`,
  * which is the server's clock). A wait never holds its place past its timeout by more than one poll and its last
  * checks; the margin covers that, so a live wait is never shown closed early, and a lost `closed` leaves the page
