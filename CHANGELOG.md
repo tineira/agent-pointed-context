@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The dock asks before it creates one (2026-11-14, TIN-879)
+
+- **A computer with no dock sees "Create a new dock" and "Join a dock on another computer", and nothing is created until one is pressed.** Opening the dock used to make a Durable Object at once, so crawlers and a second computer left empty docks behind (the second one's deleted when it joined). `POST /api/dock` now only resumes: 404 `no_dock` with no dock that opens, with `replaced` when the cookie named a dock that is gone, which the chooser says in a line instead of the old notice. Creating is `POST /api/dock/new`, refused from another origin (403). The floating pets still only resume. Dock for Windows loads production's `/dock` pages, so its PR builds show the chooser only after this merges. (`apps/dock/src/worker/index.ts`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/dock.css`, `apps/dock/src/web/try.tsx`, `apps/dock/test/computers.test.ts`, `apps/dock/test/dock-chooser.test.ts`, `scripts/extension-e2e.mjs`, `DESIGN.md`)
+
 ### The pin badge's × never covers the mark on touch (2026-11-14, APC 0.11.2, TIN-903)
 
 - **`@tineira/apc-web` 0.11.2 puts the pin badge's × beside the mark on touch.** It used to sit on the mark's corner with a 44 px hit area, so a tap meant to arm or drag the mark unpinned (found adopting the packaged pet in Autio). The × is now 24 px beside the mark and its hit area stops at the mark's edge; the step between stacked badges on touch is `PIN_STACK_STEP_TOUCH` (72 px), with `pinStackStep(touch)`, `pinTouch()` and `pinBadgeX` for apps that place badges themselves. Desktop pointers are unchanged. (`packages/web/src/pin-badge.ts`, `packages/web/test/pin-touch.test.ts`, `apps/dock/src/docs/pages/spec.md`)

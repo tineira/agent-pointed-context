@@ -17,7 +17,7 @@ const TRY_POST = `${SIGNALS.url}?post=post_013`;
 const TRY_CUSTOMER = PULSE.url.replace(/overview$/, "customers/cus_0048");
 
 const TRY_STEPS = [
-  { title: "Your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie. Use it in the browser with nothing to install, or as an app for Windows. On another computer, link it from the dock's menu, and your agent stays connected once." },
+  { title: "Your dock", text: "A small page that holds your agent and follows you from app to app. It is yours alone: no account, one cookie. Use it in the browser with nothing to install, or as an app for Windows. On another computer, choose Join when the dock first opens, with a code from the dock's menu, and your agent stays connected once." },
   { title: "Connect your agent", text: "Add one MCP server to Claude, ChatGPT, Cursor or Grok. That single connection is all it needs." },
   { title: "Open Pulse or Signals", text: "Open one from this page, below. The first time your agent arrives in it, allow it there, then in your dock." },
   { title: "Point and ask", text: "Drag your agent from the dock onto a bar, a customer or a headline, and ask about \"this\". Point at something in the other app and ask how the two connect." },

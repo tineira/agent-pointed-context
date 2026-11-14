@@ -65,7 +65,7 @@ function computer(env: Json, userAgent: string) {
       cookie = value;
     },
     async open() {
-      return (await send("/api/dock", {})).json.did as string;
+      return (await send("/api/dock/new", {})).json.did as string;
     },
     async state(did: string) {
       return (await send(`/api/d/${did}/state`)).json;
@@ -264,13 +264,17 @@ test("a computer removes another, never itself; the removed one's cookie stops o
   const removedSecret = b.cookie.split(".")[1]!;
   const upgrade = await env.HUB.get(did).fetch(new Request(`${ORIGIN}/api/d/${did}/ws`, { headers: { "x-apc-owner": removedSecret, upgrade: "websocket" } }));
   assert.equal(upgrade.status, 403);
-  // Its next visit opens a new dock, and the page is told why (not a silent empty dock).
+  // Its next visit makes no dock (TIN-879): the page is told this computer no longer opens its dock, and asks.
+  const docks = env.HUB.objects.size;
   const again = await b.send("/api/dock", {});
-  assert.equal(again.json.created, true);
-  assert.equal(again.json.replaced, true);
-  assert.notEqual(again.json.did, did);
+  assert.equal(again.status, 404);
+  assert.deepEqual(again.json, { error: "no_dock", replaced: true });
+  assert.equal(env.HUB.objects.size, docks);
   // A first visit with no cookie says nothing of the kind.
-  assert.equal((await computer(env, FIREFOX_MAC).send("/api/dock", {})).json.replaced, undefined);
+  const first = await computer(env, FIREFOX_MAC).send("/api/dock", {});
+  assert.equal(first.status, 404);
+  assert.deepEqual(first.json, { error: "no_dock" });
+  assert.equal(env.HUB.objects.size, docks);
 });
 
 test("Remove unpairs every browser sending page readings, and a page socket from before this change is closed to come back tagged", async () => {
@@ -358,4 +362,22 @@ test("guessing from many addresses: past 3000 misses in a minute, all together, 
   assert.equal(await codes.put("KQ7M4P2XD", "b".repeat(32), Date.now() + 60_000), false, "a code is one dock's");
   for (let i = 0; i < 3000; i++) assert.deepEqual(await codes.take("000000000", `client-${i % 200}`), { error: "unknown_code" });
   assert.deepEqual(await codes.take("KQ7M4P2XD", "someone-new"), { error: "busy" });
+});
+
+test("joining from a computer that has no dock makes no dock on the way: its page asked, was told to choose, and joined the real one (TIN-879)", async () => {
+  const env = world();
+  const a = computer(env, CHROME_WIN);
+  const b = computer(env, EDGE_WIN);
+  const did = await a.open();
+  assert.equal(env.HUB.objects.size, 1);
+  // The page loads: no dock, so nothing is made and the chooser shows.
+  assert.deepEqual((await b.send("/api/dock", {})).json, { error: "no_dock" });
+  assert.equal(env.HUB.objects.size, 1);
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
+  const claim = (await b.send("/api/dock/join", { code })).json.claim;
+  await a.send(`/api/d/${did}/joins/${(await a.state(did)).joins[0].id}`, { action: "approve" });
+  assert.deepEqual((await b.send("/api/dock/join/status", { claim })).json, { status: "joined", did });
+  // Only the dock it joined exists: none was made and then deleted.
+  assert.equal(env.HUB.objects.size, 1);
+  assert.deepEqual((await b.send("/api/dock", {})).json, { did, created: false });
 });

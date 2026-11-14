@@ -157,13 +157,13 @@ export function HubDock() {
     setJoining(null);
     setHeld(false);
   };
-  /** Another computer removed this one from the dock (TIN-838): the hub closed its socket saying so. */
-  const [removed, setRemoved] = useState(false);
   /**
-   * This page opened a new dock because its cookie no longer opened the old one (removed on another
-   * computer, Start over there, or the dock ended; Review round 1 on #158): it says so, with Join.
+   * No dock opens on this computer (TIN-879): a first visit, or its cookie names a dock that is gone (removed on
+   * another computer, Start over there, or the dock ended: replaced). Nothing is created until the person
+   * chooses: Create a new dock, or Join a dock on another computer.
    */
-  const [replaced, setReplaced] = useState(false);
+  const [chooser, setChooser] = useState<{ replaced: boolean } | null>(null);
+  const [creating, setCreating] = useState(false);
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
   const [reopen, setReopen] = useState(0);
@@ -172,16 +172,34 @@ export function HubDock() {
     // The strip and the pets only resume the dock its window opened, and wait for it on a first run (#84).
     let retry = 0;
     const open = () =>
-      call<{ did: string; replaced?: boolean }>("/api/dock", FLOATING ? { resume: true, desktop: DESKTOP_SHELL } : { desktop: DESKTOP_SHELL }).then(
-        (r) => {
-          setDid(r.did);
-          if (r.replaced) setReplaced(true);
-        },
-        (e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError({ message: String(e), retry: unreachable(e) })),
-      );
+      fetch("/api/dock", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(FLOATING ? { resume: true, desktop: DESKTOP_SHELL } : { desktop: DESKTOP_SHELL }) })
+        .then(async (res) => {
+          if (res.status === 404 && !FLOATING) {
+            const body = (await res.json().catch(() => null)) as { error?: string; replaced?: boolean } | null;
+            if (body?.error === "no_dock") {
+              setError(null);
+              return setChooser({ replaced: body.replaced === true });
+            }
+          }
+          if (!res.ok) throw new Error(`/api/dock: ${res.status}`);
+          setChooser(null);
+          setDid(((await res.json()) as { did: string }).did);
+        })
+        .catch((e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError({ message: String(e), retry: unreachable(e) })));
     void open();
     return () => clearTimeout(retry);
   }, [reopen, held]);
+  /** Create a new dock: the person's choice, from the dock's own page (TIN-879). */
+  const createDock = () => {
+    setCreating(true);
+    void call<{ did: string }>("/api/dock/new", { desktop: DESKTOP_SHELL }).then(
+      (r) => {
+        setChooser(null);
+        setDid(r.did);
+      },
+      (e: unknown) => setError({ message: String(e), retry: unreachable(e) }),
+    ).finally(() => setCreating(false));
+  };
   const base = did ? `/api/d/${did}` : null;
   const refresh = useCallback(() => {
     if (!base) return;
@@ -198,7 +216,8 @@ export function HubDock() {
       } else if (/: 40[34]$/.test(String(e))) {
         // The web dock's cookie no longer opens it (TIN-838): removed on another computer, or the dock ended.
         setState(null);
-        setRemoved(true);
+        setDid(null);
+        setChooser({ replaced: true });
       } else setError({ message: String(e), retry: FLOATING || unreachable(e) });
     });
   }, [base]);
@@ -231,7 +250,8 @@ export function HubDock() {
         if (e.code === REMOVED_CLOSE && !FLOATING) {
           closed = true;
           setState(null);
-          setRemoved(true);
+          setDid(null);
+          setChooser({ replaced: true });
           return;
         }
         refresh();
@@ -325,40 +345,36 @@ export function HubDock() {
   }, [error, base, refresh]);
 
   const unreached = "Could not reach your dock. Trying again…";
-  if (removed && joining === null)
-    return (
-      <main className="dock">
-        <Header />
-        <section className="dock-panel" role="status">
-          <p>This computer no longer opens your dock: it was removed on another computer, or the dock ended.</p>
-          <div className="row">
-            <button type="button" className="primary" onClick={() => setJoining("")}>
-              Join a dock on another computer
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRemoved(false);
-                setDid(null);
-                setReopen((n) => n + 1);
-              }}
-            >
-              New dock
-            </button>
-          </div>
-        </section>
-      </main>
-    );
   // Joining another dock (TIN-838): before the dock opens (the join link), or from the "⋯" menu.
   if (joining !== null && !FLOATING) {
     const connected = state?.agents.filter((a) => a.client_name).length ?? 0;
     return (
       <main className="dock">
         <Header />
-        <JoinPanel initialCode={joining} desktop={DESKTOP_SHELL} leaving={state ? ((state.devices?.length ?? 1) > 1 || connected ? { agents: connected } : null) : "unknown"} cancel={stopJoining} />
+        <JoinPanel initialCode={joining} desktop={DESKTOP_SHELL} leaving={state ? ((state.devices?.length ?? 1) > 1 || connected ? { agents: connected } : null) : chooser ? null : "unknown"} cancel={stopJoining} />
       </main>
     );
   }
+  // No dock yet (TIN-879): the person chooses before anything is created.
+  if (chooser && !base && !FLOATING && !error)
+    return (
+      <main className="dock">
+        <Header />
+        <section className="dock-panel dock-chooser" aria-labelledby="chooser-title">
+          <h2 id="chooser-title">Set up your dock</h2>
+          {chooser.replaced && <p role="status">This computer no longer opens its dock: it was removed on another computer, or that dock ended.</p>}
+          <p>Is this your first dock, or do you already have one on another computer?</p>
+          <div className="row">
+            <button type="button" className="primary" disabled={creating} onClick={createDock}>
+              Create a new dock
+            </button>
+            <button type="button" disabled={creating} onClick={() => setJoining("")} title="Use a dock you already have on another computer, with a code from it">
+              Join a dock on another computer
+            </button>
+          </div>
+        </section>
+      </main>
+    );
   if (error) return PET ? <PetWaiting note={unreached} /> : STRIP ? <div className="float float-empty">{unreached}</div> : <main><Header /><p>{error.retry ? unreached : `Could not open your dock: ${error.message}`}</p></main>;
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
@@ -571,28 +587,6 @@ export function HubDock() {
       {noticeEl}
       {joinRequests}
       {requests}
-      {replaced && (
-        <div className="decision-notice" role="status">
-          <p>
-            This is a new dock: this computer no longer opened its old one (it was removed on another computer, or that dock ended).{" "}
-            <button type="button" className="link-button" onClick={() => setJoining("")}>
-              Join a dock on another computer
-            </button>
-          </p>
-          <button type="button" onClick={() => setReplaced(false)}>
-            OK
-          </button>
-        </div>
-      )}
-      {/* A fresh dock on a computer that may have one elsewhere (TIN-838): join that one instead. */}
-      {!replaced && !setup.connected && devices.length <= 1 && (
-        <p className="join-hint">
-          Already have a dock on another computer?{" "}
-          <button type="button" className="link-button" onClick={() => setJoining("")}>
-            Join it
-          </button>
-        </p>
-      )}
       {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>+</b> below, then connect it.</p>}
       <ul className="tiles">
         {state.agents.map((a) => {
