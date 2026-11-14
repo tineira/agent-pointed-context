@@ -5,11 +5,12 @@
  *   npx @tineira/apc-conformance https://pulse.example --grant https://pulse.example/mcp/<sid>/<secret>
  *   APC_TOKEN=… npx @tineira/apc-conformance https://app.example --grant https://app.example/api/mcp --bearer-env APC_TOKEN
  *
- * PASS, FAIL or SKIP per check; exit 1 on any FAIL, 2 on a usage error; `--json` for the report as JSON.
+ * PASS, FAIL or SKIP per check, then how many ran and why the rest were skipped (with a warning when most were); exit 1
+ * on any FAIL, 2 on a usage error; `--json` for the report as JSON, with the same in its `coverage`.
  */
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { HttpConformanceUsageError, redactSecrets, runHttpConformance, type HttpConformanceReport } from "./http.ts";
+import { HttpConformanceUsageError, coverageLines, redactSecrets, runHttpConformance, type HttpConformanceReport } from "./http.ts";
 
 const HELP = `apc-conformance: checks a live APC app over HTTP (https://apc.tineira.com/docs)
 
@@ -61,6 +62,7 @@ function format(report: HttpConformanceReport): string {
     if (r.note) lines.push(`      note: ${r.note}`);
   }
   lines.push("", `${report.passed} passed, ${report.failed} failed, ${report.skipped} skipped`);
+  lines.push(...coverageLines(report.coverage));
   return lines.join("\n");
 }
 

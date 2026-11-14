@@ -2,7 +2,7 @@
  * What the in-process suite (`index.ts`) and the HTTP checks (`http.ts`) share: the error a check
  * throws, how a JSON-RPC reply is read off Streamable HTTP, and the shapes of the core's view and focus.
  */
-import { compareStandard, endpointRule, parseParams, parseTarget, type ApcEndpointProfile, type ApcManifest, type FocusTarget } from "@tineira/apc-protocol";
+import { compareStandard, endpointRule, isRevokedAnswer, parseParams, parseTarget, type ApcEndpointProfile, type ApcManifest, type FocusTarget } from "@tineira/apc-protocol";
 
 export class ConformanceError extends Error {}
 
@@ -176,4 +176,55 @@ export function standardSupport(claimed: string, own: string): { ok: true; note?
     return { ok: true, note: `standard ${claimed} is a newer patch of the ${own} these checks know; a patch never changes the contract, so they apply (update @tineira/apc-conformance when you can)` };
   }
   return { ok: false, reason: `standard is ${claimed}, newer than the ${own} these checks know: update @tineira/apc-conformance` };
+}
+
+/** A `RevokedAnswer` body, `revoked_by` being the app's host (the host of the grant's MCP URL). */
+export function checkRevokedBody(body: unknown, host: string, what: string): void {
+  expect(isRevokedAnswer(body) && ISO.test(body.revoked_at) && typeof body.message === "string" && body.message.length > 0, `${what} on a revoked grant answers { error: "revoked", revoked_by, revoked_at, message }: ${JSON.stringify(body).slice(0, 200)}`);
+  expect(body.revoked_by === host, `${what} on a revoked grant: revoked_by is ${JSON.stringify(body.revoked_by)}, not the app's host ${host}`);
+}
+
+/**
+ * What a revoked grant is sent besides `initialize`, `tools/list` and the tool calls: every request with the grant, whatever
+ * the method, is answered revoked (spec, "Revoke from the app"). A JSON-RPC body each, as `[label, body]`; a notification has no id.
+ */
+export const REVOKED_PROBES: ReadonlyArray<readonly [string, string]> = [
+  ["ping", JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" })],
+  ["resources/list", JSON.stringify({ jsonrpc: "2.0", id: 1, method: "resources/list", params: {} })],
+  ["prompts/list", JSON.stringify({ jsonrpc: "2.0", id: 1, method: "prompts/list", params: {} })],
+  ["a notification (notifications/initialized)", JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })],
+  ["a body that is not JSON-RPC", "{ not json"],
+];
+
+/**
+ * EP-5 (APC 0.11): `P/{secret}` claims every child of `P` that fits a secret, so the app serves nothing there but its
+ * grants (and the exact entries it declares). Two children no grant has (random, one with a dash and an underscore) are
+ * sent a JSON-RPC POST and a plain GET, and each must be refused with a 4xx (no 2xx, no redirect, no 5xx): a
+ * single-page app's fallback page, a catch-all route, a login redirect or a router that crashes there is what the rule
+ * forbids. An unknown grant answers 404; another 4xx passes with a note naming it (a WAF or an auth wall in front).
+ * `status` sends one request and gives its HTTP status (a sender that throws on a redirect fails the check its own way).
+ */
+export async function checkNothingButGrants(origin: string, manifest: ApcManifest, status: (url: string, init: RequestInit) => Promise<number>): Promise<string | null> {
+  const entries = Array.isArray(manifest.mcp.endpoints) ? manifest.mcp.endpoints.map(endpointRule).filter((e) => e !== null) : [];
+  const bases = entries.filter((e) => e.secret).map((e) => e.base);
+  if (!bases.length) return null;
+  const declared = (Array.isArray(manifest.mcp.endpoints) ? manifest.mcp.endpoints : []).map((e) => String((e as { path?: unknown }).path ?? "").toLowerCase());
+  const hex = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
+  const refused = (s: number) => s >= 400 && s < 500;
+  const not404: string[] = [];
+  for (const base of bases) {
+    for (const child of [hex(16), `apc-conformance_${hex(6)}`]) {
+      const path = `${base}/${child}`;
+      if (declared.some((d) => d === path.toLowerCase() || d.startsWith(`${path.toLowerCase()}/`))) continue;
+      const url = `${origin}${path}`;
+      const post = await status(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
+      expect(refused(post), `${base}/{secret}: a JSON-RPC POST to ${base}/<a secret no grant has> answers HTTP ${post}: P/{secret} claims every child of ${base}/ that fits a secret, so one that names no grant is an unknown grant, never served`);
+      const get = await status(url, { method: "GET", headers: { accept: "text/html, application/json, */*" } });
+      expect(refused(get), `${base}/{secret}: a GET of ${base}/<a secret no grant has> answers HTTP ${get}: the app serves nothing but its grants on a child of ${base}/ that fits a secret, other than the exact entries it declares (a 4xx; an unknown grant answers 404)`);
+      if (post !== 404) not404.push(`POST ${post}`);
+      if (get !== 404) not404.push(`GET ${get}`);
+    }
+  }
+  const covered = `${bases.map((b) => `${b}/{secret}`).join(", ")}: a child that names no grant is not served`;
+  return not404.length ? `${covered}; but it answers ${[...new Set(not404)].join(", ")}, not 404 as an unknown grant does` : covered;
 }
