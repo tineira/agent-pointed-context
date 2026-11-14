@@ -127,6 +127,21 @@ test("Orders: an MCP request over 1 MiB answers 413 before it is parsed, to a gr
   assert.deepEqual(await ok.json(), { jsonrpc: "2.0", id: 1, result: {} });
 });
 
+test("Orders: a child of /mcp/ that fits a secret but names no grant is an unknown grant, 404, even with no session (EP-5)", async () => {
+  const origin = "https://orders.test";
+  const app = new OrdersApp({ origin, profiles: ["direct", "dock"], signedIn: () => false });
+  const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+  for (const child of ["AbCdEfGhIjKlMnOpQrStUv", "operations-console", "0".repeat(32)]) {
+    const url = `${origin}/mcp/${child}`;
+    const post = await app.fetch(new Request(url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) }));
+    assert.equal(post.status, 404, `POST ${child}`);
+    const get = await app.fetch(new Request(url));
+    assert.equal(get.status, 404, `GET ${child}`);
+  }
+  // A path that does not fit a secret is not claimed by /mcp/{secret}: the app's own answer stands.
+  assert.equal((await app.fetch(new Request(`${origin}/mcp/short`))).status, 401);
+});
+
 test("Orders: agent traffic stamps nothing: ping and tools/list in handoff, and anything served while asleep, leave the grant as it was", async () => {
   const { adapter, app } = ordersUnderTest("dock");
   const life = adapter.dock!.lifecycle!;

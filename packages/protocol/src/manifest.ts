@@ -47,8 +47,8 @@ export const APC_JSON_PATH = "/.well-known/apc.json";
 /** The most bytes a reader takes of an `apc.json`. */
 export const APC_JSON_MAX_BYTES = 16_384;
 /**
- * Where an app's MCP URLs live when it says nothing else: `@tineira/apc-server`'s default `mcp.path`, and the
- * path a hub holds a verified app to when it pairs it without a file (its file out of reach, no copy).
+ * `@tineira/apc-server`'s default `mcp.path`: where an app's MCP URLs live when it says nothing else. A hub never
+ * pairs an app without its file: an `apc.json` out of reach refuses the pairing (H7, `apc_json_unreachable`).
  */
 export const APC_DEFAULT_MCP_PATH = "/mcp/";
 

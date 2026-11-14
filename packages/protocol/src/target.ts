@@ -34,7 +34,10 @@ export function parseParams(raw: unknown): FocusParams | null {
   return out;
 }
 
-/** A valid target, or null. A target names a row (id) or a computation (params), or both. */
+/**
+ * A valid target, or null. A target names a row (id) or a computation (params with at least one key), or both:
+ * since APC 0.12 a target with no id and `params: {}` is refused, as one with neither.
+ */
 export function parseTarget(raw: { kind?: unknown; id?: unknown; part?: unknown; params?: unknown }): FocusTarget | null {
   const kind = raw.kind;
   if (typeof kind !== "string" || !KIND_RE.test(kind)) return null;
@@ -44,7 +47,7 @@ export function parseTarget(raw: { kind?: unknown; id?: unknown; part?: unknown;
   if (part !== null && (typeof part !== "string" || !PART_RE.test(part))) return null;
   const params = parseParams(raw.params);
   if (raw.params !== null && raw.params !== undefined && params === null) return null;
-  if (id === null && params === null) return null;
+  if (id === null && (params === null || Object.keys(params).length === 0)) return null;
   return { kind, id: id as string | null, part: part as string | null, params };
 }
 

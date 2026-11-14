@@ -14,6 +14,13 @@ test("a target names something: a row or a computation", () => {
   assert.equal(parseTarget({ kind: "customer", id: "cus 42" }), null);
 });
 
+test("an empty params names nothing: a target with no id needs at least one key (APC 0.12)", () => {
+  assert.equal(parseTarget({ kind: "figure", params: {} }), null);
+  assert.equal(parseTarget({ kind: "figure", id: null, params: {} }), null);
+  assert.equal(parseFocusAttrs("figure:", null, "{}"), null, "the page's attributes too");
+  assert.deepEqual(parseTarget({ kind: "customer", id: "cus_0042", params: {} })?.id, "cus_0042", "with an id it still names the row");
+});
+
 test("keys only: amounts, free text and nested objects are refused", () => {
   assert.equal(parseParams({ mrr: 1234.57 }), null, "a number is an amount");
   assert.equal(parseParams({ mrr: "1234.57" }), null, "a numeric string is an amount too");

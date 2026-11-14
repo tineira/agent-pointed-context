@@ -90,7 +90,7 @@ export function docPageHtml(page: DocPage, source: string, examples: Record<stri
     `<main class="docs">`,
     `<header class="docs-head"><a class="kicker" href="/">Agent Pointed Context</a><span class="row small"><a href="/dock">Your dock</a><a href="${REPO}">GitHub</a></span></header>`,
     `<nav class="docs-nav" aria-label="Docs">${nav}</nav>`,
-    `<aside class="docs-draft" role="note"><b>Draft.</b> The APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-deprecation">versioning and deprecation policy</a>.</aside>`,
+    `<aside class="docs-draft" role="note"><b>Draft.</b> The APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.</aside>`,
     `<article class="docs-body">${blocks(parseMarkdown(source), page.file, examples)}</article>`,
     `<footer class="docs-foot"><p>The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT. Source of this page: <a href="${REPO}/blob/main/${page.file}">${page.file}</a>. This page as Markdown: <a href="${docMarkdownPath(page)}">${docMarkdownPath(page)}</a>.</p><p><a href="/">Home</a> · <a href="/v1/">Version 1, as described in the paper</a></p></footer>`,
     `</main>`,
