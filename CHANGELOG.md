@@ -9,7 +9,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 ### CI makes a real Dock pairing in the Workers runtime, and after each deploy (2026-11-14, TIN-900)
 
 - **CI's `check` job runs one real Dock pairing between the dock and Pulse in workerd.** After `pnpm build`, `scripts/dock-pairing.mjs` (`pnpm test:workerd`) runs the built Workers through Miniflare with real Durable Objects and their production origins, and walks the drop, Allow, `/apc/pair`, the owner's approval with the code, `initialize`, a read through the dock, `/apc/confirm` and the give-back. A hub client with `redirect: "error"` fails it with `hub_unreachable`, as production did from APC 0.9 to 0.11.0. (`scripts/dock-pairing.mjs`, `.github/workflows/ci.yml`, `package.json`, `README.md`)
-- **"Deploy the APC standard" ends with the same pairing in production.** `--production` pairs a new dock's agent with a new Pulse sandbox on apc.tineira.com, gives the grant back and starts both over; no secret. (`scripts/dock-pairing.mjs`, `.github/workflows/ci.yml`)
+- **"Deploy the APC standard" ends with the same pairing in production.** `--production` pairs a new dock's agent with a new Pulse sandbox on apc.tineira.com, gives the grant back and starts both over; no secret. It tries twice within its own deadline, always cleans up, and a failed cleanup is a warning. Red means the deploy shipped and pairing needs a look; nothing rolls back (README, "Run it"). `scripts/mcp-sessions.mjs` leaves its `apc-deploy-smoke` sessions out. (`scripts/dock-pairing.mjs`, `.github/workflows/ci.yml`, `scripts/lib/mcp-sessions.mjs`, `README.md`)
 
 ### The dock asks before it creates one (2026-11-14, TIN-879)
 

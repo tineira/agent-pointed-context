@@ -9,6 +9,7 @@ test("the query groups by day, client and session over connected points only", (
   assert.match(sql, /FROM apc_mcp_sessions/);
   assert.match(sql, /INTERVAL '7' DAY/);
   assert.match(sql, /blob1 = 'connected'/);
+  assert.match(sql, /blob2 NOT IN \('apc-deploy-smoke', 'apc-workerd-pairing'\)/, "the deploy's pairing smoke is left out (TIN-900)");
   assert.match(sql, /blob8 AS source/);
   assert.match(sql, /GROUP BY day, source, client_name, session/);
   assert.throws(() => sessionsSql(0));
