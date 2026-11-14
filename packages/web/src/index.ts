@@ -5,6 +5,7 @@ export * from "./view.ts";
 export * from "./agents-bar.ts";
 export * from "./pin-badge.ts";
 export * from "./direct-agents.ts";
+export * from "./handoff-card.ts";
 export * from "./strings.ts";
 export * from "./pet-state.ts";
 export * from "./pet-scheme.ts";

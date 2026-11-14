@@ -190,7 +190,7 @@ test("rendered: Float, the strip and the pets show no field and no Allow for a r
   assert.equal(buttons(coded).Allow, undefined, "no Allow");
   assert.deepEqual(buttons(coded), { Deny: false });
   assert.ok(coded.includes(CODE_IN_DOCK), "where to type it");
-  assert.match(renderRequest({ entry: "dock", code: true, openDock: () => {} }), />Open the dock</, "the pets open the dock");
+  assert.match(renderRequest({ entry: "dock", code: true, openDock: () => {} }), /class="primary open-dock"[^>]*>Open the dock</, "the pets open the dock, with a button that is hard to miss");
   const legacy = renderRequest({ entry: "dock" });
   assert.deepEqual(buttons(legacy), { Allow: false, Deny: false }, "a request without a code keeps its buttons");
   assert.match(legacy, /class="primary"[^>]*>Allow</);

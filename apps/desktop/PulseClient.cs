@@ -92,7 +92,13 @@ public sealed class PulseClient : IDisposable
         return new HubPairResult(ok, Str(json, "error"), Str(json, "grant_id"), Str(json, "status"), Str(json, "consent"), Str(json, "pairing_code"), pairing, Str(json, "pin_error"));
     }
 
-    /// <summary>Revoke from the app (APC 0.2): also Cancel on a grant still waiting for its pairing code (APC 0.9).</summary>
+    /// <summary>
+    /// Cancel on the waiting card (APC 0.10 section 4): Pulse's Cancel route ends a dock grant only while it is in handoff and has served
+    /// no call, and refuses (not_cancellable) otherwise. Revoke below is the separate action for a grant that has connected.
+    /// </summary>
+    public Task<(bool Ok, string? Error, string? GrantId)> CancelAsync(string grantId) => PostAsync("/hub/cancel", new { grant_id = grantId });
+
+    /// <summary>Revoke from the app (APC 0.2): takes a connected agent's access back. It is not the waiting card's Cancel.</summary>
     public Task<(bool Ok, string? Error, string? GrantId)> RevokeAsync(string grantId) => PostAsync($"/grants/{grantId}/revoke", new { });
 
     public Task<(bool Ok, string? Error, string? GrantId)> UnpinAsync(string grantId) => PostAsync("/unpin", new { grant_id = grantId });

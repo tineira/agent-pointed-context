@@ -161,7 +161,7 @@ The dock puts the agent on a drag with the type `application/x-apc-agent` and th
 
 Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent ("Let your agent from the dock at … read Orders?") with that nonce, and the Allow sends it back. The server makes a grant only for a request that brings the nonce back. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress` (see [one pending pairing](#one-pending-pairing)).
 
-Since 0.9 the consent shows a [pairing code](#the-pairing-code), and the server answers `consent_required` with both: `{ consent, pairing_code }`. The page shows the code formatted (`K7M-4P2`): "After Allow, your dock asks for this code: **K7M-4P2**. Type it only in your own dock; never give it to anyone. Whoever types it gets this access."
+Since 0.9 the consent shows a [pairing code](#the-pairing-code), and the server answers `consent_required` with both: `{ consent, pairing_code }`. The reference apps hold the code on the page and show it only after the Allow, formatted (`K7M-4P2`), in a card that takes the consent's place: the code large with a copy button, the time left and Cancel, and under it "Type it only in your own dock; never give it to anyone. Whoever types it gets this access." Before the Allow they say only "After Allow, your dock will ask for a code." This is how the reference apps do it, not a rule: the rules are in the next section.
 
 ### The pairing code
 
@@ -171,7 +171,7 @@ A drag can be put on any page, and anyone who runs a dock can make tickets for t
 - The hub keeps it with the pending pairing and **MUST NOT** show it: not in the dock's state, not in what it sends the dock's pages, not in any answer. The dock owner types it to approve; the hub compares it in constant time with what the app sent, ignoring case, spaces and dashes (O reads as 0, I and L as 1). A missing or malformed code is refused and not counted. A wrong one counts (`wrong_pairing_code`, with `attempts_left`); the fifth removes the request and gives the grant back (`pairing_code_refused`). A request with a code that nobody approves goes after two minutes, its grant given back. A match clears the code. Deny and unpair need no code.
 - The app **MUST** keep the grant only when the hub acknowledges the code (below), and delete it, before it answers its page, on any other answer: a hub that does not check codes never holds a grant.
 - The reference hub requires the code: it refuses a pairing without one (`pairing_code_required`). Other hubs SHOULD require it too.
-- After the Allow the reference apps show the code again, with the time left and Cancel (the app's revoke), until the hub connects (its first `initialize` on the grant) or the grant goes, and say: "If your dock doesn't ask for this code, the agent wasn't yours: Cancel."
+- After the Allow the reference apps show the code, with the time left and Cancel (the app's revoke), until the hub connects (its first `initialize` on the grant) or the grant goes, and say: "If your dock doesn't ask for this code, the agent wasn't yours: Cancel."
 
 ### Pairing: `POST {hub}/apc/pair`
 

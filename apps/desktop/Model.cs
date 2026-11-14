@@ -21,8 +21,11 @@ public sealed record Grant(string id, string label, string? client_name, string?
 /// <summary>A dock grant waiting for the person to type its pairing code in their dock (APC 0.9): the raw code, and until when.</summary>
 public sealed record DockPairing(string code, string expires_at);
 
-/// <summary>A dock agent's grant; `pairing` while the dock has not connected yet (APC 0.9), null after.</summary>
-public sealed record HubLink(string hub, string agent, string grant_id, DockPairing? pairing = null);
+/// <summary>
+/// A dock agent's grant. `state` (APC 0.10): in_flight while the Allow is answered, handoff until the dock connects, then live.
+/// In handoff, `pairing` is the code still to be typed in the dock (APC 0.9); without it the dock took the code and is connecting.
+/// </summary>
+public sealed record HubLink(string hub, string agent, string grant_id, DockPairing? pairing = null, string? state = null);
 
 /// <summary>The pairing code as a person reads it: K7M4P2 as K7M-4P2. Display only; Pulse keeps and sends it raw.</summary>
 public static class PairingCodes

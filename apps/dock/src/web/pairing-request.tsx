@@ -113,12 +113,10 @@ export function PairingRequest(props: PairingRequestProps) {
     <span className="code-elsewhere">
       {CODE_IN_DOCK}
       {props.openDock && (
-        <>
-          {" "}
-          <button type="button" className="link" onClick={props.openDock}>
-            Open the dock
-          </button>
-        </>
+        // A button, not a link (TIN-901): the person has to find the dock window to type the code, so this is the one thing to press.
+        <button type="button" className="primary open-dock" onClick={props.openDock}>
+          Open the dock
+        </button>
       )}
     </span>
   );

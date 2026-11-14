@@ -217,6 +217,48 @@ export const DEFAULT_DIRECT_STRINGS: DirectStrings = {
     `Please connect this remote MCP server, named "${appName}". URL: ${url}. It uses Streamable HTTP and needs no OAuth or API key: the access is in the URL. If you can add it yourself, do it now and tell me when it's connected. If you can't, tell me the exact steps to add it in the app I'm using you in right now. Do not open the URL in a browser.`,
 };
 
+/** What `<apc-handoff>` says: the card that keeps the pairing code in sight until the person's dock has it (TIN-901). */
+export interface HandoffStrings {
+  /** The title while the dock is to ask for the code, while it took the code and connects, and when the pairing ended. */
+  waitingTitle(host: string): string;
+  connectingTitle(host: string): string;
+  endedTitle: string;
+  /** The label above the code, and its copy button (and what it says for a moment after it copied). */
+  codeLabel: string;
+  copy: string;
+  copied: string;
+  /** The time left, as `m:ss`. */
+  expiresIn(clock: string): string;
+  /** Under the code: where to type it, and what to do when the dock does not ask for it. */
+  typeItOnlyInYourDock: string;
+  notYours: string;
+  /** The dock took the code and is connecting. */
+  connecting: string;
+  /** The code ran out before the dock finished: nothing works any more, so the person drops the agent again. */
+  expired(host: string): string;
+  dropAgain: string;
+  /** The button: Cancel while the pairing stands (it takes the access back), Close once it ended. */
+  cancel: string;
+  close: string;
+}
+
+export const DEFAULT_HANDOFF_STRINGS: HandoffStrings = {
+  waitingTitle: (host) => `Type this code in your dock at ${host}`,
+  connectingTitle: (host) => `Your dock at ${host} is connecting`,
+  endedTitle: "The pairing did not finish",
+  codeLabel: "Code",
+  copy: "Copy code",
+  copied: "Copied",
+  expiresIn: (clock) => `Works once. Expires in ${clock}.`,
+  typeItOnlyInYourDock: "Type it only in your own dock; never give it to anyone. Whoever types it gets this access.",
+  notYours: "If your dock doesn't ask for this code, the agent wasn't yours: Cancel.",
+  connecting: "Your dock took the code. If you didn't type a code there, the agent wasn't yours: Cancel.",
+  expired: (host) => `The code ran out before your dock at ${host} finished, so it no longer works.`,
+  dropAgain: "Drag the agent from the dock again.",
+  cancel: "Cancel",
+  close: "Close",
+};
+
 /** What `enablePinning` shows the person: the tap-to-pin note and the answers to a dock agent's drop. */
 export interface PinningStrings {
   /** The note while an agent is armed, with the agent's name (from its mark). */
