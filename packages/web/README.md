@@ -1,6 +1,6 @@
 # @tineira/apc-web
 
-Agent Pointed Context (APC) for an app's page, in the browser: the person drags their agent's mark onto anything marked with `data-focus` (or taps it, on a phone) and the agent gets that as its focus. With the agent bar `<apc-agents>` (Revoke, Unlink, paths), the pin badge `<apc-pin>`, presence flashes, view reporting and the Direct agents list `<apc-direct-agents>`. Browser code with no Node imports; ESM for any bundler. Docs: https://apc.tineira.com/docs
+Agent Pointed Context (APC) for an app's page, in the browser: the person drags their agent's mark onto anything marked with `data-focus` (or taps it, on a phone) and the agent gets that as its focus. With the agent bar `<apc-agents>` (Revoke, Unlink, paths), the pin badge `<apc-pin>`, presence flashes, view reporting, the Direct agents list `<apc-direct-agents>`, and the agent in the page: the APC pet (`createPet`, `<apc-pet>`), the header pets `<apc-pets>` and the brand logos. Browser code with no Node imports; ESM for any bundler. Docs: https://apc.tineira.com/docs
 
 ## Install
 

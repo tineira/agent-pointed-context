@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { petState, pinPhase, READ_HOLD_MS, watchRead, type PetInput } from "../src/web/pet-state.ts";
+import { petState, pinPhase, READ_HOLD_MS, watchRead, type PetInput } from "../src/pet-state.ts";
 
 const calm: PetInput = { connected: true, waiting: false, busy: false, pin: "none", requests: 0, dragging: false };
 

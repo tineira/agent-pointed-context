@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { blobPath, blink, CLIP, farthest, FX, frameAt, PetSim, POSES, share, stilled } from "../src/web/pet-pose.ts";
-import type { PetState } from "../src/web/pet-state.ts";
+import { blobPath, blink, CLIP, farthest, FX, frameAt, PetSim, POSES, share, stilled } from "../src/pet-pose.ts";
+import type { PetState } from "../src/pet-state.ts";
 
 const STATES = Object.keys(POSES) as PetState[];
 

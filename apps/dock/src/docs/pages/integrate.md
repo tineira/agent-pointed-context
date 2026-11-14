@@ -115,6 +115,17 @@ The page's event stream is how the server knows a page is open, and how presence
 
 On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile)).
 
+### The agent in the page
+
+To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3, then a "+N" (or list) button that opens a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page)). Each pet is a mark and only a mark, so `enablePinning` drags it like the bar's, and a tap or Enter on it arms the agent. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
+
+<!-- include orders-page.ts#pets -->
+
+- **Colours.** `scheme = "auto"` follows `prefers-color-scheme`. With your own theme switch, set `scheme` to `"light"` or `"dark"` when it changes. To tint the pet to a strict palette, set `tint` (`{ body, line }`, hex) or the custom properties `--apc-pet-body` and `--apc-pet-line`.
+- **Size.** `--apc-pets-size` (36 px by default) sizes the pets; each stays a 44 px target. A lone pet anywhere else is `createPet({ state, badge, label })` (or `<apc-pet>`), sized by `size` or `--apc-pet-size`.
+- **Logos.** `agentBadge({ clientName, key })` gives the brand's logo, else the client's icon, else a neutral mark in the agent's own colour. `<apc-pin>` wears the same badge when you set `badge` on its agent; `pinStackIndex` places several badges on one element.
+- **Words.** `<apc-pets>` takes `strings` (`PetsStrings`) like the other components.
+
 ## 10. Revoke
 
 Revoke holds in the app alone, at once, and calls nobody. The app keeps a hash of the secret, so the URL answers `revoked` from then on, and a call already running ends the same way.
@@ -173,6 +184,7 @@ Localizing changes no protocol text, the tools or conformance: [Conformance](/do
 - `get_current_view` and `wait_for_focus` are registered on every grant.
 - Every tool runs inside the wrapper: revoke check, `attention`, presence, `then`.
 - The agent bar is on every page, with Revoke; on a phone it stays in the page.
+- If you show agents as pets: `<apc-pets>` in the header, its states fed only by what the page knows, its colours following the page's scheme.
 - Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token); an unknown grant 404.
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
 - Dock: every drop goes to the server; the hub is on your allowlist, checked on the drop and on the Allow (`parseDockDrop`); consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).

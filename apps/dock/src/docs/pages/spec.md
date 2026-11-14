@@ -87,6 +87,43 @@ On a phone there is no dock window, extension or desktop pet to drag from, so th
 
 The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims 0.6.0 or later **MUST** give the conformance suite its page on a phone.
 
+### The agent in the page
+
+How an app shows each connected agent inside its page (since 0.11). These are SHOULDs: an app may keep its own mark for agents, but an app that shows a pet **SHOULD** show this one, the character the dock draws. `@tineira/apc-web` ships it: `createPet` and `<apc-pet>`, the header `<apc-pets>`, the pin badge `<apc-pin>`, the brand logos and `petState`.
+
+- **The pet.** One character for every agent: a soft blob with two eyes, with the agent's logo as a badge at its bottom right. It is APC's own; no vendor's character is drawn or animated.
+- **The header.** The pets sit in the app's header, next to the person's account, up to 3 of them, then one button: "+N" for the rest, or a list button when all show. That button opens a popover with every agent: what it is doing, where its pin is (a click goes there) and whether it read it. A pet whose pin is on another page wears a dot. A pet is only a mark: a click, a tap or Enter on it is pinning's (it arms the agent), never the popover's, so the popover never covers the target the person is about to tap.
+- **The pin badge.** Where an agent is pinned, the element wears the agent's logo, with × to unpin. Several agents on one element each keep a badge: the app places them side by side, so every × stays reachable (the package gives each badge its place, `pinStackIndex`, and the step, `PIN_STACK_STEP`).
+- **Marks.** A pet and a pin badge are marks: they carry `data-apc-mark` and `data-grant`, so the person drags them (or taps them, then a target) to point the agent, as with the agent bar.
+
+**States.** The pet has 8 states. The app drives each one from data it has, and shows a state only when that data says so; nothing is guessed from timing:
+
+| State | What drives it in an app |
+|---|---|
+| `dragging` | the person is dragging this agent's mark, in this page |
+| `pairing` | a pairing request of this agent waits on the person |
+| `offline` | no agent client is connected on the grant, or the grant was revoked |
+| `pinned` | the agent's pin is unread |
+| `calling` | a call is in flight, or the page just heard one (presence) |
+| `read` | the agent just read its pin (shown for 6 s, `READ_HOLD_MS`) |
+| `waiting` | a `wait_for_focus` of this agent is open, as the page-readable wait signal says. Never inferred from how recently the agent called |
+| `idle` | connected, and none of the above |
+
+The first state that holds, top to bottom, is shown (`petState`).
+
+**Motion.** One `requestAnimationFrame` loop per window drives every pet in it. It stops while the page is hidden and slows down (20 frames a second) once every pet has kept its state for 10 s. With `prefers-reduced-motion: reduce`, each pet is a still pose of its state.
+
+**Phone.** In a viewport that matches `APC_MOBILE_MEDIA`, the pets stay in the header, side by side, and every tap target (a pet, the list button, ×, the popover's links) is at least 44 px.
+
+**Logos.** A badge is the brand's logo (`brandFor` the client's declared name), else the icon the client sent, else a neutral mark in a colour of the agent's own. Brands only: never a vendor's mascot. A logo says which agent is connected, never that it is verified.
+
+**Colour scheme.** The pet **SHOULD** follow the page's colour scheme.
+
+- On a light page, the light pet: a dark body with a white outline and eyes.
+- On a dark page, the inverse pet: a near-white body (not pure white), a dark outline and eyes, and a shine tuned to the light body.
+- The badge's white disc keeps a thin outline in the inverse pet, so it reads on both bodies. The orange ring, the "!" and the other state marks do not change.
+- The package takes `scheme: "light" | "dark" | "auto"`. `auto` follows `prefers-color-scheme`; an app with its own theme switch passes its theme. An app with a strict palette tints the body and the line (`tint`, or `--apc-pet-body` and `--apc-pet-line`).
+
 ## The Direct profile
 
 The agent connects to the app's own MCP endpoint.

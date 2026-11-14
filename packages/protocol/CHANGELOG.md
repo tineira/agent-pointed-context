@@ -8,6 +8,14 @@ The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protoco
 
 Wave 2 of the APC 1.0 track (TIN-880): the agent in the page (TIN-878), a presence kind for waits (TIN-886) and several MCP endpoints in `apc.json` (TIN-888). Each change adds its own subsection below.
 
+### The agent in the page (TIN-878)
+
+- **How an app shows each connected agent in its page is part of the standard, as SHOULDs.** An app may keep its own mark; an app that shows a pet SHOULD show the APC pet: in the header up to 3 pets, then a "+N" (or list) button that opens a popover, a pin badge with × on the pinned element (the app places several side by side), the pets and badges being marks, and a pet only a mark (a tap arms it, it never opens the popover) (`data-apc-mark`, `data-grant`). On a phone the pets stay in the header and every tap target is at least 44 px. Logos are brands only, never a vendor's mascot.
+- **The 8 states and what drives each in an app** (`petState`, `PetInput`, `PET_STATES` in `@tineira/apc-web`): dragging, pairing, offline (no client, or revoked), pinned (an unread pin), calling (a call in flight or just heard), read (shown for `READ_HOLD_MS`), waiting (an open `wait_for_focus`, only from the page-readable wait signal, never inferred from timing), idle. Every input is optional and defaults to "not happening".
+- **Motion**: one `requestAnimationFrame` loop per window, stopped while the page is hidden, slower once every pet is calm, a still pose with `prefers-reduced-motion`.
+- **Colour scheme (SHOULD follow the page)**: the light pet on light pages, the inverse pet on dark ones (a near-white body, a dark outline and eyes, a thin outline on the badge's disc); the state marks do not change. `scheme: "light" | "dark" | "auto"` (`resolvePetScheme`, `petPalette`), and `tint` or `--apc-pet-body` / `--apc-pet-line` for a strict palette.
+- In the spec's "The agent in the page" and the integrate guide.
+
 ## 0.10.0 (draft, 2026-11-13)
 
 The Dock profile as built (TIN-882): a dock grant has states, each state answers in a fixed way, and the hub and the app have MUSTs around the hub call. Before, the profile said how a pairing starts and not what a grant answers between the Allow and the hub's first `initialize`: one app served data in that window, two had no gate at all. In `packages/protocol/src/dock.ts` and `core.ts`, the spec's Dock profile and DESIGN.md section 22. The binding stays the secret MCP URL; other bindings are left open for future versions.
