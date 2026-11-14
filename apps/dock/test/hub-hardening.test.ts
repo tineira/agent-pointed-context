@@ -83,6 +83,70 @@ test("a verified app's pin dated ahead of the hub's clock is not taken, so anoth
   assert.equal((await w.agent()).focus?.app.origin, SHOP);
 });
 
+// ---- F7: give-backs are retried, and every grant goes back before the dock's data ----
+
+test("a give-back the app did not take is tried again on the alarm until it is taken", async (t) => {
+  const w = await verifiedWorld(t);
+  const id = await w.pair(w.shop);
+  w.shop.revoke = () => new Response("down", { status: 503 });
+  assert.deepEqual(await w.hub.decide(id, "unpair"), { ok: true });
+  assert.equal(w.revokes(w.shop), 1);
+  assert.deepEqual(w.givebacks().map((g) => [g.mcp_url, g.attempts]), [[grantUrl(w.shop), 0]], "kept to try again");
+  assert.ok(Number(w.givebacks()[0]!.next_at) >= Date.now() + LIMITS.giveBackRetryMs[0]! - 1_000, "not before its time");
+  await w.hub.alarm();
+  assert.equal(w.revokes(w.shop), 1, "not due yet: nothing sent");
+  w.due();
+  await w.hub.alarm();
+  assert.equal(w.revokes(w.shop), 2, "tried again");
+  assert.equal(w.givebacks()[0]!.attempts, 1);
+  w.shop.revoke = undefined;
+  w.due();
+  await w.hub.alarm();
+  assert.equal(w.revokes(w.shop), 3);
+  assert.deepEqual(w.givebacks(), [], "taken: nothing left to try");
+});
+
+test("give-back retries are bounded, and a grant paired again is never given back from the old try", async (t) => {
+  const w = await verifiedWorld(t);
+  w.shop.revoke = () => new Response("down", { status: 503 });
+  await w.hub.decide(await w.pair(w.shop), "unpair");
+  for (let i = 0; i < LIMITS.giveBackRetryMs.length + 3; i++) {
+    w.due();
+    await w.hub.alarm();
+  }
+  assert.equal(w.revokes(w.shop), 1 + LIMITS.giveBackRetryMs.length - 1 + 1, "the first try, then one per retry step");
+  assert.deepEqual(w.givebacks(), [], "the tries ran out");
+  // Failed again, then the app pairs the same grant again: the retry leaves it alone.
+  await w.hub.decide(await w.pair(w.shop), "unpair");
+  assert.equal(w.givebacks().length, 1);
+  await w.pair(w.shop);
+  assert.deepEqual(w.givebacks(), [], "the new pairing holds that grant");
+  const sent = w.revokes(w.shop);
+  w.due();
+  await w.hub.alarm();
+  assert.equal(w.revokes(w.shop), sent);
+});
+
+test("a dock that expires gives every grant back before its data goes", async (t) => {
+  const w = await verifiedWorld(t);
+  await w.pair(w.shop);
+  await w.pair(w.market);
+  w.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() - 1));
+  await w.hub.alarm();
+  assert.deepEqual([w.revokes(w.shop), w.revokes(w.market)], [1, 1]);
+  assert.equal(w.hubRoom.db.prepare("select count(*) as n from pairings").get()!.n, 0, "and then the data went");
+});
+
+test("a dock found expired by a request, before its alarm, gives every grant back too", async (t) => {
+  const w = await verifiedWorld(t);
+  await w.pair(w.shop);
+  w.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() - 1));
+  const who = (await w.hubRoom.db.prepare("select id from agents").get()) as { id: string };
+  await w.hub.reader({ ticket: "x", agent: who.id }, EXTENSION);
+  await w.hub.idle();
+  assert.equal(w.revokes(w.shop), 1);
+});
+
 // ---- F8: secrets stay out of the logs ----
 
 test("the dock's Workers keep no invocation logs, and what the dock logs carries no secret", () => {

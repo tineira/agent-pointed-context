@@ -46,6 +46,11 @@ export const LIMITS = {
    * APC 0.10), so the last try comes well before that. After it the pairing shows its error, and the next use tries again.
    */
   introRetryMs: [15_000, 45_000, 2 * 60_000, 4 * 60_000, 8 * 60_000],
+  /**
+   * When the hub tries again to give a grant back to an app that did not take it (TIN-911): no answer, an error or a
+   * redirect. In ms after the try before. After the last, the grant is left to the app's own end (dormancy, its sandbox).
+   */
+  giveBackRetryMs: [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000],
   /** What the hub keeps of an unverified app's tools and views. */
   unverifiedTools: 32,
   unverifiedDescription: 1_024,

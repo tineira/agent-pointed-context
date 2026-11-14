@@ -306,6 +306,7 @@ export class Hub extends DurableObject<Env> {
       create table if not exists joins (
         id text primary key, code text not null unique, status text not null, expires_at integer not null,
         label text, claim text unique, asked_at text, answer_by integer);
+      create table if not exists givebacks (mcp_url text primary key, verified integer not null, attempts integer not null, next_at integer not null);
     `);
     // A dock from before TIN-838 had one owner secret: it becomes the dock's first computer, so its cookie still opens it.
     const owner = this.meta("owner");
@@ -506,8 +507,10 @@ export class Hub extends DurableObject<Env> {
     const intro = Math.min(Infinity, ...this.pairings(undefined, "paired").map((p) => this.introRetryAt(p) ?? Infinity));
     // A join's end (TIN-838): the open code's, or the claimed one's answer_by, so the dock drops a request nobody answered.
     const joinEnd = this.sql.exec<{ at: number | null }>("select min(case when status = 'open' then expires_at else answer_by end) as at from joins").toArray()[0]?.at;
+    // The next give-back to try again (TIN-911).
+    const giveBackAt = this.sql.exec<{ at: number | null }>("select min(next_at) as at from givebacks").toArray()[0]?.at;
     await this.ctx.storage.setAlarm(
-      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, coded ? Date.parse(coded) : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, intro, joinEnd ?? Infinity),
+      Math.min(expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, coded ? Date.parse(coded) : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, intro, joinEnd ?? Infinity, giveBackAt ?? Infinity),
     );
   }
   /**
@@ -609,9 +612,60 @@ export class Hub extends DurableObject<Env> {
     giveBack.push(...stale.filter(givesBack));
     return giveBack;
   }
-  /** Give these grants back to their apps; settles when every app answered or timed out. */
+  /** Give these grants back to their apps; settles when every app answered or timed out. One an app did not take is tried again later. */
   private giveBack(pairings: Pairing[]): Promise<unknown> {
-    return pairings.length ? Promise.allSettled(pairings.map((p) => revokeGrant(p.mcp_url, transport(p)))) : Promise.resolve();
+    return pairings.length ? Promise.allSettled(pairings.map((p) => this.giveBackGrant(p))) : Promise.resolve();
+  }
+  /**
+   * Give one grant back (TIN-388). An app that does not take it (no answer, an error, a redirect) keeps a live grant the
+   * hub no longer holds, so the hub tries again, on the alarm, at LIMITS.giveBackRetryMs (TIN-911), until the app
+   * takes it or the tries run out.
+   */
+  private async giveBackGrant(p: Pairing): Promise<void> {
+    if (await revokeGrant(p.mcp_url, transport(p))) return;
+    // Only while the dock still holds this grant nowhere live: a new request may carry the same URL again.
+    if (this.holdsLive(p.mcp_url) || !this.meta("did")) return;
+    this.sql.exec("insert into givebacks (mcp_url, verified, attempts, next_at) values (?, ?, 0, ?) on conflict(mcp_url) do nothing", p.mcp_url, p.verified ? 1 : 0, Date.now() + LIMITS.giveBackRetryMs[0]!);
+    await this.arm();
+  }
+  /** Whether a pairing the hub may still call holds this grant URL. */
+  private holdsLive(mcpUrl: string): boolean {
+    return this.pairings().some((p) => p.mcp_url === mcpUrl && givesBack(p));
+  }
+  /**
+   * The give-backs that are due, tried again (the alarm). Each is counted, or dropped after its last try, synchronously
+   * before anything is sent, so one try is made once; one the app takes goes, as does one a live pairing holds again.
+   */
+  private retryGiveBacks(): Promise<unknown> {
+    const now = Date.now();
+    const due = this.sql.exec<{ mcp_url: string; verified: number; attempts: number }>("select mcp_url, verified, attempts from givebacks where next_at <= ?", now).toArray();
+    const send: Array<{ mcp_url: string; verified: boolean }> = [];
+    for (const g of due) {
+      if (this.holdsLive(g.mcp_url)) {
+        this.sql.exec("delete from givebacks where mcp_url = ?", g.mcp_url);
+        continue;
+      }
+      const after = LIMITS.giveBackRetryMs[g.attempts + 1];
+      if (after === undefined) this.sql.exec("delete from givebacks where mcp_url = ?", g.mcp_url);
+      else this.sql.exec("update givebacks set attempts = ?, next_at = ? where mcp_url = ?", g.attempts + 1, now + after, g.mcp_url);
+      send.push({ mcp_url: g.mcp_url, verified: !!g.verified });
+    }
+    if (!send.length) return Promise.resolve();
+    return Promise.allSettled(
+      send.map(async (g) => {
+        if (await revokeGrant(g.mcp_url, { verified: g.verified })) this.sql.exec("delete from givebacks where mcp_url = ?", g.mcp_url);
+      }),
+    );
+  }
+  /**
+   * Before the dock's data goes (it expired, Start over, its last computer left): every grant it still holds, and every
+   * give-back still to retry, given back once, best effort, since nothing will be left to try again from (TIN-911).
+   */
+  private giveBackEverything(): Promise<unknown> {
+    const urls = new Map<string, boolean>();
+    for (const p of this.pairings().filter(givesBack)) urls.set(p.mcp_url, p.verified);
+    for (const g of this.sql.exec<{ mcp_url: string; verified: number }>("select mcp_url, verified from givebacks").toArray()) if (!urls.has(g.mcp_url)) urls.set(g.mcp_url, !!g.verified);
+    return Promise.allSettled([...urls].map(([url, verified]) => revokeGrant(url, { verified })));
   }
   /**
    * Work that runs after the request that started it has answered (TIN-609): giving grants back from
@@ -640,7 +694,10 @@ export class Hub extends DurableObject<Env> {
   private async alive(): Promise<boolean> {
     if (!this.meta("did")) return false;
     if (Number(this.meta("expires_at") ?? 0) > Date.now()) return true;
+    // Expired before its alarm rang: the grants are read before the data goes, and given back after this request answered.
+    const giveBack = this.giveBackEverything();
     await this.wipe();
+    this.later(giveBack);
     return false;
   }
   /**
@@ -648,15 +705,20 @@ export class Hub extends DurableObject<Env> {
    * everything, as when the dock expires.
    */
   async reset(): Promise<void> {
-    await Promise.allSettled(this.pairings().filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
+    await this.giveBackEverything();
     await this.wipe();
   }
 
   async alarm(): Promise<void> {
     this.expireReadings();
-    if (Number(this.meta("expires_at") ?? 0) <= Date.now()) return this.wipe();
+    // The dock expired (TIN-911): every grant it holds is given back before its data goes.
+    if (Number(this.meta("expires_at") ?? 0) <= Date.now()) {
+      if (this.meta("did")) await this.giveBackEverything();
+      return this.wipe();
+    }
     this.expireJoins();
     await this.giveBack(this.expirePending());
+    await this.retryGiveBacks();
     await this.retryIntroductions();
     this.broadcast();
     await this.arm();
@@ -892,6 +954,7 @@ export class Hub extends DurableObject<Env> {
     this.dropReaders();
     const empty = this.devices().length === 0 && this.agents().every((a) => !a.client_name) && !this.sql.exec("select 1 from pairings limit 1").toArray().length;
     if (empty) {
+      await this.giveBackEverything();
       await this.wipe();
       return { ok: true, wiped: true };
     }
@@ -943,7 +1006,7 @@ export class Hub extends DurableObject<Env> {
     this.busy.delete(agentId);
     this.busyUntil.delete(agentId);
     this.broadcast();
-    await Promise.allSettled(lines.filter(givesBack).map((p) => revokeGrant(p.mcp_url, transport(p))));
+    await this.giveBack(lines.filter(givesBack));
     return { ok: true };
   }
 
@@ -1114,7 +1177,7 @@ export class Hub extends DurableObject<Env> {
       if (checked) {
         if (checked.error !== "pairing_code_refused") return checked;
         // The last wrong code: the request went (checkCode removed it); the app gets its grant back.
-        if (givesBack(p)) await revokeGrant(p.mcp_url, transport(p));
+        if (givesBack(p)) await this.giveBackGrant(p);
         return checked;
       }
       // The approval this call inserts, if it inserts one (Fix check 4 on #120): when the call ends without a settled
@@ -1166,7 +1229,7 @@ export class Hub extends DurableObject<Env> {
       // Dropped. Held: app_blocked. Otherwise the domain's approval went while the hub introduced itself (a Deny,
       // Unpair or Remove of that domain elsewhere in the dock): the person asks again, with the warning.
       const result = takeBack(now.status === "blocked" ? "app_blocked" : "approval_withdrawn");
-      if (settled) await revokeGrant(settled.mcp_url, transport(settled));
+      if (settled) await this.giveBackGrant(settled);
       return result;
     }
     if (action === "deny" || action === "unpair") {
@@ -1179,7 +1242,7 @@ export class Hub extends DurableObject<Env> {
       this.broadcast();
       // And the app gets its grant back, so a later drop there asks the person again (TIN-388). A grant
       // the app revoked itself is gone there already: removing the line is all that is left. A blocked domain is never called.
-      if (givesBack(p)) await revokeGrant(p.mcp_url, transport(p));
+      if (givesBack(p)) await this.giveBackGrant(p);
       return { ok: true };
     }
     return { ok: false, error: "invalid_action" };
@@ -1520,6 +1583,8 @@ export class Hub extends DurableObject<Env> {
     const appId = verdict.verified ? appIdFor(name, new Set([...others.map((p) => p.app_id), PAGE_APP.id])) : domainId!.id;
     const declared = verdict.verified ? null : declaredName(name) || null;
     const id = `pr_${randomHex(6)}`;
+    // A grant this request carries again is no longer one to give back (TIN-911).
+    this.sql.exec("delete from givebacks where mcp_url = ?", b.mcp_url);
     this.sql.exec(
       "insert into pairings (id, agent_id, app_id, app_name, app_origin, mcp_url, status, created_at, verified, declared_name, pairing_code, code_attempts, code_expires_at) values (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
       id, t.agent_id, appId, verdict.verified ? name : host(origin), origin, b.mcp_url, new Date().toISOString(), verdict.verified ? 1 : 0, declared,
