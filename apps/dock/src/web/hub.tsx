@@ -15,7 +15,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPet } from "./apc-pet.tsx";
-import { canDrag, dragTitle, fillAgentDrag } from "./agent-drag.ts";
+import { canDrag, dragTitle, startAgentDrag } from "./agent-drag.ts";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
@@ -439,19 +439,17 @@ export function HubDock() {
     // An agent not connected yet does not drag (TIN-908): Connect this agent, under its tile, connects it.
     draggable: canDrag(a),
     title: dragTitle(a),
-    onDragStart: (e: React.DragEvent<HTMLElement>) => startDrag(e.nativeEvent, a.id),
+    onDragStart: (e: React.DragEvent<HTMLElement>) => void startDrag(e.nativeEvent, a.id),
     onDragEnd: () => endDrag(a.id),
   });
-  function startDrag(e: DragEvent, agentId: string) {
+  /** Starts an agent's drag, and says whether it went ahead: a cancelled drag gets no dragend, so the caller marks it dragged only then. */
+  function startDrag(e: DragEvent, agentId: string): boolean {
     // Only a connected agent drags, as the APC payload (agent-drag.ts): never its MCP URL, nor the prompt
     // that holds it (TIN-908). Any other drag is cancelled, so nothing reaches the page it would be dropped on.
     const agent = state?.agents.find((a) => a.id === agentId);
     const t = tickets.current.get(agentId);
     const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
-    if (!fillAgentDrag(e.dataTransfer, agent, fresh)) {
-      e.preventDefault();
-      return;
-    }
+    if (!startAgentDrag(e, agent, fresh)) return false;
     // The drag image is the character itself (not the whole tile), held where the person grabbed it.
     const pet = (e.currentTarget as HTMLElement | null)?.querySelector(".apc-pet");
     if (pet && e.dataTransfer) {
@@ -459,6 +457,7 @@ export function HubDock() {
       e.dataTransfer.setDragImage(pet, Math.min(Math.max(e.clientX - r.left, 0), r.width), Math.min(Math.max(e.clientY - r.top, 0), r.height));
     }
     setDragging(agentId);
+    return true;
   }
   function endDrag(agentId: string) {
     setDragging(null);
@@ -758,7 +757,7 @@ interface FloatProps {
   /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
   requests: FloatRequest[];
   decide: (id: string, action: Decision) => void;
-  dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
+  dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => boolean; endDrag: () => void };
   /** The controls (for the checklist and the footer), and each agent's Float mark where Float is there to choose for. */
   children: (controls: ReactNode, float: FloatChoice | null) => ReactNode;
   /** The hub's refusal of the last answer (Fix check 4 on #120). */
@@ -1055,7 +1054,7 @@ function FloatAgents(props: {
   floats?: (id: string) => boolean;
   requests: FloatRequest[];
   decide: (id: string, action: Decision) => void;
-  dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => void; endDrag: () => void };
+  dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => boolean; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
   notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
   /** The hub's refusal of the last answer (Fix check 4 on #120): shown above the requests or the logos. */
@@ -1136,8 +1135,7 @@ function FloatAgents(props: {
             draggable={canDrag(a)}
             title={dragTitle(a, "an app")}
             onDragStart={(e) => {
-              setDragging(a.id);
-              d.startDrag(e.nativeEvent);
+              if (d.startDrag(e.nativeEvent)) setDragging(a.id);
             }}
             onDragEnd={() => {
               setDragging(null);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { canDrag, dragTitle, fillAgentDrag, type DragSink } from "../src/web/agent-drag.ts";
+import { canDrag, dragTitle, fillAgentDrag, startAgentDrag, type DragSink } from "../src/web/agent-drag.ts";
 
 /** A DataTransfer that keeps what was put on it. */
 function sink(): DragSink & { data: Map<string, string> } {
@@ -43,13 +43,39 @@ test("An agent gone from the dock does not drag", () => {
   assert.equal(dt.data.size, 0);
 });
 
-test("No surface of the dock writes its own drag: every drag goes through agent-drag.ts", () => {
-  for (const file of ["hub.tsx", "pet.tsx", "setup.tsx"]) {
-    const src = readFileSync(new URL(`../src/web/${file}`, import.meta.url), "utf8");
-    assert.ok(!/setData\(/.test(src), `${file} writes a drag itself`);
+test("A dragstart on an agent not connected yet is cancelled with nothing on it", () => {
+  for (const agent of [unconnected, undefined]) {
+    const dt = sink();
+    const e = { dataTransfer: dt, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    assert.equal(startAgentDrag(e, agent, { hub: "https://apc.tineira.com", ticket: "t_0123456789abcdef" }), false);
+    assert.equal(e.defaultPrevented, true);
+    assert.equal(dt.data.size, 0);
+  }
+  // A connected agent's goes ahead, not prevented.
+  const dt = sink();
+  const e = { dataTransfer: dt, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  assert.equal(startAgentDrag(e, connected, undefined), true);
+  assert.equal(e.defaultPrevented, false);
+  assert.deepEqual([...dt.data.keys()], ["application/x-apc-agent"]);
+});
+
+/** Every source file of the dock's page, at any depth. */
+const WEB = new URL("../src/web/", import.meta.url);
+const webFiles = (readdirSync(WEB, { recursive: true }) as string[]).filter((f) => /\.(tsx?|css)$/.test(f)).map((f) => f.replaceAll("\\", "/"));
+
+test("No file of the dock's page writes a drag of its own: every drag goes through agent-drag.ts", () => {
+  assert.ok(webFiles.includes("hub.tsx") && webFiles.includes("pet.tsx"), "the scan found the dock's page");
+  for (const file of webFiles) {
+    if (file === "agent-drag.ts") continue;
+    const src = readFileSync(new URL(file, WEB), "utf8");
+    assert.ok(!/\bsetData\s*\(/.test(src), `${file} writes a drag itself`);
+    assert.ok(!/\bitems\s*\.\s*add\s*\(/.test(src), `${file} adds an item to a drag itself`);
+    assert.ok(!/DownloadURL/.test(src), `${file} puts a DownloadURL on a drag`);
     assert.ok(!/askYourAgentPrompt/.test(src) || file === "setup.tsx", `${file} builds the connect prompt`);
     assert.ok(!/drag[^.\n]*into (your|the) agent.s chat/i.test(src), `${file} still says to drag into the chat`);
-    // A bare `draggable` attribute (always true) would start a drag for an agent not connected yet.
-    assert.ok(!/^\s*draggable\s*$/m.test(src), `${file} makes an agent draggable whatever its state`);
+    // A `draggable` that is always true would start a drag for an agent not connected yet.
+    assert.ok(!/^\s*draggable\s*$/m.test(src) && !/<[A-Za-z][^>]*\sdraggable(?=\s*\/?>|\s+[A-Za-z-]+=)/.test(src), `${file} has a bare draggable`);
+    assert.ok(!/draggable\s*=\s*(\{\s*true\s*\}|"true"|'true')/.test(src), `${file} has draggable set to true`);
+    assert.ok(!/draggable\s*:\s*true\b/.test(src), `${file} has draggable: true`);
   }
 });

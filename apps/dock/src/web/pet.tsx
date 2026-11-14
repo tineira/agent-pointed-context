@@ -78,7 +78,8 @@ export function PetView(props: {
   agent: DockAgent;
   requests: PetRequest[];
   decide: (id: string, action: UnverifiedAction) => void;
-  startDrag: (e: DragEvent) => void;
+  /** Whether the drag went ahead (an agent not connected yet does not drag, TIN-908). */
+  startDrag: (e: DragEvent) => boolean;
   endDrag: () => void;
   /** The hub's refusal of the last answer (Fix check 4 on #120): the bubble shows it, with or without a request left. */
   refusal?: ReactNode;
@@ -140,10 +141,11 @@ export function PetView(props: {
       <div
         className="pet-logo"
         draggable={canDrag(a)}
-        title={dragTitle(a, "an app")}
+        title={canDrag(a) ? dragTitle(a, "an app") : `Connect ${a.name} first: click to open your dock`}
+        // Not connected yet (TIN-908): it does not drag, and a click opens the dock, where it connects.
+        onClick={canDrag(a) ? undefined : petApp.openDock}
         onDragStart={(e) => {
-          setDragging(true);
-          props.startDrag(e.nativeEvent);
+          if (props.startDrag(e.nativeEvent)) setDragging(true);
         }}
         onDragEnd={() => {
           setDragging(false);

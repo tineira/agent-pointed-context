@@ -40,6 +40,17 @@ export function fillAgentDrag(dt: DragSink | null | undefined, agent: DraggedAge
   return true;
 }
 
+/**
+ * Starts a drag of `agent` from a dragstart event: filled when it may go on, cancelled (default
+ * prevented, nothing written) when not. The caller marks the agent as dragged only on true, since a
+ * cancelled drag gets no dragend.
+ */
+export function startAgentDrag(e: { dataTransfer: DragSink | null; preventDefault(): void }, agent: DraggedAgent | undefined, fresh: { hub: string; ticket: string } | undefined): boolean {
+  if (fillAgentDrag(e.dataTransfer, agent, fresh)) return true;
+  e.preventDefault();
+  return false;
+}
+
 /** The tooltip on an agent's drag handle. */
 export function dragTitle(agent: DraggedAgent & { name: string }, where = "anything in an APC app"): string {
   return canDrag(agent) ? `Drag ${agent.name} onto ${where} to point it there (or to pair it with that app)` : `Connect ${agent.name} first: use Connect this agent in the dock`;
