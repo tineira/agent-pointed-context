@@ -1,5 +1,11 @@
 import {
   AGENT_HANDLE_RE,
+  bindingVerdict,
+  hasBindingKey,
+  isInitializeMessage,
+  PAIRING_MISMATCH_ERROR,
+  rpcMessages,
+  type DockBinding,
   DOCK_GRANT_RPC_ERROR_CODE,
   DRAG_TICKET_RE,
   dockGrantAnswer,
@@ -234,6 +240,31 @@ export interface DockGrantGateOptions {
   pairingMessage?: string;
   /** What a dormant grant tells the agent; `IDLE_MESSAGE` by default. */
   idleMessage?: string;
+  /**
+   * The grant's binding (M10, APC 0.12): what the app stored when the hub acknowledged it. With it, every
+   * `initialize` in the request (a batch, one without an `id`) is checked (M11, `bindingVerdict`), and one that
+   * does not hold it gets HTTP 404 `{ error: "pairing_mismatch" }` in handoff, live or dormant, the state
+   * unchanged. Leave it out only for an app before 0.12.
+   */
+  binding?: DockBinding;
+  /** The app allows more than one hub (M11, SHOULD): a missing `pairing_id` on a declared grant is a mismatch in every state. */
+  multiHub?: boolean;
+}
+
+/** The 404 of M11 and M12 (APC 0.12): nothing about the grant or its binding, only the token. */
+function pairingMismatch(): Response {
+  return Response.json({ error: PAIRING_MISMATCH_ERROR }, { status: 404, headers: { "cache-control": "no-store" } });
+}
+
+/**
+ * M12 (APC 0.12): on a grant that is **not** a Dock grant, a request carrying an `initialize` (in a batch, or
+ * without an `id`) with either binding key, whatever its value, is a hub introducing itself to a grant that was
+ * never handed to a dock: HTTP 404 `{ error: "pairing_mismatch" }`, before any other answer (revoked
+ * included), and the grant is unchanged. Null when the request carries none: serve it as before. Whether the
+ * grant is a Dock grant is the app's own record (M10), never this request.
+ */
+export function directGrantGate(body: unknown): Response | null {
+  return rpcMessages(body).some((m) => isInitializeMessage(m) && hasBindingKey(m)) ? pairingMismatch() : null;
 }
 
 type RpcId = string | number | null;
@@ -304,8 +335,18 @@ export function dockGrantToolResult(state: DockGrantState, tool: string, options
  *
  * A request that is not a POST with one JSON-RPC message (a GET for a stream, a batch, junk) is gated as
  * "another method", so it never gets data from a grant that is not live. Nothing it answers wakes the grant.
+ *
+ * With `options.binding` (APC 0.12, M11), an `initialize` anywhere in the request that does not hold the grant's
+ * binding answers HTTP 404 `{ error: "pairing_mismatch" }` in handoff, live or dormant, the state unchanged.
  */
 export function dockGrantGate(state: DockGrantState, message: unknown, options: DockGrantGateOptions): DockGrantGate {
+  // M11 (APC 0.12): every initialize in the request holds the grant's binding, or the request is a 404 wherever an
+  // initialize would be served (revoked, ended and in flight answer first, below).
+  if (options.binding && (state === "handoff" || state === "live" || state === "dormant")) {
+    const binding = options.binding;
+    const mismatch = rpcMessages(message).some((m) => isInitializeMessage(m) && bindingVerdict(m, binding, state, { multiHub: options.multiHub }) === "mismatch");
+    if (mismatch) return { serve: false, answer: dockGrantAnswer(state, "initialize", { binding: "mismatch" }), response: pairingMismatch() };
+  }
   const { call, id, tool } = callOf(message);
   const answer = dockGrantAnswer(state, call);
   switch (answer.kind) {
