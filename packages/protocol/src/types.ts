@@ -60,6 +60,8 @@ export interface PresenceEvent {
   at: string;
   tool: string;
   kind: "read" | "write";
+  /** What the call touched that has an id, at most 20. A computation (a target with params and no id) is not named here. */
   targets: Array<{ kind: string; id: string }>;
+  /** How many distinct targets the call touched: at least `targets.length`, more past the cap of 20, and it may count a computation. For display. */
   count: number;
 }

@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { exampleRegion, fragmentTarget, headingIds, linksOf, parseInline, parseMarkdown, REPO, repoPath, resolveHref, slugify, type Block, type Inline } from "../src/docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, isDocsPath, SITE_PATHS } from "../src/docs/pages.ts";
-import { docHtmlFile, docMarkdownPath, docPageMarkdown, staticDocFiles } from "../src/docs/static.ts";
+import { docHtmlFile, docMarkdownPath, docPageHtml, docPageMarkdown, staticDocFiles } from "../src/docs/static.ts";
 import { readdirSync } from "node:fs";
 
 const root = new URL("../../../", import.meta.url);
@@ -81,8 +81,15 @@ test("a link is only ever http(s), mailto, a site path, an anchor or a file in t
   assert.deepEqual(brokenIn({ path: "/docs/x", file: "apps/dock/README.md" }, parseMarkdown("# T\n\n[x](javascript:alert%281%29) [y](data:,x)")), ["javascript:alert%281%29: unsafe link", "data:,x: unsafe link"]);
 });
 
+test("an anchor a heading had before it was renamed still lands on it, with a script and without (TIN-913)", () => {
+  assert.equal(fragmentTarget("#versioning-and-deprecation"), "versioning-and-compatibility");
+  const spec = DOC_PAGES.find((p) => p.file.endsWith("spec.md"))!;
+  const html = docPageHtml(spec, readFileSync(new URL(spec.file, root), "utf8"), {});
+  assert.match(html, /<span id="versioning-and-deprecation"><\/span><h2 id="versioning-and-compatibility">/);
+});
+
 test("a malformed #fragment names nothing, and never throws", () => {
-  assert.equal(fragmentTarget("#versioning-and-deprecation"), "versioning-and-deprecation");
+  assert.equal(fragmentTarget("#the-core"), "the-core");
   assert.equal(fragmentTarget("#caf%C3%A9"), "café");
   assert.equal(fragmentTarget("#%E0%A4%A"), null);
   assert.equal(fragmentTarget("#%"), null);

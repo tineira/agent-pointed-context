@@ -121,7 +121,7 @@ export function Docs({ path }: { path: string }) {
       </header>
       <Nav current={page} />
       <aside className="docs-draft" role="note">
-        <b>Draft.</b> The APC standard is at {APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-deprecation">versioning and deprecation policy</a>.
+        <b>Draft.</b> The APC standard is at {APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.
       </aside>
       <article className="docs-body">
         {page ? <Blocks blocks={blocks} file={page.file} /> : (

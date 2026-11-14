@@ -245,10 +245,19 @@ export function resolveHref(href: string, file: string): string | null {
 }
 
 /** The element id a URL's #fragment names, or null. A malformed fragment (`#%E0%A4%A`) names nothing; it never throws. */
+/**
+ * Anchors a heading had before it was renamed, and the heading's id now: published links to the old anchor (the
+ * paper, READMEs of packages already on npm) still land on the section. The static page keeps the old id too.
+ */
+export const ANCHOR_ALIASES: Readonly<Record<string, string>> = {
+  "versioning-and-deprecation": "versioning-and-compatibility",
+};
+
 export function fragmentTarget(hash: string): string | null {
   if (!hash.startsWith("#") || hash.length < 2) return null;
   try {
-    return decodeURIComponent(hash.slice(1));
+    const id = decodeURIComponent(hash.slice(1));
+    return ANCHOR_ALIASES[id] ?? id;
   } catch {
     return null;
   }

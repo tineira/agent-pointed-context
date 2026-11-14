@@ -12,6 +12,7 @@
  */
 // #region imports
 import {
+  APC_SECRET_RE,
   LONG_DORMANCY_RECOMMENDED_MS,
   PAIRING_CODE_TTL_MS,
   T_ACK_MAX_MS,
@@ -274,6 +275,9 @@ export class OrdersApp {
     // Each grant's MCP URL: the agent itself (Direct) or a dock's hub (Dock) calls it.
     const mcp = path.match(/^\/mcp\/([0-9a-f]{32})$/);
     if (mcp) return this.mcp(request, mcp[1]!);
+    // apc.json's "/mcp/{secret}" claims every child of /mcp/ that fits a secret (APC 0.11): one that names no grant is
+    // an unknown grant, and answers 404 like one, never this app's other answers (a 401 for no session, say).
+    if (path.startsWith("/mcp/") && APC_SECRET_RE.test(path.slice("/mcp/".length))) return Response.json({ error: "unknown_grant" }, { status: 404 });
     // A dock's hub gives a grant back (Dock): public, so it answers the same 200 to anything (handleDockGiveBack).
     if (path === "/apc/revoke") return handleDockGiveBack(request, { origin: this.origin, endGrantBySecretHash: (hash) => this.givenBack(hash) });
 

@@ -17,7 +17,7 @@ On an app (Direct):
 | the app's own tools | what the focus's `next` and `next_args` name: make exactly that call |
 | `apc_link({ code })` | only when a result on your other connection to this app carried `apc_link` |
 
-On a dock (Dock), one connection for every app the person paired:
+On a dock (Dock), one connection for every app the person paired. These are the reference hub's tools, and APC 1.0 does not freeze them: 1.0 freezes the pairing contract between app, agent and hub, while the hub's tools (its `get_current_view` with `views`, its `wait_for_focus`, `list_app_tools` and `call_app_tool`, and page readings with `page_text`) stay non-normative until a later minor version, and may change in any release before then ([what 1.0 freezes](/docs/spec#what-10-freezes)). Read them by their descriptions in `tools/list`, as for any MCP server:
 
 | Tool | |
 |---|---|

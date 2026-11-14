@@ -7,7 +7,7 @@
  * `staticDocFiles` returns next to its index.html (vite.config.ts), and test/docs.test.ts checks it.
  */
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
-import { exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "./markdown.ts";
+import { ANCHOR_ALIASES, exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "./markdown.ts";
 import { DOC_PAGES, EXAMPLES_DIR, type DocPage } from "./pages.ts";
 
 /** Where a page's Markdown is served: /docs/spec.md for /docs/spec, /docs/overview.md for /docs itself. */
@@ -43,7 +43,9 @@ function blocks(list: Block[], file: string, examples: Record<string, string>): 
         case "heading": {
           const level = Math.min(b.level, 4);
           const anchor = b.level > 1 ? `<a class="docs-anchor" href="#${escapeHtml(b.id)}" aria-label="${escapeHtml(`Link to ${plainText(b.c)}`)}">#</a>` : "";
-          return `<h${level} id="${escapeHtml(b.id)}">${inlines(b.c, file)}${anchor}</h${level}>`;
+          // A renamed heading keeps its old id on a mark before it, so an old link lands here with no script.
+          const old = Object.keys(ANCHOR_ALIASES).filter((from) => ANCHOR_ALIASES[from] === b.id).map((from) => `<span id="${escapeHtml(from)}"></span>`).join("");
+          return `${old}<h${level} id="${escapeHtml(b.id)}">${inlines(b.c, file)}${anchor}</h${level}>`;
         }
         case "para":
           return `<p>${inlines(b.c, file)}</p>`;
@@ -90,7 +92,7 @@ export function docPageHtml(page: DocPage, source: string, examples: Record<stri
     `<main class="docs">`,
     `<header class="docs-head"><a class="kicker" href="/">Agent Pointed Context</a><span class="row small"><a href="/dock">Your dock</a><a href="${REPO}">GitHub</a></span></header>`,
     `<nav class="docs-nav" aria-label="Docs">${nav}</nav>`,
-    `<aside class="docs-draft" role="note"><b>Draft.</b> The APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-deprecation">versioning and deprecation policy</a>.</aside>`,
+    `<aside class="docs-draft" role="note"><b>Draft.</b> The APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.</aside>`,
     `<article class="docs-body">${blocks(parseMarkdown(source), page.file, examples)}</article>`,
     `<footer class="docs-foot"><p>The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT. Source of this page: <a href="${REPO}/blob/main/${page.file}">${page.file}</a>. This page as Markdown: <a href="${docMarkdownPath(page)}">${docMarkdownPath(page)}</a>.</p><p><a href="/">Home</a> · <a href="/v1/">Version 1, as described in the paper</a></p></footer>`,
     `</main>`,

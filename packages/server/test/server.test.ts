@@ -248,6 +248,14 @@ test("the tools teach the loop: instructions and descriptions name wait_for_focu
   assert.match(APC_INSTRUCTIONS, /in the background/);
 });
 
+test("wait_for_focus has one loop, the one 'then' drives: no unattended loop on page_open (APC 0.12)", async () => {
+  const { client } = await connect(null);
+  const { tools } = await client.listTools();
+  const wait = tools.find((t) => t.name === "wait_for_focus")!;
+  assert.doesNotMatch(wait.description!, /unattended|in a loop|for as long as page_open/i);
+  assert.match(wait.description!, /When it returns no focus, go back to the person\.$/);
+});
+
 /** A fake grant with a pin store the test drives, for the APC 0.8 rules. */
 async function grantWithPins(slots = new MemoryWaitSlots(), grantId = "g", events?: PresenceWaitEvent[]) {
   const pin: { at: string | null; seenAt: string | null } = { at: null, seenAt: null };

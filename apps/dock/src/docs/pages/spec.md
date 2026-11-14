@@ -1,17 +1,33 @@
 # The APC specification
 
-This is the contract an app, an agent and a dock share in Agent Pointed Context, at the version in the banner above. It is a draft: see [versioning and deprecation](#versioning-and-deprecation). The reference is the code in [`@tineira/apc-protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol) (types and constants) and the [conformance suite](/docs/conformance); this page says the same in words. Every change is in the [changelog](/docs/changelog).
+This is the contract an app, an agent and a hub share in Agent Pointed Context, at the version in the banner above. It is a draft until 1.0: see [versioning and compatibility](#versioning-and-compatibility). This page is the standard. [`@tineira/apc-protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol) carries its types and constants and the readers it names (the target grammar, `apc.json`, the grant states), and the [conformance suite](/docs/conformance) checks an app against it. Neither covers all of it: the hub's side is checked only by the reference hub's own tests, and [the hub's tools](#the-hubs-tools) are described, not specified. Where the package or the suite disagrees with this page, one of them has a bug, and the fix is recorded in the [changelog](/docs/changelog), like every change.
 
-**MUST** and **MUST NOT** mark what the reference code enforces: `@tineira/apc-protocol` refuses it, the reference hub refuses it, or the conformance suite fails an app that does not. Everything else describes how the reference apps behave and what a reader can rely on.
+**MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT** and **MAY** mean what [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) say, and only in bold capitals. Each binds the party its sentence names: an app (its server or its page), an agent, a hub, or a dock's page. A SHOULD may be left out only for a reason its implementer can state, knowing what it costs. Text without these words describes how the reference software behaves and what a reader can rely on.
+
+How they are checked does not change what they mean. The conformance suite checks an app's MUSTs where it can reach them ([conformance](/docs/conformance) lists which), and `@tineira/apc-protocol` refuses what its readers refuse. A hub's MUSTs, and a dock's, bind the same way, but no suite checks a hub in 1.0: the reference hub's own tests do. A MUST that nothing checks is still a MUST.
 
 ## Terms
 
-- **App**: a web app that speaks APC: it has a page the person uses and an MCP endpoint agents call.
+- **App**: a web app that speaks APC: it has a page the person uses and an MCP endpoint agents call. The endpoint speaks MCP over Streamable HTTP; its `initialize` result names `protocolVersion` and `serverInfo.name`, and offers the `tools` capability.
 - **Agent**: the person's own AI agent, an MCP client (Claude, ChatGPT, Cursor, Grok and others).
 - **Grant**: one agent's access to one app, with its own pin and name. A grant holds per agent, never per app. How the agent proves it holds the grant is the app's binding: in the reference apps a secret MCP URL (whoever holds it holds the grant); with OAuth a bearer token on a shared URL (see [the Direct profile](#the-direct-profile)).
 - **Hub**: the server side of a **dock**, the window where the person keeps their agents. In the Dock profile the hub holds the grants and relays between agents and apps. The reference hub is at `apc.tineira.com`.
 - **The person's page**: the app's page, open in a browser (or a desktop or phone app).
 - **Profile**: how agents reach an app: **Direct** or **Dock**. An app offers one or both.
+
+## What 1.0 freezes
+
+1.0 freezes the pairing contract between an app, an agent and a hub: [the core](#the-core), [the Direct profile](#the-direct-profile), [the Dock profile](#the-dock-profile) with the hub's duties toward apps (H1 to H8), [`apc_link`](#apc_link), [`apc.json`](#apcjson), the rules of [the hub's trust model](#the-hubs-trust-model) on which apps pair and on marking what an unverified app gives, and [reading what you do not know](#reading-what-you-do-not-know). The hub's tools for agents are **not** frozen by 1.0: its `get_current_view` with `views[]`, its one `wait_for_focus` across apps, `list_app_tools` and `call_app_tool`, the `<app>__<tool>` relay, the shape of the untrusted envelope and labels it marks an unverified app's content with (the marking itself is frozen), and the browser extension's `page_reading` focus with `page__get_reading`'s `page_text`. They stay non-normative until a later minor version states them; until then [the hub's tools](#the-hubs-tools) describes the reference hub, and any minor version may change them. An agent reads them as it reads any MCP server's tools: by their descriptions.
+
+## Reading what you do not know
+
+So that a minor version can add without breaking anyone, every reader **MUST** ignore what it does not know:
+
+- **A key.** In `apc.json`, a target, a view, a focus, a `PresenceEvent` or `PresenceWaitEvent`, a tool result, a tool error, and a hub's answer to `/apc/pair` or `/apc/confirm`, a key the reader does not know is read as if it were not there, and the rest is read as usual.
+- **A word of an open list.** A word of `profiles` it does not know (at the top level of `apc.json` and in an `mcp.endpoints` entry, where it is left out one by one and the entry stays), a presence message of a `kind` it does not know (the whole message is ignored), and a tool it was not told of.
+- **An error code.** A code it does not know reads as the request's failure or refusal, by its status and shape (HTTP 400, `isError: true`, a JSON-RPC error), never as success. [The error codes](#error-codes) lists those this version names.
+
+Ignoring never widens. Where this page says to drop something whole (an `mcp.endpoints` entry with a key the reader does not know, or a path it does not understand), the reader drops it and uses no part of it: that is the one place an unknown key is not ignored. And a writer never relies on an older reader understanding what it added: what an older reader does is always what it does when it ignores it. A `standard` newer than the reader's own is read by the same rule: see [versioning and compatibility](#versioning-and-compatibility).
 
 ## The core
 
@@ -32,22 +48,24 @@ The screen the person is on, as identifiers, trimmed to what the calling grant m
 
 ### The pin and the focus format
 
-The person drops the agent's mark on a **target**: `{ kind, id, part, params }`. A target names a row (`id`), a computation (`params`), or both, and **MUST** have one of the two.
+The person drops the agent's mark on a **target**: `{ kind, id, part, params }`. A target names a row (`id`), a computation (`params`), or both, and **MUST** have one of the two: an `id`, or `params` with at least one key (since 0.12 a target with no `id` and `params: {}` is refused, as one with neither).
 
 - `kind` and every param key match `[a-z][a-z0-9_]{0,31}`; `id` matches `[A-Za-z0-9_.:-]{1,80}`.
 - `part` names a piece of the target (`total`, `step:new`): a word, optionally followed by `:` and a token.
 - `params` **MUST** carry keys only: string tokens, or lists of at most 20, in at most 1 KB. A bare number is an amount, never a key, and is refused (a month such as `2026-03` passes). Free text never travels.
 - In the page, a pointable element carries `data-focus="kind:id"`, with `data-focus-part` and `data-focus-params` (JSON) when needed (`focusAttrs` in `@tineira/apc-protocol`).
 
-The app keeps **one pin per grant**: a new drop replaces it, unread. It is **unread** while it was dropped after the last read that returned it. What the agent receives is the **focus** (`FocusPayload`): the target plus `app_url`, `pinned_at`, and `next` and `next_args`, the exact tool call that reads it. It may carry `part_note`, `trimmed` (what the grant may not see was left out) and `gone` (the row no longer exists).
+The app keeps **one pin per grant**: a new drop replaces it, unread. Every drop makes a new pin with a new `pinned_at`, so a drop on the target already pinned, and read, makes it unread again. It is **unread** while it was dropped after the last read that returned it. What the agent receives is the **focus** (`FocusPayload`): the target plus `app_url`, `pinned_at`, and `next` and `next_args`, the exact tool call that reads it. It may carry `part_note`, `trimmed` (what the grant may not see was left out) and `gone` (the row no longer exists).
+
+**Trimmed per grant** means: anything a grant may not see is left out of its view, its focus and its tool results, and a focus that lost something to that carries `trimmed: true`. A grant never learns from an answer what it may not see.
 
 ### Attention
 
-While a grant's pin is unread, every tool result on that grant carries `attention: { focus, note }`, as a top-level key of the structured result **and** of the JSON text, so a model that sees only text sees it too. It points at `get_current_view`; it never instructs.
+While a grant's pin is unread, every tool result on that grant that serves app data carries `attention: { focus, note }` (on a Dock grant, only a live one: no answer in handoff or dormant carries it, see [what each state answers](#the-grants-states)), as a top-level key of the structured result **and** of the JSON text, so a model that sees only text sees it too. It points at `get_current_view`; it never instructs.
 
 ### Presence
 
-After each successful tool call, the app publishes a `PresenceEvent` to the person's page: `{ v: 1, grant_id, at, tool, kind, targets, count }`, ids only, `kind` being `read` or `write`, at most 20 `targets` of `{ kind, id }`. A read of a target **MUST** name it in `targets`. The page lights up what the agent read.
+After each successful tool call, the app publishes a `PresenceEvent` to the person's page: `{ v: 1, grant_id, at, tool, kind, targets, count }`, ids only, `kind` being `read` or `write`, at most 20 `targets` of `{ kind, id }`. A read of a target that has an `id` **MUST** name it in `targets` as `{ kind, id }`. A read of a computation (a target with `params` and no `id`) names nothing there, since presence carries ids only. `count` is how many distinct targets the call touched: at least the length of `targets`, more when the call touched over 20, and it may count a computation that `targets` cannot name. It is for display (`presenceEvent` in `@tineira/apc-server` counts the distinct targets it was given, before the cap). The page lights up what the agent read.
 
 #### Wait events (since 0.11)
 
@@ -57,7 +75,8 @@ The page shows that an agent is listening (a drop reaches it now) from a second 
 - An app that sends them **MUST** send `open` when a `wait_for_focus` claims the grant's one place for a wait, and `closed` when the wait gives it up: on return (a pin, a timeout, a closed page), on cancel, and when the grant is revoked or deleted during it. A wait refused (within `WAIT_CLAIM_GAP_S`, or on a revoked grant) sends nothing.
 - **Atomic: what "can tell" means.** Its place for a wait says, in the step that takes it, whether another wait held it, and, in the step that gives it up, whether this wait held it (a compare-and-swap and a compare-and-delete on a store row). An app that can only check and then release, in two steps, **MUST NOT** send wait events: a claim between the two would end the page on `closed` while a wait runs, and no "waiting" beats a wrong one.
 - **A takeover** sends the old wait's `closed`, then the new wait's `open`, both when the new wait claims the place. The old wait sends nothing when it later finds it was taken over. So a grant's last wait event always says whether a wait holds its place now.
-- **A `closed` that never comes.** A worker can die before it sends `closed`. A page **MUST** treat an `open` as closed once it is older than the app's longest wait (its ceiling for `timeout_s`; 50 s, `WAIT_CEILING_DEFAULT_S`, unless the app sets its own) plus `WAIT_EVENT_MARGIN_S` (10 s), counted on the page's clock from when the event arrived, never from `at`. A live wait overruns its timeout by at most one poll and its last checks, which the margin covers; a lost `closed` leaves the page "waiting" for a minute at most. An app **SHOULD** tell a page that connects during a wait about it (Pulse and Signals send the open event first), and leave out one past the same limit. An `open` for a wait the page already has open keeps the first arrival, so a replay never restarts its clock; a page that first hears of a wait from a replay counts from then, so there a lost `closed` can show for up to twice the limit.
+- **The ceiling a page counts on.** A page needs the app's ceiling for `timeout_s` (its longest wait). A page the app ships itself knows it from the app's own code (`ceilingS` in `@tineira/apc-web`'s `waitOpen`, `waitOpenLimitMs(ceilingS)`); a page that does not know it counts on `WAIT_CEILING_DEFAULT_S` (50 s). So an app whose wait events a page it did not write reads **SHOULD** keep its ceiling at 50 s or less, or a wait longer than that shows closed early there.
+- **A `closed` that never comes.** A worker can die before it sends `closed`. A page **MUST** treat an `open` as closed once it is older than the app's ceiling as the page knows it (50 s, `WAIT_CEILING_DEFAULT_S`, when it does not) plus `WAIT_EVENT_MARGIN_S` (10 s), counted on the page's clock from when the event arrived, never from `at`. A live wait overruns its timeout by at most one poll and its last checks, which the margin covers; a lost `closed` leaves the page "waiting" for a minute at most. An app **SHOULD** tell a page that connects during a wait about it (Pulse and Signals send the open event first), and leave out one past the same limit. An `open` for a wait the page already has open keeps the first arrival, so a replay never restarts its clock; a page that first hears of a wait from a replay counts from then, so there a lost `closed` can show for up to twice the limit.
 - **Dock grants.** A Dock agent waits on the hub, not on the app: the waits an app sees on a dock grant are the hub's relays. A page **MUST NOT** show a dock grant as waiting, whatever its wait events say. The dock shows its own agents' waits, from the hub's place for each agent.
 - A page that reads the channel ignores a message it does not know, so a page before 0.11 is not affected (`flashTargets` ignores wait events). A page reads the five keys strictly and drops a key it does not know (the event only drives a display); an app sends exactly the five.
 
@@ -71,14 +90,15 @@ When the app cannot answer just now, it still answers in this shape, `{ view: nu
 
 ### `wait_for_focus` and `then`
 
-`wait_for_focus({ timeout_s })` holds the call until the person pins the agent, or `timeout_s` passes (a whole number from 1 to the app's ceiling; optional, 25 by default in `@tineira/apc-server`).
+`wait_for_focus({ timeout_s })` holds the call until the person pins the agent, or `timeout_s` passes (a whole number from 1 to the app's ceiling; optional, 25 by default in `@tineira/apc-server`). A `timeout_s` that is not a whole number in that range **MUST** be refused as invalid arguments (a JSON-RPC error, or a tool error with `isError: true`, as the MCP SDK refuses input its schema does not take), never clamped or replaced by the default: the agent learns the range from the tool's input schema.
 
 - A pin dropped during the wait is returned, marked seen: `{ focus, timed_out: false }`.
 - With none, it returns `focus: null` with a `note`, and `timed_out: true` at the timeout, or `timed_out: false, page_open: false` as soon as the app knows the person's page is closed. `page_open` is left out while the person does not share their view (an app without that switch always shares).
 - A dormant dock grant (since 0.10) answers at once `{ focus: null, timed_out: false, page_open: false, idle: true, note }`. An answer without `idle` (an app before 0.10) reads as page closed or unavailable, as before.
 - **One wait per grant.** At most one wait of a grant delivers. A new wait takes over: the one it replaces ends at its next check with `focus: null, timed_out: false` and a note, and delivers and marks nothing. A new wait within 2 seconds of one still running (`WAIT_CLAIM_GAP_S`) is refused instead, with `focus: null, timed_out: false, retry_after_s` and a note. A wait whose request the client cancels stops and frees its place at once: MCP's `notifications/cancelled` (to a stateless server it comes in a POST of its own, so the app keeps its calls in flight per grant to find the one it names: `InflightCalls`), and an HTTP abort where the host reports one.
+- **"At once" and "at its next check"** mean within one poll of the wait (2 s in `@tineira/apc-server`) and its last checks. The conformance suite allows 8.7 s after a pin, a revoke or a takeover, and 4 s past `timeout_s`.
 
-`then` is the loop hint: a key on a result, placed like `attention`, present while a page of the person's is open (and they share their view) **and** the grant was pinned in the last 30 minutes, read or unread (`THEN_PIN_WINDOW_MIN`; an app may set its own window). An open page with no recent pin gives no `then`, so an agent does not wait after every answer. It tells the agent to call `wait_for_focus` after answering, in the background if its client can, and otherwise to keep the wait short and never chain waits. It **MUST NOT** be on a `wait_for_focus` result that came back with no focus: that result ends the loop.
+`then` is the loop hint: a key on a result, placed like `attention`, present while a page of the person's is open (and they share their view) **and** the grant was pinned in the last 30 minutes, read or unread (`THEN_PIN_WINDOW_MIN`; an app may set its own window). An open page with no recent pin gives no `then`, so an agent does not wait after every answer. It tells the agent to call `wait_for_focus` after answering, in the background if its client can, and otherwise to keep the wait short and never chain waits. It **MUST NOT** be on a `wait_for_focus` result that came back with no focus, whatever ended the wait (a timeout, a closed page, a takeover, a refusal or a cancel): that result ends the loop. There is no other loop: an agent waits only while `then` says so, attended or not, and goes back to the person when a wait returns no focus.
 
 ### Seen once delivered
 
@@ -88,8 +108,9 @@ Checking for a pin, or polling for one, never marks it seen: only returning it d
 
 Every agent in the app's agent bar, Direct or Dock, has Revoke. It holds in the app alone and at once: the app calls nobody, so it works with the hub down.
 
-- From then on every request with the grant, whatever the method, **MUST** be answered with `{ error: "revoked", revoked_by, revoked_at, message }` (`RevokedAnswer`), `revoked_by` being the app's host. The HTTP status is the binding's: 403 with a secret URL, 401 with `WWW-Authenticate: Bearer error="invalid_token"` with a bearer token. An unknown or expired grant answers without a `RevokedAnswer` (404 with a secret URL), so a holder can tell "taken back" from "gone".
-- A call already running when the grant is revoked **MUST** end as a tool error with the same answer and no app data. Whether a grant was revoked is told by the grant itself (its secret, and the hash the app keeps of it), never by a grant id a later grant may reuse.
+- From then on every request with the grant **MUST** be answered with `{ error: "revoked", revoked_by, revoked_at, message }` (`RevokedAnswer`), `revoked_by` being the app's host and `message` a non-empty string. That holds whatever the request is: `initialize`, `ping`, `tools/list`, `tools/call`, any other method, a notification, a `GET` or a `DELETE`, and a body that does not parse. The HTTP status is the binding's: 403 with a secret URL, 401 with `WWW-Authenticate: Bearer error="invalid_token"` with a bearer token.
+- An unknown or expired grant answers without a `RevokedAnswer`, so a holder can tell "taken back" from "gone": 404 with a secret URL; a plain 401 with `WWW-Authenticate: Bearer error="invalid_token"` with a bearer token.
+- A call already running when the grant is revoked **MUST** end as a tool error (`isError: true`) whose `content[0].text` is the `RevokedAnswer` as JSON, with no app data. The app **MAY** put the same `RevokedAnswer` in `structuredContent`. Whether a grant was revoked is told by the grant itself (its secret, and the hash the app keeps of it), never by a grant id a later grant may reuse.
 - A revoked grant never works again. The person lets the agent back with a new grant: a new MCP URL (Direct), or a new drop with consent in the app and in the dock (Dock).
 
 ### Mobile
@@ -144,7 +165,7 @@ The agent connects to the app's own MCP endpoint.
 
 - **A grant per agent, whatever the auth.** The standard does not fix how the agent authenticates. A grant **MUST** have a stable id per agent connection (pins, views, presence and `apc_link` are keyed by it), be revocable from the app alone (ending everything that could bring it back without the person: with OAuth, its refresh tokens and authorization too) and checked before and after each tool call, tell revoked apart from expired or unknown, and be trimmed per grant (`GrantRequirement`). Any binding that meets that will do.
 - **The secret URL** (the reference apps): the person makes an agent in the app's page; the app makes a grant with a secret of 128 random bits, which is the last segment of the agent's MCP URL (`newDirectGrant` in `@tineira/apc-server`).
-- **OAuth 2.1**: every grant shares one MCP URL, and the bearer token names the grant. A revoked token answers 401 with the `RevokedAnswer` body, so the client does not just authorize again.
+- **A bearer token** (OAuth 2.1, or a token the app issues): every grant shares one MCP URL, and the token names the grant. A revoked token answers 401 with the `RevokedAnswer` body, so the client does not just authorize again. The grant's id is random and stays the same for the grant's whole life; it is never derived from the token. [A complete Direct app with a bearer token](/docs/integrate#a-complete-direct-app-with-a-bearer-token) shows one.
 - **Hosts with no long-lived process** (stateless functions and a database) still bound `wait_for_focus` by their function's time limit (their own ceiling for `timeout_s`), tell a closed page from a heartbeat the page sends, and check the grant before and after each tool call.
 - **The agent list**: where the person makes and names agents and copies the URL, or a prompt that asks the agent to add it (`<apc-direct-agents>` in `@tineira/apc-web`). An agent names itself on `initialize` (`clientInfo.name`) until the person renames it.
 - **The agent bar** shows Direct agents in full, always: the app is the only place the person sees and points them.
@@ -155,11 +176,11 @@ The agent connects once, to a hub. The person drags it from the dock onto any ap
 
 ### The drop
 
-The dock puts the agent on a drag with the type `application/x-apc-agent` and the payload `{ v: 1, agent, hub, ticket }`: a public handle, the hub's bare origin, and a ticket. The payload **MUST NOT** hold a secret or an MCP URL: any page the agent is dropped on can read it. The **ticket** is single use, lives 240 seconds (since 0.9; 60 before), is bound to that agent, and opens a pairing request or a confirmation and nothing else. The reference dock refreshes a ticket once it has less than 180 seconds left (it checks every 10), so a drag carries one with about three minutes left, and the app's two-minute consent fits in it.
+The dock puts the agent on a drag with the type `application/x-apc-agent` and the payload `{ v: 1, agent, hub, ticket }`: a public handle, the hub's bare origin, and a ticket. The dock **MUST NOT** put a secret or an MCP URL in the payload: any page the agent is dropped on can read it. The **ticket** is single use, lives 240 seconds (since 0.9; 60 before), is bound to that agent, and opens a pairing request or a confirmation and nothing else. The reference dock refreshes a ticket once it has less than 180 seconds left (it checks every 10), so a drag carries one with about three minutes left, and the app's two-minute consent fits in it.
 
 ### Consent in the app
 
-Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent ("Let your agent from the dock at … read Orders?") with that nonce, and the Allow sends it back. The server makes a grant only for a request that brings the nonce back. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress` (see [one pending pairing](#one-pending-pairing)).
+Consent is the app's server's to check, never its page's alone. The page sends every dock drop to its server. For an agent it holds no grant for (never paired, revoked, or one the dock no longer confirms), the server answers `consent_required` with a nonce; the page shows its consent ("Let your agent from the dock at … read Orders?") with that nonce, and the Allow sends it back. The server **MUST** make a grant only for a request that brings back the nonce of a consent it gave for that dock and that agent, and **MUST** accept each nonce only once. In the reference apps (`DockConsent` in `@tineira/apc-server`) the nonce has 128 random bits, works once, for the same dock and agent, for two minutes. One drop of an agent is answered at a time: a second request while the first waits on the hub answers `pairing_in_progress` (see [one pending pairing](#one-pending-pairing)).
 
 Since 0.9 the consent shows a [pairing code](#the-pairing-code), and the server answers `consent_required` with both: `{ consent, pairing_code }`. The reference apps hold the code on the page and show it only after the Allow, formatted (`K7M-4P2`), in a card that takes the consent's place: the code large with a copy button, the time left and Cancel, and under it "Type it only in your own dock; never give it to anyone. Whoever types it gets this access." Before the Allow they say only "After Allow, your dock will ask for a code." This is how the reference apps do it, not a rule: the rules are in the next section.
 
@@ -170,7 +191,7 @@ A drag can be put on any page, and anyone who runs a dock can make tickets for t
 - The app **MUST** make a new code with every consent: 6 characters of Crockford base32 (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`, 30 bits; `newPairingCode` in `@tineira/apc-server`), shown only on the app owner's page. After the Allow it sends the code, raw (`K7M4P2`), in `pairing_code` of `/apc/pair`, and nowhere else: not over MCP, not in a URL, not to `/apc/confirm`.
 - The hub keeps it with the pending pairing and **MUST NOT** show it: not in the dock's state, not in what it sends the dock's pages, not in any answer. The dock owner types it to approve; the hub compares it in constant time with what the app sent, ignoring case, spaces and dashes (O reads as 0, I and L as 1). A missing or malformed code is refused and not counted. A wrong one counts (`wrong_pairing_code`, with `attempts_left`); the fifth removes the request and gives the grant back (`pairing_code_refused`). A request with a code that nobody approves goes after two minutes, its grant given back. A match clears the code. Deny and unpair need no code.
 - The app **MUST** keep the grant only when the hub acknowledges the code (below), and delete it, before it answers its page, on any other answer: a hub that does not check codes never holds a grant.
-- The reference hub requires the code: it refuses a pairing without one (`pairing_code_required`). Other hubs SHOULD require it too.
+- The reference hub requires the code: it refuses a pairing without one (`pairing_code_required`). Other hubs **SHOULD** require it too.
 - After the Allow the reference apps show the code, with the time left and Cancel (the app's revoke), until the hub connects (its first `initialize` on the grant) or the grant goes, and say: "If your dock doesn't ask for this code, the agent wasn't yours: Cancel."
 
 ### Pairing: `POST {hub}/apc/pair`
@@ -186,7 +207,7 @@ The hub checks the body first, before it reads or spends the ticket: a `pairing_
 
 Since 0.12 the acknowledgement also carries `binding: "pairing_id"`: the hub names this pairing on every `initialize` it sends to the grant ([the binding](#the-binding)). An app accepts only that value: an acknowledgement with any other `binding`, or with `binding: "pairing_id"` and a `pairing_id` that is not 22 to 64 of `A–Z a–z 0–9 _ -`, is a refusal, and the app deletes the grant before it answers its page. An acknowledgement without `binding` is a hub before 0.12.
 
-The app **MUST** treat any other answer as a refusal and delete the grant: a redirect (never followed: [M2](#the-app-and-the-hub-call)), any status but 200 and 400, a 200 without the acknowledgement (`hub_ignores_pairing_code`), no answer within its time limit. `pairWithHub` in `@tineira/apc-server` does exactly that. Since 0.10 the call also follows [the app's rules on the hub call](#the-app-and-the-hub-call) (M1 to M9), and the grant is [in flight](#the-grants-states) until the acknowledgement. Only an absent `pairing_code` is a pairing without a code, from an app before 0.9: the reference hub refuses it with `pairing_code_required`, and other hubs SHOULD.
+The app **MUST** treat any other answer as a refusal and delete the grant: a redirect (never followed: [M2](#the-app-and-the-hub-call)), any status but 200 and 400, a 200 without the acknowledgement (`hub_ignores_pairing_code`), no answer within its time limit. `pairWithHub` in `@tineira/apc-server` does exactly that. Since 0.10 the call also follows [the app's rules on the hub call](#the-app-and-the-hub-call) (M1 to M9), and the grant is [in flight](#the-grants-states) until the acknowledgement. Only an absent `pairing_code` is a pairing without a code, from an app before 0.9: the reference hub refuses it with `pairing_code_required`, and other hubs **SHOULD**.
 
 ### Every drop: `POST {hub}/apc/confirm`
 
@@ -215,7 +236,7 @@ Since 0.10 a dock grant has a state in the app, and the state says what the gran
 
 The time limits (`T_ACK_MAX_MS`, `T_CONNECT_MAX_MS` and the recommended times in `@tineira/apc-protocol`):
 
-- `T_ack` is at most 30 seconds: more than the hub call's own 10-second deadline (M3), so an answer that comes in time is kept.
+- `T_ack` **MUST** be longer than the app's own deadline for the hub call (M3, at most 10 seconds), so an answer that comes in time is kept, and **MUST** be at most 30 seconds (`T_ACK_MAX_MS`).
 - `T_connect` is at most 10 minutes.
 - `T_idle` is the app's; 30 minutes is recommended. Long dormancy is the app's; 30 days is recommended.
 
@@ -228,9 +249,9 @@ The time limits (`T_ACK_MAX_MS`, `T_CONNECT_MAX_MS` and the recommended times in
 | `ping`, `tools/list` | 404 | served | served | served | 404 | `RevokedAnswer` |
 | `tools/call` | 404 | tool error `pairing` | app data | core tools: the idle shapes; other tools: tool error `idle` | 404 | `RevokedAnswer` |
 | other methods (`resources/*`, `prompts/*`) | 404 | JSON-RPC -32000, `data: { error: "pairing", message }` | as the app serves them | JSON-RPC -32000, `data: { error: "idle", message }` | 404 | `RevokedAnswer` |
-| notifications | 404 | ignored (202) | as 0.8 | as 0.8 | 404 | `RevokedAnswer` |
+| notifications | 404 | ignored (202) | served (202) | served (202), does not wake | 404 | `RevokedAnswer` |
 
-The first row covers every request to the grant's URL, whatever its method, including a `GET`, a `DELETE` or a body that does not parse. A 404 leaves the state unchanged. `RevokedAnswer` is 403 with the secret URL, as in 0.8. No answer in handoff or dormant carries `attention`, `then`, an `apc_link` offer or a presence event.
+The first row covers every request to the grant's URL, whatever its method, including a `GET`, a `DELETE` or a body that does not parse. A 404 leaves the state unchanged. `RevokedAnswer` is 403 with the secret URL, as in [revoke from the app](#revoke-from-the-app). No answer in handoff or dormant carries `attention`, `then`, an `apc_link` offer or a presence event.
 
 **The tool errors** are `{ error: "pairing", message }` (the person has not finished pairing) and `{ error: "idle", message }` (the person is away from the app), carried in both `structuredContent` and `content[0].text` (as JSON), with `isError: true` (`DockGrantErrorAnswer`).
 
@@ -247,7 +268,7 @@ The first row covers every request to the grant's URL, whatever its method, incl
 - **The acknowledgement's move is conditional too.** The move from in flight to handoff happens only if the grant is neither ended (by a give-back or `T_ack`) nor revoked, in the same atomic step.
 - **A served call** is a `tools/call` that returned app data in the live state. `ping`, `tools/list`, `initialize` and the `pairing` and `idle` errors are not served calls.
 - **Wake actions** are authenticated actions of the grant's own user on the app's page: a page heartbeat, which **MUST** be sent at least every `T_idle / 2` while the page is open, or a confirmed drop. Agent traffic (`initialize`, `ping`, `tools/list`, `tools/call`) never wakes a grant and never extends it.
-- **Cancel revokes.** Cancel, on the waiting card, is allowed only in handoff, before any served call; afterwards the grant answers `RevokedAnswer`. The check and the revoke are one atomic step, so Cancel never revokes a live grant or one that has served a call, and every tool handler re-checks revoke after its work and before it returns data (as 0.8 already requires).
+- **Cancel revokes.** Cancel, on the waiting card, is allowed only in handoff, before any served call; afterwards the grant answers `RevokedAnswer`. The check and the revoke are one atomic step, so Cancel never revokes a live grant or one that has served a call, and every tool handler re-checks revoke after its work and before it returns data ([revoke from the app](#revoke-from-the-app)).
 
 A Dock grant serves app data only while live: after the acknowledgement **and** a committed `initialize`, and while not dormant, ended or revoked.
 
@@ -271,7 +292,7 @@ What an app **MUST** do around the drop and the hub call (`DockAppRequirement`):
 - **M3. Time limit.** One deadline, at most 10 seconds (`HUB_CALL_DEADLINE_MS`), covers the headers and the whole body.
 - **M4. Byte cap**, at most 8 KiB (`HUB_ANSWER_MAX_BYTES`). A `content-length` that is present must be ASCII digits only (`/^\d+$/`) and at most the cap, or the answer is refused before it is read. The decoded stream is cut at the cap. An absent `content-length` is not refused. The declared and decoded lengths are never compared, because of `gzip`.
 - **M5. No lock across the call.** No database transaction or row lock is held across the hub call. One drop, Allow or confirm runs at a time per (user, hub, agent), across instances (an advisory lock and a partial unique index will do).
-- **M6. Owner-session endpoints** (the drop, the consent and its Allow, the heartbeat, Cancel) need the owner's authenticated session, and every state change is a `POST` with the media type `application/json`. A request that carries `Origin` is refused unless it equals the app's **configured** public origin (behind a proxy, the deployment configures its external origin; the app never derives it from the request URL). A request whose `Sec-Fetch-Site` is `cross-site` or `same-site` is refused. A request with neither header comes from a client that is not a browser (Pulse for Windows, say) and is taken on the session alone: a browser always sends `Origin` on a cross-origin `POST`, so a hostile page cannot strip it, and `application/json` across origins needs a CORS preflight the app never grants. A heartbeat may be a WebSocket; its handshake follows the same `Origin` rule.
+- **M6. Owner-session endpoints** (the drop, its Allow, the heartbeat, Cancel; the consent is the drop's answer, not an endpoint of its own) need the owner's authenticated session, and every state change is a `POST` with the media type `application/json`. A request that carries `Origin` is refused unless it equals the app's **configured** public origin (behind a proxy, the deployment configures its external origin; the app never derives it from the request URL). A request whose `Sec-Fetch-Site` is `cross-site` or `same-site` is refused. A request with neither header comes from a client that is not a browser (Pulse for Windows, say) and is taken on the session alone: a browser always sends `Origin` on a cross-origin `POST`, so a hostile page cannot strip it, and `application/json` across origins needs a CORS preflight the app never grants. A heartbeat may be a WebSocket; its handshake follows the same `Origin` rule.
 - **M7. `/apc/revoke`**, as [above](#the-hub-gives-a-grant-back-post-appapcrevoke).
 - **M8. `apc.json`** lists `dock` only when the app can pair right now (its configuration is present), computed per request or cached 60 seconds at most (a `max-age` of 60 or less).
 - **M9.** The app sends hub requests to the parsed `url.origin` of M1, never to the raw `hub` string.
@@ -279,7 +300,7 @@ What an app **MUST** do around the drop and the hub call (`DockAppRequirement`):
 
 ### The hub's duties
 
-What a hub **MUST** do (`DockHubRequirement`; the reference hub follows them):
+What a hub **MUST** do (`DockHubRequirement`; the reference hub follows them). No conformance suite checks a hub in 1.0: these rules, and the hub's other MUSTs in this page (the pairing code is never shown, the dock puts no secret in the drag, an unverified app pairs only over HTTPS on a domain name, what an unverified app gives reaches the agent marked), are proven by the reference hub's own tests (`apps/dock/test`). They bind every hub all the same. The sentences of H4 about the hub's own `views[]` and `wait_for_focus` describe [the hub's tools](#the-hubs-tools), which 1.0 does not freeze; what a hub does with an app's `pairing` and `idle` answers is frozen.
 
 - **H1.** The hub sends `initialize` on a grant's MCP URL only after the dock owner approved the pairing with the code, and sends no `initialize`, `tools/list` or `tools/call` before that. While approving, the dock takes no code.
 - **H2.** `/apc/confirm` expires overdue pending requests before it answers, so an expired request answers `not_paired`.
@@ -300,7 +321,7 @@ Since 0.12. The pairing code proves that the dock's owner read a code. The bindi
 - **M12.** On a grant that is not a Dock grant, a request carrying an `initialize` with either key, whatever its value, **MUST** get HTTP 404 before any other answer, revoked included, and the grant is unchanged.
 - The 404s of M11 and M12 **SHOULD** carry `{ "error": "pairing_mismatch" }`; a hub reads only that exact token. The app never shows the keys to its page or puts them in an answer, and **SHOULD NOT** log them.
 - A grant whose record holds no `pairing_id` (made before the app implemented 0.12) is checked on its agent alone.
-- Apps on 0.10 and 0.11 ignore the keys and pair with the reference hub as before, unchecked. The policy is that they keep doing so for at least 6 months from 0.12.0 (tagged 2026-11-14, so until 2027-05-14): the hub records the standard each app claims and refuses nothing on it, and only a later release, announced in the changelog, may end that. An app that validates `params._meta` strictly must accept the two keys.
+- Apps on 0.10 and 0.11 ignore the keys and pair with the reference hub as before, unchecked. The policy is that they keep doing so for at least 6 months from 0.12.0 (tagged 2026-11-14, so until 2027-05-14) and, once 1.0 ships, for at least 6 months after it ([versioning and compatibility](#versioning-and-compatibility)): the hub records the standard each app claims and refuses nothing on it, and only a later release, announced in the changelog, may end that. An app that validates `params._meta` strictly must accept the two keys.
 
 ### The derived secret (optional)
 
@@ -322,6 +343,8 @@ Since 0.12 [the binding](#the-binding) ties the hub's `initialize` to the app's 
 The page never sees the MCP URL or the secret, and the code is shown only on the owner's page and sent only in `/apc/pair`. APC covers pointing only: confirmations and approvals of what an agent does are outside the standard.
 
 ### The hub's tools
+
+**Not normative in 1.0.** This section describes the reference hub's tools for agents; 1.0 does not freeze them (see [what 1.0 freezes](#what-10-freezes)), and their shapes live in the hub's code, not in `@tineira/apc-protocol`. A later minor version will state them. An app relies on none of it: what the hub sends an app is the Dock profile above.
 
 A hub exposes to the agent its own `get_current_view` (the focus, now with `app: { id, name, origin }`, and a `views` list, one per paired app), one `wait_for_focus` across all apps, `list_app_tools`, and `call_app_tool({ app, tool, args })`. Each app's other tools are relayed as `<app>__<tool>` (at most 64 characters). The hub rewrites `next` and `next_args` to its own tool names, removes the apps' `attention` and `then`, and adds its own. Since 0.10 it relays the apps' `pairing` and `idle` answers as [H4](#the-hubs-duties) says. A browser extension is one more app of the hub, with id `page`; a page reading is the focus kind `page_reading`, read with `page__get_reading`.
 
@@ -348,7 +371,7 @@ Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`,
 - `standard`: the version of this standard it implements.
 - `origin`: exactly the origin it is served from; a file that names another is refused.
 - `profiles`: `"direct"`, `"dock"` or both for an app; `"hub"` alone for a hub, which then also gives `dock: { pair, confirm }`. A reader ignores words and keys it does not know. Since 0.10 an app lists `"dock"` only while it can pair, and the file is computed per request or cached 60 seconds at most (M8).
-- `mcp.path`: every grant's MCP URL on the origin starts with `origin + path`. Unless `mcp.endpoints` is present (below), a hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it. A Direct app whose grants share one URL (a bearer token names the grant) may serve it at `mcp.path` itself, or without its last `/` (`/api/mcp` for `"/api/mcp/"`).
+- `mcp.path`: a path that starts and ends with `/`. It is a prefix: every grant's MCP URL on the origin starts with `origin + path`. Unless `mcp.endpoints` is present (below), a hub pairs only an MCP URL under it, with no encoded `/`, `\`, `.` or `%` and no `.` or `..` segment after it. A Direct app whose grants share one URL (a bearer token names the grant) may serve it at `mcp.path` itself, or without its last `/` (`/api/mcp` for `"/api/mcp/"`): a Direct app whose agents all use one URL `/mcp` with a bearer token declares `"/mcp/"`.
 - `mcp.endpoints` (0.11, optional): the exact MCP endpoints of the origin and the profiles each serves; when present, only they cover a URL ([below](#mcpendpoints-011)).
 - `direct.connect` (with `"direct"`): the page on the same origin where the person connects an agent directly.
 - `direct.auth` and `direct.resource_metadata` (optional, information only): how agents authenticate (`"url"`, `"oauth"`) and, with OAuth, the protected-resource metadata URL on the origin. A reader never requires them.
@@ -384,7 +407,7 @@ A reader **MUST** drop, whole, an entry it does not fully understand, and never 
    - the entry is exact, the path equals it (case-sensitive), and the grants share the URL (a bearer token names the grant); or
    - the entry is `P/{secret}`, the path is `P/s` where `s` is 16 to 128 of `A-Z a-z 0-9 _ -`, and no entry's path equals it, usable or dropped, or begins with it followed by `/`, compared without ASCII case (exact wins: a sibling an entry names, or the fixed parent of a deeper entry, is never a secret).
 
-An app **MUST NOT** serve anything but its grants on a child of `P` that fits the secret, other than the exact entries it declares: `P/{secret}` claims every such child. Keep fixed routes out of a `{secret}` parent. A file that narrows does not end pairings already made; the app revokes them. `declaresMcpUrl(manifest, url, { profile, shared })` and `mcpUrlCoverage` in `@tineira/apc-protocol` implement this, and these vectors are its tests (`packages/protocol/test/mcp-endpoint-vectors.json`):
+An app **MUST NOT** serve anything but its grants on a child of `P` that fits the secret, other than the exact entries it declares: `P/{secret}` claims every such child. A child that fits the secret and names no grant is an unknown grant, and answers as one: 404. Keep fixed routes out of a `{secret}` parent. A file that narrows does not end pairings already made; the app revokes them. `declaresMcpUrl(manifest, url, { profile, shared })` and `mcpUrlCoverage` in `@tineira/apc-protocol` implement this, and these vectors are its tests (`packages/protocol/test/mcp-endpoint-vectors.json`):
 
 <!-- mcp-endpoint-vectors:start -->
 ```json
@@ -473,7 +496,7 @@ An unverified app pairs only after the person approves the dock's warning for it
 
 ### Untrusted marking
 
-What an unverified app gives reaches the agent marked:
+A hub **MUST** mark everything an unverified app gives (its results, its errors, its view, its focus, its `attention`, its tools) so that an agent can tell it from the hub's own words, and **MUST NOT** count its `then` or `page_open`. The marking is frozen by 1.0; the shapes below (the envelope, the labels) are the reference hub's, part of its tools, which 1.0 does not freeze:
 
 - A relayed result arrives in an envelope, in the structured result and the text: `{ app, untrusted: true, note, result }` (or `text: [...]`).
 - Its entry in `views`, its focus and its `attention` carry `untrusted: true`.
@@ -493,13 +516,84 @@ A hub may block domains (a domain covers its subdomains): a blocked app cannot p
 
 With the APC browser extension the person can drop a dock agent on any web page, APC or not. Everything the person can see inside the outline the extension draws while they drag (a block of text, a form's question or a whole form), including what they typed there, and their selection, is read on the drop, and only then, and handed to the hub as a page reading, with `untrusted: true`: what a page says is data from that page, never instructions. Card, account and id numbers go only as the person set in the extension; passwords and one-time codes never. This is the extension's, for pages without APC: an APC app decides itself what it exposes to an agent, through its own tools. On a Direct-only app that does not answer dock drops itself, the extension tells the person to connect directly.
 
-## Versioning and deprecation
+## Error codes
 
-The standard has its own [semver](https://semver.org), `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. Every change to the contract adds an entry to the [changelog](/docs/changelog) and bumps it; an app says which version it implements in its `apc.json`.
+The codes this version names, in one place. Each section above says the shape and the status; a reader that meets a code not listed reads it as a refusal or a failure ([reading what you do not know](#reading-what-you-do-not-know)). A code marked *reference* is what the reference software answers there; another implementation may answer another code for the same case and still conform. The others are named by a rule of this page. The table is not exhaustive: the dock's own pages and the reference software have codes of their own (`try_again` when a link code collides, say).
 
-- **0.x, now: a draft.** Any minor release may change the contract, compatible or not. The changelog says what changed and what an app must do. A patch release (0.7.0 to 0.7.1) never changes the contract: it fixes the software or the wording; any change to the contract is a new minor (0.x) or major version. The suite checks an app that claims any version from 0.5.0 up to its own, and passes a newer patch of its own minor with a note (its checks still apply); a newer minor fails until the suite is updated.
-- **1.0: the contract frozen.** From 1.0, a change that breaks a conforming app, agent or hub needs a new major version; a minor version only adds (a new optional key, a new tool, a new profile); a patch only clarifies.
-- **Deprecation (proposed for 1.0).** Something to be removed or changed incompatibly is first marked deprecated in a minor release, in the changelog and here, and keeps working for at least one more minor release **and** at least 3 months, whichever is longer, before a major release removes it. A security fix may shorten that window; the changelog then says why.
+**An app, to an agent on a grant** (the core, both profiles)
+
+| Code | When | Where |
+|---|---|---|
+| `revoked` | every request on a revoked grant (`RevokedAnswer`: 403 with a secret URL, 401 with a bearer token) | [revoke from the app](#revoke-from-the-app) |
+| `pairing` | a tool call (tool error) or another method (JSON-RPC -32000) on a Dock grant in handoff | [the grant's states](#the-grants-states) |
+| `idle` | a tool other than a core tool, or another method, on a dormant Dock grant | [the grant's states](#the-grants-states) |
+| `pairing_mismatch` | the body (**SHOULD**) of the HTTP 404 an `initialize` gets when it does not hold the grant's binding (M11), or names a pairing on a grant that is not a Dock grant (M12) | [the binding](#the-binding) |
+| `link_refused` | `apc_link` refused, with a `reason`: `unknown_code`, `expired`, `used`, `same_connection`, `same_path`, `not_offered` or `already_linked` | [`apc_link`](#apc_link) |
+
+An unknown or ended grant carries no `RevokedAnswer`: it is a 404 (a secret URL) or a plain 401 (a bearer token). A code in its body is optional; the reference apps answer `{ "error": "unknown_grant" }`. An app whose configuration of its profiles is wrong answers its agent paths HTTP 503 with `profiles_misconfigured` (*reference*, `profilesRefusal` in `@tineira/apc-server`).
+
+**An app, to its own page, on a drop or an Allow** (Dock)
+
+| Code | When | Where |
+|---|---|---|
+| `consent_required` | not an error: the agent needs the person's consent, with its nonce and pairing code | [consent in the app](#consent-in-the-app) |
+| `hub_not_allowed` | the drop's `hub` fails the allowlist (M1) | [the app and the hub call](#the-app-and-the-hub-call) |
+| `consent_expired` | an Allow whose consent a newer drop replaced, or that ran out | [one pending pairing](#one-pending-pairing) |
+| `pairing_in_progress` | an Allow while another Allow of that agent waits on the hub | [one pending pairing](#one-pending-pairing) |
+| `hub_ignores_pairing_code` | the hub answered 200 without the code's acknowledgement; the grant is deleted | [pairing](#pairing-post-hubapcpair) |
+| `hub_unreachable`, `hub_refused` | *reference* (`pairWithHub`, `confirmWithHub`): no answer in time; any answer that is not an acknowledgement | [the app and the hub call](#the-app-and-the-hub-call) |
+| `invalid_drop` | *reference* (`parseDockDrop`): a drop that is not `{ v: 1, agent, hub, ticket }` | [the drop](#the-drop) |
+
+**A hub, to an app** (HTTP 400 with `{ ok: false, error }`, on `/apc/pair` and `/apc/confirm`)
+
+| Code | When | Where |
+|---|---|---|
+| `invalid_pairing_code` | `pairing_code` is present and not a code; the ticket is not spent | [pairing](#pairing-post-hubapcpair) |
+| `pairing_code_required` | `/apc/pair` without `pairing_code` (an app before 0.9) | [the pairing code](#the-pairing-code) |
+| `ticket_expired` | *reference*: the ticket is unknown, spent, out of time, or another agent's | [the drop](#the-drop) |
+| `invalid` | *reference*: the body lacks `ticket`, `agent` or `mcp_url` | |
+| `dock_expired` | *reference*: the ticket's dock is gone | |
+| `app_not_allowed` | *reference*: the MCP URL is not on the app's origin, the hub is closed to unverified apps, or the host is not a domain name | [verified and unverified apps](#verified-and-unverified-apps) |
+| `https_required` | *reference*: an unverified app over `http:` | [verified and unverified apps](#verified-and-unverified-apps) |
+| `app_blocked` | the app's domain is blocked (on `/apc/confirm` too) | [the blocklist](#the-blocklist-and-the-kill-switch) |
+| `app_host_too_long`, `app_id_taken` | *reference*: an unverified app's host gives no usable tool prefix | [verified and unverified apps](#verified-and-unverified-apps) |
+| `too_many_apps` | the dock already holds as many pairings as it takes | [limits](#limits) |
+| `apc_json_missing`, `apc_json_redirected`, `apc_json_unreachable`, `apc_json_invalid`, `apc_json_wrong_origin` | the app's `apc.json` is missing, redirected, out of reach (H7), unreadable, or names another origin (`ApcJsonRefusal`) | [`apc.json`](#apcjson) |
+| `dock_not_offered` | the app's `apc.json` does not list `"dock"` | [`apc.json`](#apcjson) |
+| `mcp_url_not_declared` | the app's `apc.json` does not cover `mcp_url` for `dock` | [`mcp.endpoints`](#mcpendpoints-011) |
+| `not_paired` | `/apc/confirm`: the dock no longer pairs this agent with this grant, or holds the pairing as ended | [every drop](#every-drop-post-hubapcconfirm) |
+
+**A hub, to the dock's owner, on an approval** (the dock's page)
+
+| Code | When | Where |
+|---|---|---|
+| `pairing_code_required`, `invalid_pairing_code` | *reference*: Allow with no code, or with one that is not a code; neither counts as a wrong code | [the pairing code](#the-pairing-code) |
+| `wrong_pairing_code` | a wrong code, with `attempts_left` | [the pairing code](#the-pairing-code) |
+| `pairing_code_refused` | the fifth wrong code: the request goes and its grant is given back | [the pairing code](#the-pairing-code) |
+| `warning_required` | *reference*: an unverified app approved before its warning was | [the warning](#the-warning) |
+| `unknown_pairing` | *reference*: the request is gone (expired, replaced or decided meanwhile) | [one pending pairing](#one-pending-pairing) |
+
+**A hub, to an agent** (outside the 1.0 freeze, except H4 and H5)
+
+| Code | When | Where |
+|---|---|---|
+| `pairing`, `idle` | an app's answer, relayed (H4) | [the hub's duties](#the-hubs-duties) |
+| `pairing_ended` | a pairing the hub introduced answered 404 (H5) | [the hub's duties](#the-hubs-duties) |
+| `app_unreachable` | *reference*: an app did not answer; for an unverified app, in the hub's own words only | [untrusted marking](#untrusted-marking) |
+| `unknown_app`, `unknown_tool`, `invalid_arguments`, `no_reading` | *reference*: the hub's own tools | [the hub's tools](#the-hubs-tools) |
+| `unknown_agent` | *reference*: HTTP 404 on an agent's MCP URL the dock no longer has (removed, or rotated when a computer left) | |
+
+## Versioning and compatibility
+
+The standard has its own [semver](https://semver.org), `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. Every change to the contract adds an entry to the [changelog](/docs/changelog) and bumps it. The packages' TypeScript APIs, presentation (how a page draws its agents) and a hub's internals are not the contract. Why the policy is what it is: [DESIGN.md § 27](https://github.com/tineira/agent-pointed-context/blob/main/DESIGN.md#27-versioning-and-compatibility-from-10-tin-913).
+
+- **0.x, now: a draft.** Any minor release may change the contract, compatible or not; the changelog says what changed and what an app must do. A patch (0.7.0 to 0.7.1) never changes the contract.
+- **From 1.0: what breaks.** A change that can make a party that conforms to N.x fail at N.y, or misbehave against a peer at N.y, is breaking and needs a new major version: a key made required; a tool, route or event removed or renamed; an input narrowed or a result widened; a new MUST on an existing party; a code changed; a state transition changed. A minor version only adds what every reader already ignores ([reading what you do not know](#reading-what-you-do-not-know)): an optional key, a tool, an event, a profile, an error code, a SHOULD. Two additions are not that, and need a major version or a gate: a key inside an `mcp.endpoints` entry, or a path form outside the 0.11 grammar, since an older reader drops the whole entry and stops covering its URLs (a minor may add one only beside an entry older readers understand, which keeps covering them); and anything that narrows what a party may do. An older reader ignores a restricting key, so a narrowing is enforced only where the older party declares that it takes it, as an app takes the binding only when the hub's acknowledgement declares `binding` (0.12); without such a declaration it is a major version. A patch only clarifies the wording, fixes the reference software, or makes the conformance suite check a rule this page already states.
+- **`standard` in `apc.json`** is the highest version whose rules the app meets. A hub or an agent **MUST NOT** refuse an app because its `standard` is an older minor version of the same major: it uses what that version defines. A `standard` that is a newer minor version of the reader's major is read by the rules the reader knows, ignoring the rest. A hub tells majors apart by the major version of that field.
+- **Apps on 0.x when 1.0 ships.** 1.0 is 0.12 frozen under that number: an app on 0.12 claims 1.0 by changing only `standard`. A 1.x hub **MUST** keep pairing and relaying apps that claim 0.10 or 0.11 for at least 6 months after 1.0; it may show them as made for an older version, and refuses nothing on that claim. The reference hub counts the `standard` each app claims, to know when the window can close; it enforces nothing on it. A 1.0 hub does not support apps below 0.10.
+- **The previous major.** When a new major version ships, the reference hub keeps serving apps of the previous one for at least 12 months.
+- **Deprecation (normative from 1.0).** Something to be removed or changed incompatibly **MUST** first be marked deprecated in a minor release, in the changelog and on this page, and keep working for at least one more minor release **and** at least 3 months, whichever is longer, before a major release removes it. A security fix may shorten that window; the changelog then says why, and the conformance suite gets its check in the same release.
+- **The conformance suite.** At 0.x it checks a claim from 0.5.0 up to its own, passes a newer patch of its own minor with a note, and fails a newer minor. From 1.0, the suite at N.y checks a claim of any N.x up to N.y, passes a claim of a newer minor of N with a note (checking it by N.y's rules), fails a claim of another major and names the suite to use, and keeps checking claims from 0.10 up, labelled "pre-1.0".
 
 Comments on this policy, and any proposal to change the contract, go in a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
 

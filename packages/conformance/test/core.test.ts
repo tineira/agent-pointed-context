@@ -61,6 +61,8 @@ const broken: Array<[CoreBreak, string, RegExp]> = [
   ["cancel_ignored", "cancelled wait (notifications/cancelled)", /still unread/],
   // EP-5: nothing but grants under P/{secret}.
   ["spa_fallback", "nothing but grants is served under a {secret} entry", /a GET of \/mcp\/<a secret no grant has> answers HTTP 200/],
+  // An out-of-range timeout_s is refused, never clamped (APC 0.12).
+  ["timeout_clamped", "wait_for_focus refuses a timeout_s outside its range", /timeout_s: 0 \}\) is refused as invalid arguments/],
 ];
 
 for (const [brk, part, message] of broken) {

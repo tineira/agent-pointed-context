@@ -34,7 +34,10 @@ export function parseParams(raw: unknown): FocusParams | null {
   return out;
 }
 
-/** A valid target, or null. A target names a row (id) or a computation (params), or both. */
+/**
+ * A valid target, or null. A target names a row (id) or a computation (params with at least one key), or both:
+ * since APC 0.12 a target with no id and `params: {}` is refused, as one with neither.
+ */
 export function parseTarget(raw: { kind?: unknown; id?: unknown; part?: unknown; params?: unknown }): FocusTarget | null {
   const kind = raw.kind;
   if (typeof kind !== "string" || !KIND_RE.test(kind)) return null;
@@ -44,7 +47,7 @@ export function parseTarget(raw: { kind?: unknown; id?: unknown; part?: unknown;
   if (part !== null && (typeof part !== "string" || !PART_RE.test(part))) return null;
   const params = parseParams(raw.params);
   if (raw.params !== null && raw.params !== undefined && params === null) return null;
-  if (id === null && params === null) return null;
+  if (id === null && (params === null || Object.keys(params).length === 0)) return null;
   return { kind, id: id as string | null, part: part as string | null, params };
 }
 
@@ -66,7 +69,8 @@ export interface FocusAttrs {
 export function focusAttrs(target: { kind: string; id?: string | null; part?: string | null; params?: Record<string, KeyValue> | null }): FocusAttrs {
   const attrs: FocusAttrs = { "data-focus": `${target.kind}:${target.id ?? ""}` };
   if (target.part) attrs["data-focus-part"] = target.part;
-  if (target.params) attrs["data-focus-params"] = JSON.stringify(target.params);
+  // Empty params name nothing (APC 0.12): leave the attribute out rather than write one no reader takes.
+  if (target.params && Object.keys(target.params).length > 0) attrs["data-focus-params"] = JSON.stringify(target.params);
   return attrs;
 }
 
