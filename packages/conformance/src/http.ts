@@ -82,14 +82,19 @@ export interface HttpConformanceReport {
 
 /**
  * What a run covered (integrator finding F7): `ran` of `total` checks ran (passed or failed), and why the others were
- * skipped, grouped, most first. `mostly_skipped` is true when more than half were skipped: then the run says nothing
- * about most of the standard, and the command line says so in a warning.
+ * skipped, grouped, most first. `in_process` of them can never run over HTTP (they need the app's adapter); the rest,
+ * `http_total`, are the ones a run can reach, and `http_ran` of those ran. `mostly_skipped` is true when more than half
+ * of those were skipped (no `--grant`, no `--revoked`, an apc.json that did not parse): then the run says nothing about
+ * most of what it could check, and the command line says so in a warning. A full run is never "mostly skipped".
  */
 export interface HttpCoverage {
   ran: number;
   total: number;
   skipped: number;
   skipped_why: Array<{ why: string; count: number }>;
+  in_process: number;
+  http_ran: number;
+  http_total: number;
   mostly_skipped: boolean;
 }
 
@@ -105,12 +110,18 @@ export function coverageOf(results: ReadonlyArray<HttpCheckResult>): HttpCoverag
     groups.set(why, (groups.get(why) ?? 0) + 1);
   }
   const total = results.length;
+  const inProcess = results.filter((r) => r.id === "in-process").length;
+  const httpTotal = total - inProcess;
+  const httpRan = total - skipped.length;
   return {
-    ran: total - skipped.length,
+    ran: httpRan,
     total,
     skipped: skipped.length,
     skipped_why: [...groups].map(([why, count]) => ({ why, count })).sort((a, b) => b.count - a.count),
-    mostly_skipped: skipped.length * 2 > total,
+    in_process: inProcess,
+    http_ran: httpRan,
+    http_total: httpTotal,
+    mostly_skipped: (httpTotal - httpRan) * 2 > httpTotal,
   };
 }
 
@@ -645,15 +656,17 @@ export async function runHttpConformance(options: HttpConformanceOptions): Promi
  * ran; K skipped", why, grouped, and a warning when more than half were skipped, so such a run never reads as a pass.
  */
 export function coverageLines(c: HttpCoverage): string[] {
-  const lines = [`${c.ran} of ${c.total} checks ran; ${c.skipped} skipped${c.skipped ? ", because:" : ""}`];
+  const lines = [
+    `${c.ran} of ${c.total} checks ran (${c.http_ran} of the ${c.http_total} reachable over HTTP); ${c.skipped} skipped${c.skipped ? ", because:" : ""}`,
+  ];
   for (const g of c.skipped_why) lines.push(`  ${String(g.count).padStart(3)}  ${g.why}`);
   if (c.mostly_skipped) {
     lines.push(
       "",
-      `WARNING: ${c.skipped} of ${c.total} checks were skipped. This is NOT a conformance pass: the run says nothing about most`,
-      "of the standard. Give --grant (and --revoked) for the MCP checks, and run apcConformance(adapter) from",
-      "@tineira/apc-conformance in the app's own tests for the checks that need the person's page.",
+      `WARNING: ${c.http_total - c.http_ran} of the ${c.http_total} checks reachable over HTTP were skipped. This is NOT a conformance`,
+      "pass: the run says nothing about most of what it could check. Give --grant and --revoked for the MCP checks.",
     );
   }
+  if (c.in_process) lines.push(`The ${c.in_process} in-process checks run only with apcConformance(adapter), in the app's own tests: a CLI run is never the whole suite.`);
   return lines;
 }

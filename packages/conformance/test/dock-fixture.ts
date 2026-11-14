@@ -127,7 +127,8 @@ export type FixtureBreak =
   // The consent's nonce (core.test.ts).
   | "nonce_unchecked"
   | "nonce_any_agent"
-  | "nonce_reusable";
+  | "nonce_reusable"
+  | "nonce_optional";
 
 export interface FixtureOptions {
   break?: FixtureBreak;
@@ -381,12 +382,15 @@ class Fixture {
 
   private async drop(b: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.config.pairing) return { ok: false, error: "not_available" };
-    const { ticket, consent } = b;
+    const { ticket } = b;
+    let { consent } = b;
     let { agent } = b;
     // An Allow that carries no agent (allowNoAgent): the agent is the consent's.
     if (consent !== undefined && this.config.hubBoundToConsent && agent === undefined) agent = this.storage.consents.get(String(consent))?.agent;
     if (typeof agent !== "string" || typeof ticket !== "string") return { ok: false, error: "invalid" };
     const target = (b.target as FocusTarget | undefined) ?? null;
+    // (nonce_optional: a request with no nonce for an agent with a pending consent is taken as its Allow, as if the click were enough.)
+    if (consent === undefined && this.has("nonce_optional") && typeof agent === "string") consent = [...this.storage.consents].findLast(([, c]) => c.agent === agent)?.[0];
     if (consent !== undefined) {
       const nonce = String(consent);
       let hub: string | null;

@@ -113,7 +113,13 @@ test("a conforming app passes every HTTP check, and the in-process ones are repo
   assert.equal(report.skipped, IN_PROCESS_ONLY.length + 1);
   assert.equal(report.coverage.ran, 12);
   assert.equal(report.coverage.total, 12 + IN_PROCESS_ONLY.length + 1);
-  assert.equal(report.coverage.mostly_skipped, true, "more than half are in process only");
+  assert.equal(report.coverage.in_process, IN_PROCESS_ONLY.length);
+  assert.equal(report.coverage.http_total, 13);
+  assert.equal(report.coverage.http_ran, 12);
+  // A full run (--grant and --revoked) is no "mostly skipped", however many checks need the adapter.
+  assert.equal(report.coverage.mostly_skipped, false);
+  assert.doesNotMatch(coverageLines(report.coverage).join("\n"), /WARNING|NOT a conformance pass/);
+  assert.match(coverageLines(report.coverage).join("\n"), /in-process checks run only with apcConformance\(adapter\)/);
   assert.deepEqual(report.app, { name: "Fake", standard: APC_STANDARD_VERSION, profiles: ["direct"] });
 });
 
@@ -387,12 +393,14 @@ test("the report says how much ran and why the rest was skipped, grouped, and wa
   assert.ok(c.skipped_why.some((g) => /give --grant/.test(g.why) && g.count > 1), "the checks waiting on --grant are one group");
   assert.equal(c.skipped_why.reduce((n, g) => n + g.count, 0), c.skipped);
   const lines = coverageLines(c).join("\n");
-  assert.match(lines, new RegExp(`^${c.ran} of ${c.total} checks ran; ${c.skipped} skipped`));
-  assert.match(lines, /WARNING: .* NOT a conformance pass/);
+  assert.match(lines, new RegExp(`^${c.ran} of ${c.total} checks ran \\(${c.http_ran} of the ${c.http_total} reachable over HTTP\\); ${c.skipped} skipped`));
+  assert.equal(c.mostly_skipped, true, "with no --grant, most of what HTTP reaches was skipped");
+  assert.match(lines, /WARNING: .* NOT a conformance/);
 
-  // At most half skipped: no warning. Exactly half is no majority either.
-  const r = (status: HttpCheckResult["status"], detail?: string): HttpCheckResult => ({ id: "x", name: "x", status, ...(detail ? { detail } : {}) });
-  const half = coverageOf([r("pass"), r("fail"), r("skip", "a"), r("skip", "b")]);
+  // At most half of the HTTP checks skipped: no warning. Exactly half is no majority either. In-process ones never count.
+  const r = (status: HttpCheckResult["status"], detail?: string, id = "x"): HttpCheckResult => ({ id, name: "x", status, ...(detail ? { detail } : {}) });
+  const inProcess = Array.from({ length: 10 }, () => r("skip", "page", "in-process"));
+  const half = coverageOf([r("pass"), r("fail"), r("skip", "a"), r("skip", "b"), ...inProcess]);
   assert.equal(half.mostly_skipped, false);
   assert.doesNotMatch(coverageLines(half).join("\n"), /WARNING/);
   const most = coverageOf([r("pass"), r("skip", "a"), r("skip", "a"), r("skip", "b")]);
@@ -417,8 +425,8 @@ test("the command line prints the coverage under the pass/fail line, and in --js
   try {
     const text = await runCli([origin, "--allow-http"]);
     assert.equal(text.code, 0, text.out);
-    assert.match(text.out, /\d+ passed, 0 failed, \d+ skipped\r?\n\d+ of \d+ checks ran; \d+ skipped, because:\r?\n/);
-    assert.match(text.out, /WARNING: \d+ of \d+ checks were skipped\. This is NOT a conformance pass/);
+    assert.match(text.out, /\d+ passed, 0 failed, \d+ skipped\r?\n\d+ of \d+ checks ran \(\d+ of the \d+ reachable over HTTP\); \d+ skipped, because:\r?\n/);
+    assert.match(text.out, /WARNING: \d+ of the \d+ checks reachable over HTTP were skipped\. This is NOT a conformance/);
     const json = await runCli([origin, "--allow-http", "--json"]);
     const report = JSON.parse(json.out) as { coverage: { ran: number; total: number; mostly_skipped: boolean; skipped_why: unknown[] } };
     assert.equal(report.coverage.mostly_skipped, true);
@@ -447,10 +455,15 @@ test("under a {secret} entry nothing but grants is served: a fallback page there
   const spa = await run({ manifest, grantUrl: TG, spaFallback: true }, { grant: TG, revoked: undefined });
   assert.equal(status(spa, "apc-json-secret-children"), "fail");
   assert.match(spa.results.find((r) => r.id === "apc-json-secret-children")!.detail!, /a GET of \/mcp\/<a secret no grant has> answers HTTP 200/);
-  // A 403 there serves nothing: that an unknown grant answers 404 is the unknown-grant check's.
+  // A 403 there serves nothing: it passes, with a note that an unknown grant answers 404 (the unknown-grant check fails it).
   const forbidden = await run({ manifest, grantUrl: TG, unknownStatus: 403 }, { grant: TG, revoked: undefined });
   assert.equal(status(forbidden, "apc-json-secret-children"), "pass");
+  assert.match(forbidden.results.find((r) => r.id === "apc-json-secret-children")!.note!, /answers POST 403, GET 403, not 404/);
   assert.equal(status(forbidden, "grant-unknown-404"), "fail");
+  assert.doesNotMatch(ok.results.find((r) => r.id === "apc-json-secret-children")!.note!, /not 404/);
+  // A 5xx is a crash, not a refusal.
+  const crash = await run({ manifest, grantUrl: TG, unknownStatus: 500 }, { grant: TG, revoked: undefined });
+  assert.equal(status(crash, "apc-json-secret-children"), "fail");
   // Without a {secret} entry there is nothing to check: skipped, never failed.
   assert.equal(status(await run({ spaFallback: true }), "apc-json-secret-children"), "skip");
 });

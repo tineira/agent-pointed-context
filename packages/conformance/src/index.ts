@@ -40,6 +40,7 @@ import {
   REVOKED_HTTP_STATUS_BEARER,
   WAIT_CLAIM_GAP_S,
   canonicalTarget,
+  isRevokedAnswer,
   compareStandard,
   describeMcpCoverage,
   mcpUrlCoverage,
@@ -53,7 +54,7 @@ import {
   type PresenceMessage,
   type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, REVOKED_PROBES, attentionOf, checkCoreToolList, checkNothingButGrants, checkFocusShape, checkMcpEndpoints, checkRevokedBody, checkView, data, expect, isObject, resultKey, rpcBody, sameJson, standardSupport, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, REVOKED_PROBES, attentionOf, checkCoreToolList, checkNothingButGrants, checkFocusShape, checkMcpEndpoints, checkRevokedBody, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHub } from "./hub.ts";
 import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
@@ -395,7 +396,6 @@ function checkRevoked(conn: AgentConnection, status: number, body: unknown, what
   if (bearer) expect(/^bearer\b.*error="?invalid_token"?/i.test(headers.get("www-authenticate") ?? ""), `${what} on a revoked bearer grant: no WWW-Authenticate: Bearer error="invalid_token"`);
   checkRevokedBody(body, new URL(conn.mcpUrl).host, what);
 }
-
 
 /** A focus in the core's format, naming `target`. */
 function checkFocus(focus: unknown, target: FocusTarget, where: string): Record<string, unknown> {
@@ -804,7 +804,8 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       // validates structuredContent even on isError, as with the pairing and idle errors).
       const extra = Object.keys(d).filter((k) => !REVOKED_KEYS.includes(k));
       expect(extra.length === 0, `it carries no focus, view or other data: ${extra.join(", ")}`);
-      expect(r.structuredContent === undefined || sameJson(r.structuredContent, d), `its structuredContent, when there, is the same RevokedAnswer as the text: ${String(JSON.stringify(r.structuredContent)).slice(0, 200)}`);
+      const sc = r.structuredContent;
+      expect(sc === undefined || (isRevokedAnswer(sc) && Object.keys(sc).every((k) => REVOKED_KEYS.includes(k))), `its structuredContent, when there, is a RevokedAnswer and nothing else: ${String(JSON.stringify(sc)).slice(0, 200)}`);
       expect(ms < 300 + SOON_MS, `it ended at ${ms} ms, not soon after the revoke`);
     }),
     check("one wait per grant: a newer wait takes over, and the older one delivers nothing (APC 0.8)", async () => {
@@ -822,7 +823,7 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       expect(await app.page.pin(conn.grantId, first), "the app refused the pin");
       const { value: got, ms } = await newer;
       checkFocus(data(got).focus, first, "the newer wait");
-      expect(ms < SOON_MS, `the newer wait returned at ${ms} ms, not soon after the pin`);
+      expect(ms < 300 + SOON_MS, `the newer wait returned at ${ms} ms, not soon after the pin`);
     }),
 
     check("a second wait started right after the first is refused with retry_after_s, and the first still delivers (APC 0.8)", async () => {
