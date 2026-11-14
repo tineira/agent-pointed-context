@@ -1143,6 +1143,11 @@ export class Hub extends DurableObject<Env> {
     const r = this.readers().find((x) => x.id === pairingId);
     if (r) {
       if (action === "approve" && r.status === "pending") {
+        // One reader per agent and extension: the one allowed now replaces the one paired before (TIN-911).
+        for (const old of this.readers(r.agent_id).filter((x) => x.origin === r.origin && x.id !== r.id)) {
+          this.sql.exec("delete from readers where id = ?", old.id);
+          this.sql.exec("delete from pointer where pairing_id = ?", old.id);
+        }
         // The token is handed out once, to whoever holds the claim: the extension that asked.
         this.sql.exec("update readers set status = 'paired', approved_at = ?, token = ? where id = ?", new Date().toISOString(), `${this.meta("did")}.${randomHex(16)}`, r.id);
       } else if (action === "deny" || action === "unpair") {
@@ -1665,8 +1670,9 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
     const label = typeof b.label === "string" ? b.label.replace(/[\p{C}]/gu, "").trim().slice(0, 40) : "";
-    // One reader per agent and extension: a new request replaces an older one.
-    for (const old of this.readers(t.agent_id).filter((r) => r.origin === origin)) {
+    // One request per agent and extension: a new one replaces an older request. A paired reader stays until the person
+    // allows the new one (TIN-911): a request alone, which anyone holding a drop's ticket can make, never unpairs it.
+    for (const old of this.readers(t.agent_id).filter((r) => r.origin === origin && r.status === "pending")) {
       this.sql.exec("delete from readers where id = ?", old.id);
       this.sql.exec("delete from pointer where pairing_id = ?", old.id);
     }

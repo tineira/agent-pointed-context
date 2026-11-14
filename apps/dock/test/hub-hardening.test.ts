@@ -163,6 +163,33 @@ test("the dock's Workers keep no invocation logs, and what the dock logs carries
   assert.equal(redactSecrets(`"https://signals.example/mcp/grant_Ab-9xYz" failed`), `"https://signals.example/mcp/[redacted]" failed`, "a grant secret in any alphabet");
 });
 
+// ---- F5: a reader request alone never unpairs a browser ----
+
+test("a new reader request leaves the browser already paired as it is until the person allows the new one", async (t) => {
+  const w = await verifiedWorld(t);
+  const who = await w.agent();
+  const ask = async () => {
+    const { ticket } = await w.hub.ticket(who.id);
+    return (await w.hub.reader({ ticket, agent: who.id, label: "Chrome on Windows" }, EXTENSION)).claim as string;
+  };
+  const readers = async () => ((await w.agent()).pairings as Json[]).filter((p) => p.kind === "reader");
+  const claim = await ask();
+  await w.hub.decide((await readers())[0]!.id, "approve");
+  const token = (await w.hub.readerStatus({ claim }, EXTENSION)).token as string;
+  const reading = { reading: { url: "https://news.example/a", title: "A", text: "Hello", element: null } };
+  assert.equal((await w.hub.reading(reading, token, EXTENSION)).ok, true);
+  // Another request for the same agent and extension: the paired browser keeps sending.
+  const second = await ask();
+  assert.deepEqual((await readers()).map((r) => r.status).sort(), ["paired", "pending"]);
+  assert.equal((await w.hub.reading(reading, token, EXTENSION)).ok, true, "a request alone unpaired nothing");
+  // Allowed: the new one replaces the old.
+  await w.hub.decide((await readers()).find((r) => r.status === "pending")!.id, "approve");
+  assert.equal((await readers()).length, 1);
+  assert.equal((await w.hub.reading(reading, token, EXTENSION)).error, "not_paired");
+  const fresh = (await w.hub.readerStatus({ claim: second }, EXTENSION)).token as string;
+  assert.equal((await w.hub.reading(reading, fresh, EXTENSION)).ok, true);
+});
+
 // ---- The Worker: F13 and F12 ----
 
 function namespace(make: (ctx: unknown) => unknown) {
