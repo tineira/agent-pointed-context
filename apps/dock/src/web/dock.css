@@ -114,7 +114,8 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .code-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .code-entry p { margin: 0; font-size: 12px; }
 .code-error { color: #c0392b; min-height: 0; }
-.code-elsewhere { font-size: 12px; color: var(--muted); }
+.code-elsewhere { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--muted); }
+.code-elsewhere .open-dock { font-size: 13px; font-weight: 600; padding: 6px 12px; }
 .unverified-warning { display: flex; flex-direction: column; gap: 8px; }
 .unverified-warning p { margin: 0; color: var(--fg); }
 .unverified-warning .unverified-domain { font-size: 22px; font-weight: 700; line-height: 1.2; min-width: 0; }

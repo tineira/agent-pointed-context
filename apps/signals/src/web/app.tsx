@@ -7,7 +7,7 @@
  * Direct profile's list from @tineira/apc-web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, formatPairingCode, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { createViewReporter, dropExpiredWaits, enablePinning, foldWaitEvent, loadApcProfiles, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type AgentDrag, type BarAgent, type OpenWaits } from "@tineira/apc-web";
+import { createViewReporter, dropExpiredWaits, enablePinning, foldWaitEvent, handoffFollow, heldPairing, loadApcProfiles, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type AgentDrag, type BarAgent, type HandoffPairing, type OpenWaits } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_SEED, MONTHS } from "../../../demo/src/model/seed.ts";
 import type { Post } from "../../../demo/src/model/market.ts";
@@ -15,6 +15,7 @@ import { CROSS_APP, demoMarket, pulseCustomerPath, signalsPostPath } from "../..
 import { feedSearch, readFeedLink, shows, type FeedLink } from "./link.ts";
 import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
+import { ApcHandoff } from "./apc-handoff.tsx";
 import { ApcPin } from "./apc-pin.tsx";
 import { openSession } from "./session.ts";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
@@ -65,6 +66,11 @@ const PAIR_ERRORS: Record<string, string> = {
   not_cancellable: "the dock has connected already; to take its access back, revoke the agent in the agent bar",
   not_available: "this Signals does not pair with docks",
 };
+
+/** A refusal in words, for the page's notices and the handoff card. */
+function pairError(error: string | undefined): string {
+  return PAIR_ERRORS[error ?? ""] ?? error ?? "it did not go through";
+}
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
 /** Pulse, the other demo app, at its own site (TIN-621). */
@@ -159,6 +165,8 @@ function Feed({ sid }: { sid: string }) {
   // The post a link opened on (?post=), or the one whose time the person clicked: highlighted, in the address.
   const [selected, setSelected] = useState<string | null>(initial.post);
   const [pending, setPending] = useState<Pending | null>(null);
+  /** The grant the consent card is showing as the handoff (TIN-901): the banner leaves it out, so the code is not shown twice. */
+  const [cardGrant, setCardGrant] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // The Connect panel (Direct): open when the visitor came to connect (?connect, from the dock's landing page).
   const [connectOpen, setConnectOpen] = useState(() => new URLSearchParams(location.search).has("connect") || location.hash === "#connect");
@@ -351,8 +359,8 @@ function Feed({ sid }: { sid: string }) {
       });
   };
   // Cancel on the waiting card (APC 0.10): takes the dock's access back, and only while the dock has not connected.
-  const cancel = (id: string) => {
-    void call<{ ok: boolean; error?: string }>(`${base}/hub/cancel`, { grant_id: id })
+  const cancel = (id: string): Promise<void> =>
+    call<{ ok: boolean; error?: string }>(`${base}/hub/cancel`, { grant_id: id })
       .then(
         (r) => (r.ok ? "Cancelled: Signals took that dock's access back." : `Not cancelled: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`),
         (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`,
@@ -361,7 +369,6 @@ function Feed({ sid }: { sid: string }) {
         say(message);
         refresh();
       });
-  };
   const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpinEntry} onRevoke={revoke} onUnlink={unlink} />;
   return (
     <Shell
@@ -403,7 +410,7 @@ function Feed({ sid }: { sid: string }) {
           </div>
           {notice && <div className="notice">{notice}</div>}
           {state.grants
-            .filter((g) => g.path === "dock" && g.state === "handoff")
+            .filter((g) => g.path === "dock" && g.state === "handoff" && g.id !== cardGrant)
             .map((g) => (
               <DockWaiting key={g.id} hub={g.hub ?? ""} pairing={g.pairing ?? null} onCancel={() => cancel(g.id)} />
             ))}
@@ -558,16 +565,17 @@ function Feed({ sid }: { sid: string }) {
         <Consent
           key={pending.consent}
           pending={pending}
-          onDone={async (allow) => {
-            if (!allow) return setPending(null);
-            // The dialog stays, its buttons off, until the pairing answers (Grok on #123): one Allow, one request.
-            const r = await call<{ ok: boolean; error?: string }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target, consent: pending.consent }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
-            // A newer drop's consent, shown meanwhile, stays.
-            setPending((p) => (p === pending ? null : p));
-            // Paired: the waiting card takes over, with the code, from Signals' own state (it comes back on a reload or a new drop).
-            if (!r.ok) say(`Not paired: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`);
-            refresh();
-          }}
+          grants={state.grants}
+          // The card stays, its buttons off, until the pairing answers (Grok on #123): one Allow, one request.
+          allow={() =>
+            call<{ ok: boolean; error?: string; grant_id?: string; pairing?: { code: string; expires_at: string } }>(`${base}/hub/pair`, { hub: pending.drag.hub, agent: pending.drag.agent, ticket: pending.drag.ticket, target: pending.target, consent: pending.consent })
+              .catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+              // Paired: the waiting card takes over, with the code, from Signals' own state (it comes back on a reload or a new drop).
+              .finally(refresh)
+          }
+          onHandoff={setCardGrant}
+          onCancel={cancel}
+          onClose={() => setPending((p) => (p === pending ? null : p))}
         />
       )}
     </Shell>
@@ -632,35 +640,85 @@ function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void 
   );
 }
 
-function Consent(props: { pending: Pending; onDone: (allow: boolean) => Promise<void> | void }) {
+type ConsentPhase =
+  | { kind: "ask" }
+  | { kind: "handoff"; grantId: string; held: HandoffPairing }
+  | { kind: "ended"; message: string };
+
+/**
+ * The consent, and after the Allow the same card in the same place as the handoff (TIN-901, as Pulse). Before Allow it
+ * shows no code, only that the dock will ask for one: the page holds the code (`pending.pairing_code`) and reveals it on
+ * Allow, large, with a copy button and the time left. The card follows its grant in Signals' state (it hides the code when
+ * the dock took it) and goes when the dock connects or the grant goes. A refusal or an expired code is said on the card,
+ * which asks the person to drag the agent again: a new code needs a new consent.
+ */
+function Consent(props: {
+  pending: Pending;
+  /** Signals' dock grants now: the card follows its grant's state. */
+  grants: readonly GrantState[];
+  /** Makes the grant (the Allow): the pairing's answer. */
+  allow: () => Promise<{ ok: boolean; error?: string; grant_id?: string; pairing?: { code: string; expires_at: string } }>;
+  /** The grant the card shows, so the page's banner does not show the same code twice; null once it goes. */
+  onHandoff: (grantId: string | null) => void;
+  /** Cancel on the card: takes the dock's access back (only in handoff). */
+  onCancel: (grantId: string) => Promise<void>;
+  /** The card is done (not now, closed, cancelled, or the dock connected). */
+  onClose: () => void;
+}) {
   const host = new URL(props.pending.drag.hub).host;
   // One answer per consent: the ref holds before the re-render that turns the buttons off (a double click).
   const answered = useRef(false);
+  const seen = useRef(false);
   const [busy, setBusy] = useState(false);
-  const answer = (allow: boolean) => {
+  const [phase, setPhase] = useState<ConsentPhase>({ kind: "ask" });
+  const { onHandoff, onClose } = props;
+  const grantId = phase.kind === "handoff" ? phase.grantId : null;
+  useEffect(() => {
+    onHandoff(grantId);
+    return () => onHandoff(null);
+  }, [grantId, onHandoff]);
+  const grant = grantId ? props.grants.find((g) => g.id === grantId) : undefined;
+  // Signals' state is the truth once it has the grant (handoffFollow); until then the card shows what the page held. Once the
+  // state has had the grant in handoff and no longer does (or has it live), the dock connected or the grant went: the card is done.
+  const step = phase.kind === "handoff" ? handoffFollow({ grantId: phase.grantId, held: phase.held, seen: seen.current }, grant) : null;
+  const done = step?.done ?? false;
+  const inHandoff = grant?.state === "handoff";
+  useEffect(() => {
+    if (inHandoff) seen.current = true;
+    if (done) onClose();
+  }, [inHandoff, done, onClose]);
+  const allow = () => {
     if (answered.current) return;
     answered.current = true;
     setBusy(true);
-    void props.onDone(allow);
+    void props.allow().then((r) => {
+      if (!r.ok || !r.grant_id) return setPhase({ kind: "ended", message: pairError(r.error) });
+      // Paired: the code the page held is shown now, with the expiry Signals stored (APC 0.10 § 4); with none in the answer, no countdown until the state says.
+      setPhase({ kind: "handoff", grantId: r.grant_id, held: heldPairing(props.pending.pairing_code, r.pairing) });
+    });
   };
   return (
     <div className="backdrop" role="dialog" aria-modal="true" aria-labelledby="consent-title">
       <div className="modal">
-        <h2 id="consent-title">Let your agent from the dock at {host} read Signals?</h2>
-        <p>
-          If you allow it, Signals gives that dock its own access to this feed, the dock asks you once more, and from then on that agent reads Signals when you point it here.
-        </p>
-        <p>
-          After Allow, your dock asks for this code: <b className="pairing-code">{formatPairingCode(props.pending.pairing_code)}</b>. Type it only in your own dock; never give it to anyone. Whoever types it gets this access.
-        </p>
-        <div className="actions">
-          <button type="button" className="primary" disabled={busy} onClick={() => answer(true)}>
-            {busy ? "Pairing…" : "Allow"}
-          </button>
-          <button type="button" disabled={busy} onClick={() => answer(false)}>
-            Not now
-          </button>
-        </div>
+        {phase.kind === "ask" ? (
+          <>
+            <h2 id="consent-title">Let your agent from the dock at {host} read Signals?</h2>
+            <p>If you allow it, Signals gives that dock its own access to this feed, the dock asks you once more, and from then on that agent reads Signals when you point it here.</p>
+            <p>After Allow, your dock will ask for a code.</p>
+            <div className="actions">
+              <button type="button" className="primary" disabled={busy} onClick={allow}>
+                {busy ? "Pairing…" : "Allow"}
+              </button>
+              <button type="button" disabled={busy} onClick={onClose}>
+                Not now
+              </button>
+            </div>
+          </>
+        ) : phase.kind === "ended" ? (
+          <ApcHandoff host={host} pairing={null} message={phase.message} titleId="consent-title" autoFocus onCancel={onClose} />
+        ) : (
+          <ApcHandoff host={host} pairing={step?.pairing ?? null} titleId="consent-title" autoFocus onCancel={() => void props.onCancel(phase.grantId).then(onClose)} />
+        )}
       </div>
     </div>
   );

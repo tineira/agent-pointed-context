@@ -117,11 +117,23 @@ function Sandbox({ sid }: { sid: string }) {
   const notePinError = (e: PinError | undefined) => {
     if (e) setPinErrors((m) => new Map(m).set(e.grantId, e.error));
   };
+  /** The grant the consent card is showing as the handoff (TIN-901): the banner leaves it out, so the code is not shown twice. */
+  const [cardGrant, setCardGrant] = useState<string | null>(null);
 
   const refresh = useCallback(() => api.state().then(setState), [api]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  // Cancel on a waiting card (APC 0.10): the dock grant ends only while it is in handoff, and Pulse says what happened.
+  const cancelHub = (grantId: string) =>
+    api
+      .hubCancel(grantId)
+      .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled: ${hubError(r.error)}`), (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`)
+      .then((message) => {
+        setNotice(message);
+        setTimeout(() => setNotice(null), 8000);
+        void refresh();
+      });
 
   const navigate = useCallback((nextRoute: Route, nextFilters: Filters) => {
     writeRoute(nextRoute, nextFilters);
@@ -439,23 +451,15 @@ function Sandbox({ sid }: { sid: string }) {
       )}
       {(state.hub_links ?? []).flatMap((l) =>
         // Waiting on the dock (APC 0.10): in handoff, with the code still to be typed or the dock connecting.
-        l.state === "handoff"
+        // The consent card shows the one it just made (TIN-901); this banner is what survives a reload.
+        l.state === "handoff" && l.grant_id !== cardGrant
           ? [
               <DockWaiting
                 key={l.grant_id}
                 hub={l.hub}
                 pairing={l.pairing ?? null}
                 {...(pinErrors.has(l.grant_id) ? { pinError: pinErrors.get(l.grant_id)! } : {})}
-                onCancel={() =>
-                  void api
-                    .hubCancel(l.grant_id)
-                    .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled: ${hubError(r.error)}`), (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`)
-                    .then((message) => {
-                      setNotice(message);
-                      setTimeout(() => setNotice(null), 8000);
-                      void refresh();
-                    })
-                }
+                onCancel={() => void cancelHub(l.grant_id)}
               />,
             ]
           : [],
@@ -473,9 +477,16 @@ function Sandbox({ sid }: { sid: string }) {
           key={pendingDrop.consent}
           api={api}
           drop={pendingDrop}
-          onDone={(message, pinError) => {
-            setPendingDrop(null);
+          links={state.hub_links ?? []}
+          pinError={cardGrant ? pinErrors.get(cardGrant) : undefined}
+          onPaired={(_grantId, pinError) => {
             notePinError(pinError);
+            void refresh();
+          }}
+          onHandoff={setCardGrant}
+          onCancel={cancelHub}
+          onDone={(message) => {
+            setPendingDrop(null);
             if (message) {
               setNotice(message);
               setTimeout(() => setNotice(null), 8000);
