@@ -35,6 +35,10 @@ const pulse: DockAppUnderTest = {
   link: (state, grantId) => (state as unknown as State).hub_links.find((l) => l.grant_id === grantId),
   pinned: (state, grantId) => (state as unknown as State).grants.find((g) => g.id === grantId)?.pin?.id ?? null,
   grantIds: (state) => (state as unknown as State).grants.map((g) => g.id),
+  direct: async (object) => {
+    const g = await (object as unknown as { addAgentGrant(): Promise<{ id: string; secret: string }> }).addAgentGrant();
+    return { id: g.id, secret: g.secret };
+  },
 };
 
 dockLifecycleTests(pulse);
