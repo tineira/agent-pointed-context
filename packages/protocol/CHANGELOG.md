@@ -9,7 +9,7 @@ The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protoco
 A patch: the wording of M2 and the packages; the contract an app implements is the same (TIN-880).
 
 - **M2 no longer names `redirect: "error"`, which Cloudflare Workers does not implement.** Workers throws a `TypeError` on it before anything is sent, so an app on Workers that followed the letter of M2 could never reach its hub. The rule is the same: never follow a redirect. Call the hub with `redirect: "manual"` (or `"error"` where the runtime has it), and refuse any 3xx, an `opaqueredirect` or `response.redirected` (`packages/protocol/src/dock.ts`, the spec).
-- **`pairWithHub` and `confirmWithHub` call the hub with `redirect: "manual"`.** In 0.10.0 to 0.11.0 they asked for `"error"`, so on Workers every Dock pairing and confirm failed as `hub_unreachable` before it was sent. In Node and browsers they worked; the 3xx refusal is unchanged (`packages/server/src/hub-client.ts`).
+- **`pairWithHub` and `confirmWithHub` call the hub with `redirect: "manual"`.** From 0.9.0 to 0.11.0 they asked for `"error"`, so on Workers every Dock pairing and confirm failed as `hub_unreachable` before it was sent. In Node and browsers they worked. A redirect is still refused, now as `hub_refused` on every runtime (Node used to report it as `hub_unreachable`) (`packages/server/src/hub-client.ts`).
 
 ## 0.11.0 (draft, 2026-11-13)
 

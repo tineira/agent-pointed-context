@@ -289,7 +289,7 @@ test("against a real HTTP server: gzip is decoded and capped, a slow body hits t
 function workersFetch(answer: () => Response) {
   const sent: RequestInit[] = [];
   const f = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const mode = init?.redirect ?? "follow";
+    const mode = init?.redirect ?? "follow"; // a new Request on Workers defaults to "follow" (an incoming one is "manual")
     if (mode !== "follow" && mode !== "manual") {
       throw new TypeError(`Invalid redirect value, must be one of "follow" or "manual" ("error" won't be implemented since it does not make sense at the edge; use "manual" and check the response status code).`);
     }

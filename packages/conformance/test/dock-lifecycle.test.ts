@@ -180,7 +180,7 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["follows_then_checks_redirected", "M2:", /reached https:\/\/elsewhere\.example/],
   ["ignores_redirected_flag", "M2:", /answers redirected, the Allow says it paired/],
   ["ignores_opaqueredirect", "M2:", /answers opaque_redirect, the Allow says it paired/],
-  ["ignores_3xx", "M2:", /answers status_3xx, the Allow says it paired/],
+  ["ignores_3xx", "M2:", /answers (redirect|status_3xx), the Allow says it paired/],
   ["no_deadline_on_headers", "M3:", /answers slow_headers, the Allow was still waiting/],
   ["no_deadline_on_body", "M3:", /answers slow_body, the Allow was still waiting/],
   ["deadline_per_part", "M3:", /answers slow_headers_then_body, the Allow says it paired/],
