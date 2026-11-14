@@ -97,6 +97,7 @@ export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
   { name: "a cancelled wait publishes closed (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
   { name: "a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", why: "needs the person's Revoke during a wait, and presence goes to the page" },
   { name: "a refused wait publishes nothing (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
+  { name: "an app whose wait-event checks were not checked sends no wait event anywhere in the run (APC 0.11)", why: "presence goes to the person's page, not to the agent" },
   { name: "revoke from the app cuts that agent at once, and only that agent", why: "needs the person's Revoke (the CLI checks a grant you revoked, with --revoked)" },
   { name: "a call already running when the grant is revoked ends revoked, with no data", why: "needs the person's Revoke during a call" },
   { name: "mobile: every agent is shown in the page, and the agent bar cannot be collapsed", why: "needs the page on a phone (page.mobile)" },

@@ -343,6 +343,7 @@ async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, p
 const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
 const NOT_011 = { note: "not checked: the app's apc.json claims a standard before 0.11.0, which has no wait events" };
 const NO_WAIT_EVENTS = { note: "not checked: the app sends no wait events (APC 0.11: optional, and only for an app that claims and releases its place for a wait atomically), so its page shows no waiting" };
+const PROBE_FAILED = { note: "not checked: the wait-event probe failed in an earlier check, which reports why" };
 const DOCK_WAITS = { note: "not checked on the Dock profile: a dock agent waits on the hub, so the page shows no waiting for a dock grant (APC 0.11)" };
 
 /** The wait events of one grant among presence messages, checked for their exact shape (APC 0.11), oldest first. */
@@ -394,51 +395,69 @@ async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
 }
 
 /** The checks of the core, in order. Each makes its own agents, so any one can run alone. */
-export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
+export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
+  /**
+   * Any wait event the page got anywhere in the run, on any agent, in any check (APC 0.11). Every drain of the page's
+   * presence goes through here, so an app that sends wait events on some path only is still seen to send them.
+   */
+  let sawWait = false;
+  const app: ApcAppAdapter = {
+    ...adapter,
+    page: {
+      ...adapter.page,
+      takePresence: () => {
+        const messages = adapter.page.takePresence();
+        if (messages.some((m) => m.kind === "wait")) sawWait = true;
+        return messages;
+      },
+    },
+  };
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
   /**
-   * An agent for a wait-event check (APC 0.11), revoked once the check ends (`waitCheck`), so the five checks add no
-   * agents to the app's count: an app may cap its agents (Signals keeps at most 20 Direct ones).
+   * Whether the app claims 0.11.0, asked once per run, with one short wait on the first wait-event check's agent so the
+   * page has had a chance to get a wait event. A probe that fails fails that check; the others then say so in a note,
+   * rather than report the same error four more times.
    */
-  let waitAgents: string[] = [];
-  const waitAgent = async (): Promise<AgentConnection> => {
-    const conn = await app.connect();
-    waitAgents.push(conn.grantId);
-    return conn;
-  };
-  /**
-   * Whether the app sends wait events at all (APC 0.11: a MAY): one short wait, and any wait event of its grant on the
-   * page. Asked once per run. An app that sends none passes the wait-event checks with a note; one that sends any is
-   * held to every rule.
-   */
-  let sendsWaits: Promise<boolean> | null = null;
-  const sendsWaitEvents = (conn: AgentConnection): Promise<boolean> =>
-    (sendsWaits ??= (async () => {
+  let probe: Promise<boolean> | null = null;
+  let probeFailed = false;
+  const probeWaits = (conn: AgentConnection): Promise<boolean> =>
+    (probe ??= (async () => {
+      if (!(await claims(conn, "0.11.0"))) return false;
       await app.page.setOpen(true);
       app.page.takePresence();
       await call(app, conn, "wait_for_focus", { timeout_s: 1 });
       await sleep(300);
-      return app.page.takePresence().some((m) => m.grant_id === conn.grantId && m.kind === "wait");
-    })());
-  /** A wait-event check: Direct, an app that claims 0.11.0 and sends wait events, its agents revoked when it ends. */
-  const waitCheck = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck =>
+      app.page.takePresence();
+      return true;
+    })().catch((error: unknown) => {
+      probeFailed = true;
+      throw error;
+    }));
+  /** A wait-event check passed with a note because the app had sent no wait event by then: the last check holds it to that. */
+  let waitSkipped = false;
+  /**
+   * A wait-event check: Direct, an app that claims 0.11.0 and has sent a wait event somewhere in the run (APC 0.11: the
+   * events are a MAY, and an app that sends any follows every rule). Its one agent is revoked when it ends, so the
+   * checks stay under an app's cap on agents (Signals keeps at most 20 Direct ones).
+   */
+  const waitCheck = (name: string, run: (conn: AgentConnection) => Promise<void | { note: string }>): ConformanceCheck =>
     check(name, async () => {
+      if (app.profile === "dock") return DOCK_WAITS;
+      if (probeFailed) return PROBE_FAILED;
+      const conn = await app.connect();
       try {
-        if (app.profile === "dock") return DOCK_WAITS;
-        const probe = await waitAgent();
-        if (!(await claims(probe, "0.11.0"))) return NOT_011;
-        if (!(await sendsWaitEvents(probe))) return NO_WAIT_EVENTS;
-        return await run();
+        if (!(await probeWaits(conn))) return NOT_011;
+        if (!sawWait) {
+          waitSkipped = true;
+          return NO_WAIT_EVENTS;
+        }
+        return await run(conn);
       } finally {
-        const made = waitAgents;
-        waitAgents = [];
-        for (const grantId of made) {
-          try {
-            await app.page.revoke(grantId);
-          } catch {
-            // A revoke that fails here must not hide the check's own result.
-          }
+        try {
+          await app.page.revoke(conn.grantId);
+        } catch {
+          // A revoke that fails here must not hide the check's own result.
         }
       }
     });
@@ -607,10 +626,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       if (first.id) expect(e.targets.some((t) => t.kind === first.kind && t.id === first.id), `the read of ${first.kind}:${first.id} names it`);
     }),
 
-    waitCheck("a wait publishes open, then closed, on the presence channel (APC 0.11)", async () => {
-      if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await waitAgent();
-      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+    waitCheck("a wait publishes open, then closed, on the presence channel (APC 0.11)", async (conn) => {
       await app.page.setOpen(true);
       app.page.takePresence();
       const waiting = call(app, conn, "wait_for_focus", { timeout_s: 2 });
@@ -622,10 +638,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "closed", `once the wait returned, the page has its closed, and only that: got [${states.join()}]`);
     }),
 
-    waitCheck("a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", async () => {
-      if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await waitAgent();
-      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+    waitCheck("a takeover publishes the old wait's closed before the new wait's open (APC 0.11)", async (conn) => {
       await app.page.setOpen(true);
       app.page.takePresence();
       const older = call(app, conn, "wait_for_focus", { timeout_s: 10 });
@@ -638,10 +651,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed,open,closed", `open, then at the takeover closed and open, then closed: got [${states.join()}]`);
     }),
 
-    waitCheck("a cancelled wait publishes closed (APC 0.11)", async () => {
-      if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await waitAgent();
-      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+    waitCheck("a cancelled wait publishes closed (APC 0.11)", async (conn) => {
       await app.page.setOpen(true);
       app.page.takePresence();
       const waiting = call(app, conn, "wait_for_focus", { timeout_s: 10 }).catch(() => null);
@@ -654,10 +664,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed", `a cancelled wait sends open, then closed when it stops: got [${states.join()}]`);
     }),
 
-    waitCheck("a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", async () => {
-      if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await waitAgent();
-      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+    waitCheck("a wait whose grant is revoked publishes closed, and a wait on a revoked grant publishes nothing (APC 0.11)", async (conn) => {
       await app.page.setOpen(true);
       app.page.takePresence();
       const waiting = send(app, conn, "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 10 } }).catch(() => null);
@@ -671,10 +678,7 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
       expect(states.join() === "open,closed", `a wait cut by a revoke sends open, then closed, and a wait on the revoked grant nothing: got [${states.join()}]`);
     }),
 
-    waitCheck("a refused wait publishes nothing (APC 0.11)", async () => {
-      if (app.profile === "dock") return DOCK_WAITS;
-      const conn = await waitAgent();
-      if (!(await claims(conn, "0.11.0"))) return NOT_011;
+    waitCheck("a refused wait publishes nothing (APC 0.11)", async (conn) => {
       await app.page.setOpen(true);
       app.page.takePresence();
       const running = call(app, conn, "wait_for_focus", { timeout_s: 2 });
@@ -788,6 +792,13 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     ...(app.profile === "dock" ? dockChecks(app, app.dock) : []),
     ...(app.profile === "dock" ? dockLifecycleChecks(app, app.dock) : []),
     ...(app.link ? linkChecks(app, app.link) : []),
+
+    // Last, after every check that can make the app send a wait event (a takeover, a cancel, a revoke, a longer wait).
+    check("an app whose wait-event checks were not checked sends no wait event anywhere in the run (APC 0.11)", async () => {
+      app.page.takePresence();
+      if (!waitSkipped) return;
+      expect(!sawWait, "the app sent wait events in this run, so it is held to every wait-event rule, but the wait-event checks ran before any came and passed as not checked: an app that sends any wait event sends them on every wait");
+    }),
   ];
 }
 
