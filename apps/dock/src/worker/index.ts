@@ -8,7 +8,7 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
-import { DOCK_TTL_MS, NOT_OWNER, type Env, type Hub, type OwnerMethod } from "./hub.ts";
+import { DOCK_TTL_MS, NOT_OWNER, OWNER_HEADER, type Env, type Hub, type OwnerMethod } from "./hub.ts";
 import { deviceLabel, normalizeJoinCode } from "./devices.ts";
 import { DIRECTORY } from "./join-codes.ts";
 import { withByteRanges } from "./range.ts";
@@ -263,7 +263,7 @@ app.post("/api/d/:did/pairings/:pid", async (c) => {
 });
 app.get("/api/d/:did/ws", async (c) => {
   const headers = new Headers(c.req.raw.headers);
-  headers.set("x-apc-owner", c.var.owner);
+  headers.set(OWNER_HEADER, c.var.owner);
   return stubFor(c.env, c.var.did).fetch(new Request(c.req.raw, { headers }));
 });
 
@@ -351,8 +351,12 @@ app.post("/apc/reading/log/clear", async (c) => {
 });
 
 app.all("/mcp/:did/:secret", async (c) => {
-  if (!/^[0-9a-f]{32}$/.test(c.req.param("did"))) return c.json({ error: "not_found" }, 404);
-  return stubFor(c.env, c.req.param("did")).fetch(c.req.raw);
+  // An agent's MCP URL and nothing else (TIN-911): never a path the dock's own object answers otherwise, such as its socket.
+  if (!/^[0-9a-f]{32}$/.test(c.req.param("did")) || !/^[0-9a-f]{32}$/.test(c.req.param("secret"))) return c.json({ error: "not_found" }, 404);
+  // The header the owner's socket carries is the Worker's word alone: never one a caller sent.
+  const headers = new Headers(c.req.raw.headers);
+  headers.delete(OWNER_HEADER);
+  return stubFor(c.env, c.req.param("did")).fetch(new Request(c.req.raw, { headers }));
 });
 
 /**

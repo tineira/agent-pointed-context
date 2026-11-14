@@ -76,3 +76,44 @@ test("the dock's Workers keep no invocation logs, and what the dock logs carries
   assert.equal(redactSecrets("nothing secret here"), "nothing secret here");
   assert.equal(redactSecrets(`"https://signals.example/mcp/grant_Ab-9xYz" failed`), `"https://signals.example/mcp/[redacted]" failed`, "a grant secret in any alphabet");
 });
+
+// ---- The Worker: F13 and F12 ----
+
+function namespace(make: (ctx: unknown) => unknown) {
+  const objects = new Map<string, unknown>();
+  return { idFromName: (name: string) => name, get: (name: string) => (objects.has(name) ? objects : objects.set(name, make(durableObjectRoom().ctx))).get(name) };
+}
+function workerEnv() {
+  const env: Json = { ASSETS: { fetch: async () => new Response("asset") } };
+  env.HUB = namespace((ctx) => new Hub(ctx, env));
+  env.JOIN_CODES = namespace((ctx) => new JoinCodes(ctx, env));
+  return env;
+}
+const ORIGIN = "https://dock.test";
+function browser(env: Json, userAgent: string) {
+  let cookie = "";
+  const send = async (path: string, body?: unknown, headers: Record<string, string> = {}) => {
+    const r: Response = await app.request(
+      `${ORIGIN}${path}`,
+      body === undefined ? { headers: { cookie, "user-agent": userAgent, ...headers } } : { method: "POST", headers: { cookie, "user-agent": userAgent, "content-type": "application/json", origin: ORIGIN, ...headers }, body: JSON.stringify(body) },
+      env,
+    );
+    const set = r.headers.get("set-cookie");
+    if (set) cookie = set.split(";")[0]!.replace(/^apc_dock=$/, "");
+    return { status: r.status, json: (await r.json().catch(() => null)) as Json };
+  };
+  return { send, secret: () => cookie.split(".")[1]! };
+}
+
+test("the dock's socket answers on its own path only: never through an agent's MCP path, with a header the caller sent", async () => {
+  const env = workerEnv();
+  const a = browser(env, "Mozilla/5.0 (Windows NT 10.0) Chrome/156.0.0.0");
+  const did = (await a.send("/api/dock/new", {})).json.did as string;
+  const forged = await a.send(`/mcp/${did}/ws`, undefined, { "x-apc-owner": a.secret(), upgrade: "websocket" });
+  assert.equal(forged.status, 404);
+  const hub = (env.HUB as { get: (n: string) => { fetch: (r: Request) => Promise<Response> } }).get(did);
+  const direct = await hub.fetch(new Request(`${ORIGIN}/mcp/${did}/ws`, { headers: { "x-apc-owner": a.secret(), upgrade: "websocket" } }));
+  assert.equal(direct.status, 404, "the dock's object takes /ws on its own path only");
+  // The owner's socket refuses another origin before it reads the cookie (TIN-865).
+  assert.equal((await a.send(`/api/d/${did}/ws`, undefined, { origin: "https://pulse.apc.tineira.com", upgrade: "websocket" })).status, 403);
+});

@@ -28,7 +28,10 @@ export const DOCK_TTL_MS = 7 * 24 * 60 * 60_000;
 const OWNER_METHODS = new Set(["state", "newLink", "cancelLink", "decideJoin", "removeDevice", "addAgent", "keptAtHand", "reset", "ticket", "setBadge", "removeAgent", "calls", "clearFocus", "clearReadings", "decide"] as const);
 export type OwnerMethod = typeof OWNER_METHODS extends Set<infer M> ? M : never;
 /** What `Hub.asOwner` throws for a secret that opens none of the dock's computers any more. */
-export const NOT_OWNER = "not_owner";/** The shape of the apc.json copy the hub keeps (APC 0.11, TIN-888): a row without it was written by an older parser. */
+export const NOT_OWNER = "not_owner";
+/** The header the Worker puts the owner's computer secret in for the dock's socket (index.ts); the Worker drops it from every other request it hands on. */
+export const OWNER_HEADER = "x-apc-owner";
+/** The shape of the apc.json copy the hub keeps (APC 0.11, TIN-888): a row without it was written by an older parser. */
 export const APC_JSON_COPY_VERSION = 2;
 const WAIT_CEILING_S = 50;
 const WAIT_DEFAULT_S = 25;
@@ -1858,9 +1861,10 @@ export class Hub extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname.endsWith("/ws")) {
+    // The socket's own path only (TIN-911), never another that happens to end in /ws.
+    if (/^\/api\/d\/[0-9a-f]{32}\/ws$/.test(url.pathname)) {
       // One of this dock's computers (TIN-838); its socket carries which, so removing that computer closes it.
-      const device = this.deviceBySecret(request.headers.get("x-apc-owner") ?? "");
+      const device = this.deviceBySecret(request.headers.get(OWNER_HEADER) ?? "");
       if (!device) return new Response("forbidden", { status: 403 });
       if (request.headers.get("upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
       const pair = new WebSocketPair();
