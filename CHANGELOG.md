@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### The presentation rules move out of the spec into a UX guide (2026-11-14, TIN-915)
+
+- **A new docs page, [the APC UX guide](https://apc.tineira.com/docs/ux), holds what the spec said about how an app shows its agents.** The pet, the header, pin badges, the 8 states, motion, colour, phones and the pairing and consent cards are guidance with `@tineira/apc-web` as the reference; the spec keeps the rules interoperability and security depend on (marks, honest states, no logo as verification, the mobile capability, the owner-only code, default Deny). Nothing in the packages changes, and no conformance check was removed or downgraded: `page.mobile` tests a capability, so it stays. APC standard 0.12.0 (the contract shrinks). (`apps/dock/src/docs/pages/ux.md`, `apps/dock/src/docs/pages/spec.md`, `apps/dock/src/docs/pages/overview.md`, `apps/dock/src/docs/pages/integrate.md`, `apps/dock/src/docs/pages.ts`, `apps/dock/src/web/docs.tsx`, `packages/protocol/CHANGELOG.md`)
+
 ### The conformance suite checks what the 1.0 review found unchecked, and the command line says what it covered (2026-11-14, TIN-912)
 
 - **`@tineira/apc-conformance` fails apps that broke rules it used to pass unchecked.** A revoked grant must answer revoked to every request (`ping`, other methods, a notification, a body that does not parse) naming the app's host; no `wait_for_focus` result with no focus carries `then` (timeout, taken over, refused, cancelled); nothing but grants is served under a `{secret}` entry; a Dock Allow pairs only with its own consent's nonce, once. The revoked tool error may now carry `structuredContent`. APC standard 0.12.0. (`packages/conformance/src/index.ts`, `packages/conformance/src/shared.ts`, `packages/conformance/src/http.ts`, `packages/protocol/src/version.ts`, `packages/protocol/CHANGELOG.md`, `apps/dock/src/docs/pages/conformance.md`)

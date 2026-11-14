@@ -124,11 +124,11 @@ The page's event stream is how the server knows a page is open, and how presence
 
 <!-- include orders-page.ts#pinning -->
 
-On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile)).
+On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile), and [phones](/docs/ux#phones) in the UX guide).
 
 ### The agent in the page
 
-To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3, then a "+N" (or list) button that opens a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page)). Each pet is a mark and only a mark, so `enablePinning` drags it like the bar's, and a tap or Enter on it arms the agent. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
+To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3, then a "+N" (or list) button that opens a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page) holds the rules, [the UX guide](/docs/ux) the pattern). Each pet is a mark and only a mark, so `enablePinning` drags it like the bar's, and a tap or Enter on it arms the agent. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
 
 <!-- include orders-page.ts#pets -->
 
