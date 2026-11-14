@@ -103,8 +103,15 @@ export async function world(t: TestContext, env: Json = {}) {
   /** Requests per origin, whatever they asked. */
   const hits = new Map<string, number>();
 
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", async function route(input: string | URL | Request, init?: RequestInit): Promise<Response> {
     const request = input instanceof Request ? input : new Request(input, init);
+    // As a real fetch does, a redirect is followed unless the caller said "manual" (TIN-911): the target is then reached, and counted.
+    if (request.redirect === "follow") {
+      const answer = await route(new Request(request.clone(), { redirect: "manual" }));
+      const location = answer.headers.get("location");
+      if (answer.status >= 300 && answer.status < 400 && location) return route(new Request(new URL(location, request.url), { method: request.method, headers: request.headers, body: request.method === "GET" ? undefined : await request.clone().text() }));
+      return answer;
+    }
     const url = new URL(request.url);
     hits.set(url.origin, (hits.get(url.origin) ?? 0) + 1);
     if (url.origin === PULSE && url.pathname === "/.well-known/apc.json") return pulseWorker.fetch(request, PULSE_ENV);

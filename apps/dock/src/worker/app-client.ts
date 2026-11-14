@@ -25,8 +25,9 @@ const PROTOCOL = "2025-06-18";
 
 /**
  * How the hub talks to one app (TIN-580): a verified app (APP_ORIGINS) or not. Every answer is read up
- * to a byte cap, every call has a time limit that covers the body too, and an unverified app's
- * redirects are not followed. The default is the strict one, unverified.
+ * to a byte cap, every call has a time limit that covers the body too, and no app's redirect is
+ * followed, verified or not (TIN-911): a redirect would carry the hub's request, and the grant in it, to
+ * an address the hub never vetted. The default is the strict one, unverified.
  */
 export interface AppTransport {
   verified: boolean;
@@ -57,7 +58,17 @@ export function failureReason(error: unknown): string {
   return error instanceof AppCallError ? error.reason : "unreachable";
 }
 
-/** Rejects when the signal aborts: a call ends at its time limit even if the app never answers or never ends its body. */
+/**
+ * Whether an answer is a redirect (TIN-911): a 3xx, the opaque answer some runtimes give for one under
+ * `redirect: "manual"`, or one a runtime followed anyway. Every call to an app uses `redirect: "manual"`
+ * (Workers throws on `"error"` before sending, as the app side's hub client notes, APC 0.11.1), and such an
+ * answer is a failure, never followed.
+ */
+export function isRedirect(response: Response): boolean {
+  return (response.status >= 300 && response.status < 400) || response.status === 0 || (response.type as string) === "opaqueredirect" || response.redirected;
+}
+
+/** Rejects when the signal aborts:a call ends at its time limit even if the app never answers or never ends its body. */
 function deadline(signal: AbortSignal, what: string, ms: number): Promise<never> {
   const p = new Promise<never>((_, reject) => {
     const fail = () => reject(new AppCallError(`${what}: no answer within ${ms} ms`, undefined, "timeout"));
@@ -120,11 +131,15 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": PROTOCOL, "user-agent": "apc-hub/0.1" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
       signal,
-      // An unverified app's redirect would send the hub's request, and its grant, where the app chose.
-      ...(transport.verified ? {} : { redirect: "manual" as const }),
+      // Never followed, verified app or not (TIN-911): a redirect would send the hub's request, and its grant, where the app chose.
+      redirect: "manual",
     }),
     ends,
   ]);
+  if (isRedirect(response)) {
+    response.body?.cancel().catch(() => {});
+    throw new AppCallError(`${method}: a redirect (HTTP ${response.status})`, response.status, "redirect", `${method}: a redirect, not followed`);
+  }
   if (!response.ok) {
     const code = await errorCode(response, ends);
     // The reason leaves out the app's code: it is the app's text.
@@ -183,18 +198,19 @@ export async function initializeApp(mcpUrl: string, title: string, icon: string 
  * Give a grant back (TIN-388): whoever holds a grant may return it, and the app deletes it, its pins
  * and its dock link. The MCP URL is the proof. An app that does not know the endpoint answers 404.
  */
-export async function revokeGrant(mcpUrl: string, transport: AppTransport = STRICT): Promise<boolean> {
+export async function revokeGrant(mcpUrl: string, _transport: AppTransport = STRICT): Promise<boolean> {
   try {
     const response = await fetch(`${new URL(mcpUrl).origin}/apc/revoke`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ mcp_url: mcpUrl }),
       signal: AbortSignal.timeout(LIMITS.revokeMs),
-      ...(transport.verified ? {} : { redirect: "manual" as const }),
+      // Never followed, verified app or not (TIN-911): the body is the grant itself.
+      redirect: "manual",
     });
-    // Only the status counts; the body is never read.
+    // Only the status counts; the body is never read. A redirect is a failure.
     response.body?.cancel().catch(() => {});
-    return response.ok;
+    return response.ok && !isRedirect(response);
   } catch {
     return false;
   }

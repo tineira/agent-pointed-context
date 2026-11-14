@@ -46,6 +46,21 @@ async function verifiedWorld(t: TestContext) {
   return { ...w, shop, market, elsewhere, pair, givebacks, due, revokes };
 }
 
+// ---- F14: no redirect is followed, verified app or not ----
+
+test("a verified app's redirect is a failure: the hub's MCP call and its give-back never reach the redirect's target", async (t) => {
+  const w = await verifiedWorld(t);
+  const id = await w.pair(w.shop);
+  w.shop.respond = (method, params) => (method === "tools/call" && params.name === "get_figure" ? redirect() : undefined);
+  const result = await w.callHub("shop__get_figure");
+  assert.equal(result.isError, true, "the call failed");
+  w.shop.revoke = redirect;
+  assert.deepEqual(await w.hub.decide(id, "unpair"), { ok: true });
+  await w.hub.idle();
+  assert.equal(w.hits.get(ELSEWHERE), undefined, "nothing the hub sent, the grant included, reached the target");
+  assert.deepEqual(w.elsewhere.calls, []);
+});
+
 // ---- F8: secrets stay out of the logs ----
 
 test("the dock's Workers keep no invocation logs, and what the dock logs carries no secret", () => {
