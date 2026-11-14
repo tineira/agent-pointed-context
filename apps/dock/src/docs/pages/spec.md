@@ -298,7 +298,7 @@ Since 0.12. The pairing code proves that the dock's owner read a code. The bindi
 - **M12.** On a grant that is not a Dock grant, a request carrying an `initialize` with either key, whatever its value, **MUST** get HTTP 404 before any other answer, revoked included, and the grant is unchanged.
 - The 404s of M11 and M12 **SHOULD** carry `{ "error": "pairing_mismatch" }`; a hub reads only that exact token. The app never shows the keys to its page or puts them in an answer, and **SHOULD NOT** log them.
 - A grant whose record holds no `pairing_id` (made before the app implemented 0.12) is checked on its agent alone.
-- Apps on 0.10 and 0.11 ignore the keys and keep pairing with the reference hub, unchecked, for 6 months from 0.12.0. An app that validates `params._meta` strictly must accept the two keys.
+- Apps on 0.10 and 0.11 ignore the keys and pair with the reference hub as before, unchecked. The policy is that they keep doing so for at least 6 months from 0.12.0 (tagged 2026-11-14, so until 2027-05-14): the hub records the standard each app claims and refuses nothing on it, and only a later release, announced in the changelog, may end that. An app that validates `params._meta` strictly must accept the two keys.
 
 ### The derived secret (optional)
 
