@@ -12,6 +12,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { DockAgent } from "./agent-page.tsx";
 import type { Marks } from "./float-marks.ts";
 import { AgentPet } from "./apc-pet.tsx";
+import { canDrag, dragTitle } from "./agent-drag.ts";
 import { READER_NOTICE } from "../worker/reading.ts";
 import type { UnverifiedAction } from "./unverified.tsx";
 import type { InFlight } from "./request-state.ts";
@@ -77,7 +78,8 @@ export function PetView(props: {
   agent: DockAgent;
   requests: PetRequest[];
   decide: (id: string, action: UnverifiedAction) => void;
-  startDrag: (e: DragEvent) => void;
+  /** Whether the drag went ahead (an agent not connected yet does not drag, TIN-908). */
+  startDrag: (e: DragEvent) => boolean;
   endDrag: () => void;
   /** The hub's refusal of the last answer (Fix check 4 on #120): the bubble shows it, with or without a request left. */
   refusal?: ReactNode;
@@ -138,11 +140,12 @@ export function PetView(props: {
     <PetFrame where={where} name={a.name} beside={requests} moved={(s) => setSide(s)}>
       <div
         className="pet-logo"
-        draggable
-        title={a.client_name ? `Drag ${a.name} onto an app to point it` : `Drag ${a.name} into your agent's chat to connect it`}
+        draggable={canDrag(a)}
+        title={canDrag(a) ? dragTitle(a, "an app") : `Connect ${a.name} first: click to open your dock`}
+        // Not connected yet (TIN-908): it does not drag, and a click opens the dock, where it connects.
+        onClick={canDrag(a) ? undefined : petApp.openDock}
         onDragStart={(e) => {
-          setDragging(true);
-          props.startDrag(e.nativeEvent);
+          if (props.startDrag(e.nativeEvent)) setDragging(true);
         }}
         onDragEnd={() => {
           setDragging(false);

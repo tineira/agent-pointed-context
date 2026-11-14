@@ -147,8 +147,8 @@ export function Setup(props: { agents: DockAgent[]; progress: Onboarding; keepAt
   const pulsePaired = pulse.some((p) => p.status === "paired");
   const bodies = [
     <div key="connect">
-      <p>Drag the plug above into your agent’s chat and send. Or add its URL as a remote MCP server.</p>
-      {!agents.length && <p>Add an agent with <b>+</b> below to get its plug and connection URL.</p>}
+      <p>Add your agent’s URL to it as a remote MCP server, or copy the prompt below and paste it into your agent’s chat. On a phone, scan the QR.</p>
+      {!agents.length && <p>Add an agent with <b>+</b> below to get its connection URL and prompt.</p>}
       {agents.filter((a) => !a.client_name).map((a) => <ConnectAgent key={a.id} agent={a} />)}
       {connected && <p className="ok">Your agent connected. This is the only connection it needs.</p>}
     </div>,

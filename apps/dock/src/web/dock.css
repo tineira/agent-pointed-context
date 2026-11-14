@@ -178,6 +178,9 @@ button.primary.icon-button[aria-pressed="true"] { color: #fff; }
 .float-body { margin: 0; min-height: 0; overflow-x: hidden; background: var(--bg); }
 .float { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-content: center; align-items: center; min-height: 100vh; padding: 8px; background: var(--bg); }
 .float-agent { cursor: grab; }
+/* An agent not connected yet does not drag (TIN-908): no grab cursor; its pet opens the dock on a click. */
+.tile-drag[draggable="false"], .float-agent[draggable="false"] { cursor: default; }
+.pet-logo[draggable="false"] { cursor: pointer; }
 .float-empty { color: var(--muted); font-size: 13px; text-align: center; }
 
 /*
