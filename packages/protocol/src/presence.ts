@@ -9,7 +9,7 @@
  * **When a wait event is sent.** `open` when a `wait_for_focus` claims the grant's one place for a wait (APC 0.8);
  * `closed` when the wait gives it up: on return (a pin, a timeout, a closed page), on cancel, or when the grant is
  * revoked or deleted. A wait refused (within `WAIT_CLAIM_GAP_S`, or on a revoked grant) claims nothing and sends
- * nothing. Only an app whose place for a wait tells takeovers and releases atomically sends wait events at all
+ * nothing. Wait events are optional (MAY), and only an app whose place for a wait tells takeovers and releases atomically sends them at all
  * (`AtomicWaitSlot` in `@tineira/apc-server`): checking and then releasing in two steps could end the page on `closed`
  * while a wait runs, and no "waiting" beats a wrong one.
  *
@@ -28,7 +28,7 @@
  * **Dock grants.** A Dock agent waits on the hub, not on the app: the waits an app sees on a dock grant are the hub's
  * relays, not the agent listening. A page shows no "waiting" for a dock grant, whatever its wait events say.
  *
- * An app that implements 0.11 sends wait events for every wait it runs; a page that reads the channel ignores a
+ * An app that sends wait events sends them for every wait it runs, by every rule above; a page that reads the channel ignores a
  * message it does not know, so pages before 0.11 are not affected (`flashTargets` in `@tineira/apc-web` ignores wait
  * events).
  */

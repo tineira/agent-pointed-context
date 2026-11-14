@@ -161,9 +161,20 @@ function rewrittenPresence(rewrite: (messages: PresenceMessage[]) => PresenceMes
 const WAITS = "a wait publishes open, then closed";
 const TAKEOVER = "a takeover publishes the old wait's closed";
 
-test("the wait-event checks fail an app that sends no wait events (APC 0.11)", async () => {
+test("an app that sends no wait events passes every wait-event check with a note: they are optional (APC 0.11)", async () => {
   const checks = rewrittenPresence((m) => m.filter((e) => e.kind !== "wait"));
-  await assert.rejects(named(checks, WAITS).run(), /the page has its open/);
+  const names = [WAITS, TAKEOVER, "a cancelled wait publishes closed", "a wait whose grant is revoked publishes closed", "a refused wait publishes nothing"];
+  const waitChecks = names.map((n) => named(checks, n));
+  for (const c of waitChecks) {
+    await c.run();
+    assert.match(c.note ?? "", /not checked: the app sends no wait events/, c.name);
+  }
+});
+
+test("an app that sends open but never closed is held to the rules and fails (APC 0.11)", async () => {
+  const openOnly = rewrittenPresence((m) => m.filter((e) => !(e.kind === "wait" && e.state === "closed")));
+  await assert.rejects(named(openOnly, WAITS).run(), /has its closed, and only that: got \[\]/);
+  await assert.rejects(named(openOnly, "a cancelled wait publishes closed").run(), /got \[open\]/);
 });
 
 test("the wait-event checks fail an app whose wait events carry more than ids, or another shape (APC 0.11)", async () => {
@@ -222,4 +233,62 @@ test("the wait-event checks fail an app whose refused wait sends an event (APC 0
   // As if the refused wait sent its own open.
   const doubled = rewrittenPresence((m) => m.flatMap((e) => (e.kind === "wait" && e.state === "open" ? [e, e] : [e])));
   await assert.rejects(named(doubled, REFUSED).run(), /got \[open,open\]/);
+});
+
+const GUARD = "an app whose wait-event checks were not checked sends no wait event anywhere in the run";
+
+test("an app that sends wait events only on a takeover cannot pass as not checked: the last check fails it (APC 0.11)", async () => {
+  // Wait events kept only in a drain that holds a takeover (a closed right before an open): the probe and a plain wait see none.
+  const takeoverOnly = rewrittenPresence((m) => {
+    const waits = m.filter((e) => e.kind === "wait");
+    const takeover = waits.some((e, i) => e.state === "closed" && waits[i + 1]?.state === "open");
+    return takeover ? m : m.filter((e) => e.kind !== "wait");
+  });
+  const skipped = named(takeoverOnly, WAITS);
+  await skipped.run();
+  assert.match(skipped.note ?? "", /the app sends no wait events/, "skipped while it had sent none");
+  await named(takeoverOnly, "one wait per grant: a newer wait takes over").run();
+  await assert.rejects(named(takeoverOnly, GUARD).run(), /the app sent wait events in this run/);
+});
+
+test("an app that sends no wait events passes the last check too (APC 0.11)", async () => {
+  const none = rewrittenPresence((m) => m.filter((e) => e.kind !== "wait"));
+  await named(none, WAITS).run();
+  await named(none, "one wait per grant: a newer wait takes over").run();
+  await named(none, GUARD).run();
+});
+
+test("a revoke that throws while a wait-event check gives its agent back does not hide the check's result (APC 0.11)", async () => {
+  const { adapter } = ordersUnderTest("direct");
+  const take = adapter.page.takePresence.bind(adapter.page);
+  const checks = apcConformance({
+    ...adapter,
+    page: {
+      ...adapter.page,
+      takePresence: () => take().filter((e) => !(e.kind === "wait" && e.state === "closed")),
+      revoke: async () => {
+        throw new Error("revoke broke");
+      },
+    },
+  });
+  await assert.rejects(named(checks, "a cancelled wait publishes closed").run(), /got \[open\]/);
+});
+
+test("the wait-event probe runs once per run, and each check makes one agent (APC 0.11)", async () => {
+  const { adapter } = ordersUnderTest("direct");
+  let probes = 0;
+  let agents = 0;
+  const checks = apcConformance({
+    ...adapter,
+    connect: async () => (agents++, adapter.connect()),
+    fetch: async (request) => {
+      const body = request.method === "POST" ? await request.clone().text() : "";
+      if (body.includes('"wait_for_focus"') && body.includes('"timeout_s":1}')) probes++;
+      return adapter.fetch!(request);
+    },
+  });
+  await named(checks, WAITS).run();
+  await named(checks, "a cancelled wait publishes closed").run();
+  assert.equal(probes, 1);
+  assert.equal(agents, 2);
 });
