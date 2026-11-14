@@ -120,7 +120,7 @@ const api = async (path, body) => {
   if (set) cookie = set.split(";")[0];
   return out;
 };
-const { did } = await api("/api/dock", {});
+const { did } = await api("/api/dock/new", {});
 const base = `/api/d/${did}`;
 let state = await api(`${base}/state`);
 const agent = state.agents[0];

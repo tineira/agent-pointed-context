@@ -78,23 +78,21 @@ function keepCookie(c: Context, did: string, owner: string): void {
 }
 
 /**
- * Resume the visitor's dock, or open a new one. With { resume: true } (the desktop dock's pets, #84,
- * which open beside the dock's own window and must not make a second dock), only resume: 404 without one.
+ * Resume the visitor's dock. It never makes one (TIN-879): with no dock that opens it answers 404 no_dock, and
+ * the page asks the person whether to create a new dock or join one on another computer. `replaced` says the
+ * cookie named a dock that no longer opens (removed on another computer, Start over there, or the dock ended,
+ * TIN-838). { resume: true } (the desktop dock's pets, #84) gets the same answer and only needs the 404.
  */
 app.post("/api/dock", async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { resume?: unknown; desktop?: unknown } | null;
+  const body = (await c.req.json().catch(() => null)) as { desktop?: unknown } | null;
   const current = session(getCookie(c, COOKIE));
   if (current && (await stubFor(c.env, current.did).isOwner(current.owner, labelOf(c, body?.desktop)))) {
     keepCookie(c, current.did, current.owner);
     return c.json({ did: current.did, created: false });
   }
-  if (body?.resume === true) return c.json({ error: "no_dock" }, 404);
-  const did = randomHex(16);
-  const { owner } = await stubFor(c.env, did).init(did, labelOf(c, body?.desktop));
-  keepCookie(c, did, owner);
-  // A cookie that named a dock it no longer opens (removed on another computer, Start over there, or the dock
-  // ended, TIN-838): the page says this is a new dock, with Join beside it, rather than nothing.
-  return c.json({ did, created: true, ...(current ? { replaced: true } : {}) });
+  // A cookie for a dock that is gone goes, so the next visits (the pets poll) carry none and wake no object.
+  if (current) deleteCookie(c, COOKIE, { path: "/" });
+  return c.json({ error: "no_dock", ...(current ? { replaced: true } : {}) }, 404, { "cache-control": "no-store" });
 });
 
 /**
@@ -112,6 +110,25 @@ function fromThisSite(c: Context): boolean {
   if (origin) return origin === new URL(c.req.url).origin;
   return ["same-origin", "none", undefined].includes(c.req.header("sec-fetch-site"));
 }
+app.use("/api/dock/new", async (c, next) => (fromThisSite(c) ? next() : c.json({ ok: false, error: "forbidden" }, 403)));
+/**
+ * Create a dock (TIN-879): only when the person chose Create a new dock, and only from the dock's own page (a
+ * page on another site must not be able to mint docks in the visitor's browser). A visitor whose dock still
+ * opens gets that one back, so a second Create after the first returned makes no second dock. Two Creates in flight at once, from two tabs with no cookie, can still make two: the last cookie wins and the other dock ends by itself.
+ */
+app.post("/api/dock/new", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { desktop?: unknown } | null;
+  const current = session(getCookie(c, COOKIE));
+  const label = labelOf(c, body?.desktop);
+  if (current && (await stubFor(c.env, current.did).isOwner(current.owner, label))) {
+    keepCookie(c, current.did, current.owner);
+    return c.json({ did: current.did, created: false });
+  }
+  const did = randomHex(16);
+  const { owner } = await stubFor(c.env, did).init(did, label);
+  keepCookie(c, did, owner);
+  return c.json({ did, created: true }, 200, { "cache-control": "no-store" });
+});
 app.use("/api/dock/join", async (c, next) => (fromThisSite(c) ? next() : c.json({ ok: false, error: "forbidden" }, 403)));
 app.use("/api/dock/join/status", async (c, next) => (fromThisSite(c) ? next() : c.json({ ok: false, error: "forbidden" }, 403)));
 app.post("/api/dock/join", async (c) => {
