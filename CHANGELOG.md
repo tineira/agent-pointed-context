@@ -8,7 +8,7 @@ Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged 
 
 ### Removing a computer from the dock gives every agent a new MCP URL (2026-11-14, TIN-909)
 
-- **A computer removed from a dock, or one that leaves it, can no longer use the agents' MCP URLs it saw.** Every agent gets a new secret, the old URLs answer 404 `unknown_agent`, requests still running on them are cut, drag tickets go, pairings stay, and the dock asks the person to reconnect each connected agent with its new URL; agent traffic alone now keeps a dock at most 30 days after a computer last opened it. Found by the APC 1.0 security review; the contract does not change. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/web/setup.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/web/computers.tsx`, `apps/dock/test/rotate-on-remove.test.ts`, `DESIGN.md`)
+- **A computer removed from a dock, or one that leaves it, can no longer use the agents' MCP URLs it saw.** Every agent gets a new secret, the old URLs answer 404 `unknown_agent`, requests still running on them are cut, drag tickets go, pairings stay, and the dock asks the person to reconnect each connected agent with its new URL; every owner route checks the computer again in the same step as its call, so one removed meanwhile gets nothing. Found by the APC 1.0 security review; the contract does not change. (`apps/dock/src/worker/hub.ts`, `apps/dock/src/worker/index.ts`, `apps/dock/src/web/setup.tsx`, `apps/dock/src/web/hub.tsx`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/web/computers.tsx`, `apps/dock/test/rotate-on-remove.test.ts`, `apps/dock/test/computers.test.ts`, `DESIGN.md`)
 
 ### An agent not connected yet no longer drags its MCP URL (2026-11-14, TIN-908)
 

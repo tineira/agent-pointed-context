@@ -1,16 +1,14 @@
 /**
  * Removing a computer cuts it off (TIN-909): it saw every agent's MCP URL in the dock, so when a computer is removed
  * or leaves, every agent gets a new secret. The old URLs answer as an unknown agent's, a request still running on
- * one is cut, the agents keep their pairings, and the dock asks the person to reconnect each connected agent. Agent
- * traffic alone no longer keeps a dock alive forever. The real hub and the real Pulse sandbox (hostile-world.ts).
+ * one is cut, the agents keep their pairings, and the dock asks the person to reconnect each connected agent. The
+ * real hub and the real Pulse sandbox (hostile-world.ts).
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { asResult, DOCK, fakeApp, PULSE, rpcAnswer, world, type Json } from "./hostile-world.ts";
 
 const SHOP = "https://shop.example";
-
-const { AGENT_ALONE_TTL_MS, DOCK_TTL_MS } = await import(new URL("../src/worker/hub.ts", import.meta.url).href);
 
 type World = Awaited<ReturnType<typeof world>>;
 
@@ -91,7 +89,7 @@ test("after leave, the same: the computer that left can no longer use the URLs i
 
 test("a request still running on an old URL is cut when the computer is removed, and delivers nothing", async (t) => {
   const { w, first, second, oldUrl } = await linkedDock(t, { APP_ORIGINS: `${PULSE},${SHOP}` }, false);
-  // A second app whose page is open: the hub's wait relayed to it holds 2 s, then finds a pin.
+  // A second app whose page is open: the hub's wait relayed to it holds 3 s, then finds a pin.
   const shop = fakeApp(SHOP, "Shop");
   w.apps.set(SHOP, shop);
   const who = await w.agent();
@@ -99,41 +97,14 @@ test("a request still running on an old URL is cut when the computer is removed,
   assert.deepEqual(await w.hub.decide(asked.pairing_id, "approve", "K7M4P2"), { ok: true });
   const pin = { app: { id: "shop", name: "Shop" }, target: { kind: "order", id: "o1" }, label: "Order 1", pinned_at: new Date().toISOString(), next: "get_current_view" };
   shop.respond = (method: string, params: Json) =>
-    method === "tools/call" && params.name === "wait_for_focus" ? new Promise<Response>((resolve) => setTimeout(() => resolve(rpcAnswer(asResult({ focus: pin, timed_out: false, page_open: true }))), 2000)) : null;
+    method === "tools/call" && params.name === "wait_for_focus" ? new Promise<Response>((resolve) => setTimeout(() => resolve(rpcAnswer(asResult({ focus: pin, timed_out: false, page_open: true }))), 3000)) : null;
   const waiting = post(w, oldUrl, "tools/call", { name: "wait_for_focus", arguments: { timeout_s: 5 } });
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal((await w.agent()).waiting, true, "the wait holds its place");
+  const cutAt = Date.now();
   assert.deepEqual(await w.hub.removeDevice(second.id, first.secret), { ok: true });
   assert.deepEqual(await waiting, { status: 404, json: { error: "unknown_agent" } });
-});
-
-test("agent traffic alone keeps a dock no longer than AGENT_ALONE_TTL_MS after a computer last opened it", async (t) => {
-  const w = await world(t);
-  const url = (await w.agent()).mcp_url;
-  const meta = (key: string) => Number((w.hubRoom.db.prepare("select value from meta where key = ?").get(key) as { value: string }).value);
-  const opened = Date.now() - AGENT_ALONE_TTL_MS + 60 * 60_000;
-  w.hubRoom.db.prepare("update meta set value = ? where key = 'opened_at'").run(String(opened));
-  w.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() + 60_000));
-  assert.equal((await initialize(w, url)).status, 200);
-  assert.equal(meta("expires_at"), opened + AGENT_ALONE_TTL_MS, "an agent's call slides the end only up to the cap");
-  // Past the cap, an agent's call never brings the dock back.
-  w.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() - 1));
-  assert.equal((await initialize(w, url)).status, 404);
-});
-
-test("a computer's visit still slides the dock's end DOCK_TTL_MS; a dock from before counts its computers' last use", async (t) => {
-  const opened = Date.now() - AGENT_ALONE_TTL_MS + 60 * 60_000;
-  const w2 = await world(t);
-  const secret = (w2.hubRoom.db.prepare("select secret from devices").get() as { secret: string }).secret;
-  w2.hubRoom.db.prepare("update meta set value = ? where key = 'opened_at'").run(String(opened));
-  const at = Date.now();
-  assert.equal(await w2.hub.isOwner(secret), true);
-  const end = Number((w2.hubRoom.db.prepare("select value from meta where key = 'expires_at'").get() as { value: string }).value);
-  assert.ok(end >= at + DOCK_TTL_MS, "a computer's visit slides the end DOCK_TTL_MS");
-  // A dock from before has no mark: its computers' last use stands for it.
-  w2.hubRoom.db.prepare("delete from meta where key = 'opened_at'").run();
-  w2.hubRoom.db.prepare("update devices set last_used_at = ?").run(new Date(opened).toISOString());
-  w2.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() + 60_000));
-  assert.equal((await initialize(w2, (await w2.agent()).mcp_url)).status, 200);
-  assert.equal(Number((w2.hubRoom.db.prepare("select value from meta where key = 'expires_at'").get() as { value: string }).value), opened + AGENT_ALONE_TTL_MS);
+  // Cut at once, not when the app's wait answers 3 s in: the abort reaches the running wait.
+  assert.ok(Date.now() - cutAt < 1500, `answered ${Date.now() - cutAt} ms after the removal`);
+  assert.equal((await w.agent()).waiting, false, "the wait gave its place up");
 });

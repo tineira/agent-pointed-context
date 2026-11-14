@@ -277,6 +277,51 @@ test("a computer removes another, never itself; the removed one's cookie stops o
   assert.equal(env.HUB.objects.size, docks);
 });
 
+/** `who` joins A's dock: a code from A, a yes on A, its secret collected. */
+async function joinDock(env: Json, a: ReturnType<typeof computer>, did: string, who: ReturnType<typeof computer>) {
+  const code = (await a.send(`/api/d/${did}/link`, {})).json.code;
+  const claim = (await who.send("/api/dock/join", { code })).json.claim;
+  await a.send(`/api/d/${did}/joins/${(await a.state(did)).joins[0].id}`, { action: "approve" });
+  assert.equal((await who.send("/api/dock/join/status", { claim })).json.status, "joined");
+}
+
+test("a computer removed between the Worker's cookie check and its call reads and does nothing: not the agents' new MCP URLs (TIN-909)", async () => {
+  const env = world();
+  const a = computer(env, CHROME_WIN);
+  const b = computer(env, EDGE_WIN);
+  const c = computer(env, FIREFOX_MAC);
+  const did = await a.open();
+  await joinDock(env, a, did, b);
+  await joinDock(env, a, did, c);
+  const hub = env.HUB.objects.get(did).object;
+  const devices = (await a.state(did)).devices as Json[];
+  const agentId = (await a.state(did)).agents[0].id as string;
+  // The cookie check passes, and then, before the route's own call, A removes the computer asking.
+  const isOwner = hub.isOwner.bind(hub);
+  let removeAfterCheck: { secret: string; id: string } | null = null;
+  hub.isOwner = async (secret: string, label: string | null) => {
+    const ok = await isOwner(secret, label);
+    if (removeAfterCheck?.secret === secret) {
+      const { id } = removeAfterCheck;
+      removeAfterCheck = null;
+      assert.deepEqual(await hub.removeDevice(id, a.cookie.split(".")[1]!), { ok: true });
+    }
+    return ok;
+  };
+  removeAfterCheck = { secret: b.cookie.split(".")[1]!, id: devices[1]!.id };
+  const read = await b.send(`/api/d/${did}/state`);
+  assert.deepEqual([read.status, read.json], [404, { error: "dock_expired" }], "the state, with the rotated URLs, is not given");
+  const rotated = (await a.state(did)).agents.map((x: Json) => new URL(x.mcp_url).pathname.split("/")[3]);
+  assert.equal(rotated.some((s: string) => JSON.stringify(read.json).includes(s)), false);
+  // Nor an action: a drag ticket for the agent.
+  removeAfterCheck = { secret: c.cookie.split(".")[1]!, id: devices[2]!.id };
+  const ticket = await c.send(`/api/d/${did}/agents/${agentId}/ticket`, {});
+  assert.deepEqual([ticket.status, ticket.json], [404, { error: "dock_expired" }]);
+  assert.equal(env.HUB.objects.get(did).room.db.prepare("select count(*) as n from tickets").get()!.n, 0);
+  // The computer that stays is unaffected.
+  assert.equal((await a.send(`/api/d/${did}/state`)).status, 200);
+});
+
 test("Remove unpairs every browser sending page readings, and a page socket from before this change is closed to come back tagged", async () => {
   const env = world();
   const a = computer(env, CHROME_WIN);
