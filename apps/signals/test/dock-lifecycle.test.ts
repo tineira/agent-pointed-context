@@ -35,6 +35,11 @@ const signals: DockAppUnderTest = {
   link: (state, grantId) => (state as unknown as State).grants.find((g) => g.id === grantId && g.path === "dock"),
   pinned: (state, grantId) => (state as unknown as State).grants.find((g) => g.id === grantId)?.pin?.id ?? null,
   grantIds: (state) => (state as unknown as State).grants.map((g) => g.id),
+  direct: async (object, room) => {
+    const made = await (object as unknown as { addDirectGrant(): Promise<{ grant_id: string }> }).addDirectGrant();
+    const row = room.db.prepare("select secret from grants where id = ?").get(made.grant_id) as { secret: string };
+    return { id: made.grant_id, secret: row.secret };
+  },
 };
 
 dockLifecycleTests(signals);

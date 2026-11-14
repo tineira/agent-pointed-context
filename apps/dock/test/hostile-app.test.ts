@@ -379,7 +379,9 @@ test("apc_link (APC 0.4): the hub names the agent's own MCP client to a verified
   const app = fakeApp("https://evil.example", "Pulse", { respond: (method, params) => (method === "initialize" ? void seen.push(params) : undefined) });
   assert.equal((await w.pairApp(app)).ok, true);
   assert.equal(seen.length, 1, "the hub introduced itself to the unverified app");
-  assert.equal("_meta" in seen[0]!, false, "with no word of the agent's client");
+  const meta = (seen[0] as { _meta?: Record<string, unknown> })._meta ?? {};
+  assert.equal("apc.tineira.com/agent_client" in meta, false, "with no word of the agent's client");
+  assert.deepEqual(Object.keys(meta).sort(), ["apc.tineira.com/agent", "apc.tineira.com/pairing_id"], "only the binding (H8, APC 0.12), which every app gets");
   // Pulse, verified, is told: with the agent also connected directly, its own result carries an offer.
   const direct = await w.pulse.addAgentGrant();
   const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "2" } } };

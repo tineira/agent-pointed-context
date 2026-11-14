@@ -55,6 +55,8 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   const workerEnv = { ...sandboxEnv, SANDBOX: { idFromName: (name: string) => name, get: (id: string) => (id === SID ? sandbox : new Sandbox(durableObjectRoom().ctx, sandboxEnv)) } };
   const hub = standInHub({
     origin: hubOrigin,
+    // The hub's clock runs from the day 0.12.0 was tagged, inside the window for hubs before 0.12, whatever day this runs.
+    now: ((started) => () => Date.parse("2026-11-14T12:00:00Z") + (Date.now() - started))(Date.now()),
     // The hub reaches Pulse as it does in production: the grant's MCP URL, and the public /apc/revoke (M7, APC 0.10).
     app: async (request) => (new URL(request.url).pathname === "/apc/revoke" ? worker.fetch(request, workerEnv) : sandbox.fetch(request)),
   });
@@ -135,6 +137,7 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
               room,
               object: () => sandbox,
               restart: () => void (sandbox = new Sandbox(room.ctx, sandboxEnv)),
+              directGrant: () => connectOn("direct"),
             }),
           },
         }

@@ -11,8 +11,10 @@
  * relays. The code gates the honest hub's approval, and that hub's `initialize` is the dock owner's yes
  * (H1); the code never gates the app's data path. Against a hub that breaks H1, or someone holding the
  * URL, the URL is the credential, as in 0.9: no app can detect a breach of H1, and hub conformance and the
- * operator's allowlist are the controls. Other ways to authenticate the app-to-dock link are left open for
- * future versions.
+ * operator's allowlist are the controls. Since 0.12 the binding (H8, M10 to M12; `bindingVerdict` in core.ts)
+ * ties the hub's `initialize` to the app's own `/apc/pair` call for that agent, so a URL the app did not hand to
+ * that pairing never goes live. It does not stop a drop's ticket being relayed through a real account on the
+ * app; closing that is planned before 1.0.
  *
  * ## The grant's states, in order of precedence
  *
@@ -183,6 +185,9 @@ export function dockGrantCallOf(message: { method: string; id?: string | number 
  * | `tools/call` | 404 | tool error `pairing` | serve | core: idle shape; other: tool error `idle` | 404 | revoked |
  * | other methods | 404 | -32000 `pairing` | serve | -32000 `idle` | 404 | revoked |
  * | notifications | 404 | 202, ignored | serve | serve | 404 | revoked |
+ *
+ * Since 0.12 (M11), `initialize` in handoff, live or dormant is `not_found` (HTTP 404, the state unchanged) when
+ * `options.binding` is `"mismatch"` (`bindingVerdict`): it does not carry the grant's own pairing.
  */
 export type DockGrantAnswerKind =
   | { kind: "serve"; commits: boolean; wakes: false }
@@ -193,7 +198,10 @@ export type DockGrantAnswerKind =
   | { kind: "idle_shape" }
   | { kind: "ignored" };
 
-export function dockGrantAnswer(state: DockGrantState, call: DockGrantCall): DockGrantAnswerKind {
+export function dockGrantAnswer(state: DockGrantState, call: DockGrantCall, options: { binding?: "holds" | "mismatch" } = {}): DockGrantAnswerKind {
+  // M11 (APC 0.12): an initialize that does not hold the grant's binding is a 404 wherever it would be served;
+  // revoked, ended and in flight answer first, as before.
+  if (call === "initialize" && options.binding === "mismatch" && (state === "handoff" || state === "live" || state === "dormant")) return { kind: "not_found" };
   switch (state) {
     case "revoked":
       return { kind: "revoked" };
@@ -261,8 +269,13 @@ export type DockDropError = "hub_not_allowed" | "consent_expired" | "pairing_in_
  *   `APC_JSON_PAIRING_MAX_AGE_S` old (fetched fresh on `/apc/pair`, or a `max-age` of 60 or less); a 5xx or
  *   unreachable `apc.json` never falls back to a stale copy that lists `dock`: the pairing is refused
  *   (`apc_json_unreachable`).
+ * - **H8** (0.12). Every `initialize` the hub sends to a grant carries the pairing's `pairing_id` in
+ *   `params._meta[APC_PAIRING_ID_META]` and its agent's handle in `params._meta[APC_AGENT_META]`, to every app,
+ *   and `/apc/pair` answers with `binding: "pairing_id"`. A `pairing_id` matches `PAIRING_ID_RE`, holds at least
+ *   128 random bits, is unique across the hub, never changes while its pairing exists, and authorizes nothing at
+ *   the hub.
  */
-export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7";
+export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" | "H8";
 
 /**
  * The app MUSTs around the hub call (APC 0.10):
@@ -290,5 +303,18 @@ export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7";
  * - **M8. `apc.json`** lists `dock` only while the app can pair (its config is present), computed per request
  *   or cached `APC_JSON_PAIRING_MAX_AGE_S` at most.
  * - **M9.** The app sends hub requests to the parsed `url.origin` of M1, never to the raw `hub` string.
+ * - **M10** (0.12). Whether a grant is a Dock grant comes from the app's own record of how it made it, never from
+ *   its URL, the request or its client. With the move out of in flight (the same atomic step) the app stores the
+ *   hub's origin, the agent, the acknowledgement's `pairing_id` and whether it declared `binding`
+ *   (`DockBinding`); they never change. An acknowledgement whose `binding` is unknown, or declared with an id out
+ *   of form, is a refusal (`declaredBinding`). The app reads the keys from the body it gates on.
+ * - **M11** (0.12). On a Dock grant in handoff, live or dormant, an `initialize` that does not hold the binding
+ *   (`bindingVerdict`) gets HTTP 404, the state unchanged, SHOULD with `{ error: "pairing_mismatch" }`. Every
+ *   `initialize` in a request counts, in a batch or without an `id`.
+ * - **M12** (0.12). On a grant that is not a Dock grant, a request carrying an `initialize` with either binding
+ *   key (`hasBindingKey`) gets HTTP 404 before any other answer, revoked included; the grant is unchanged.
  */
-export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9";
+export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12";
+
+/** The error a 404 of M11 or M12 SHOULD carry (APC 0.12). A hub reads it only as this exact token. */
+export const PAIRING_MISMATCH_ERROR = "pairing_mismatch";

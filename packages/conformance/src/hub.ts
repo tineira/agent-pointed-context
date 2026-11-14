@@ -31,9 +31,16 @@
  *   app called (M9) and `bodies` every body it sent (the code only in `/apc/pair`); `forget()` drops a pairing without giving it back (it expired at the hub, so `/apc/confirm`
  *   answers `not_paired`); `decide(…, { introduce: false })` approves without the hub's `initialize`.
  *
+ * - **Since 0.12** (the binding, H8): pairing ids are `pr_` and 32 hex (128 bits), `/apc/pair` declares
+ *   `binding: "pairing_id"`, and the hub's `initialize` names the pairing and its agent in `_meta`. `"ack_unbound"`
+ *   is a hub before 0.12 (no `binding`, no `_meta`), `"ack_unknown_binding"` declares a scheme no app knows. The
+ *   answers of the broken modes (`"redirect"`, `"error_500"`) keep their short ids and declare nothing: an app refuses
+ *   them anyway. `decide` records how the app answered the introduction (`refused` on any 4xx or JSON-RPC error),
+ *   and `calls` every method the hub sent to the pairing's grant. `now()` is the hub's clock (the `now` option).
+ *
  * It never shows a code: `received` keeps what the app sent, for the checks to compare with what the app showed.
  */
-import { HUB_ANSWER_MAX_BYTES, normalizePairingCode, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, TICKET_TTL_MS } from "@tineira/apc-protocol";
+import { APC_AGENT_META, APC_PAIRING_ID_META, HUB_ANSWER_MAX_BYTES, normalizePairingCode, PAIRING_BINDING, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, TICKET_TTL_MS } from "@tineira/apc-protocol";
 
 export type StandInHubMode =
   | "ack"
@@ -51,7 +58,9 @@ export type StandInHubMode =
   | "ack_with_length"
   | "slow_headers"
   | "slow_headers_then_body"
-  | "slow_headers_then_stall";
+  | "slow_headers_then_stall"
+  | "ack_unbound"
+  | "ack_unknown_binding";
 
 /** A `/apc/pair` answer kept back (`hold()`): what the app sent once it arrives, and the release. */
 export interface StandInHold {
@@ -66,10 +75,15 @@ export interface StandInPairing {
   agent: string;
   mcp_url: string;
   app_origin: string;
-  status: "pending" | "paired";
+  /** `refused`: approved, and the app did not serve the hub's introduction (any 4xx, or a JSON-RPC error). */
+  status: "pending" | "paired" | "refused";
   /** The code the app sent, raw, until it is typed right; null for an app that sent none. */
   pairing_code: string | null;
   attempts: number;
+  /** The acknowledgement declared the binding (APC 0.12): the hub's `initialize` names the pairing and its agent. */
+  bound: boolean;
+  /** Every JSON-RPC method the hub sent to the pairing's grant, oldest first. */
+  calls: string[];
 }
 
 export interface StandInHubOptions {
@@ -116,6 +130,13 @@ export interface StandInHub {
   forget(pairingId: string): void;
   /** Ends every stall of `"slow_body"`, `"slow_headers"`, `"slow_headers_then_body"` and `"slow_headers_then_stall"`. */
   releaseStalls(): void;
+  /** The hub's clock, ms since the epoch: the `now` option, Date.now by default. */
+  now(): number;
+  /**
+   * A `pairing_id` the hub's `/apc/confirm` answer carries, when set (null by default): a later hub answer naming
+   * another pairing, which an app must never take as the grant's binding (APC 0.12, M10).
+   */
+  confirmPairingId: string | null;
 }
 
 const randomHex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -155,10 +176,16 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     });
   const json = (body: unknown, status = 200) => Response.json(body, { status });
 
-  const callApp = async (url: string, body: unknown) => {
-    if (!options.app) return;
+  /** Whether the app served the request: HTTP 2xx and, for JSON, no JSON-RPC error (null without an app). */
+  const callApp = async (url: string, body: unknown): Promise<boolean | null> => {
+    if (!options.app) return null;
     const response = await options.app(new Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) }));
-    await response.body?.cancel().catch(() => {});
+    if (response.status < 200 || response.status >= 300) {
+      await response.body?.cancel().catch(() => {});
+      return false;
+    }
+    const text = await response.text().catch(() => "");
+    return !/"error"\s*:\s*\{/.test(text);
   };
   const giveBack = async (p: StandInPairing) => {
     pairings.splice(pairings.indexOf(p), 1);
@@ -178,17 +205,19 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     if (b.pairing_code !== undefined && !code) return json({ ok: false, error: "invalid_pairing_code" }, 400);
     if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
     tickets.delete(b.ticket);
-    const p: StandInPairing = { id: `pr_${randomHex(6)}`, agent: b.agent, mcp_url: b.mcp_url, app_origin: app.origin, status: "pending", pairing_code: code, attempts: 0 };
+    // 128 random bits, unique (H8, APC 0.12); the binding is declared unless the mode is a hub before 0.12.
+    const p: StandInPairing = { id: `pr_${randomHex(16)}`, agent: b.agent, mcp_url: b.mcp_url, app_origin: app.origin, status: "pending", pairing_code: code, attempts: 0, bound: true, calls: [] };
     pairings.push(p);
-    return json({ ok: true, pairing_id: p.id, status: "pending", agent: { name: "Agent via dock", icon: null }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}) });
+    return json({ ok: true, pairing_id: p.id, status: "pending", agent: { name: "Agent via dock", icon: null }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}), binding: PAIRING_BINDING });
   };
 
   const confirm = (body: Record<string, unknown>): Response => {
     if (!live(body.ticket, body.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
     const p = pairings.find((x) => x.agent === body.agent && x.mcp_url === body.mcp_url);
-    if (!p) return json({ ok: false, error: "not_paired" }, 400);
+    // A pairing the app refused to be introduced to is ended at the hub (H5): not paired.
+    if (!p || p.status === "refused") return json({ ok: false, error: "not_paired" }, 400);
     tickets.delete(body.ticket as string);
-    return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null } });
+    return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null }, ...(hub.confirmPairingId ? { pairing_id: hub.confirmPairingId } : {}) });
   };
 
   /** What `path` (`/apc/pair` or `/apc/confirm`) answers in `mode`. */
@@ -218,6 +247,16 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     const answer = path === "/apc/pair" ? pair(body) : confirm(body);
     if (mode === "ack") return answer;
     const text = await answer.text();
+    if (mode === "ack_unbound" || mode === "ack_unknown_binding") {
+      if (!answer.ok) return new Response(text, { status: answer.status, headers: { "content-type": "application/json" } });
+      const rest = JSON.parse(text) as Record<string, unknown>;
+      const p = pairings.find((x) => x.id === rest.pairing_id);
+      if (mode === "ack_unbound") {
+        delete rest.binding;
+        if (p) p.bound = false;
+      } else rest.binding = "hmac-v9";
+      return json(rest);
+    }
     const headers = (more: Record<string, string> = {}) => ({ "content-type": "application/json", ...more });
     switch (mode) {
       case "no_ack": {
@@ -377,8 +416,17 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       }
       p.status = "paired";
       if (decideOptions?.introduce === false) return { ok: true };
-      // The hub introduces itself to the app, as a real one does on approval.
-      await callApp(p.mcp_url, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", title: "Agent via dock", version: "0.9.0" } } });
+      // The hub introduces itself to the app, as a real one does on approval, naming the pairing (H8, APC 0.12).
+      p.calls.push("initialize");
+      const meta = p.bound ? { _meta: { [APC_PAIRING_ID_META]: p.id, [APC_AGENT_META]: p.agent } } : {};
+      const served = await callApp(p.mcp_url, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", title: "Agent via dock", version: "0.12.0" }, ...meta } });
+      // An introduction the app did not serve: the pairing never goes live, and the hub sends it nothing more (H1, H5).
+      if (served === false) p.status = "refused";
+      else if (served === true) {
+        // Served: the hub learns the app's tools, as a real one does after its introduction.
+        p.calls.push("tools/list");
+        await callApp(p.mcp_url, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+      }
       return { ok: true };
     },
     async expire() {
@@ -403,6 +451,8 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       const i = pairings.findIndex((p) => p.id === pairingId);
       if (i >= 0) pairings.splice(i, 1);
     },
+    now,
+    confirmPairingId: null,
     releaseStalls() {
       for (const c of stalls) {
         try {

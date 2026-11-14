@@ -22,7 +22,7 @@ function hubAnswering(answer: (init: RequestInit) => Response | Promise<Response
 
 test("the acknowledgement on a 200 pairs; the call never follows a redirect and carries the code in the body only", async () => {
   const hub = hubAnswering(() => Response.json(ACK));
-  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hub.fetch }), { ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Claude via dock", icon: null } });
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: hub.fetch }), { ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Claude via dock", icon: null }, binding: null });
   assert.equal(hub.sent[0]!.url, `${HUB}/apc/pair`);
   assert.equal(hub.sent[0]!.init.redirect, "manual");
   assert.ok(hub.sent[0]!.init.signal, "a time limit");
@@ -301,7 +301,7 @@ function workersFetch(answer: () => Response) {
 
 test("on the Workers runtime the hub call is sent, never follows a redirect, and refuses the 3xx (M2)", async () => {
   const ok = workersFetch(() => Response.json(ACK));
-  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: ok.fetch }), { ok: true, pairing_id: ACK.pairing_id, status: "pending", agent: ACK.agent });
+  assert.deepEqual(await pairWithHub(HUB, BODY, { fetch: ok.fetch }), { ok: true, pairing_id: ACK.pairing_id, status: "pending", agent: ACK.agent, binding: null });
   assert.equal(ok.sent.length, 1, "the pairing was sent");
   assert.equal(ok.sent[0]!.redirect, "manual", "redirects are never followed");
   const confirm = { ticket: BODY.ticket, agent: "ag_1", mcp_url: BODY.mcp_url };

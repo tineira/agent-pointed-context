@@ -49,6 +49,7 @@
  * what happens in the page.
  */
 import type { FocusPayload, ViewPayload } from "./types.ts";
+import type { DockGrantState } from "./dock.ts";
 
 /** How an agent reaches an app. An app offers one or both; the core is the same on each. */
 export type ApcProfile = "direct" | "dock";
@@ -361,10 +362,138 @@ export interface DockPairRequest {
   pairing_code?: string;
 }
 
-/** The hub's answer to `/apc/pair`: HTTP 200 with the acknowledgement, or HTTP 400 with the reason. */
+/**
+ * The hub's answer to `/apc/pair`: HTTP 200 with the acknowledgement, or HTTP 400 with the reason. Since 0.12 the
+ * acknowledgement declares `binding: "pairing_id"` (`PAIRING_BINDING`): the hub names this pairing on every
+ * `initialize` it sends to the grant (the binding, below).
+ */
 export type DockPairAnswer =
-  | { ok: true; pairing_id: string; status: "pending"; agent: { name: string; icon: string | null }; pairing_code: typeof PAIRING_CODE_ACK }
+  | { ok: true; pairing_id: string; status: "pending"; agent: { name: string; icon: string | null }; pairing_code: typeof PAIRING_CODE_ACK; binding?: typeof PAIRING_BINDING }
   | { ok: false; error: string };
+
+/**
+ * The binding (Dock profile, APC 0.12). The pairing code proves that the dock's owner read a code; the binding
+ * proves that the grant the hub introduces itself to is the one the app handed to this pairing, for this agent.
+ *
+ * - **The hub (H8)** puts, on every `initialize` it sends to a grant, the pairing's `pairing_id` in
+ *   `params._meta[APC_PAIRING_ID_META]` and the pairing's agent handle in `params._meta[APC_AGENT_META]`, for
+ *   every app, and answers `/apc/pair` with `binding: "pairing_id"`. A `pairing_id` matches `PAIRING_ID_RE`,
+ *   holds at least 128 random bits, is unique across the hub, never changes while its pairing exists, and
+ *   authorizes nothing at the hub. Neither value is a secret: the agent handle is public (it is in the drag), and
+ *   the app already had the `pairing_id` from its own acknowledgement. The check is equality with what the app
+ *   stored from its own call, which nobody else can write.
+ * - **The app (M10 to M12)** stores, with the move out of in flight, the hub's origin (context, not a check: the
+ *   `initialize` names no hub), the agent, the `pairing_id` and whether `binding` was declared; refuses an
+ *   `initialize` whose values differ from those (`bindingVerdict`); and refuses, before anything else, an
+ *   `initialize` carrying either key on a grant that is not a Dock grant.
+ * - **Reading the keys** has three outcomes (`readBindingKey`): absent, invalid (present but not a string of the
+ *   key's form: a number, `""`, an over-long string) and valid. Invalid counts as a mismatch, never as absent.
+ */
+export const PAIRING_BINDING = "pairing_id";
+/** The `_meta` key of the hub's `initialize` that carries the pairing's id (APC 0.12). */
+export const APC_PAIRING_ID_META = "apc.tineira.com/pairing_id";
+/** The `_meta` key of the hub's `initialize` that carries the pairing's agent handle (APC 0.12). Public, no authority. */
+export const APC_AGENT_META = "apc.tineira.com/agent";
+/** A declared binding's `pairing_id`: 22 to 64 of `A–Z a–z 0–9 _ -` (22 characters of base64url are 128 bits). */
+export const PAIRING_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
+/** The binding's agent key: the drag's agent handle grammar. */
+const BINDING_AGENT_RE = /^[\w.:-]{1,128}$/;
+/** What a stored `pairing_id` may be (a declared one, or one a hub before 0.12 acknowledged and the app kept). */
+const STORED_PAIRING_ID_RE = /^[\x21-\x7e]{1,128}$/;
+
+/** One `_meta` key of an `initialize`, read: not there, there but not of its form, or a value of its form. */
+export type BindingKey = { kind: "absent" } | { kind: "invalid" } | { kind: "valid"; value: string };
+
+function metaOf(message: unknown): Record<string, unknown> | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return null;
+  const params = (message as { params?: unknown }).params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return null;
+  const meta = (params as { _meta?: unknown })._meta;
+  return meta && typeof meta === "object" && !Array.isArray(meta) ? (meta as Record<string, unknown>) : null;
+}
+
+/**
+ * Reads `params._meta[key]` of one JSON-RPC message (APC 0.12): `absent` when `params`, `_meta` or the key is
+ * not there (an own property), `invalid` when the key is there with anything but a string of its form, `valid`
+ * otherwise. For `APC_PAIRING_ID_META` the form is `STORED_PAIRING_ID_RE` (any printable ASCII up to 128: a
+ * comparison with what the app stored decides the rest); for `APC_AGENT_META`, the drag's agent handle.
+ */
+export function readBindingKey(message: unknown, key: typeof APC_PAIRING_ID_META | typeof APC_AGENT_META): BindingKey {
+  const meta = metaOf(message);
+  if (!meta || !Object.prototype.hasOwnProperty.call(meta, key)) return { kind: "absent" };
+  const value = meta[key];
+  const form = key === APC_AGENT_META ? BINDING_AGENT_RE : STORED_PAIRING_ID_RE;
+  return typeof value === "string" && form.test(value) ? { kind: "valid", value } : { kind: "invalid" };
+}
+
+/** Whether a message carries either binding key, with any value (M12 keys on presence). */
+export function hasBindingKey(message: unknown): boolean {
+  const meta = metaOf(message);
+  return !!meta && (Object.prototype.hasOwnProperty.call(meta, APC_PAIRING_ID_META) || Object.prototype.hasOwnProperty.call(meta, APC_AGENT_META));
+}
+
+/** The messages of a request body: each element of a batch, or the one message. */
+export function rpcMessages(body: unknown): unknown[] {
+  return Array.isArray(body) ? body : [body];
+}
+
+/** Whether a message is an introduction: its `method` is `"initialize"`, with or without an `id`. */
+export function isInitializeMessage(message: unknown): boolean {
+  return !!message && typeof message === "object" && !Array.isArray(message) && (message as { method?: unknown }).method === "initialize";
+}
+
+/**
+ * What a Dock grant stored when the hub acknowledged it (M10, APC 0.12). `pairing_id` is null for a grant from
+ * before the app stored one; `declared` is whether the acknowledgement carried `binding: "pairing_id"`.
+ */
+export interface DockBinding {
+  pairing_id: string | null;
+  agent: string;
+  declared: boolean;
+}
+
+/** Equal strings, in time that does not depend on where they differ (the values are not secret: hygiene). */
+function sameString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Whether one `initialize` holds the grant's binding (M11, APC 0.12), on a Dock grant in handoff, live or
+ * dormant: `mismatch` when its `pairing_id` is invalid, or valid and other than a stored one; when its agent
+ * is invalid, or valid and other than the stored one; or, on a declared grant, when its `pairing_id` is absent
+ * in handoff (and, for an app that allows more than one hub, `multiHub`, in every state). An absent value is
+ * otherwise served, so a hub rolled back to 0.11 never ends a live pairing, and a hub before 0.12 (which sends
+ * neither key) pairs as before.
+ */
+export function bindingVerdict(message: unknown, binding: DockBinding, state: DockGrantState, options: { multiHub?: boolean } = {}): "holds" | "mismatch" {
+  const id = readBindingKey(message, APC_PAIRING_ID_META);
+  const agent = readBindingKey(message, APC_AGENT_META);
+  if (id.kind === "invalid" || agent.kind === "invalid") return "mismatch";
+  if (id.kind === "valid" && binding.pairing_id !== null && !sameString(id.value, binding.pairing_id)) return "mismatch";
+  if (agent.kind === "valid" && !sameString(agent.value, binding.agent)) return "mismatch";
+  if (id.kind === "absent" && binding.declared && (state === "handoff" || options.multiHub)) return "mismatch";
+  return "holds";
+}
+
+/**
+ * The binding a hub's acknowledgement declares, read by an app (APC 0.12): `"pairing_id"` with an id of
+ * `PAIRING_ID_RE`; null when it declares none (a hub before 0.12); `"refused"` for any other value of
+ * `binding`, or a declared binding with an id out of form. An app treats `"refused"` as a refusal of the
+ * pairing: an unknown scheme never downgrades it silently.
+ */
+export function declaredBinding(answer: { binding?: unknown; pairing_id?: unknown }): typeof PAIRING_BINDING | null | "refused" {
+  if (answer.binding === undefined) return null;
+  if (answer.binding !== PAIRING_BINDING) return "refused";
+  return typeof answer.pairing_id === "string" && PAIRING_ID_RE.test(answer.pairing_id) ? PAIRING_BINDING : "refused";
+}
+
+/** Whether a stored `pairing_id` is one the app may keep (printable ASCII, at most 128). */
+export function isStoredPairingId(value: unknown): value is string {
+  return typeof value === "string" && STORED_PAIRING_ID_RE.test(value);
+}
 
 /** The other path: Direct for Dock and Dock for Direct. */
 export function oppositePath(path: ApcProfile): ApcProfile {

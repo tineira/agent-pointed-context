@@ -8,10 +8,11 @@ import { test } from "node:test";
 import { apcConformance, ConformanceError, type ApcAppAdapter, type ConformanceCheck } from "../src/index.ts";
 import { dockFixture, type FixtureBreak, type FixtureOptions } from "./dock-fixture.ts";
 
-const ours = (checks: ConformanceCheck[]) => checks.filter((c) => c.name.includes("(dock): 0.10: "));
+/** The Dock checks: those of 0.10, and the binding's of 0.12 (TIN-910). */
+const ours = (checks: ConformanceCheck[]) => checks.filter((c) => c.name.includes("(dock): 0.10: ") || c.name.includes("(dock): 0.12: "));
 const named = (checks: ConformanceCheck[], part: string) => {
   const found = ours(checks).filter((c) => c.name.includes(part));
-  assert.equal(found.length, 1, `one 0.10 check named "${part}", found ${found.length}`);
+  assert.equal(found.length, 1, `one Dock check named "${part}", found ${found.length}`);
   return found[0]!;
 };
 const fails = async (check: ConformanceCheck, message: RegExp) =>
@@ -21,15 +22,21 @@ const fails = async (check: ConformanceCheck, message: RegExp) =>
     return true;
   });
 const NOTE_FREE = /M5/;
+/** The fixture offers only the Dock profile: M12, which needs a Direct agent too, says so (the `bothProfiles` variant runs it). */
+const DOCK_ONLY_NOTE = /0\.12: M12:/;
 
 {
   const { adapter, hub } = dockFixture();
   const checks = ours(apcConformance(adapter));
-  test("the suite has the 0.10 Dock checks", () => assert.equal(checks.length, 31));
+  test("the suite has the Dock checks of 0.10 (31) and of 0.12 (6)", () => {
+    assert.equal(checks.filter((c) => c.name.includes(": 0.10: ")).length, 31);
+    assert.equal(checks.filter((c) => c.name.includes(": 0.12: ")).length, 6);
+  });
   for (const check of checks) {
     test(`the conforming fixture passes, and every grant the check made is given back: ${check.name}`, async () => {
       await check.run();
       if (NOTE_FREE.test(check.name)) assert.match(check.note ?? "", /refused with pairing_in_progress/, "the M5 probe says what it saw");
+      else if (DOCK_ONLY_NOTE.test(check.name)) assert.match(check.note ?? "", /not checked: the app does not offer both profiles/);
       else assert.equal(check.note, undefined, `no note: ${check.note}`);
       // The suite leaves no grant behind: each one the hub paired answers 404 (ended) or 403 (revoked).
       for (const url of new Set(hub.received.map((b) => b.mcp_url).filter((u): u is string => typeof u === "string"))) {
@@ -53,6 +60,7 @@ const allowed: Array<[string, FixtureOptions, string[], RegExp?]> = [
   ["an app behind a proxy that answers 502 for a host it does not serve", { unknownHost: "bad_gateway" }, ["M6:"], /not checked: the request to https:\/\/apc-conformance-internal\.example.*HTTP 502/],
   ["an app whose Allow carries only the consent and the ticket (hub and agent bound to the consent)", { hubBoundToConsent: true, allowNoAgent: true }, ["M1:", "M6:"]],
   ["an adapter whose Cancel body hands out grants paired beforehand", { cancelPrepaired: true }, ["M6:"]],
+  ["an app that offers both profiles on one /mcp/ path (APC 0.12)", { bothProfiles: true }, ["0.12: M12:", "0.12: M10, M11:", "0.12: M11: a live", "0.12: M10: a later hub answer", "0.12: M11: a hub before 0.12", "0.12: the binding is never shown", "M8:"]],
 ];
 for (const [what, options, parts, note] of allowed) {
   test(`${what} passes`, async () => {
@@ -225,6 +233,19 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["ignores_stored_expiry", "stored expiry has passed", /past the stored expiry/],
   ["confirm_paired_goes_live", "paired before the app saw initialize", /pairing error \(handoff\)/],
   ["stale_allow_accepted", "the stale Allow gets consent_expired", /consent_expired/],
+  // The binding (APC 0.12, TIN-910): one break per rule.
+  ["binding_ignored", "0.12: M10, M11:", /with no value \(the binding was declared\) answers HTTP 404/],
+  ["binding_case_insensitive", "0.12: M10, M11:", /with its id in another case answers HTTP 404/],
+  ["binding_prefix_compare", "0.12: M10, M11:", /with its id as a prefix answers HTTP 404/],
+  ["binding_first_message_only", "0.12: M10, M11:", /a batch whose initialize names another pairing answers HTTP 404/],
+  ["binding_handoff_only", "0.12: M11: a live", /on a live grant naming another pairing answers HTTP 404/],
+  ["binding_absent_refused_live", "0.12: M11: a live", /on a live grant naming no pairing is served/],
+  ["binding_rebound_on_confirm", "0.12: M10: a later hub answer", /the grant's own pairing is still served after a second pairing named it/],
+  ["binding_unknown_scheme_accepted", "0.12: M10: a later hub answer", /an unknown binding scheme/],
+  ["binding_unbound_refused", "0.12: M11: a hub before 0.12", /a hub before 0\.12 names no pairing; its initialize is served/],
+  ["binding_shown", "0.12: the binding is never shown", /initialize on the grant carries the pairing_id/],
+  ["direct_serves_hub", "0.12: M12:", /the pairing is paired/, { bothProfiles: true }],
+  ["direct_first_message_only", "0.12: M12:", /the hub's introduction in a batch on a Direct grant was served/, { bothProfiles: true }],
 ];
 
 for (const [brk, part, message, options] of broken) {
@@ -234,7 +255,7 @@ for (const [brk, part, message, options] of broken) {
   });
 }
 
-test("every 0.10 check has a broken app that fails it", () => {
+test("every Dock check (0.10 and 0.12) has a broken app that fails it", () => {
   const { adapter } = dockFixture();
   const covered = new Set(broken.map(([, part]) => named(apcConformance(adapter), part).name));
   assert.deepEqual(ours(apcConformance(adapter)).map((c) => c.name).filter((n) => !covered.has(n)), []);

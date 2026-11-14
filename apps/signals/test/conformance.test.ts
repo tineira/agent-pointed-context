@@ -48,6 +48,8 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
   const workerEnv = { ...feedEnv, FEED: { idFromName: (name: string) => name, get: (id: string) => (id === SID ? feed : new Feed(durableObjectRoom().ctx, feedEnv)) } };
   const hub = standInHub({
     origin: hubOrigin,
+    // The hub's clock runs from the day 0.12.0 was tagged, inside the window for hubs before 0.12, whatever day this runs.
+    now: ((started) => () => Date.parse("2026-11-14T12:00:00Z") + (Date.now() - started))(Date.now()),
     // The hub reaches Signals as it does in production: the grant's MCP URL, and the public /apc/revoke (M7, APC 0.10).
     app: async (request) => (new URL(request.url).pathname === "/apc/revoke" ? worker.fetch(request, workerEnv) : feed.fetch(request)),
   });
@@ -127,6 +129,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
               room,
               object: () => feed,
               restart: () => void (feed = new Feed(room.ctx, feedEnv)),
+              directGrant: () => connectOn("direct"),
             }),
           },
         }

@@ -1,5 +1,5 @@
 import { badContentLength, bareOrigin, LOOPBACK_HOST, readCapped, utf8 } from "./util.ts";
-import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type DockPairRequest, type HubCallError } from "@tineira/apc-protocol";
+import { declaredBinding, HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, isStoredPairingId, PAIRING_CODE_ACK, type DockPairRequest, type HubCallError, type PAIRING_BINDING } from "@tineira/apc-protocol";
 
 /**
  * An app's calls to a dock's hub, server to server (the Dock profile; APC 0.9, hardened in 0.10):
@@ -25,7 +25,11 @@ import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type Dock
  * It believes only these answers:
  *
  * - **HTTP 200** with `ok: true` and, for a pairing, the acknowledgement `pairing_code: "required"` and a
- *   string `pairing_id`; for a confirm, `status` `"pending"` or `"paired"`.
+ *   `pairing_id` of printable ASCII (at most 128); for a confirm, `status` `"pending"` or `"paired"`. Since 0.12 a
+ *   pairing's acknowledgement may declare `binding: "pairing_id"` (with a `pairing_id` of `PAIRING_ID_RE`): the
+ *   result's `binding` says so, and the app stores it with the grant (M10). Any other `binding`, or a declared one
+ *   with an id out of form, is `hub_refused`: the app ends the grant before it answers its page, as on any refusal,
+ *   so the hub's request, if it made one, finds an ended grant (404, `pairing_ended`) and goes.
  * - **HTTP 400** with `ok: false` and an `error` in the hub's vocabulary (`/^[a-z_]{1,64}$/`): the hub's
  *   own refusal, passed on.
  *
@@ -49,7 +53,8 @@ export interface HubAgent {
   icon: string | null;
 }
 
-export type PairWithHubResult = { ok: true; pairing_id: string; status: "pending"; agent: HubAgent } | { ok: false; error: string };
+/** `binding`: `"pairing_id"` when the acknowledgement declared it (APC 0.12), null from a hub that does not bind. */
+export type PairWithHubResult = { ok: true; pairing_id: string; status: "pending"; agent: HubAgent; binding: typeof PAIRING_BINDING | null } | { ok: false; error: string };
 export type ConfirmWithHubResult = { ok: true; status: "pending" | "paired"; agent: HubAgent } | { ok: false; error: string };
 
 const HUB_ERROR = /^[a-z_]{1,64}$/;
@@ -169,8 +174,11 @@ export async function pairWithHub(hub: string | URL, body: DockPairRequest, opti
   if (refused) return { ok: false, error: refused };
   if (a.status !== 200 || a.body?.ok !== true) return { ok: false, error: "hub_refused" };
   if (a.body.pairing_code !== PAIRING_CODE_ACK) return { ok: false, error: "hub_ignores_pairing_code" };
-  if (typeof a.body.pairing_id !== "string" || !a.body.pairing_id) return { ok: false, error: "hub_refused" };
-  return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent) };
+  if (!isStoredPairingId(a.body.pairing_id)) return { ok: false, error: "hub_refused" };
+  // The binding the hub declares (APC 0.12, M10): an unknown one, or a declared id out of form, is a refusal.
+  const binding = declaredBinding(a.body);
+  if (binding === "refused") return { ok: false, error: "hub_refused" };
+  return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding };
 }
 
 /** `POST {hub}/apc/confirm` on a drop of an agent the app holds a grant for: whether the hub still pairs them. */

@@ -7,7 +7,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type FocusTarget, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
@@ -96,6 +96,13 @@ interface DockLink {
   acked_at: number | null;
   pairing_code: string | null;
   pairing_expires_at: string | null;
+  /**
+   * The binding (M10, APC 0.12): the hub's `pairing_id` from its acknowledgement (stored since TIN-389), and whether
+   * that acknowledgement declared `binding: "pairing_id"` (1). Null `declared` (a link from before 0.12) is 0: the
+   * stored id is then checked mismatch-only, as is the agent.
+   */
+  pairing_id: string | null;
+  declared: number | null;
 }
 
 /** What a dock agent's drop answers the page (or Pulse for Windows). */
@@ -186,7 +193,8 @@ export class Sandbox extends DurableObject<Env> {
     // A dock grant's lifecycle (APC 0.10, TIN-892): in_flight from the Allow, handoff from the hub's acknowledgement,
     // live from the hub's first committed initialize. A link from before has no state: its hub read it already (live).
     // The times are ms since the epoch; secret_hash is how a give-back and Cancel find the grant without its secret.
-    for (const column of ["state text", "secret_hash text", "allowed_at integer", "acked_at integer"]) {
+    // Whether the hub's acknowledgement declared the binding (APC 0.12, TIN-910); the value is pairing_id, kept since TIN-389.
+    for (const column of ["state text", "secret_hash text", "allowed_at integer", "acked_at integer", "declared integer"]) {
       try {
         this.sql.exec(`alter table hub_links add column ${column}`);
       } catch {
@@ -628,7 +636,7 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   private dockRows(): DockLink[] {
-    return this.sql.exec<DockLink>("select hub, agent, grant_id, state, secret_hash, allowed_at, acked_at, pairing_code, pairing_expires_at from hub_links").toArray();
+    return this.sql.exec<DockLink>("select hub, agent, grant_id, state, secret_hash, allowed_at, acked_at, pairing_code, pairing_expires_at, pairing_id, declared from hub_links").toArray();
   }
   private dockRow(grantId: string): DockLink | null {
     return this.dockRows().find((l) => l.grant_id === grantId) ?? null;
@@ -798,7 +806,8 @@ export class Sandbox extends DurableObject<Env> {
     const at = this.dockNow();
     const pairing: DockPairing = { code: taken.pairing_code, expires_at: new Date(at + PAIRING_CODE_TTL_MS).toISOString() };
     const moved = this.sql
-      .exec("update hub_links set state = 'handoff', acked_at = ?, pairing_id = ?, pairing_expires_at = ? where grant_id = ? and secret_hash = ? and state = 'in_flight' and allowed_at > ? returning grant_id", at, answer.pairing_id, pairing.expires_at, id, hash, at - DOCK_TIMES.ackMs)
+      // The binding is written in the same statement (M10, APC 0.12): only this move writes it, so it never changes.
+      .exec("update hub_links set state = 'handoff', acked_at = ?, pairing_id = ?, declared = ?, pairing_expires_at = ? where grant_id = ? and secret_hash = ? and state = 'in_flight' and allowed_at > ? returning grant_id", at, answer.pairing_id, answer.binding ? 1 : 0, pairing.expires_at, id, hash, at - DOCK_TIMES.ackMs)
       .toArray().length === 1;
     if (!moved) {
       if (mine()) this.endDockGrant(id, "no_acknowledgement");
@@ -941,6 +950,15 @@ export class Sandbox extends DurableObject<Env> {
     // A dock grant past T_ack or T_connect has ended (APC 0.10), and one whose link is missing is none: gone before the lookup.
     this.sweepDock();
     const grant = this.grants().find((g) => g.secret === secret);
+    const link = grant ? this.dockRow(grant.id) : null;
+    // A hub introducing itself to a grant that is not a Dock grant (M12, APC 0.12): 404 before anything else, a
+    // revoked Direct grant included, and nothing changes. Whether it is a Dock grant is Pulse's own record (the link,
+    // or the revoked row's hub), never this request.
+    const directGrant = grant ? !link : this.sql.exec("select 1 from revoked_grants where secret_hash = ? and hub is null", hash).toArray().length > 0;
+    if (directGrant) {
+      const refused = directGrantGate(rpcBody);
+      if (refused) return refused;
+    }
     // Revoked: 403 with the answer, whatever the method (checked before the method), so the holder can say so.
     if (!grant) return gone();
     // Agent traffic on a grant that is not live yet extends nothing (APC 0.10): the sandbox's life is not touched by it.
@@ -948,9 +966,10 @@ export class Sandbox extends DurableObject<Env> {
     // A dock grant answers by its state (APC 0.10, dockGrantGate): 404 in flight; in handoff only initialize, ping and
     // tools/list are served, and a tools/call gets the `pairing` error; live, everything. A gated answer is built here,
     // before the log, the links, presence and the transport, so it carries no attention, then, apc_link or app data.
-    const link = this.dockRow(grant.id);
     if (link) {
-      const gate = dockGrantGate((link.state ?? "live") as DockStored, request.method === "POST" ? rpcBody : null, { host });
+      // The binding (M11, APC 0.12): every initialize must carry this pairing's id and agent, or it is a 404.
+      const binding = { pairing_id: link.pairing_id, agent: link.agent, declared: link.declared === 1 };
+      const gate = dockGrantGate((link.state ?? "live") as DockStored, request.method === "POST" ? rpcBody : null, { host, binding });
       if (!gate.serve) return gate.response;
       if (gate.commits) {
         // The hub's first initialize (the dock owner's yes) makes the grant live: one conditional statement, and no

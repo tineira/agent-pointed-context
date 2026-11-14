@@ -49,7 +49,7 @@ export interface DockAgent {
   /** blocked_by: our blocklist, or the kill switch that closes the dock to unverified apps. */
   /** code: a pending request whose app sent a pairing code (APC 0.9), approved only with it; never the code itself. */
   /** ended: the app ended the grant (APC 0.10: it answered 404); ended_by is the app's host. idle: the app said it is asleep. */
-  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "ended" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; ended_by?: string; ended_at?: string | null; idle?: boolean; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed"; code?: boolean }>;
+  pairings: Array<{ id: string; kind: "app" | "reader"; app: AppRef; status: "pending" | "paired" | "revoked" | "ended" | "blocked"; created_at: string; page_open: boolean | null; error: string | null; revoked_by?: string; revoked_at?: string | null; ended_by?: string; ended_at?: string | null; ended_reason?: "pairing_mismatch"; idle?: boolean; warning?: boolean; approving?: boolean; blocked_by?: "blocklist" | "closed"; code?: boolean }>;
   compat: { listed_after_pairing: boolean; listed_at: string | null; prefixed_calls: number; relay_calls: number; waits: number };
 }
 /** A computer on this dock (TIN-838); `current` is the one this page runs on. */
@@ -401,7 +401,15 @@ export function AgentPage(props: {
                 <span>
                   {p.app.name} {p.app.unverified && <NotVerified />} <span className="warn">· Ended by {p.ended_by ?? host(p.app.origin)}</span>
                   {p.ended_at ? <span className="muted"> · {when(p.ended_at)}</span> : null}
-                  <span className="muted"> · drop {a.name} on it again to pair</span>
+                  {p.ended_reason === "pairing_mismatch" ? (
+                    // A verified app refused the hub's introduction (APC 0.12): it did not hand this grant to this pairing.
+                    <span className="muted">
+                      {" "}
+                      · {p.app.name} refused this connection. If a site other than {host(p.app.origin)} showed you the code, don&apos;t type codes from it again.
+                    </span>
+                  ) : (
+                    <span className="muted"> · drop {a.name} on it again to pair</span>
+                  )}
                 </span>
                 <button type="button" onClick={() => props.decide(p.id, "unpair")} title="Remove this line from the dock">
                   Remove

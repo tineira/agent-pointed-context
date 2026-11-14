@@ -23,7 +23,9 @@
  * The hub's own duties (H1 to H7) are not checked here: the hub is reference-only until after 1.0.
  */
 import {
+  APC_AGENT_META,
   APC_JSON_PATH,
+  APC_PAIRING_ID_META,
   APC_JSON_PAIRING_MAX_AGE_S,
   APC_LINK_KEY,
   HUB_CALL_DEADLINE_MS,
@@ -41,6 +43,7 @@ import {
   isRevokedAnswer,
   normalizePairingCode,
   parseApcManifest,
+  type ApcManifest,
   type DockGrantCall,
   type DockGrantState,
   type FocusTarget,
@@ -66,6 +69,11 @@ const DEADLINE_SLACK_FLOOR_MS = 1000;
 const GIVE_BACK_MS = 2000;
 /** A host the app is never configured with: a request sent there with a matching `Origin` must still be refused (M6). */
 const INTERNAL_ORIGIN = "https://apc-conformance-internal.example";
+/**
+ * The end of the window in which an app on 0.12 still serves a hub before 0.12 (APC 0.12: 6 months from 0.12.0, tagged
+ * 2026-11-14). The check of that window runs only before it, by the stand-in hub's clock (its `now` option).
+ */
+const UNBOUND_WINDOW_END = "2027-05-14T00:00:00Z";
 /** The members of `dock.lifecycle` a 0.10 Dock app must give (idleMs and hubDeadlineMs are optional). */
 const REQUIRED = ["dropAgent", "cancel", "heartbeat", "advance", "failCommits", "restart", "pairingDisabled"] as const;
 
@@ -111,7 +119,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
    * The standard the app claims, failing closed: from apc.json at the owner origin (a bare origin) when the adapter
    * gives `dock.lifecycle`, else at a grant's origin. A read or a parse that fails is a failure, never "before 0.10".
    */
-  const claimed = async (life: ApcDockLifecycleAdapter | undefined): Promise<string> => {
+  const claimed = async (life: ApcDockLifecycleAdapter | undefined): Promise<string> => (await manifestOf(life)).standard;
+  const manifestOf = async (life: ApcDockLifecycleAdapter | undefined): Promise<ApcManifest> => {
     let origin: string;
     if (life) {
       const o = (life.owner as { origin?: unknown } | undefined)?.origin;
@@ -127,7 +136,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     expect(response.status === 200, `cannot tell which standard the app claims: GET ${origin}${APC_JSON_PATH} answered HTTP ${response.status}; the 0.10 checks fail closed`);
     const parsed = parseApcManifest(await response.json().catch(() => undefined), origin);
     expect(parsed.ok, `cannot tell which standard the app claims: ${origin}${APC_JSON_PATH} is ${parsed.ok ? "" : `${parsed.error} (${parsed.detail})`}; the 0.10 checks fail closed`);
-    return parsed.manifest.standard;
+    return parsed.manifest;
   };
 
   /** Gives back every grant the hub received an `/apc/pair` for since `from`: the suite leaves no grant behind. */
@@ -208,9 +217,15 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     if (out?.note) named.note = out.note;
   };
 
-  /** A JSON-RPC message to the grant's URL: with `id: 1` unless `noId`. */
-  const send = async (mcpUrl: string, method: string, params: Record<string, unknown>, noId = false): Promise<Sent> => {
+  /**
+   * A JSON-RPC message to the grant's URL: with `id: 1` unless `noId`. An `initialize` names the grant's pairing and
+   * agent in `_meta`, as the stand-in hub's own does (H8, APC 0.12), unless `exact`, or a pairing that is not bound.
+   */
+  const send = async (mcpUrl: string, method: string, params: Record<string, unknown>, noId = false, exact = false): Promise<Sent> => {
     const started = Date.now();
+    // The grant's own pairing: the first the app made for this URL (a later one, made by a check, is another pairing).
+    const pairing = method === "initialize" && !exact && !("_meta" in params) ? dock?.hub.pairings.find((p) => p.mcp_url === mcpUrl) : undefined;
+    if (pairing?.bound) params = { ...params, _meta: { [APC_PAIRING_ID_META]: pairing.id, [APC_AGENT_META]: pairing.agent } };
     const response = await fetchApp(
       new Request(mcpUrl, {
         method: "POST",
@@ -221,14 +236,14 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     const body = rpcBody(response.headers.get("content-type") ?? "", await response.text());
     return { status: response.status, body, headers: response.headers, ms: Date.now() - started };
   };
-  /** A request that is not a JSON-RPC message (the spec's "any request" row): a GET, a DELETE, a POST that does not parse. */
-  const sendRaw = async (mcpUrl: string, method: "GET" | "DELETE" | "POST"): Promise<Sent> => {
+  /** A request that is not a JSON-RPC message (the spec's "any request" row): a GET, a DELETE, a POST that does not parse (or the `raw` body given). */
+  const sendRaw = async (mcpUrl: string, method: "GET" | "DELETE" | "POST", rawBody = "{ not json"): Promise<Sent> => {
     const started = Date.now();
     const response = await fetchApp(
       new Request(mcpUrl, {
         method,
         headers: { accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...(method === "POST" ? { "content-type": "application/json" } : {}) },
-        ...(method === "POST" ? { body: "{ not json" } : {}),
+        ...(method === "POST" ? { body: rawBody } : {}),
       }),
     );
     const raw = await response.text();
@@ -241,6 +256,13 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     return { status: response.status, body, headers: response.headers, ms: Date.now() - started };
   };
   const toolCall = (mcpUrl: string, tool: string, args: Record<string, unknown> = {}) => send(mcpUrl, "tools/call", { name: tool, arguments: args });
+  /** Any JSON body to a URL, with the connection's headers (a bearer token): what the hub, or an agent, sends as is. */
+  const sendBody = async (mcpUrl: string, body: unknown, headers: Record<string, string> = {}): Promise<Sent> => {
+    const started = Date.now();
+    const response = await fetchApp(new Request(mcpUrl, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18", ...headers }, body: JSON.stringify(body) }));
+    const parsed = rpcBody(response.headers.get("content-type") ?? "", await response.text());
+    return { status: response.status, body: parsed, headers: response.headers, ms: Date.now() - started };
+  };
   const resultOf = (s: Sent): ToolCallResult | undefined => (isObject(s.body) && isObject(s.body.result) ? (s.body.result as ToolCallResult) : undefined);
   const brief = (s: Sent) => `HTTP ${s.status} ${JSON.stringify(s.body).slice(0, 200)}`;
   const served = (s: Sent) => s.status === 200 && isObject(s.body) && isObject(s.body.result);
@@ -622,6 +644,17 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       // Pairing is the app sending /apc/pair: a drop of an agent it already holds a grant for answers yes by /apc/confirm, which is no consent.
       expect(d.hub.received.length === before, `${where}, its answer carried ${JSON.stringify(token.slice(0, 12))}…, with which an Allow then paired (the app sent /apc/pair): a GET made a consent`);
     }
+  };
+
+  /** A check of the binding (APC 0.12): run on an app that claims 0.12.0 or later, noted as not checked before. */
+  const check12 = (name: string, body: (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, m: ApcManifest) => Promise<void | { note: string }>): Named => {
+    const named = check(name, async (life, d) => {
+      const m = await manifestOf(life);
+      if (compareStandard(m.standard, "0.12.0") < 0) return { note: `not checked: the app's apc.json claims ${m.standard}, before 0.12.0, which has no binding` };
+      return body(life, d, m);
+    });
+    named.name = named.name.replace(": 0.10: ", ": 0.12: ");
+    return named;
   };
 
   return [
@@ -1317,6 +1350,145 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       expect(pairCount(d, old.agent) === before, "the stale Allow sent the hub /apc/pair");
       const answer = await fresh.allow();
       expect(answer.ok, `the Allow on the new consent did not pair: ${answer.error}`);
+    }),
+
+    // The binding (APC 0.12, TIN-910): on an app that claims 0.12.0 or later.
+    check12("M12: a Direct agent's MCP URL sent to /apc/pair never goes live: the introduction is not served, the pairing never pairs, no tool call reaches it, and the Direct agent is unchanged", async (life, d, m) => {
+      if (!(m.profiles.includes("direct") && m.profiles.includes("dock"))) return { note: "not checked: the app does not offer both profiles" };
+      expect(typeof life.directGrant === "function", "the app offers both profiles and claims 0.12.0 or later: give dock.lifecycle.directGrant in the adapter");
+      const direct = await life.directGrant!();
+      const agent = newAgent();
+      // The suite plays the attacker: the Direct URL handed to the hub, with a code it chose.
+      const posted = await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket: d.hub.ticket(agent), agent, app: { name: app.name, origin: new URL(direct.mcpUrl).origin }, mcp_url: direct.mcpUrl, pairing_code: "K7M4P2" }) });
+      const pairing = d.hub.pairings.find((p) => p.agent === agent);
+      expect(posted.status === 200 && pairing, "the stand-in hub took the request (it checks no apc.json)");
+      const decided = await d.hub.decide(pairing.id, "approve", "K7M4P2");
+      expect(decided.ok, `the stand-in hub did not approve: ${decided.error}`);
+      expect(pairing.status === "refused", `the hub's introduction (initialize naming a pairing) on a Direct grant was served: the pairing is ${pairing.status}. A grant that is not a Dock grant refuses it (HTTP 404, or any refusal: 401 for a bearer grant)`);
+      // A hub sends tools/list once its introduction is served (the stand-in does): a refused one gets nothing more.
+      expect(pairing.calls.every((c) => c === "initialize"), `the hub sent ${pairing.calls.join(", ")} to the Direct grant: its introduction was served`);
+      for (const [label, body] of [
+        ["in a batch", [{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INIT, _meta: { [APC_PAIRING_ID_META]: pairing.id, [APC_AGENT_META]: agent } } }]],
+        ["without an id", { jsonrpc: "2.0", method: "initialize", params: { ...INIT, _meta: { [APC_PAIRING_ID_META]: pairing.id } } }],
+      ] as const) {
+        const s = await sendBody(direct.mcpUrl, body, direct.headers);
+        expect(!served(s) && !(Array.isArray(s.body) && s.body.some((x) => isObject(x) && "result" in x)), `the hub's introduction ${label} on a Direct grant was served: ${brief(s)}`);
+      }
+      // The Direct agent is unchanged: its own initialize and a tool call are served, and nothing was revoked.
+      const own = await sendBody(direct.mcpUrl, { jsonrpc: "2.0", id: 1, method: "initialize", params: INIT }, direct.headers);
+      expect(served(own), `the Direct agent's own initialize is not served after the hub's was refused: ${brief(own)}`);
+      const probe = await sendBody(direct.mcpUrl, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: app.probe.tool, arguments: app.probe.args } }, direct.headers);
+      expect(probe.status !== REVOKED_HTTP_STATUS && served(probe), `the Direct agent no longer works after the hub's introduction was refused: ${brief(probe)}`);
+    }),
+
+    check12("M10, M11: a grant in handoff commits only on its own pairing and agent; another pairing's real id, a near miss, junk or none is a 404 and changes nothing", async (life, d) => {
+      const a = await handoff(life, d);
+      const b = await handoff(life, d);
+      const own = { [APC_PAIRING_ID_META]: a.pairing.id, [APC_AGENT_META]: a.agent };
+      const cases: Array<[string, Record<string, unknown> | undefined]> = [
+        ["no value (the binding was declared)", undefined],
+        ["the other grant's real pairing_id", { ...own, [APC_PAIRING_ID_META]: b.pairing.id }],
+        ["its id with one character changed", { ...own, [APC_PAIRING_ID_META]: `${a.pairing.id.slice(0, -1)}${a.pairing.id.endsWith("0") ? "1" : "0"}` }],
+        ["its id as a prefix", { ...own, [APC_PAIRING_ID_META]: a.pairing.id.slice(0, -1) }],
+        ["its id with a suffix", { ...own, [APC_PAIRING_ID_META]: `${a.pairing.id}0` }],
+        ["its id in another case", { ...own, [APC_PAIRING_ID_META]: a.pairing.id.toUpperCase() }],
+        ["a number", { ...own, [APC_PAIRING_ID_META]: 7 }],
+        ["an array", { ...own, [APC_PAIRING_ID_META]: [a.pairing.id] }],
+        ["an object", { ...own, [APC_PAIRING_ID_META]: { id: a.pairing.id } }],
+        ["an empty string", { ...own, [APC_PAIRING_ID_META]: "" }],
+        ["the other grant's agent", { ...own, [APC_AGENT_META]: b.agent }],
+        ["a junk agent", { ...own, [APC_AGENT_META]: 7 }],
+      ];
+      for (const [label, meta] of cases) {
+        const s = await send(a.mcpUrl, "initialize", { ...INIT, ...(meta ? { _meta: meta } : {}) }, false, true);
+        expect(s.status === 404, `initialize on a grant in handoff with ${label} answers HTTP 404, got ${brief(s)}`);
+        await expectState(a.mcpUrl, "pairing", `after initialize with ${label}`);
+      }
+      // Every initialize in a request counts: one in a batch, and one without an id.
+      const batch = await sendRaw(a.mcpUrl, "POST", JSON.stringify([{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INIT, _meta: { ...own, [APC_PAIRING_ID_META]: b.pairing.id } } }]));
+      expect(batch.status === 404, `a batch whose initialize names another pairing answers HTTP 404, got ${brief(batch)}`);
+      await expectState(a.mcpUrl, "pairing", "after a batch naming another pairing");
+      const noId = await sendRaw(a.mcpUrl, "POST", JSON.stringify({ jsonrpc: "2.0", method: "initialize", params: { ...INIT, _meta: { ...own, [APC_PAIRING_ID_META]: b.pairing.id } } }));
+      expect(noId.status === 404, `an initialize without an id naming another pairing answers HTTP 404, got ${brief(noId)}`);
+      await expectState(a.mcpUrl, "pairing", "after an initialize without an id naming another pairing");
+      // A body with the key twice: the app reads the body it gates on, and the duplicate whose last value is not its own is refused.
+      const twice = await sendRaw(a.mcpUrl, "POST", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"apc-hub","version":"0.12.0"},"_meta":{"${APC_PAIRING_ID_META}":"${a.pairing.id}","${APC_AGENT_META}":"${a.agent}","${APC_PAIRING_ID_META}":"${b.pairing.id}"}}}`);
+      expect(twice.status === 404, `initialize whose pairing_id appears twice, the last another pairing's, answers HTTP 404, got ${brief(twice)}`);
+      await expectState(a.mcpUrl, "pairing", "after initialize with a duplicate key");
+      const ok = await send(a.mcpUrl, "initialize", { ...INIT, _meta: own }, false, true);
+      expect(served(ok), `initialize with its own pairing and agent commits: ${brief(ok)}`);
+      await expectState(a.mcpUrl, "data", "after initialize with its own pairing");
+      await expectState(b.mcpUrl, "pairing", "the other grant, untouched");
+    }),
+
+    check12("M11: a live and a dormant grant refuse another pairing's real id, and serve an initialize that names none", async (life, d) => {
+      const a = await liveGrant(life, d);
+      const b = await handoff(life, d);
+      const other = { [APC_PAIRING_ID_META]: b.pairing.id, [APC_AGENT_META]: a.agent };
+      const refused = await send(a.mcpUrl, "initialize", { ...INIT, _meta: other }, false, true);
+      expect(refused.status === 404, `initialize on a live grant naming another pairing answers HTTP 404, got ${brief(refused)}`);
+      await expectState(a.mcpUrl, "data", "live, after initialize naming another pairing");
+      const batch = await sendRaw(a.mcpUrl, "POST", JSON.stringify([{ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...INIT, _meta: other } }]));
+      expect(batch.status === 404, `a batch on a live grant whose initialize names another pairing answers HTTP 404, got ${brief(batch)}`);
+      const none = await send(a.mcpUrl, "initialize", INIT, false, true);
+      expect(served(none), `initialize on a live grant naming no pairing is served (a hub rolled back): ${brief(none)}`);
+      if (!life.idleMs) return { note: "the dormant half not checked: the adapter gives no idleMs" };
+      await app.page.setOpen(false);
+      await life.advance(life.idleMs + 1000);
+      await expectState(a.mcpUrl, "idle", "T_idle after going live");
+      const dormant = await send(a.mcpUrl, "initialize", { ...INIT, _meta: other }, false, true);
+      expect(dormant.status === 404, `initialize on a dormant grant naming another pairing answers HTTP 404, got ${brief(dormant)}`);
+      const quietly = await send(a.mcpUrl, "initialize", INIT, false, true);
+      expect(served(quietly), `initialize on a dormant grant naming no pairing is served: ${brief(quietly)}`);
+      await expectState(a.mcpUrl, "idle", "dormant still: neither initialize woke it");
+      await life.heartbeat();
+    }),
+
+    check12("M10: a later hub answer never rebinds a grant (a /apc/confirm naming another pairing, a second pairing of its URL), and an acknowledgement with a binding no app knows holds no grant", async (life, d) => {
+      const a = await liveGrant(life, d);
+      // A second pairing of the grant's URL at the hub, and another drop whose /apc/confirm answer names it: neither rebinds the grant.
+      const ticket = d.hub.ticket(a.agent);
+      await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent: a.agent, app: { name: app.name, origin: life.owner.origin }, mcp_url: a.mcpUrl, pairing_code: "K7M4P2" }) });
+      const later = d.hub.pairings.filter((p) => p.mcp_url === a.mcpUrl).at(-1)!;
+      expect(later.id !== a.pairing.id, "the stand-in made a second pairing for the grant");
+      // The reference hub's /apc/confirm answer carries no pairing_id; an app MUST ignore fields it does not know in a
+      // hub's answer (the spec, "Every drop: POST {hub}/apc/confirm"), so this one must change nothing.
+      d.hub.confirmPairingId = later.id;
+      try {
+        await drop(life, d, a.agent);
+      } finally {
+        d.hub.confirmPairingId = null;
+      }
+      const stillOwn = await send(a.mcpUrl, "initialize", { ...INIT, _meta: { [APC_PAIRING_ID_META]: a.pairing.id, [APC_AGENT_META]: a.agent } }, false, true);
+      expect(served(stillOwn), `the grant's own pairing is still served after a second pairing named it and a /apc/confirm answer carried that one (an app ignores fields it does not know in a hub's answer, and never rebinds): ${brief(stillOwn)}`);
+      const rebound = await send(a.mcpUrl, "initialize", { ...INIT, _meta: { [APC_PAIRING_ID_META]: later.id, [APC_AGENT_META]: a.agent } }, false, true);
+      expect(rebound.status === 404, `the second pairing's id took the grant (the binding changed): ${brief(rebound)}`);
+      await refusedWith(life, d, "ack_unknown_binding", "M10 (an unknown binding scheme)");
+    }),
+
+    check12(`M11: a hub before 0.12 (no binding declared): its plain initialize commits, as 0.11 did (until ${UNBOUND_WINDOW_END}, the end of the 6 months from 0.12.0)`, async (life, d) => {
+      if (d.hub.now() >= Date.parse(UNBOUND_WINDOW_END)) return { note: `not checked: the window for hubs before 0.12 ended on ${UNBOUND_WINDOW_END} (by the stand-in hub's clock)` };
+      d.hub.mode = "ack_unbound";
+      let g: Awaited<ReturnType<typeof handoff>>;
+      try {
+        g = await handoff(life, d);
+      } finally {
+        d.hub.mode = "ack";
+      }
+      expect(!g.pairing.bound, "the stand-in declared the binding");
+      const init = await send(g.mcpUrl, "initialize", INIT, false, true);
+      expect(served(init), `a hub before 0.12 names no pairing; its initialize is served and commits: ${brief(init)}`);
+      await expectState(g.mcpUrl, "data", "after a plain initialize from a hub before 0.12");
+    }),
+
+    check12("the binding is never shown: no MCP answer and no drop outcome carries the pairing_id", async (life, d) => {
+      const g = await handoff(life, d);
+      const again = await drop(life, d, g.agent);
+      expect(!JSON.stringify(again).includes(g.pairing.id), "a drop's outcome (what the page shows) carries the pairing_id");
+      for (const [method, params] of [["initialize", INIT], ["tools/list", {}], ["tools/call", { name: "get_current_view", arguments: {} }], ["tools/call", { name: app.probe.tool, arguments: app.probe.args }]] as const) {
+        const s = await send(g.mcpUrl, method, params);
+        expect(!JSON.stringify(s.body).includes(g.pairing.id), `${method} on the grant carries the pairing_id`);
+      }
     }),
   ];
 }

@@ -274,6 +274,20 @@ async function pair(t) {
   const again = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: { ...drop, ticket: await ticket() } });
   check(again.status === 200 && again.json?.ok === true && again.json?.grant_id === grantId, `a second drop: the hub's /apc/confirm answered (confirmWithHub, in ${where})`, again);
 
+  // In workerd only (TIN-910, APC 0.12): a Direct agent of the same Pulse, handed to the hub's /apc/pair as Pulse with a
+  // code the sender chose, never goes live: Pulse refuses the hub's introduction on a grant it never handed to a dock.
+  if (!PRODUCTION) {
+    const direct = await call(`${t.made.pulse}/grants/agent`, { method: "POST" });
+    must(direct.status === 200 && typeof direct.json?.secret === "string", "Pulse makes a Direct agent", direct);
+    const posted = await call(`${DOCK}/apc/pair`, { method: "POST", body: { ticket: await ticket(), agent: agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${pulse.json.sid}/${direct.json.secret}`, pairing_code: "K7M4P2" } });
+    must(posted.status === 200 && posted.json?.binding === "pairing_id" && /^pr_[0-9a-f]{32}$/.test(posted.json?.pairing_id ?? ""), "the hub takes a Direct URL it cannot tell apart, and declares the binding", posted);
+    const forced = await call(`${t.made.dock}/pairings/${posted.json.pairing_id}`, { method: "POST", body: { action: "approve", code: "K7M4P2" } });
+    check(forced.status === 400 && forced.json?.error === "pairing_ended", "the Direct grant never goes live: Pulse refuses the hub's introduction (pairing_ended)", forced);
+    const line = (await dockState())?.agents?.[0]?.pairings?.find((p) => p.id === posted.json.pairing_id);
+    check(line?.status === "ended" && line?.ended_reason === "pairing_mismatch", "the dock says Pulse refused it as not its pairing", line?.status);
+    check((await dockState())?.agents?.[0]?.pairings?.find((p) => p.id === pending.id)?.status === "paired", "the honest pairing is still paired");
+  }
+
   // The dock removes the agent and gives the grant back (/apc/revoke, dock → Pulse): Pulse ends it.
   const removed = await call(`${t.made.dock}/agents/${agent.id}/remove`, { method: "POST" });
   check(removed.status === 200 && removed.json?.ok === true, "the dock removes its agent", removed);
