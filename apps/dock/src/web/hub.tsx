@@ -21,6 +21,7 @@ import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } fr
 import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
 import { marked, noneSelected, NONE_SELECTED, readUnmarked, setMarks, writeUnmarked, type Marks } from "./float-marks.ts";
+import { openOutcome } from "./open-outcome.ts";
 import { floatApp, PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "./pet.tsx";
 import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, Setup } from "./setup.tsx";
 import { setupProgress } from "../onboarding.ts";
@@ -164,6 +165,8 @@ export function HubDock() {
    */
   const [chooser, setChooser] = useState<{ replaced: boolean } | null>(null);
   const [creating, setCreating] = useState(false);
+  /** The strip or a pet found no dock (TIN-879): it points to the dock window, where the person chooses, and stops polling fast. */
+  const [noDock, setNoDock] = useState(false);
 
   // Bumped when the desktop app's dock is gone (Start over, or 6 h idle), to open the dock again.
   const [reopen, setReopen] = useState(0);
@@ -171,23 +174,47 @@ export function HubDock() {
     if (held) return;
     // The strip and the pets only resume the dock its window opened, and wait for it on a first run (#84).
     let retry = 0;
-    const open = () =>
+    // The strip and the pets with no dock (TIN-879) ask again, slower each time, up to 30 s; coming back to the window asks at once.
+    let wait = 2000;
+    const open = (): Promise<void> =>
       fetch("/api/dock", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(FLOATING ? { resume: true, desktop: DESKTOP_SHELL } : { desktop: DESKTOP_SHELL }) })
         .then(async (res) => {
-          if (res.status === 404 && !FLOATING) {
-            const body = (await res.json().catch(() => null)) as { error?: string; replaced?: boolean } | null;
-            if (body?.error === "no_dock") {
-              setError(null);
-              return setChooser({ replaced: body.replaced === true });
-            }
+          const out = openOutcome(res.status, await res.json().catch(() => null));
+          if (out.kind === "dock") {
+            wait = 2000;
+            setChooser(null);
+            setNoDock(false);
+            return setDid(out.did);
           }
-          if (!res.ok) throw new Error(`/api/dock: ${res.status}`);
-          setChooser(null);
-          setDid(((await res.json()) as { did: string }).did);
+          if (out.kind === "choose") {
+            setError(null);
+            if (!FLOATING) return setChooser({ replaced: out.replaced });
+            setNoDock(true);
+            retry = window.setTimeout(open, wait);
+            wait = Math.min(wait * 2, 30_000);
+            return;
+          }
+          throw new Error(`/api/dock: ${out.status}`);
         })
-        .catch((e: unknown) => (FLOATING ? (retry = window.setTimeout(open, 2000)) : setError({ message: String(e), retry: unreachable(e) })));
+        .catch((e: unknown) => {
+          if (FLOATING) retry = window.setTimeout(open, 2000);
+          else setError({ message: String(e), retry: unreachable(e) });
+        });
+    const again = () => {
+      clearTimeout(retry);
+      wait = 2000;
+      void open();
+    };
+    if (FLOATING) {
+      window.addEventListener("focus", again);
+      window.addEventListener("online", again);
+    }
     void open();
-    return () => clearTimeout(retry);
+    return () => {
+      clearTimeout(retry);
+      window.removeEventListener("focus", again);
+      window.removeEventListener("online", again);
+    };
   }, [reopen, held]);
   /** Create a new dock: the person's choice, from the dock's own page (TIN-879). */
   const createDock = () => {
@@ -207,17 +234,13 @@ export function HubDock() {
       setState(s);
       setError(null);
     }, (e: unknown) => {
-      // The desktop app stays open for days, so its windows open the dock again when it is gone (403
-      // without the cookie, 404 once expired): the strip and the pets wait for the dock window's new one.
-      if ((FLOATING || DESKTOP_SHELL) && /: 40[34]$/.test(String(e))) {
+      // The dock does not open any more (403 when the cookie names another dock, 404 once it ended or the computer
+      // was removed): ask the server again, as the desktop app's windows always did (TIN-879). It says no_dock, and the
+      // chooser shows, only when there really is none; another tab may have joined a dock, and then this one follows.
+      if (/: 40[34]$/.test(String(e))) {
         setDid(null);
         setState(null);
         setReopen((n) => n + 1);
-      } else if (/: 40[34]$/.test(String(e))) {
-        // The web dock's cookie no longer opens it (TIN-838): removed on another computer, or the dock ended.
-        setState(null);
-        setDid(null);
-        setChooser({ replaced: true });
       } else setError({ message: String(e), retry: FLOATING || unreachable(e) });
     });
   }, [base]);
@@ -251,7 +274,7 @@ export function HubDock() {
           closed = true;
           setState(null);
           setDid(null);
-          setChooser({ replaced: true });
+          setReopen((n) => n + 1);
           return;
         }
         refresh();
@@ -375,6 +398,8 @@ export function HubDock() {
         </section>
       </main>
     );
+  // The strip and the pets with no dock say where to choose and wait quietly; they never make one.
+  if (noDock && FLOATING && !base) return PET ? <PetHint note="No dock yet: open your dock to create or join one" /> : <div className="float float-empty">No dock yet: choose in the dock window.</div>;
   if (error) return PET ? <PetWaiting note={unreached} /> : STRIP ? <div className="float float-empty">{unreached}</div> : <main><Header /><p>{error.retry ? unreached : `Could not open your dock: ${error.message}`}</p></main>;
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 

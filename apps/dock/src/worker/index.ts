@@ -90,6 +90,8 @@ app.post("/api/dock", async (c) => {
     keepCookie(c, current.did, current.owner);
     return c.json({ did: current.did, created: false });
   }
+  // A cookie for a dock that is gone goes, so the next visits (the pets poll) carry none and wake no object.
+  if (current) deleteCookie(c, COOKIE, { path: "/" });
   return c.json({ error: "no_dock", ...(current ? { replaced: true } : {}) }, 404, { "cache-control": "no-store" });
 });
 
@@ -112,7 +114,7 @@ app.use("/api/dock/new", async (c, next) => (fromThisSite(c) ? next() : c.json({
 /**
  * Create a dock (TIN-879): only when the person chose Create a new dock, and only from the dock's own page (a
  * page on another site must not be able to mint docks in the visitor's browser). A visitor whose dock still
- * opens gets that one back, so a double click or a second tab makes no second dock.
+ * opens gets that one back, so a second Create after the first returned makes no second dock. Two Creates in flight at once, from two tabs with no cookie, can still make two: the last cookie wins and the other dock ends by itself.
  */
 app.post("/api/dock/new", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { desktop?: unknown } | null;

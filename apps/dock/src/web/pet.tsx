@@ -212,10 +212,10 @@ function PetFrame(props: { where: string; name?: string; children: ReactNode; be
 }
 
 /** The empty dock's one pet: a click opens the dock, where agents are added. */
-export function PetHint() {
+export function PetHint(props: { note?: string }) {
   return (
     <PetFrame where="pet-right pet-up">
-      <button type="button" className="pet-logo pet-hint" title="No agents yet: open your dock to add one" aria-label="Open your dock to add an agent" onClick={petApp.openDock}>
+      <button type="button" className="pet-logo pet-hint" title={props.note ?? "No agents yet: open your dock to add one"} aria-label={props.note ?? "Open your dock to add an agent"} onClick={petApp.openDock}>
         <span className="chip">+</span>
       </button>
     </PetFrame>

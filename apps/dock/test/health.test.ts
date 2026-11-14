@@ -146,5 +146,6 @@ test("the dock cookie is sent again on every resume and state read, so it lasts 
   assert.equal(refused.headers.get("set-cookie"), null);
   const pets = await app.request("https://example.com/api/dock", { method: "POST", headers: { cookie: `apc_dock=${did}.${"f".repeat(32)}`, "content-type": "application/json" }, body: JSON.stringify({ resume: true }) }, env);
   assert.equal(pets.status, 404);
-  assert.equal(pets.headers.get("set-cookie"), null);
+  // Not renewed: a dock that is gone has its cookie cleared (TIN-879), never given a new life.
+  assert.match(pets.headers.get("set-cookie") ?? "", /^apc_dock=; Max-Age=0/);
 });
