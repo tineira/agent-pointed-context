@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using PulseDesktop;
 using Xunit;
 
@@ -56,4 +57,22 @@ public class HandoffTests
     [InlineData(9, "0:09")]
     [InlineData(-5, "0:00")]
     public void Clock_is_minutes_and_seconds(int seconds, string expected) => Assert.Equal(expected, Handoff.Clock(seconds));
+
+    [Fact]
+    public void A_tick_updates_the_card_in_place_and_never_rebuilds_its_controls()
+    {
+        var card = new HandoffCard("g_1", _ => Task.CompletedTask);
+        var cancel = card.Cancel;
+        var panel = Assert.IsType<StackPanel>(card.Root.Child);
+        card.Update(Handoff.View("dock.test", Pairing(100), Now), Now);
+        var before = panel.Children.ToArray();
+        // Each second, and through the expiry: the same controls (a Tab stop or a held click survives), and the code goes at zero.
+        for (var t = 1; t <= 101; t++)
+        {
+            var at = Now.AddSeconds(t);
+            card.Update(Handoff.View("dock.test", Pairing(100), at), at);
+            Assert.Equal(before, panel.Children.ToArray());
+            Assert.Same(cancel, card.Cancel);
+        }
+    }
 }

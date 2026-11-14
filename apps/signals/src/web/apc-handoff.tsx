@@ -7,7 +7,17 @@ import { createElement, useEffect, useRef } from "react";
 
 defineHandoff();
 
-export function ApcHandoff(props: { host: string; pairing: HandoffPairing | null; message?: string | null; onCancel: () => void; strings?: Partial<HandoffStrings> }) {
+export function ApcHandoff(props: {
+  host: string;
+  pairing: HandoffPairing | null;
+  message?: string | null;
+  onCancel: () => void;
+  strings?: Partial<HandoffStrings>;
+  /** The id of the card's title, for the dialog around it (aria-labelledby). */
+  titleId?: string;
+  /** Inside a dialog: focus moves to the card whenever it is drawn anew. */
+  autoFocus?: boolean;
+}) {
   const ref = useRef<ApcHandoffElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -18,12 +28,17 @@ export function ApcHandoff(props: { host: string; pairing: HandoffPairing | null
     el.addEventListener("apc-cancel", cancel);
     return () => el.removeEventListener("apc-cancel", cancel);
   }, []);
+  // Strings first, and on their own: a new object reaches the element even when nothing else changed.
+  useEffect(() => {
+    if (ref.current) ref.current.strings = props.strings ?? null;
+  }, [props.strings]);
   // Only when something shown changed: the element redraws on every set.
-  const key = JSON.stringify([props.host, props.pairing, props.message ?? null]);
+  const key = JSON.stringify([props.host, props.pairing, props.message ?? null, props.titleId ?? null, props.autoFocus ?? false]);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.strings = latest.current.strings ?? null;
+    el.autoFocus = latest.current.autoFocus ?? false;
+    el.titleId = latest.current.titleId ?? "";
     el.host = latest.current.host;
     el.message = latest.current.message ?? null;
     el.pairing = latest.current.pairing;

@@ -64,3 +64,36 @@ test("handoffClock", () => {
   assert.equal(handoffClock(9), "0:09");
   assert.equal(handoffClock(-5), "0:00");
 });
+
+import { handoffFollow, heldPairing, type HandoffFlow } from "../src/handoff-card.ts";
+
+const held = { code: "K7M4P2", expires_at: new Date(NOW + 100_000).toISOString() };
+const flow = (over: Partial<HandoffFlow> = {}): HandoffFlow => ({ grantId: "g_1", held, seen: false, ...over });
+
+test("a code the page holds, with no stored expiry yet, shows with no countdown, and is never given a guessed one", () => {
+  assert.deepEqual(heldPairing("K7M4P2", undefined), { code: "K7M4P2", expires_at: null });
+  assert.deepEqual(heldPairing("K7M4P2", {}), { code: "K7M4P2", expires_at: null });
+  assert.deepEqual(heldPairing("K7M4P2", { expires_at: held.expires_at }), held);
+  const v = handoffView({ host: "dock.test", pairing: heldPairing("K7M4P2", null), now: NOW + 9_999_999 });
+  assert.equal(v.phase, "code");
+  assert.equal(v.code, "K7M-4P2");
+  assert.equal(v.timed, false);
+});
+
+test("the card follows the app's state: held until the state has the grant, then the state's pairing is the truth", () => {
+  // The state has not caught up with the Allow yet: the page's held code, and not done.
+  assert.deepEqual(handoffFollow(flow(), undefined), { pairing: held, seen: false, done: false });
+  // In handoff with the code still to be typed: its pairing, and now seen.
+  const again = { code: "K7M4P2", expires_at: held.expires_at };
+  assert.deepEqual(handoffFollow(flow(), { state: "handoff", pairing: again }), { pairing: again, seen: true, done: false });
+  // The dock took the code: no pairing, so the card says it is connecting and shows no code; still not done.
+  assert.deepEqual(handoffFollow(flow({ seen: true }), { state: "handoff", pairing: null }), { pairing: null, seen: true, done: false });
+});
+
+test("the card is done when the dock connects or the grant goes, but not before the state has had the grant in handoff", () => {
+  assert.equal(handoffFollow(flow({ seen: true }), { state: "live" }).done, true, "connected");
+  assert.equal(handoffFollow(flow({ seen: true }), undefined).done, true, "the grant went (cancelled, given back, expired)");
+  assert.equal(handoffFollow(flow({ seen: false }), { state: "live" }).done, true, "a grant that comes straight as live");
+  assert.equal(handoffFollow(flow({ seen: false }), undefined).done, false, "a stale state from before the Allow must not close the card");
+  assert.equal(handoffFollow(flow({ seen: false }), { state: "in_flight" }).done, false);
+});

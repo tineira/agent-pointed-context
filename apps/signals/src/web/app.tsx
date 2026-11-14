@@ -7,7 +7,7 @@
  * Direct profile's list from @tineira/apc-web). The same agent both ways shows as one.
  */
 import { canonicalTarget, focusAttrs, formatPairingCode, type ApcProfile, type FocusRow, type FocusTarget } from "@tineira/apc-protocol";
-import { createViewReporter, dropExpiredWaits, enablePinning, foldWaitEvent, loadApcProfiles, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type AgentDrag, type BarAgent, type OpenWaits } from "@tineira/apc-web";
+import { createViewReporter, dropExpiredWaits, enablePinning, foldWaitEvent, handoffFollow, heldPairing, loadApcProfiles, mergePins, NO_OPEN_WAITS, nextWaitExpiry, waitOpen, type AgentDrag, type BarAgent, type HandoffPairing, type OpenWaits } from "@tineira/apc-web";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO_SEED, MONTHS } from "../../../demo/src/model/seed.ts";
 import type { Post } from "../../../demo/src/model/market.ts";
@@ -642,7 +642,7 @@ function Pins(props: { grants: GrantState[]; onUnpin: (grantId: string) => void 
 
 type ConsentPhase =
   | { kind: "ask" }
-  | { kind: "handoff"; grantId: string; held: { code: string; expires_at: string } }
+  | { kind: "handoff"; grantId: string; held: HandoffPairing }
   | { kind: "ended"; message: string };
 
 /**
@@ -678,21 +678,23 @@ function Consent(props: {
     return () => onHandoff(null);
   }, [grantId, onHandoff]);
   const grant = grantId ? props.grants.find((g) => g.id === grantId) : undefined;
+  // Signals' state is the truth once it has the grant (handoffFollow); until then the card shows what the page held. Once the
+  // state has had the grant in handoff and no longer does (or has it live), the dock connected or the grant went: the card is done.
+  const step = phase.kind === "handoff" ? handoffFollow({ grantId: phase.grantId, held: phase.held, seen: seen.current }, grant) : null;
+  const done = step?.done ?? false;
   const inHandoff = grant?.state === "handoff";
-  // Once Signals' state has had the grant in handoff and no longer does (or has it live), the dock connected or the grant went: the card is done.
   useEffect(() => {
-    if (!grantId) return;
     if (inHandoff) seen.current = true;
-    else if (seen.current || grant?.state === "live") onClose();
-  }, [grantId, inHandoff, grant?.state, onClose]);
+    if (done) onClose();
+  }, [inHandoff, done, onClose]);
   const allow = () => {
     if (answered.current) return;
     answered.current = true;
     setBusy(true);
     void props.allow().then((r) => {
       if (!r.ok || !r.grant_id) return setPhase({ kind: "ended", message: pairError(r.error) });
-      // Paired: the code the page held is shown now, with the expiry Signals stored (APC 0.10 § 4).
-      setPhase({ kind: "handoff", grantId: r.grant_id, held: { code: props.pending.pairing_code, expires_at: r.pairing?.expires_at ?? new Date(Date.now() + 120_000).toISOString() } });
+      // Paired: the code the page held is shown now, with the expiry Signals stored (APC 0.10 § 4); with none in the answer, no countdown until the state says.
+      setPhase({ kind: "handoff", grantId: r.grant_id, held: heldPairing(props.pending.pairing_code, r.pairing) });
     });
   };
   return (
@@ -713,9 +715,9 @@ function Consent(props: {
             </div>
           </>
         ) : phase.kind === "ended" ? (
-          <ApcHandoff host={host} pairing={null} message={phase.message} onCancel={onClose} />
+          <ApcHandoff host={host} pairing={null} message={phase.message} titleId="consent-title" autoFocus onCancel={onClose} />
         ) : (
-          <ApcHandoff host={host} pairing={grant ? (grant.pairing ?? null) : phase.held} onCancel={() => void props.onCancel(phase.grantId).then(onClose)} />
+          <ApcHandoff host={host} pairing={step?.pairing ?? null} titleId="consent-title" autoFocus onCancel={() => void props.onCancel(phase.grantId).then(onClose)} />
         )}
       </div>
     </div>

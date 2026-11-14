@@ -15,10 +15,13 @@
 import { formatPairingCode } from "@tineira/apc-protocol";
 import { DEFAULT_HANDOFF_STRINGS, resolveStrings, type HandoffStrings } from "./strings.ts";
 
-/** The code and the app's stored expiry (an ISO time, as the app's state carries it). */
+/**
+ * The code and the app's stored expiry (an ISO time, as the app's state carries it). `null` is for a code the page holds
+ * before the app's state has said when it ends: shown with no countdown, never with a guessed one.
+ */
 export interface HandoffPairing {
   code: string;
-  expires_at: string;
+  expires_at: string | null;
 }
 
 /** Event, no detail: the person pressed Cancel (or Close, once the pairing ended). */
@@ -36,6 +39,8 @@ export interface HandoffView {
   left: number;
   /** `m:ss`. */
   clock: string;
+  /** Whether there is a stored expiry to count down to: without one the code is shown with no clock. */
+  timed: boolean;
   /** The lines under the title, in order. */
   lines: string[];
   /** The button: Cancel takes the access back, Close only dismisses an ended pairing. */
@@ -58,9 +63,11 @@ export function handoffView(
   given?: Partial<HandoffStrings> | null,
 ): HandoffView {
   const w = resolveStrings(DEFAULT_HANDOFF_STRINGS, given);
-  const none = { code: null, left: 0, clock: handoffClock(0) };
+  const none = { code: null, left: 0, clock: handoffClock(0), timed: false };
   if (input.message) return { phase: "ended", title: w.endedTitle, ...none, lines: [input.message, w.dropAgain], button: w.close };
   if (!input.pairing) return { phase: "connecting", title: w.connectingTitle(input.host), ...none, lines: [w.connecting], button: w.cancel };
+  if (input.pairing.expires_at === null)
+    return { phase: "code", title: w.waitingTitle(input.host), code: formatPairingCode(input.pairing.code), left: 0, clock: handoffClock(0), timed: false, lines: [w.typeItOnlyInYourDock, w.notYours], button: w.cancel };
   const expires = Date.parse(input.pairing.expires_at);
   const left = Number.isFinite(expires) ? Math.max(0, Math.ceil((expires - input.now) / 1000)) : 0;
   if (left <= 0) return { phase: "expired", title: w.endedTitle, ...none, lines: [w.expired(input.host), w.dropAgain], button: w.cancel };
@@ -70,9 +77,47 @@ export function handoffView(
     code: formatPairingCode(input.pairing.code),
     left,
     clock: handoffClock(left),
+    timed: true,
     lines: [w.typeItOnlyInYourDock, w.notYours],
     button: w.cancel,
   };
+}
+
+/** A dock grant as the app's state has it: where it is (APC 0.10), and the code still to be typed while it is in handoff. */
+export interface HandoffLink {
+  state?: "in_flight" | "handoff" | "live" | undefined;
+  pairing?: HandoffPairing | null | undefined;
+}
+
+/** Where a consent card stands after the Allow: the grant it follows, the code the page held, and whether the state has had it in handoff. */
+export interface HandoffFlow {
+  grantId: string;
+  held: HandoffPairing | null;
+  seen: boolean;
+}
+
+/**
+ * The card's next step from the app's state (TIN-901), pure so it is tested. `link` is the grant in the app's state now, or
+ * undefined while the state has not caught up with the Allow. Until it has, the card shows what the page held. Once the
+ * state has had the grant in handoff, a state without it in handoff (live, or gone) means the dock connected or the grant
+ * ended: `done`, and the app closes the card (its banner is gone with the grant). A grant that comes straight as live is done too.
+ * With the state's grant, its `pairing` is the truth: null is the dock connecting, and the code is not shown.
+ */
+export function handoffFollow(flow: HandoffFlow, link: HandoffLink | undefined): { pairing: HandoffPairing | null; seen: boolean; done: boolean } {
+  const inHandoff = link?.state === "handoff";
+  return {
+    pairing: link ? (link.pairing ?? null) : flow.held,
+    seen: flow.seen || inHandoff,
+    done: !inHandoff && (flow.seen || link?.state === "live"),
+  };
+}
+
+/**
+ * The code the page held, with the expiry the app's answer to the Allow stored. An answer without one leaves the expiry
+ * unknown (null: no countdown) until the app's state says; the page never makes one up.
+ */
+export function heldPairing(code: string, answer: { expires_at?: string | null } | null | undefined): HandoffPairing {
+  return { code, expires_at: answer?.expires_at ?? null };
 }
 
 const STYLE_ID = "apc-handoff-style";
@@ -80,6 +125,7 @@ const CSS = `
 apc-handoff { display: block; color: var(--apc-ink, inherit); }
 .apc-handoff { display: flex; flex-direction: column; gap: 10px; }
 .apc-handoff__title { margin: 0; font-weight: 600; }
+.apc-handoff button:focus-visible { outline: 2px solid var(--apc-accent, #b85209); outline-offset: 2px; }
 .apc-handoff__code-block { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 12px; border: 1px solid var(--apc-line, #d6dce5); border-radius: 12px; background: var(--apc-chip, transparent); }
 .apc-handoff__label { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--apc-muted, #5b6575); }
 .apc-handoff__code { font: 700 2.4em/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.12em; white-space: nowrap; user-select: all; }
@@ -97,6 +143,10 @@ export interface ApcHandoffElement extends HTMLElement {
   pairing: HandoffPairing | null;
   message: string | null;
   strings: Partial<HandoffStrings> | null;
+  /** An id for the card's title, so a dialog around it can name itself by it (aria-labelledby). */
+  titleId: string;
+  /** Move focus into the card each time it is drawn anew (a phase change), as a dialog needs: to the Copy button, or to Cancel once there is no code. */
+  autoFocus: boolean;
 }
 
 /** Defines `<apc-handoff>` where custom elements exist (a browser), so importing this module in Node is safe. */
@@ -111,6 +161,8 @@ export function defineHandoff(tag = "apc-handoff"): void {
     private timer: ReturnType<typeof setInterval> | null = null;
     private shown = "";
     private clockEl: HTMLElement | null = null;
+    private idValue = "";
+    private focusIn = false;
 
     get host(): string {
       return this.hostName;
@@ -143,6 +195,21 @@ export function defineHandoff(tag = "apc-handoff"): void {
       this.render();
     }
 
+    get titleId(): string {
+      return this.idValue;
+    }
+    set titleId(next: string) {
+      this.idValue = next;
+      this.shown = "";
+      this.render();
+    }
+    get autoFocus(): boolean {
+      return this.focusIn;
+    }
+    set autoFocus(next: boolean) {
+      this.focusIn = next;
+    }
+
     connectedCallback(): void {
       if (!document.getElementById(STYLE_ID)) {
         const style = document.createElement("style");
@@ -165,7 +232,7 @@ export function defineHandoff(tag = "apc-handoff"): void {
       const view = handoffView({ host: this.hostName, pairing: this.pair, message: this.note, now: Date.now() }, this.given);
       const w = resolveStrings(DEFAULT_HANDOFF_STRINGS, this.given);
       // Each second only the clock changes: the card is redrawn when what it says does.
-      const key = JSON.stringify([view.phase, view.title, view.code, view.lines, view.button]);
+      const key = JSON.stringify([view.phase, view.title, view.code, view.timed, view.lines, view.button]);
       if (key === this.shown) {
         if (this.clockEl) this.clockEl.textContent = view.clock;
         return;
@@ -179,7 +246,9 @@ export function defineHandoff(tag = "apc-handoff"): void {
       const title = document.createElement("p");
       title.className = "apc-handoff__title";
       title.textContent = view.title;
+      if (this.idValue) title.id = this.idValue;
       card.append(title);
+      let first: HTMLElement | null = null;
       if (view.code) {
         const block = document.createElement("div");
         block.className = "apc-handoff__code-block";
@@ -204,15 +273,20 @@ export function defineHandoff(tag = "apc-handoff"): void {
           );
         });
         block.append(label, code, copy);
-        const clock = document.createElement("p");
-        clock.className = "apc-handoff__clock";
-        // "Works once. Expires in <b>m:ss</b>.": the clock is the part that changes.
-        const [before = "", after = ""] = w.expiresIn("\u0000").split("\u0000");
-        const time = document.createElement("b");
-        time.textContent = view.clock;
-        clock.append(before, time, after);
-        this.clockEl = time;
-        card.append(block, clock);
+        first = copy;
+        card.append(block);
+        if (view.timed) {
+          // Not a live region, so the countdown is not read out every second.
+          const clock = document.createElement("p");
+          clock.className = "apc-handoff__clock";
+          // "Works once. Expires in <b>m:ss</b>.": the clock is the part that changes.
+          const [before = "", after = ""] = w.expiresIn("\u0000").split("\u0000");
+          const time = document.createElement("b");
+          time.textContent = view.clock;
+          clock.append(document.createTextNode(before), time, document.createTextNode(after));
+          this.clockEl = time;
+          card.append(clock);
+        }
       }
       for (const line of view.lines) {
         const p = document.createElement("p");
@@ -230,6 +304,11 @@ export function defineHandoff(tag = "apc-handoff"): void {
       actions.append(cancel);
       card.append(actions);
       this.replaceChildren(card);
+      // A dialog's focus follows the card: the Copy button while there is a code, Cancel (or Close) when there is not.
+      if (this.focusIn) {
+        const target = first ?? cancel;
+        queueMicrotask(() => target.focus());
+      }
     }
   }
   customElements.define(tag, ApcHandoff);

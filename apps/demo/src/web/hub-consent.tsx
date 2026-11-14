@@ -9,7 +9,7 @@
  * ask for that code, the agent was someone else's: Cancel. Cancel ends the grant only while the dock has not
  * connected (APC 0.10); past the code's time the card stops showing the code.
  */
-import type { AgentDrag } from "@tineira/apc-web";
+import { handoffFollow, heldPairing, type AgentDrag, type HandoffPairing } from "@tineira/apc-web";
 import { formatPairingCode, type FocusTarget } from "@tineira/apc-protocol";
 import { useEffect, useRef, useState } from "react";
 import { REGIONS, type Region } from "../model/seed.ts";
@@ -59,7 +59,7 @@ export type HubLink = NonNullable<SandboxState["hub_links"]>[number];
 
 type Phase =
   | { kind: "ask" }
-  | { kind: "handoff"; grantId: string; held: { code: string; expires_at: string } }
+  | { kind: "handoff"; grantId: string; held: HandoffPairing }
   | { kind: "ended"; message: string };
 
 /**
@@ -98,13 +98,15 @@ export function HubConsent(props: {
     return () => onHandoff(null);
   }, [grantId, onHandoff]);
   const link = grantId ? props.links.find((l) => l.grant_id === grantId) : undefined;
+  // Pulse's state is the truth once it has the grant (handoffFollow); until then the card shows what the page held. Once the
+  // state has had the grant in handoff and no longer does (or has it live), the dock connected or the grant went: the card is done.
+  const step = phase.kind === "handoff" ? handoffFollow({ grantId: phase.grantId, held: phase.held, seen: seen.current }, link) : null;
+  const done = step?.done ?? false;
   const inHandoff = link?.state === "handoff";
-  // Once Pulse's state has had the grant in handoff and no longer does (or has it live), the dock connected or the grant went: the card is done.
   useEffect(() => {
-    if (!grantId) return;
     if (inHandoff) seen.current = true;
-    else if (seen.current || link?.state === "live") onDone(null);
-  }, [grantId, inHandoff, link?.state, onDone]);
+    if (done) onDone(null);
+  }, [inHandoff, done, onDone]);
   const allow = async () => {
     if (sent.current) return;
     sent.current = true;
@@ -115,8 +117,8 @@ export function HubConsent(props: {
         setPhase({ kind: "ended", message: hubError(r.error) });
         return;
       }
-      // Paired: the code the page held is shown now, with the expiry Pulse stored (APC 0.10 § 4).
-      setPhase({ kind: "handoff", grantId: r.grant_id, held: { code: props.drop.pairing_code, expires_at: r.pairing?.expires_at ?? new Date(Date.now() + 120_000).toISOString() } });
+      // Paired: the code the page held is shown now, with the expiry Pulse stored (APC 0.10 § 4); with none in the answer, no countdown until the state says.
+      setPhase({ kind: "handoff", grantId: r.grant_id, held: heldPairing(props.drop.pairing_code, r.pairing) });
       // A pin that failed while the pairing went through (pin_error) is said on the waiting card.
       props.onPaired(r.grant_id, r.pin_error ? { grantId: r.grant_id, error: r.pin_error } : undefined);
     } catch (error) {
@@ -152,10 +154,10 @@ export function HubConsent(props: {
             </div>
           </>
         ) : phase.kind === "ended" ? (
-          <ApcHandoff host={host} pairing={null} message={phase.message} onCancel={() => props.onDone(null)} />
+          <ApcHandoff host={host} pairing={null} message={phase.message} titleId="hub-consent-title" autoFocus onCancel={() => props.onDone(null)} />
         ) : (
           <>
-            <ApcHandoff host={host} pairing={link ? (link.pairing ?? null) : phase.held} onCancel={() => void props.onCancel(phase.grantId).then(() => props.onDone(null))} />
+            <ApcHandoff host={host} pairing={step?.pairing ?? null} titleId="hub-consent-title" autoFocus onCancel={() => void props.onCancel(phase.grantId).then(() => props.onDone(null))} />
             {props.pinError && <p>Not pinned where you dropped it ({props.pinError}). Once your dock connects, drop the agent there again.</p>}
           </>
         )}
