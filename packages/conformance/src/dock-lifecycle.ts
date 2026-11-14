@@ -1451,6 +1451,8 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent: a.agent, app: { name: app.name, origin: life.owner.origin }, mcp_url: a.mcpUrl, pairing_code: "K7M4P2" }) });
       const later = d.hub.pairings.filter((p) => p.mcp_url === a.mcpUrl).at(-1)!;
       expect(later.id !== a.pairing.id, "the stand-in made a second pairing for the grant");
+      // The reference hub's /apc/confirm answer carries no pairing_id; an app MUST ignore fields it does not know in a
+      // hub's answer (the spec, "Every drop: POST {hub}/apc/confirm"), so this one must change nothing.
       d.hub.confirmPairingId = later.id;
       try {
         await drop(life, d, a.agent);
@@ -1458,7 +1460,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         d.hub.confirmPairingId = null;
       }
       const stillOwn = await send(a.mcpUrl, "initialize", { ...INIT, _meta: { [APC_PAIRING_ID_META]: a.pairing.id, [APC_AGENT_META]: a.agent } }, false, true);
-      expect(served(stillOwn), `the grant's own pairing is still served after a second pairing named it and a /apc/confirm answer carried that one (it must not rebind): ${brief(stillOwn)}`);
+      expect(served(stillOwn), `the grant's own pairing is still served after a second pairing named it and a /apc/confirm answer carried that one (an app ignores fields it does not know in a hub's answer, and never rebinds): ${brief(stillOwn)}`);
       const rebound = await send(a.mcpUrl, "initialize", { ...INIT, _meta: { [APC_PAIRING_ID_META]: later.id, [APC_AGENT_META]: a.agent } }, false, true);
       expect(rebound.status === 404, `the second pairing's id took the grant (the binding changed): ${brief(rebound)}`);
       await refusedWith(life, d, "ack_unknown_binding", "M10 (an unknown binding scheme)");

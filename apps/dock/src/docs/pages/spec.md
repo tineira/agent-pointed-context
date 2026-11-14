@@ -192,6 +192,8 @@ The app **MUST** treat any other answer as a refusal and delete the grant: a red
 
 On a drop of an agent it already holds a grant for, the app asks the hub whether that pairing still stands: `{ ticket, agent, mcp_url }`. HTTP 200 with `{ ok: true, status }` (`"pending"` or `"paired"`) pins it; while it is pending the reference apps show the pairing code again. The answer never carries the code. `{ ok: false, error: "not_paired" }` means the dock no longer pairs it: the app drops the grant and asks the person again (the ticket is still good). A hub never confirms a revoked or blocked pairing. Since 0.10 the hub expires overdue requests before it answers (H2) and answers `not_paired` for a pairing it holds as ended; what the app does with a grant still in handoff is in [one pending pairing](#one-pending-pairing).
 
+An app **MUST** ignore fields it does not know in a hub's answer to `/apc/pair` or `/apc/confirm`: a later version may add some, and none of them changes what the app stored for a grant (since 0.12, its [binding](#the-binding) is written only from the acknowledgement of its own `/apc/pair`).
+
 ### The hub gives a grant back: `POST {app}/apc/revoke`
 
 When the person unpairs an app in the dock, denies its request, types the fifth wrong code, lets the request expire, or drops the agent again before approving (H3), the hub sends `{ mcp_url }` to the app's `/apc/revoke`, and the app ends that grant and deletes its pin. This is the hub's side; the app's own Revoke is core and needs no hub. The reference hub tries a give-back the app did not take again, a few times over half a day, and gives every grant back before a dock's data is deleted.
