@@ -46,8 +46,9 @@ app.use("*", async (c, next) => {
 /** A computer removed while its request ran (Hub.asOwner, TIN-909) is answered as one whose cookie no longer opens the dock. */
 app.onError((err, c) => {
   if (err instanceof Error && err.message.includes(NOT_OWNER)) return c.json({ error: "dock_expired" }, 404);
-  // Never the secret an error may quote (TIN-911): an MCP URL, a grant URL, a ticket or a token.
-  console.error(loggable(err));
+  // Nothing from an agent's MCP request (TIN-911): the platform stamps the record with the request URL, which holds the
+  // secret. Elsewhere, never the secret an error may quote: an MCP URL, a grant URL, a ticket or a token.
+  if (!new URL(c.req.url).pathname.startsWith("/mcp/")) console.error(loggable(err));
   return c.text("Internal Server Error", 500);
 });
 
@@ -356,7 +357,12 @@ app.all("/mcp/:did/:secret", async (c) => {
   // The header the owner's socket carries is the Worker's word alone: never one a caller sent.
   const headers = new Headers(c.req.raw.headers);
   headers.delete(OWNER_HEADER);
-  return stubFor(c.env, c.req.param("did")).fetch(new Request(c.req.raw, { headers }));
+  // A failure here is a bare 500, logged nowhere (TIN-911): any log record of this invocation carries the URL, and its secret.
+  try {
+    return await stubFor(c.env, c.req.param("did")).fetch(new Request(c.req.raw, { headers }));
+  } catch {
+    return c.json({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "internal error" } }, 500);
+  }
 });
 
 /**

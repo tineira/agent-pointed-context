@@ -68,7 +68,7 @@ export function isRedirect(response: Response): boolean {
   return (response.status >= 300 && response.status < 400) || response.status === 0 || (response.type as string) === "opaqueredirect" || response.redirected;
 }
 
-/** Rejects when the signal aborts:a call ends at its time limit even if the app never answers or never ends its body. */
+/** Rejects when the signal aborts: a call ends at its time limit even if the app never answers or never ends its body. */
 function deadline(signal: AbortSignal, what: string, ms: number): Promise<never> {
   const p = new Promise<never>((_, reject) => {
     const fail = () => reject(new AppCallError(`${what}: no answer within ${ms} ms`, undefined, "timeout"));
@@ -197,8 +197,13 @@ export async function initializeApp(mcpUrl: string, title: string, icon: string 
 /**
  * Give a grant back (TIN-388): whoever holds a grant may return it, and the app deletes it, its pins
  * and its dock link. The MCP URL is the proof. An app that does not know the endpoint answers 404.
+ *
+ * What came of it (TIN-911): `taken` (a 2xx); `failed`, worth another try (no answer, a time limit, a redirect,
+ * a 429 or a 5xx); `refused`, final (any other 4xx: the app does not know the endpoint or the grant, and asking
+ * again would change nothing).
  */
-export async function revokeGrant(mcpUrl: string, _transport: AppTransport = STRICT): Promise<boolean> {
+export type GiveBackOutcome = "taken" | "failed" | "refused";
+export async function giveBackOutcome(mcpUrl: string): Promise<GiveBackOutcome> {
   try {
     const response = await fetch(`${new URL(mcpUrl).origin}/apc/revoke`, {
       method: "POST",
@@ -210,9 +215,11 @@ export async function revokeGrant(mcpUrl: string, _transport: AppTransport = STR
     });
     // Only the status counts; the body is never read. A redirect is a failure.
     response.body?.cancel().catch(() => {});
-    return response.ok && !isRedirect(response);
+    if (isRedirect(response)) return "failed";
+    if (response.ok) return "taken";
+    return response.status === 429 || response.status >= 500 ? "failed" : "refused";
   } catch {
-    return false;
+    return "failed";
   }
 }
 

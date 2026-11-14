@@ -93,6 +93,7 @@ test("a give-back the app did not take is tried again on the alarm until it is t
   assert.equal(w.revokes(w.shop), 1);
   assert.deepEqual(w.givebacks().map((g) => [g.mcp_url, g.attempts]), [[grantUrl(w.shop), 0]], "kept to try again");
   assert.ok(Number(w.givebacks()[0]!.next_at) >= Date.now() + LIMITS.giveBackRetryMs[0]! - 1_000, "not before its time");
+  assert.equal(w.hubRoom.alarm, Number(w.givebacks()[0]!.next_at), "the dock's one alarm rings for it: nothing else is due sooner");
   await w.hub.alarm();
   assert.equal(w.revokes(w.shop), 1, "not due yet: nothing sent");
   w.due();
@@ -125,6 +126,54 @@ test("give-back retries are bounded, and a grant paired again is never given bac
   w.due();
   await w.hub.alarm();
   assert.equal(w.revokes(w.shop), sent);
+});
+
+test("a 404 or another 4xx is final: the hub does not try that give-back again; a 429 is tried again", async (t) => {
+  const w = await verifiedWorld(t);
+  w.shop.revoke = () => Response.json({ error: "not_found" }, { status: 404 });
+  await w.hub.decide(await w.pair(w.shop), "unpair");
+  assert.deepEqual(w.givebacks(), [], "a 404: nothing kept");
+  w.market.revoke = () => new Response("slow down", { status: 429 });
+  await w.hub.decide(await w.pair(w.market), "unpair");
+  assert.deepEqual(w.givebacks().map((g) => g.mcp_url), [grantUrl(w.market)]);
+  w.market.revoke = () => new Response("gone", { status: 410 });
+  w.due();
+  await w.hub.alarm();
+  assert.deepEqual(w.givebacks(), [], "a final answer on a retry ends it too");
+});
+
+test("the give-backs kept to try again are capped, the oldest dropped first", async (t) => {
+  const w = await verifiedWorld(t);
+  w.shop.revoke = () => new Response("down", { status: 503 });
+  const who = await w.agent();
+  for (let i = 0; i < 53; i++) {
+    const { ticket } = await w.hub.ticket(who.id);
+    const answer = await w.hub.pair({ ticket, agent: who.id, app: { name: w.shop.name, origin: SHOP }, mcp_url: `${SHOP}/mcp/${i.toString(16).padStart(32, "0")}`, pairing_code: CODE });
+    assert.equal(answer.ok, true, answer.error);
+    await w.hub.decide(answer.pairing_id, "deny");
+  }
+  const kept = w.givebacks().map((g) => String(g.mcp_url));
+  assert.equal(kept.length, 50);
+  assert.equal(kept.includes(`${SHOP}/mcp/${"0".repeat(32)}`), false, "the oldest went");
+  assert.equal(kept.includes(`${SHOP}/mcp/${(52).toString(16).padStart(32, "0")}`), true, "the newest stays");
+});
+
+test("Start over, and an expiring dock, give back the grants still to retry as well as the live ones", async (t) => {
+  const w = await verifiedWorld(t);
+  w.shop.revoke = () => new Response("down", { status: 503 });
+  await w.hub.decide(await w.pair(w.shop), "unpair");
+  assert.equal(w.givebacks().length, 1, "one kept to retry, and no pairing holds it");
+  await w.pair(w.market);
+  w.shop.revoke = undefined;
+  await w.hub.reset();
+  assert.deepEqual([w.revokes(w.shop), w.revokes(w.market)], [2, 1], "Start over: the queued one again, and the live one");
+  // The same for a dock that expires with a give-back still queued.
+  const v = await verifiedWorld(t);
+  v.shop.revoke = () => new Response("down", { status: 503 });
+  await v.hub.decide(await v.pair(v.shop), "unpair");
+  v.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() - 1));
+  await v.hub.alarm();
+  assert.equal(v.revokes(v.shop), 2, "expiry: the queued one tried once more before the data went");
 });
 
 test("a dock that expires gives every grant back before its data goes", async (t) => {
@@ -161,6 +210,26 @@ test("the dock's Workers keep no invocation logs, and what the dock logs carries
   assert.match(said, /fetch failed: https:\/\/apc\.example\/mcp\/\[redacted\] and https:\/\/shop\.example\/mcp\/\[redacted\]\?x=1, ticket \[redacted\]/);
   assert.equal(redactSecrets("nothing secret here"), "nothing secret here");
   assert.equal(redactSecrets(`"https://signals.example/mcp/grant_Ab-9xYz" failed`), `"https://signals.example/mcp/[redacted]" failed`, "a grant secret in any alphabet");
+  assert.equal(redactSecrets(`GET /x?token=abc-DEF_1&k=zz ok`), "GET /x?token=[redacted]&k=[redacted] ok", "a secret in a query value");
+  assert.equal(redactSecrets(`tok_${"A1".repeat(16)} rd_${"b".repeat(32)}.${"C".repeat(32)}`), "tok_[redacted] rd_[redacted]", "hex glued to _ and in upper case");
+});
+
+test("an agent's MCP request logs nothing, even when it fails: the platform stamps any record with the URL", async (t) => {
+  const said: unknown[] = [];
+  for (const method of ["log", "info", "warn", "error", "debug"] as const) t.mock.method(console, method, (...args: unknown[]) => void said.push(args));
+  const did = "d".repeat(32);
+  const secret = "e".repeat(32);
+  // The Worker: the dock's object throws.
+  const env: Json = { ASSETS: { fetch: async () => new Response("asset") }, HUB: { idFromName: (n: string) => n, get: () => ({ fetch: async () => { throw new Error(`boom at /mcp/${did}/${secret}`); } }) } };
+  const answer: Response = await app.request(`https://dock.test/mcp/${did}/${secret}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, env);
+  assert.equal(answer.status, 500);
+  // The dock's object: its MCP handler throws.
+  const w = await world(t);
+  const first = await w.agent();
+  (w.hub as { mcp: unknown }).mcp = async () => { throw new Error(`boom at ${first.mcp_url}`); };
+  const inside: Response = await w.hub.fetch(new Request(`https://dock.test${new URL(first.mcp_url).pathname}`, { method: "POST", body: "{}" }));
+  assert.equal(inside.status, 500);
+  assert.deepEqual(said, [], "nothing was logged");
 });
 
 // ---- F5: a reader request alone never unpairs a browser ----
@@ -182,9 +251,15 @@ test("a new reader request leaves the browser already paired as it is until the 
   const second = await ask();
   assert.deepEqual((await readers()).map((r) => r.status).sort(), ["paired", "pending"]);
   assert.equal((await w.hub.reading(reading, token, EXTENSION)).ok, true, "a request alone unpaired nothing");
-  // Allowed: the new one replaces the old.
-  await w.hub.decide((await readers()).find((r) => r.status === "pending")!.id, "approve");
+  // A third request (one sent with another drop's ticket) leaves the second one waiting too.
+  const third = await ask();
+  assert.deepEqual((await readers()).map((r) => r.status).sort(), ["paired", "pending", "pending"], "the earlier request still waits");
+  assert.equal((await w.hub.readerStatus({ claim: second }, EXTENSION)).status, "pending");
+  // Allowed: the one the person allows replaces every other.
+  const secondId = (await readers()).filter((r) => r.status === "pending")[0]!.id;
+  await w.hub.decide(secondId, "approve");
   assert.equal((await readers()).length, 1);
+  assert.equal((await w.hub.readerStatus({ claim: third }, EXTENSION)).status, "denied", "the other request went");
   assert.equal((await w.hub.reading(reading, token, EXTENSION)).error, "not_paired");
   const fresh = (await w.hub.readerStatus({ claim: second }, EXTENSION)).token as string;
   assert.equal((await w.hub.reading(reading, fresh, EXTENSION)).ok, true);

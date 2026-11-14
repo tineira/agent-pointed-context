@@ -16,7 +16,7 @@ import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
 import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
-import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, readApcJson, revokeGrant, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
+import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, giveBackOutcome, readApcJson, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
 import { appVerdict, declaredName, DOMAIN_ID_MAX, domainAppId, envList, isBlocked, LIMITS, shapeUnverifiedTools, UNTRUSTED_NOTE, unverifiedFocus, unverifiedLabel, unverifiedOpen, untrustedResult, unverifiedView, verifiedFocus } from "./trust.ts";
@@ -72,6 +72,13 @@ export interface Env {
 }
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
+/** The give-backs a dock keeps to try again, at most (TIN-911); and how many it sends at once. */
+const GIVEBACKS_MAX = 50;
+const GIVE_BACK_BATCH = 6;
+/** Run `work` over `items`, GIVE_BACK_BATCH at a time; settles when all did, whatever each gave. */
+async function inBatches<T>(items: T[], work: (item: T) => Promise<unknown>): Promise<void> {
+  for (let i = 0; i < items.length; i += GIVE_BACK_BATCH) await Promise.allSettled(items.slice(i, i + GIVE_BACK_BATCH).map(work));
+}
 /** A join's check number (TIN-911): four digits, both screens show it. Not a secret: it only has to match. */
 const joinCheck = () => String(crypto.getRandomValues(new Uint32Array(1))[0]! % 10_000).padStart(4, "0");
 
@@ -310,7 +317,7 @@ export class Hub extends DurableObject<Env> {
       create table if not exists joins (
         id text primary key, code text not null unique, status text not null, expires_at integer not null,
         label text, claim text unique, asked_at text, answer_by integer);
-      create table if not exists givebacks (mcp_url text primary key, verified integer not null, attempts integer not null, next_at integer not null);
+      create table if not exists givebacks (mcp_url text primary key, attempts integer not null, next_at integer not null);
     `);
     // A dock from before TIN-838 had one owner secret: it becomes the dock's first computer, so its cookie still opens it.
     const owner = this.meta("owner");
@@ -621,15 +628,17 @@ export class Hub extends DurableObject<Env> {
     return pairings.length ? Promise.allSettled(pairings.map((p) => this.giveBackGrant(p))) : Promise.resolve();
   }
   /**
-   * Give one grant back (TIN-388). An app that does not take it (no answer, an error, a redirect) keeps a live grant the
-   * hub no longer holds, so the hub tries again, on the alarm, at LIMITS.giveBackRetryMs (TIN-911), until the app
-   * takes it or the tries run out.
+   * Give one grant back (TIN-388). An app that did not take it for a reason that may pass (no answer, a 5xx, a 429, a
+   * redirect) keeps a live grant the hub no longer holds, so the hub tries again, on the alarm, at
+   * LIMITS.giveBackRetryMs (TIN-911), until the app takes it or the tries run out. Any other 4xx is final. The table
+   * holds GIVEBACKS_MAX rows at most; past that the oldest goes, so a flood of requests to dead hosts costs a bounded amount.
    */
   private async giveBackGrant(p: Pairing): Promise<void> {
-    if (await revokeGrant(p.mcp_url, transport(p))) return;
+    if ((await giveBackOutcome(p.mcp_url)) !== "failed") return;
     // Only while the dock still holds this grant nowhere live: a new request may carry the same URL again.
     if (this.holdsLive(p.mcp_url) || !this.meta("did")) return;
-    this.sql.exec("insert into givebacks (mcp_url, verified, attempts, next_at) values (?, ?, 0, ?) on conflict(mcp_url) do nothing", p.mcp_url, p.verified ? 1 : 0, Date.now() + LIMITS.giveBackRetryMs[0]!);
+    this.sql.exec("insert into givebacks (mcp_url, attempts, next_at) values (?, 0, ?) on conflict(mcp_url) do nothing", p.mcp_url, Date.now() + LIMITS.giveBackRetryMs[0]!);
+    this.sql.exec("delete from givebacks where rowid not in (select rowid from givebacks order by rowid desc limit ?)", GIVEBACKS_MAX);
     await this.arm();
   }
   /** Whether a pairing the hub may still call holds this grant URL. */
@@ -642,8 +651,8 @@ export class Hub extends DurableObject<Env> {
    */
   private retryGiveBacks(): Promise<unknown> {
     const now = Date.now();
-    const due = this.sql.exec<{ mcp_url: string; verified: number; attempts: number }>("select mcp_url, verified, attempts from givebacks where next_at <= ?", now).toArray();
-    const send: Array<{ mcp_url: string; verified: boolean }> = [];
+    const due = this.sql.exec<{ mcp_url: string; attempts: number }>("select mcp_url, attempts from givebacks where next_at <= ?", now).toArray();
+    const send: string[] = [];
     for (const g of due) {
       if (this.holdsLive(g.mcp_url)) {
         this.sql.exec("delete from givebacks where mcp_url = ?", g.mcp_url);
@@ -652,24 +661,22 @@ export class Hub extends DurableObject<Env> {
       const after = LIMITS.giveBackRetryMs[g.attempts + 1];
       if (after === undefined) this.sql.exec("delete from givebacks where mcp_url = ?", g.mcp_url);
       else this.sql.exec("update givebacks set attempts = ?, next_at = ? where mcp_url = ?", g.attempts + 1, now + after, g.mcp_url);
-      send.push({ mcp_url: g.mcp_url, verified: !!g.verified });
+      send.push(g.mcp_url);
     }
-    if (!send.length) return Promise.resolve();
-    return Promise.allSettled(
-      send.map(async (g) => {
-        if (await revokeGrant(g.mcp_url, { verified: g.verified })) this.sql.exec("delete from givebacks where mcp_url = ?", g.mcp_url);
-      }),
-    );
+    // Taken, or refused for good: nothing left to try.
+    return inBatches(send, async (url) => {
+      if ((await giveBackOutcome(url)) !== "failed") this.sql.exec("delete from givebacks where mcp_url = ?", url);
+    });
   }
   /**
    * Before the dock's data goes (it expired, Start over, its last computer left): every grant it still holds, and every
    * give-back still to retry, given back once, best effort, since nothing will be left to try again from (TIN-911).
    */
   private giveBackEverything(): Promise<unknown> {
-    const urls = new Map<string, boolean>();
-    for (const p of this.pairings().filter(givesBack)) urls.set(p.mcp_url, p.verified);
-    for (const g of this.sql.exec<{ mcp_url: string; verified: number }>("select mcp_url, verified from givebacks").toArray()) if (!urls.has(g.mcp_url)) urls.set(g.mcp_url, !!g.verified);
-    return Promise.allSettled([...urls].map(([url, verified]) => revokeGrant(url, { verified })));
+    // Bounded: LIMITS.pairings live grants and GIVEBACKS_MAX retries at most, sent GIVE_BACK_BATCH at a time.
+    const urls = new Set(this.pairings().filter(givesBack).map((p) => p.mcp_url));
+    for (const g of this.sql.exec<{ mcp_url: string }>("select mcp_url from givebacks").toArray()) urls.add(g.mcp_url);
+    return inBatches([...urls].slice(0, LIMITS.pairings + GIVEBACKS_MAX), (url) => giveBackOutcome(url));
   }
   /**
    * Work that runs after the request that started it has answered (TIN-609): giving grants back from
@@ -1150,7 +1157,7 @@ export class Hub extends DurableObject<Env> {
     const r = this.readers().find((x) => x.id === pairingId);
     if (r) {
       if (action === "approve" && r.status === "pending") {
-        // One reader per agent and extension: the one allowed now replaces the one paired before (TIN-911).
+        // One reader per agent and extension: the one allowed now replaces every other, paired or pending (TIN-911).
         for (const old of this.readers(r.agent_id).filter((x) => x.origin === r.origin && x.id !== r.id)) {
           this.sql.exec("delete from readers where id = ?", old.id);
           this.sql.exec("delete from pointer where pairing_id = ?", old.id);
@@ -1677,12 +1684,9 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from tickets where ticket = ?", b.ticket);
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
     const label = typeof b.label === "string" ? b.label.replace(/[\p{C}]/gu, "").trim().slice(0, 40) : "";
-    // One request per agent and extension: a new one replaces an older request. A paired reader stays until the person
-    // allows the new one (TIN-911): a request alone, which anyone holding a drop's ticket can make, never unpairs it.
-    for (const old of this.readers(t.agent_id).filter((r) => r.origin === origin && r.status === "pending")) {
-      this.sql.exec("delete from readers where id = ?", old.id);
-      this.sql.exec("delete from pointer where pairing_id = ?", old.id);
-    }
+    // A request alone replaces nothing (TIN-911): anyone holding a drop's ticket can make one with the extension's Origin,
+    // so it never unpairs the paired browser nor drops the extension's own pending request. Each takes a ticket, which a
+    // drag hands out once. The one the person allows replaces the others for this agent and extension (decide).
     const claim = `${this.meta("did")}.${randomHex(16)}`;
     this.sql.exec(
       "insert into readers (id, agent_id, label, origin, status, claim, created_at) values (?, ?, ?, ?, 'pending', ?, ?)",
@@ -1952,7 +1956,15 @@ export class Hub extends DurableObject<Env> {
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     const match = url.pathname.match(/^\/mcp\/[0-9a-f]{32}\/([0-9a-f]{32})$/);
-    if (match) return this.mcp(request, match[1]!);
+    if (match) {
+      // Nothing is logged from an agent's MCP request (TIN-911): the platform stamps every log record of the invocation,
+      // an uncaught exception's included, with the request URL, which holds the agent's secret. A failure is a bare 500.
+      try {
+        return await this.mcp(request, match[1]!);
+      } catch {
+        return Response.json({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "internal error" } }, { status: 500 });
+      }
+    }
     return new Response("not found", { status: 404 });
   }
 
