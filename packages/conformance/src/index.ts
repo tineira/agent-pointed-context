@@ -342,6 +342,7 @@ async function notify(app: ApcAppAdapter, to: AgentConnection, method: string, p
 /** What a check of a 0.8 rule says of an app that claims an earlier standard: passed, not checked. */
 const NOT_08 = { note: "not checked: the app's apc.json claims a standard before 0.8.0, which does not have this rule" };
 const NOT_011 = { note: "not checked: the app's apc.json claims a standard before 0.11.0, which has no wait events" };
+const NO_WAIT_EVENTS = { note: "not checked: the app sends no wait events (APC 0.11: optional, and only for an app that claims and releases its place for a wait atomically), so its page shows no waiting" };
 const DOCK_WAITS = { note: "not checked on the Dock profile: a dock agent waits on the hub, so the page shows no waiting for a dock grant (APC 0.11)" };
 
 /** The wait events of one grant among presence messages, checked for their exact shape (APC 0.11), oldest first. */
@@ -396,7 +397,6 @@ async function timed<T>(work: Promise<T>): Promise<{ value: T; ms: number }> {
 export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
   const [first, second] = app.targets;
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): ${name}`, run);
-  /** Whether the app's apc.json claims `version` or later: a rule added in a version is checked only of apps that claim it. */
   /**
    * An agent for a wait-event check (APC 0.11), revoked once the check ends (`waitCheck`), so the five checks add no
    * agents to the app's count: an app may cap its agents (Signals keeps at most 20 Direct ones).
@@ -407,16 +407,42 @@ export function apcConformance(app: ApcAppAdapter): ConformanceCheck[] {
     waitAgents.push(conn.grantId);
     return conn;
   };
+  /**
+   * Whether the app sends wait events at all (APC 0.11: a MAY): one short wait, and any wait event of its grant on the
+   * page. Asked once per run. An app that sends none passes the wait-event checks with a note; one that sends any is
+   * held to every rule.
+   */
+  let sendsWaits: Promise<boolean> | null = null;
+  const sendsWaitEvents = (conn: AgentConnection): Promise<boolean> =>
+    (sendsWaits ??= (async () => {
+      await app.page.setOpen(true);
+      app.page.takePresence();
+      await call(app, conn, "wait_for_focus", { timeout_s: 1 });
+      await sleep(300);
+      return app.page.takePresence().some((m) => m.grant_id === conn.grantId && m.kind === "wait");
+    })());
+  /** A wait-event check: Direct, an app that claims 0.11.0 and sends wait events, its agents revoked when it ends. */
   const waitCheck = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck =>
     check(name, async () => {
       try {
+        if (app.profile === "dock") return DOCK_WAITS;
+        const probe = await waitAgent();
+        if (!(await claims(probe, "0.11.0"))) return NOT_011;
+        if (!(await sendsWaitEvents(probe))) return NO_WAIT_EVENTS;
         return await run();
       } finally {
         const made = waitAgents;
         waitAgents = [];
-        for (const grantId of made) await Promise.resolve(app.page.revoke(grantId)).catch(() => false);
+        for (const grantId of made) {
+          try {
+            await app.page.revoke(grantId);
+          } catch {
+            // A revoke that fails here must not hide the check's own result.
+          }
+        }
       }
     });
+  /** Whether the app's apc.json claims `version` or later: a rule added in a version is checked only of apps that claim it. */
   const claims = async (conn: AgentConnection, version: string): Promise<boolean> => {
     const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
     const response = await (app.fetch ? app.fetch(request) : fetch(request));

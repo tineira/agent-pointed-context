@@ -161,9 +161,20 @@ function rewrittenPresence(rewrite: (messages: PresenceMessage[]) => PresenceMes
 const WAITS = "a wait publishes open, then closed";
 const TAKEOVER = "a takeover publishes the old wait's closed";
 
-test("the wait-event checks fail an app that sends no wait events (APC 0.11)", async () => {
+test("an app that sends no wait events passes every wait-event check with a note: they are optional (APC 0.11)", async () => {
   const checks = rewrittenPresence((m) => m.filter((e) => e.kind !== "wait"));
-  await assert.rejects(named(checks, WAITS).run(), /the page has its open/);
+  const names = [WAITS, TAKEOVER, "a cancelled wait publishes closed", "a wait whose grant is revoked publishes closed", "a refused wait publishes nothing"];
+  const waitChecks = names.map((n) => named(checks, n));
+  for (const c of waitChecks) {
+    await c.run();
+    assert.match(c.note ?? "", /not checked: the app sends no wait events/, c.name);
+  }
+});
+
+test("an app that sends open but never closed is held to the rules and fails (APC 0.11)", async () => {
+  const openOnly = rewrittenPresence((m) => m.filter((e) => !(e.kind === "wait" && e.state === "closed")));
+  await assert.rejects(named(openOnly, WAITS).run(), /has its closed, and only that: got \[\]/);
+  await assert.rejects(named(openOnly, "a cancelled wait publishes closed").run(), /got \[open\]/);
 });
 
 test("the wait-event checks fail an app whose wait events carry more than ids, or another shape (APC 0.11)", async () => {
