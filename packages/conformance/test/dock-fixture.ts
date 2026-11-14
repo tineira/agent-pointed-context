@@ -169,6 +169,8 @@ export interface FixtureOptions {
 
 export const ORIGIN = "https://fixture.test";
 export const HUB = "https://dock.test";
+/** Where the stand-in hub's clock starts: the day 0.12.0 was tagged, inside the window for hubs before 0.12. */
+export const HUB_CLOCK_START = Date.parse("2026-11-14T12:00:00Z");
 const SESSION = { cookie: "session=owner" };
 export const IDLE_MS = 60_000;
 /** Long dormancy: a grant dormant this long after falling asleep ends (the recommended 30 days). */
@@ -839,7 +841,10 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   const storage = fresh();
   const clock = { skew: 0 };
   let current: Fixture;
-  const hub = standInHub({ origin: HUB, app: (request) => current.fetch(request) });
+  // The hub's clock runs from a fixed start inside the 0.12 window (it closes 2027-05-14), so the window's check runs
+  // whatever day these tests run on.
+  const started = Date.now();
+  const hub = standInHub({ origin: HUB, app: (request) => current.fetch(request), now: () => HUB_CLOCK_START + (Date.now() - started) });
   current = new Fixture(storage, config, clock, hub);
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "order", id: "ord_1", part: null, params: null },

@@ -23,7 +23,9 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
    * A dock's hub, from the suite: it takes pairings (`/apc/pair`) and keeps their pairing codes, confirms them
    * (`/apc/confirm`), and calls the app back (`/apc/revoke`, and `initialize` once approved) through `app`.
    */
-  const hub = standInHub({ origin: HUB, app: (request) => app.fetch(request) });
+  // Its clock starts on the day 0.12.0 was tagged, inside the window the suite checks for hubs before 0.12.
+  const started = Date.now();
+  const hub = standInHub({ origin: HUB, app: (request) => app.fetch(request), now: () => Date.parse("2026-11-14T12:00:00Z") + (Date.now() - started) });
   // #endregion
   let skew = 0; // the time seam: the app's clock, moved forward by the checks
   const config: OrdersAppOptions = {
