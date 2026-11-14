@@ -4,14 +4,20 @@
  */
 import { focusAttrs } from "@tineira/apc-protocol";
 import { createViewReporter, defineAgentBar, enablePinning, flashTargets, initials, type ApcAgentsElement } from "@tineira/apc-web";
-import { TICKETS, type AgentRow } from "./tickets-app.ts";
+// Types only: the page never bundles the server module.
+import type { AgentRow, Ticket } from "./tickets-app.ts";
 
 const post = async (path: string, body: unknown = {}): Promise<Record<string, unknown>> =>
   (await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
 
-/** The tickets, each a row the person can point at: data-focus, made by focusAttrs. */
+/** The tickets, each a row the person can point at: data-focus, made by focusAttrs. Your page draws your own data. */
+const tickets: Ticket[] = [
+  { id: "t_101", subject: "Printer offline", status: "open" },
+  { id: "t_102", subject: "VPN drops every hour", status: "open" },
+  { id: "t_103", subject: "New laptop for Ana", status: "closed" },
+];
 const table = document.body.appendChild(document.createElement("table"));
-for (const ticket of TICKETS) {
+for (const ticket of tickets) {
   const row = table.appendChild(document.createElement("tr"));
   for (const [name, value] of Object.entries(focusAttrs({ kind: "ticket", id: ticket.id }))) row.setAttribute(name, value);
   row.append(Object.assign(document.createElement("td"), { textContent: ticket.subject }), Object.assign(document.createElement("td"), { textContent: ticket.status }));

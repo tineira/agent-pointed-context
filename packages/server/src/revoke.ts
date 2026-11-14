@@ -20,10 +20,12 @@ export const BEARER_INVALID_TOKEN = 'Bearer error="invalid_token"';
 
 /**
  * A bearer token the app does not know, or none (APC 0.8): a plain 401 with no `RevokedAnswer`, so the holder
- * tells "gone" from "taken back". The bearer binding's counterpart of a secret URL's 404.
+ * tells "gone" from "taken back". The bearer binding's counterpart of a secret URL's 404. A request that carried
+ * no token at all (`{ missing: true }`) gets the bare `Bearer` challenge, with no error code (RFC 6750, 3.1).
  */
-export function unknownBearerResponse(): Response {
-  return Response.json({ error: "invalid_token" }, { status: REVOKED_HTTP_STATUS_BEARER, headers: { "cache-control": "no-store", "www-authenticate": BEARER_INVALID_TOKEN } });
+export function unknownBearerResponse(options: { missing?: boolean } = {}): Response {
+  const body = options.missing ? { error: "unauthorized" } : { error: "invalid_token" };
+  return Response.json(body, { status: REVOKED_HTTP_STATUS_BEARER, headers: { "cache-control": "no-store", "www-authenticate": options.missing ? "Bearer" : BEARER_INVALID_TOKEN } });
 }
 
 /** What a call that was already running when its grant was revoked returns: the same answer, as a tool error, with no app data. */

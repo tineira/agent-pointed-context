@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { exampleRegion, fragmentTarget, headingIds, linksOf, parseInline, parseMarkdown, REPO, repoPath, resolveHref, slugify, type Block, type Inline } from "../src/docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, isDocsPath, SITE_PATHS } from "../src/docs/pages.ts";
-import { docHtmlFile, docMarkdownPath, staticDocFiles } from "../src/docs/static.ts";
+import { docHtmlFile, docMarkdownPath, docPageMarkdown, staticDocFiles } from "../src/docs/static.ts";
 import { readdirSync } from "node:fs";
 
 const root = new URL("../../../", import.meta.url);
@@ -272,4 +272,23 @@ test("the static pages escape the text, and /llms.txt names every page's Markdow
   // The asset server answers /docs with docs.html and /docs/spec with docs/spec.html.
   assert.deepEqual(DOC_PAGES.map(docHtmlFile).slice(0, 2), ["docs.html", "docs/spec.html"]);
   assert.match(read("apps/dock/vite.config.ts"), /plugins: \[[^\]]*staticDocs\(\)/, "the dock's build writes the static docs");
+});
+
+test("each static page has its own description, from its first paragraph, escaped (TIN-914 review)", () => {
+  const withMeta = SHELL.replace("</title>", '</title><meta name="description" content="Agent dock" />');
+  const files = new Map(staticDocFiles(withMeta, sources, examples).map((f) => [f.file, f.content]));
+  const descriptions = DOC_PAGES.map((p) => files.get(docHtmlFile(p))!.match(/<meta name="description" content="([^"]*)"/g) ?? []);
+  for (const found of descriptions) assert.equal(found.length, 1, "one description, the dock's replaced");
+  assert.equal(new Set(descriptions.map((d) => d[0])).size, DOC_PAGES.length, "a different one per page");
+  assert.ok(!descriptions.some((d) => d[0]!.includes("Agent dock")));
+  const page = DOC_PAGES[0]!;
+  const one = staticDocFiles(withMeta, { ...sources, [page.path]: '# T\n\nSay "hi" & <go>.' }, examples).find((f) => f.file === docHtmlFile(page))!.content;
+  assert.ok(one.includes('<meta name="description" content="Say &quot;hi&quot; &amp; &lt;go&gt;." />'));
+});
+
+test("the Markdown leaves code alone: a link written in a code span or a code block is not rewritten (TIN-914 review)", () => {
+  const page = DOC_PAGES.find((p) => p.path === "/docs/changelog")!;
+  const md = docPageMarkdown(page, "# T\n\nSee [the root](../../CHANGELOG.md) and `[x](../../CHANGELOG.md)` as written.\n\n```md\n[y](../y.md)\n```\n", examples);
+  assert.ok(md.includes(`See [the root](${REPO}/blob/main/CHANGELOG.md) and \`[x](../../CHANGELOG.md)\` as written.`));
+  assert.ok(md.includes("```md\n[y](../y.md)\n```"));
 });

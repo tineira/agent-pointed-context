@@ -51,7 +51,7 @@ Build it once, when the app starts: `apcManifest` throws on a declaration reader
 
 ## Revoke
 
-A revoked grant answers every request with `revokedResponse(host, revokedAt)`: the `RevokedAnswer` with 403, for a secret URL. With a bearer token, `revokedResponse(host, revokedAt, { bearer: true })`: 401 with `WWW-Authenticate: Bearer error="invalid_token"`. A token the app does not know is `unknownBearerResponse()`, a plain 401 with no `RevokedAnswer` (a secret URL's unknown grant is a 404). A call already running when its grant is revoked ends with `revokedToolResult(host, revokedAt)`.
+A revoked grant answers every request with `revokedResponse(host, revokedAt)`: the `RevokedAnswer` with 403, for a secret URL. With a bearer token, `revokedResponse(host, revokedAt, { bearer: true })`: 401 with `WWW-Authenticate: Bearer error="invalid_token"`. A token the app does not know is `unknownBearerResponse()`, a plain 401 with no `RevokedAnswer` (a secret URL's unknown grant is a 404); a request with no token at all is `unknownBearerResponse({ missing: true })`, with the bare `Bearer` challenge. A call already running when its grant is revoked ends with `revokedToolResult(host, revokedAt)`.
 
 ## Dock helpers (APC 0.10)
 

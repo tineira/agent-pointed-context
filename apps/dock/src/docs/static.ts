@@ -69,6 +69,14 @@ function blocks(list: Block[], file: string, examples: Record<string, string>): 
     .join("\n");
 }
 
+/** A page's description, for search results and link previews: its first paragraph as text, cut at a word near 200 characters. */
+export function docDescription(source: string): string {
+  const para = parseMarkdown(source).find((b) => b.t === "para");
+  const text = para?.t === "para" ? plainText(para.c).replace(/\s+/g, " ").trim() : "";
+  if (!text) return "The docs of the Agent Pointed Context (APC) standard.";
+  return text.length <= 200 ? text : `${text.slice(0, 200).replace(/\s+\S*$/, "")}…`;
+}
+
 /** A page's title, as its one `#` heading says it. */
 export function docTitle(source: string): string {
   const title = parseMarkdown(source).find((b) => b.t === "heading" && b.level === 1);
@@ -91,7 +99,8 @@ export function docPageHtml(page: DocPage, source: string, examples: Record<stri
 
 const FENCE = /^```/;
 const INCLUDE_LINE = /^<!--\s*include\s+([\w.-]+\.ts)(?:#([\w-]+))?\s*-->\s*$/;
-const LINK_TARGET = /(\]\()([^()\s]+)(\))/g;
+const CODE_SPAN = /(`[^`]*`)/;
+const LINK_TARGET =/(\]\()([^()\s]+)(\))/g;
 
 /**
  * The page as Markdown, to read with no renderer: its source, with each `<!-- include -->` replaced by the
@@ -109,11 +118,14 @@ export function docPageMarkdown(page: DocPage, source: string, examples: Record<
       out.push(`From [${file}](${REPO}/blob/main/${EXAMPLES_DIR}/${file}):`, "", "```ts", text, "```");
       continue;
     }
-    out.push(code ? line : line.replace(LINK_TARGET, (all, open: string, href: string, close: string) => {
-      if (href.startsWith("/") || href.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(href)) return all;
-      const resolved = resolveHref(href, page.file);
-      return resolved ? `${open}${resolved}${close}` : all;
-    }));
+    // Links are rewritten only outside code: a code span (`[a](b.md)` in backticks) stays as written.
+    const rewrite = (part: string) =>
+      part.replace(LINK_TARGET, (all, open: string, href: string, close: string) => {
+        if (href.startsWith("/") || href.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(href)) return all;
+        const resolved = resolveHref(href, page.file);
+        return resolved ? `${open}${resolved}${close}` : all;
+      });
+    out.push(code ? line : line.split(CODE_SPAN).map((part, i) => (i % 2 ? part : rewrite(part))).join(""));
   }
   const text = out.join("\n").trimEnd();
   return `${text}\n\n---\n\nThe APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. This page as HTML: ${page.path}. Text CC BY 4.0, code MIT. Source: ${REPO}/blob/main/${page.file}\n`;
@@ -157,7 +169,9 @@ export function staticDocFiles(shell: string, sources: Record<string, string>, e
     const md = docMarkdownPath(page);
     const html = shell
       .replace(/<title>[^<]*<\/title>/, () => `<title>${escapeHtml(`${docTitle(source)} · APC docs`)}</title>`)
-      .replace("</head>", () => `  <link rel="alternate" type="text/markdown" href="${md}" />\n  </head>`)
+      // The page's own description, in place of the dock's.
+      .replace(/\s*<meta name="description"[^>]*>/, "")
+      .replace("</head>", () => `  <meta name="description" content="${escapeHtml(docDescription(source))}" />\n  <link rel="alternate" type="text/markdown" href="${md}" />\n  </head>`)
       .replace('<div id="root"></div>', () => `<div id="root">${docPageHtml(page, source, examples)}</div>`);
     files.push({ file: docHtmlFile(page), content: html }, { file: md.slice(1), content: docPageMarkdown(page, source, examples) });
   }

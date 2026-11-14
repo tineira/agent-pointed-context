@@ -109,6 +109,9 @@ test("revokedResponse: 403 with a secret URL, 401 with the Bearer challenge for 
   assert.equal(unknown.status, 401);
   assert.equal(unknown.headers.get("www-authenticate"), 'Bearer error="invalid_token"');
   assert.notEqual(((await unknown.json()) as Record<string, unknown>).error, "revoked", "no RevokedAnswer: gone, not taken back");
+  const missing = unknownBearerResponse({ missing: true });
+  assert.equal(missing.status, 401);
+  assert.equal(missing.headers.get("www-authenticate"), "Bearer", "no token sent: the bare challenge, no error code (RFC 6750)");
 });
 
 test("the pin is unread until a read after it was dropped", () => {

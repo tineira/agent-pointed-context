@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runHttpConformance } from "@tineira/apc-conformance";
+import { TicketsApp } from "../src/docs/examples/tickets-app.ts";
 import { ticketsChecks, ticketsUnderTest } from "../src/docs/examples/tickets-conformance.ts";
 
 for (const check of ticketsChecks()) test(check.name, check.run);
@@ -24,7 +25,7 @@ test("Tickets: no token or an unknown one is a plain 401; a revoked one is 401 w
   for (const token of [null, "0123456789abcdef0123456789abcdef"]) {
     const r = await app.fetch(rpc(token));
     assert.equal(r.status, 401);
-    assert.equal(r.headers.get("www-authenticate"), 'Bearer error="invalid_token"');
+    assert.equal(r.headers.get("www-authenticate"), token ? 'Bearer error="invalid_token"' : "Bearer");
     assert.notEqual(((await r.json()) as { error?: string }).error, "revoked");
   }
   const made = (await (await app.fetch(new Request(`${ORIGIN}/api/agents`, { method: "POST", headers: session, body: "{}" }))).json()) as { id: string; url: string; token: string };
@@ -50,4 +51,25 @@ test("Tickets passes the command line's checks: a live bearer grant, then the sa
   const revoked = await runHttpConformance({ origin: ORIGIN, revoked: made.url, revokedBearer: made.token, fetch });
   assert.equal(revoked.failed, 0, JSON.stringify(revoked.results.filter((r) => r.status === "fail")));
   assert.ok(revoked.results.some((r) => r.status === "pass" && /revoked/i.test(r.name)), "the revoked check ran");
+});
+
+test("Tickets: no token gets the bare Bearer challenge; a revoked token gets the RevokedAnswer even with a body over the cap (TIN-914 review)", async () => {
+  const { app } = ticketsUnderTest();
+  const none = await app.fetch(rpc(null));
+  assert.equal(none.status, 401);
+  assert.equal(none.headers.get("www-authenticate"), "Bearer", "no error code when no token was sent (RFC 6750)");
+  const made = (await (await app.fetch(new Request(`${ORIGIN}/api/agents`, { method: "POST", headers: session, body: "{}" }))).json()) as { id: string; token: string };
+  await app.fetch(new Request(`${ORIGIN}/api/agents/${made.id}/revoke`, { method: "POST", headers: session, body: "{}" }));
+  const big = await app.fetch(new Request(`${ORIGIN}/mcp`, { method: "POST", headers: { authorization: `Bearer ${made.token}`, "content-type": "application/json" }, body: "x".repeat(2_000_000) }));
+  assert.equal(big.status, 401);
+  assert.equal(((await big.json()) as { error: string }).error, "revoked");
+  const unknown = await app.fetch(new Request(`${ORIGIN}/mcp`, { method: "POST", headers: { authorization: "Bearer 0123456789abcdef0123456789abcdef" }, body: "x".repeat(2_000_000) }));
+  assert.equal(unknown.status, 401, "an unknown token is refused before its body is read");
+});
+
+test("Tickets has no open default: without signedIn it does not start, and a request without the session is refused (TIN-914 review)", async () => {
+  assert.throws(() => new TicketsApp(ORIGIN, {} as never), /give signedIn/);
+  const { app } = ticketsUnderTest();
+  const r = await app.fetch(new Request(`${ORIGIN}/api/agents`, { method: "POST", headers: { "content-type": "application/json", origin: ORIGIN }, body: "{}" }));
+  assert.equal(r.status, 401);
 });

@@ -25,7 +25,8 @@
  *   whole run has its own deadline (TOTAL_MS), shorter than the CI step's, so that cleanup always gets to run. A
  *   failed Start over after a pairing that passed is a warning, not a failure. No secret.
  *
- * Before the pairing, the docs: they read with a plain GET, no JavaScript (TIN-914).
+ * Before the pairing, once and before any try: the docs read with a plain GET, no JavaScript (TIN-914). A failure there
+ * fails the run without making a dock or a sandbox.
  *
  * Exit code 0 only when the pairing passed; the last line is the summary. On a failure in GitHub Actions the first
  * failing step is also an `::error::` annotation.
@@ -120,9 +121,8 @@ const started = Date.now();
 let runtime = { send: (url, init) => fetch(url, init), stop: async () => {} };
 
 /** One try: its own cookies, what it made (to start over), and its result. */
-function newTry(n) {
+function newTry(n, label = TRIES > 1 ? `[try ${n}] ` : "") {
   const t = { n, failed: 0, firstFailure: null, warnings: [], jar: new Map(), made: { dock: null, pulse: null }, cleaned: false };
-  const label = TRIES > 1 ? `[try ${n}] ` : "";
   t.check = (ok, what, detail) => {
     if (ok) console.log(`${label}ok - ${what}`);
     else {
@@ -214,7 +214,6 @@ async function readDocs(t) {
 /** The pairing's steps, on one try. */
 async function pair(t) {
   const { call, rpc, check, must } = t;
-  await readDocs(t);
 
   // The dock: a new one, as its page makes it when the person presses Create a new dock (TIN-879: POST /api/dock
   // only resumes, and /api/dock/new takes only the dock's own origin), and the agent it opens with, connected.
@@ -305,6 +304,16 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function main() {
   if (!PRODUCTION) runtime = await startWorkerd();
+  // The docs first, once: they make nothing, and a failure here never starts a pairing (no dock or sandbox is made).
+  const docs = newTry(0, "");
+  tries.push(docs);
+  try {
+    await withDeadline(readDocs(docs), 3 * STEP_MS, "the docs");
+  } catch (error) {
+    docs.check(false, error instanceof Error ? error.message : String(error));
+  }
+  if (docs.failed) return docs;
+  tries.pop();
   for (let n = 1; n <= TRIES; n++) {
     const t = newTry(n);
     tries.push(t);

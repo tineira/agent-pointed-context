@@ -2,7 +2,7 @@
  * Tickets: a complete Direct app in one file, whose agents authenticate with a bearer token on one shared MCP
  * URL (APC 0.8, the OAuth binding). The guide at apc.tineira.com/docs/integrate shows it whole: every name it
  * uses is defined here or exported by a package. Copy it, swap the tickets for your data and your sign-in for
- * `signedIn`, and the conformance suite passes (tickets-conformance.ts; `apps/dock/test/docs-examples.test.ts`
+ * `signedIn`, and the conformance suite passes (tickets-conformance.ts; `apps/dock/test/docs-tickets.test.ts`
  * runs it).
  *
  * Web standard Request and Response, so it runs on Node, Deno, Bun or a Cloudflare Worker. State is in memory,
@@ -117,11 +117,15 @@ export class TicketsApp {
   /** MCP's notifications/cancelled comes in a POST of its own: the calls in flight, to find the one it names. */
   private readonly calls = new InflightCalls();
 
-  /** `origin`: the public origin you configure, never one read from a request. `signedIn`: your own sign-in (every request, by default). */
-  constructor(origin: string, options: { signedIn?: (request: Request) => boolean } = {}) {
+  /**
+   * `origin`: the public origin you configure, never one read from a request. `signedIn`: your own sign-in, required:
+   * whether a request carries the person's session. There is no default, so a copy of this file is never open to all.
+   */
+  constructor(origin: string, options: { signedIn: (request: Request) => boolean }) {
     this.origin = origin;
     this.host = new URL(origin).host;
-    this.signedIn = options.signedIn ?? (() => true);
+    if (typeof options?.signedIn !== "function") throw new TypeError("TicketsApp: give signedIn, your own sign-in check");
+    this.signedIn = options.signedIn;
     // One MCP URL, /mcp, shared by every grant: the bearer token names the grant. mcp.path is a prefix that starts and
     // ends with /, and covers /mcp, the exact endpoint (APC 0.11) that readers from 0.11 on go by.
     this.manifest = apcManifest({ name: "Tickets", origin, profiles: ["direct"], connect: "/", mcpPath: "/mcp/", endpoints: [{ path: "/mcp", profiles: ["direct"] }] });
@@ -249,22 +253,27 @@ export class TicketsApp {
     return { kind: pin.kind, id: pin.id, part: pin.part, params: pin.params, app_url: `${this.origin}/tickets/${pin.id}`, pinned_at: pin.pinned_at, next: "get_ticket", next_args: { id: pin.id } };
   }
 
+  /** What a token that holds no live grant answers: the `RevokedAnswer` (401) if it was revoked, else a plain 401. */
+  private notLive(tokenHash: string): Response {
+    const revokedAt = this.revoked.get(tokenHash);
+    return revokedAt ? revokedResponse(this.host, revokedAt, { bearer: true }) : unknownBearerResponse();
+  }
+
   /**
-   * The MCP endpoint, one URL for every grant. No token, or one the app does not know: a plain 401 (no
-   * `RevokedAnswer`). A revoked token: 401 with the `RevokedAnswer` and `WWW-Authenticate: Bearer
-   * error="invalid_token"`, to every method, before anything else.
+   * The MCP endpoint, one URL for every grant. No token: a plain 401 with the bare `Bearer` challenge. A token the
+   * app does not know: a plain 401 (no `RevokedAnswer`). A revoked token: 401 with the `RevokedAnswer` and
+   * `WWW-Authenticate: Bearer error="invalid_token"`, to every request, before anything else (its body is not even read).
    */
   private async mcp(request: Request): Promise<Response> {
     const token = bearerToken(request);
-    if (!token) return unknownBearerResponse();
+    if (!token) return unknownBearerResponse({ missing: true });
     const tokenHash = await secretHash(token);
+    if (!this.grants.has(tokenHash)) return this.notLive(tokenHash);
     const text = request.method === "POST" ? await cappedText(request, MCP_BODY_MAX_BYTES).catch(() => null) : "";
     if (text === null) return Response.json({ error: "too_large" }, { status: 413 });
+    // Read again after the body: a revoke while it arrived is answered as revoked.
     const grant = this.grants.get(tokenHash);
-    if (!grant) {
-      const revokedAt = this.revoked.get(tokenHash);
-      return revokedAt ? revokedResponse(this.host, revokedAt, { bearer: true }) : unknownBearerResponse();
-    }
+    if (!grant) return this.notLive(tokenHash);
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     let body: unknown = null;
     try {

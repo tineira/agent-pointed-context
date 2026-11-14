@@ -202,7 +202,9 @@ Tickets, a help desk's tickets, is the smallest complete Direct app, in three fi
 How the bearer binding answers, all done by the server below:
 
 - **The token names the grant.** `newDirectGrant()` gives a random grant id (`g_…`, stable for the grant's life, what pins and presence name) and a 128-bit secret, used as the token. The app keeps only the token's SHA-256 (`secretHash`), and finds the grant by it.
-- **No token, or one the app does not know: a plain 401** with `WWW-Authenticate: Bearer error="invalid_token"` and no `RevokedAnswer` (`unknownBearerResponse()`), the bearer counterpart of a secret URL's 404.
+- **A token the app does not know: a plain 401** with `WWW-Authenticate: Bearer error="invalid_token"` and no `RevokedAnswer` (`unknownBearerResponse()`), the bearer counterpart of a secret URL's 404. **No token at all:** the same 401 with the bare challenge `WWW-Authenticate: Bearer` (`unknownBearerResponse({ missing: true })`). Both are answered before the body is read.
+- **A revoked or unknown token is told apart before anything else**, a body over the cap included: the `RevokedAnswer` never waits on the request.
+- **`signedIn` has no default.** The person's routes need your sign-in; a copy of this file that leaves it out does not start.
 - **A revoked token: 401 with the `RevokedAnswer`** (`{ error: "revoked", revoked_by, revoked_at, message }`) and the same `WWW-Authenticate`, to every method, before anything else: `revokedResponse(host, revokedAt, { bearer: true })`. A secret URL's revoked answer is the same body with 403 (`revokedResponse(host, revokedAt)`).
 - **The person pastes two things into their agent:** the MCP URL and the header `Authorization: Bearer <token>`, shown once. A full OAuth 2.1 server issuing the tokens fits the same answers; this file mints them on the page to stay small.
 
