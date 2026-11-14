@@ -271,7 +271,8 @@ export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7";
  *   declared local-dev origin), or with userinfo, a path other than `/`, a query or a fragment. Compare
  *   `url.origin` for exact equality with a constant allowlist, on the drop and again on the Allow; otherwise
  *   `hub_not_allowed`, with no consent and no grant.
- * - **M2. Redirects.** `redirect: "error"`, and refuse any 3xx, `opaqueredirect` or `response.redirected`.
+ * - **M2. Redirects.** Never follow one: `redirect: "manual"` (or `"error"` where the runtime has it; Cloudflare
+ *   Workers does not, and throws), and refuse any 3xx, `opaqueredirect` or `response.redirected`.
  * - **M3. Time limit.** One deadline, `HUB_CALL_DEADLINE_MS` at most, covers the headers and the whole body.
  * - **M4. Byte cap**, `HUB_ANSWER_MAX_BYTES` at most. A `content-length` that is present must match `^\d+$`
  *   and be at most the cap, or the answer is refused before reading; the decoded stream is cut at the cap;

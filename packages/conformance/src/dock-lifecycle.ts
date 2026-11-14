@@ -485,7 +485,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       d.hub.releaseStalls();
     }
     const elsewhere = d.hub.requests.slice(calls).filter((u) => new URL(u).origin !== d.hub.origin);
-    expect(elsewhere.length === 0, `${rule}: with a hub that answers ${mode}, the app's request reached ${elsewhere.join(", ")}: the secret MCP URL and the pairing code went past the hub (call it with redirect: "error")`);
+    expect(elsewhere.length === 0, `${rule}: with a hub that answers ${mode}, the app's request reached ${elsewhere.join(", ")}: the secret MCP URL and the pairing code went past the hub (call it with redirect: "manual" and refuse the 3xx)`);
     const sent = d.hub.received.slice(before).find((b) => b.agent === c.agent);
     expect(sent && typeof sent.mcp_url === "string", `${rule}: with a hub that answers ${mode}, the app sent no /apc/pair to check`);
     for (const method of ["tools/list", "initialize"]) {
@@ -523,7 +523,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     }
     const called = d.hub.requests.slice(calls);
     const elsewhere = called.filter((u) => new URL(u).origin !== d.hub.origin);
-    expect(elsewhere.length === 0, `${where}, the app's request reached ${elsewhere.join(", ")}: the secret MCP URL went past the hub (call it with redirect: "error")`);
+    expect(elsewhere.length === 0, `${where}, the app's request reached ${elsewhere.join(", ")}: the secret MCP URL went past the hub (call it with redirect: "manual" and refuse the 3xx)`);
     expect(called.includes(`${d.hub.origin}/apc/confirm`), `${where}, the drop of an agent the app holds a grant for never called ${d.hub.origin}/apc/confirm: it called ${JSON.stringify(called)}`);
     expect(shown.page === "refused" || shown.page === "consent", `${where}, the drop shows ${JSON.stringify(shown).slice(0, 200)}: the app took the answer, and must refuse it (a failed confirm shows no code and pins nothing)`);
     const state = await stateOf(g.mcpUrl);

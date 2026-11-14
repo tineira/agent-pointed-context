@@ -6,6 +6,10 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
+### Dock pairing works again on Cloudflare Workers (2026-11-13, APC 0.11.1)
+
+- **Pulse and Signals pair with the dock again.** Since APC 0.10 their call to the dock asked `fetch` for `redirect: "error"`, which Workers does not implement: the call threw before it was sent, and the page said "The dock did not answer". The hub client now uses `redirect: "manual"` and still refuses any redirect, and a test fakes the Workers runtime. (`packages/server/src/hub-client.ts`, `packages/server/test/hub-client.test.ts`, `packages/protocol/src/dock.ts`, `apps/dock/src/docs/pages/spec.md`, `packages/conformance/src/dock-lifecycle.ts`)
+
 ### The agent in the page, packaged (2026-11-13, TIN-878)
 
 - **`@tineira/apc-web` ships the agent pet, and the dock draws its pets with it, unchanged.** `createPet` and `<apc-pet>`, the header pets `<apc-pets>` (3 + N, with a popover), the brand logos, `petState` (waiting only when the app says a wait is open), light and dark pets (`scheme`, `tint`), and a `badge` on `<apc-pin>`. (`packages/web/src/pet.ts`, `packages/web/src/pet-state.ts`, `packages/web/src/pet-pose.ts`, `packages/web/src/pet-scheme.ts`, `packages/web/src/brands.ts`, `packages/web/src/header-pets.ts`, `packages/web/src/pin-badge.ts`, `apps/dock/src/web/apc-pet.tsx`, `apps/dock/src/docs/pages/spec.md`, `apps/dock/src/docs/pages/integrate.md`)

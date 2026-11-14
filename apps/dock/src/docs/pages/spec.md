@@ -263,7 +263,7 @@ There is one pending pairing per (user, hub, agent), at the app and at the hub (
 What an app **MUST** do around the drop and the hub call (`DockAppRequirement`):
 
 - **M1. Allowlist.** Parse the drop's `hub` with `new URL`. Refuse anything unparsable, not `https:` (except a declared local-dev origin), or carrying userinfo, a path other than `/`, a query or a fragment. Compare `url.origin` for exact equality with a constant allowlist, on the drop **and** again on the Allow. Otherwise answer `hub_not_allowed`, with no consent and no grant.
-- **M2. Redirects.** Call the hub with `redirect: "error"`, and also refuse any 3xx, an `opaqueredirect` or `response.redirected`.
+- **M2. Redirects.** Never follow a redirect. Call the hub with `redirect: "manual"` (or `"error"` where the runtime implements it: Cloudflare Workers does not, and throws a `TypeError` before sending anything), and refuse any 3xx, an `opaqueredirect` or `response.redirected`.
 - **M3. Time limit.** One deadline, at most 10 seconds (`HUB_CALL_DEADLINE_MS`), covers the headers and the whole body.
 - **M4. Byte cap**, at most 8 KiB (`HUB_ANSWER_MAX_BYTES`). A `content-length` that is present must be ASCII digits only (`/^\d+$/`) and at most the cap, or the answer is refused before it is read. The decoded stream is cut at the cap. An absent `content-length` is not refused. The declared and decoded lengths are never compared, because of `gzip`.
 - **M5. No lock across the call.** No database transaction or row lock is held across the hub call. One drop, Allow or confirm runs at a time per (user, hub, agent), across instances (an advisory lock and a partial unique index will do).

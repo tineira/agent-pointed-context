@@ -11,7 +11,8 @@ import { HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, PAIRING_CODE_ACK, type Dock
  *   unparsable, or has userinfo, a path other than `/`, a query or a fragment, is `hub_not_allowed`, and
  *   nothing is sent. Check the hub against the app's
  *   allowlist first (`parseDockDrop`, M1): this client does not know the allowlist.
- * - **M2.** `redirect: "error"`, and any 3xx, `opaqueredirect` or `response.redirected` is `hub_refused`:
+ * - **M2.** `redirect: "manual"` (never `"follow"`; Cloudflare Workers throws on `"error"` before sending, so
+ *   the portable mode is `"manual"`), and any 3xx, `opaqueredirect` or `response.redirected` is `hub_refused`:
  *   the app's hub list is its trust anchor, and a redirect would hand the grant and the pairing code to
  *   another host.
  * - **M3.** One deadline, `timeoutMs` (10 s by default, and never more: `HUB_CALL_DEADLINE_MS`), covers the
@@ -106,7 +107,9 @@ async function post(hub: string | URL, path: string, body: unknown, options: Hub
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
-          redirect: "error",
+          // "manual", not "error": Workers throws on "error" (the call would never be sent), and "manual"
+          // gives the 3xx (or an opaqueredirect in a browser) back, which is refused below.
+          redirect: "manual",
           signal: controller.signal,
         }),
         expired,
