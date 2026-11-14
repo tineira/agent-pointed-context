@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PresenceWaitEvent } from "@tineira/apc-protocol";
 import { flashTargets } from "../src/presence.ts";
-import { dropExpiredWaits, foldWaitEvent, nextWaitExpiry, NO_OPEN_WAITS, waitOpen } from "../src/wait-presence.ts";
+import { agentWaitOpen, dropExpiredWaits, foldWaitEvent, nextWaitExpiry, NO_OPEN_WAITS, waitOpen } from "../src/wait-presence.ts";
+import { petState } from "../src/pet-state.ts";
 
 const at = "2026-11-13T10:00:00.000Z";
 const wait = (grant_id: string, state: "open" | "closed"): PresenceWaitEvent => ({ v: 1, grant_id, at, kind: "wait", state });
@@ -59,4 +60,14 @@ test("dropExpiredWaits removes only the opens past the rule, and keeps the same 
   const pruned = dropExpiredWaits(open, 60_000);
   assert.deepEqual([...pruned.keys()], ["g2"]);
   assert.equal(nextWaitExpiry(pruned), 90_000, "the next timer is the next open's");
+});
+
+test("an agent shown as one waits only on its Direct grant's open wait, and that feeds the pet's waiting", () => {
+  const open = foldWaitEvent(foldWaitEvent(NO_OPEN_WAITS, wait("direct_1", "open"), 0), wait("dock_1", "open"), 0);
+  const linked = [{ id: "direct_1", path: "direct" as const }, { id: "dock_1", path: "dock" as const }];
+  assert.equal(agentWaitOpen(open, linked, { now: 1000 }), true);
+  assert.equal(agentWaitOpen(open, [linked[1]!], { now: 1000 }), false, "a dock grant alone never waits, whatever its events");
+  assert.equal(agentWaitOpen(open, linked, { now: 60_000 }), false, "past the rule");
+  assert.equal(petState({ connected: true, waiting: agentWaitOpen(open, linked, { now: 1000 }) }), "waiting");
+  assert.equal(petState({ connected: true, waiting: agentWaitOpen(open, [linked[1]!], { now: 1000 }) }), "idle");
 });

@@ -68,3 +68,12 @@ export function dropExpiredWaits(open: OpenWaits, now: number = Date.now(), ceil
   const kept = [...open].filter(([, since]) => now - since < limit);
   return kept.length === open.size ? open : new Map(kept);
 }
+
+/**
+ * Whether an agent shown as one (a pet, an entry of the agent bar) is listening now: a wait open on any of its Direct
+ * grants. Its dock grants never count (`waitOpen`). What a pet's `waiting` input takes for an agent linked across both
+ * paths (`apc_link`), or for one with a single grant.
+ */
+export function agentWaitOpen(open: OpenWaits, grants: ReadonlyArray<{ id: string; path: ApcProfile }>, options: Omit<WaitOpenOptions, "path"> = {}): boolean {
+  return grants.some((g) => waitOpen(open, g.id, { ...options, path: g.path }));
+}
