@@ -129,10 +129,13 @@ test("the page makes a chooser only from the dock's own no_dock, never from anot
   }
 });
 
-test("the owner's API refuses another site, a sibling subdomain included, before it reads the cookie (TIN-865)", async () => {
+test("the owner's API refuses another site on every route, a sibling subdomain included, before it reads the cookie (TIN-865)", async () => {
   const { env, docks } = world();
   const did = "a".repeat(32);
   docks.set(did, "b".repeat(32));
+  let ownerChecks = 0;
+  const hub = env.HUB.get(did);
+  const counted = { ...env, HUB: { ...env.HUB, get: () => ({ ...hub, isOwner: async (s: string) => (ownerChecks++, hub.isOwner(s)) }) } };
   const cookie = `apc_dock=${did}.${"b".repeat(32)}`;
   const forged: Array<Record<string, string>> = [
     { origin: "https://evil.example" },
@@ -142,16 +145,17 @@ test("the owner's API refuses another site, a sibling subdomain included, before
     { "sec-fetch-site": "same-site" },
     { "sec-fetch-site": "cross-site" },
   ];
-  for (const path of [`/api/d/${did}/reset`, `/api/d/${did}/pairings/p1`, `/api/d/${did}/agents/x/remove`]) {
+  const routes = app.routes.filter((r) => r.path.startsWith("/api/d/:did/") && r.method !== "ALL");
+  assert.ok(routes.length >= 15, `found ${routes.length} owner routes`);
+  for (const route of routes) {
+    const path = route.path.replace(":did", did).replace(/:[a-z]+/g, "x");
     for (const headers of forged) {
-      const response = await app.request(`${ORIGIN}${path}`, post({ action: "allow" }, { cookie, ...headers }), env);
-      assert.equal(response.status, 403, `${path} ${JSON.stringify(headers)}`);
+      const init = route.method === "GET" ? { headers: { cookie, upgrade: "websocket", ...headers } } : post({ action: "allow" }, { cookie, ...headers });
+      const response = await app.request(`${ORIGIN}${path}`, init, counted);
+      assert.equal(response.status, 403, `${route.method} ${path} ${JSON.stringify(headers)}`);
     }
   }
-  for (const headers of forged) {
-    const response = await app.request(`${ORIGIN}/api/d/${did}/state`, { headers: { cookie, ...headers } }, env);
-    assert.equal(response.status, 403, `state ${JSON.stringify(headers)}`);
-  }
+  assert.equal(ownerChecks, 0, "the cookie was checked before the guard");
 });
 
 test("the owner's API still answers the dock's own page: same Origin, or a same-origin GET with no Origin", async () => {
