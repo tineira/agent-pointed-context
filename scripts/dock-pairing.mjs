@@ -196,9 +196,10 @@ const wrongCode = (code) => (code[0] === "0" ? "1" : "0") + code.slice(1);
 async function pair(t) {
   const { call, rpc, check, must } = t;
 
-  // The dock: a new one, and the agent it opens with, connected.
-  const dock = await call(`${DOCK}/api/dock`, { method: "POST", body: {} });
-  must(dock.status === 200 && typeof dock.json?.did === "string", "the dock opens", dock);
+  // The dock: a new one, as its page makes it when the person presses Create a new dock (TIN-879: POST /api/dock
+  // only resumes, and /api/dock/new takes only the dock's own origin), and the agent it opens with, connected.
+  const dock = await call(`${DOCK}/api/dock/new`, { method: "POST", body: {} });
+  must(dock.status === 200 && dock.json?.created === true && typeof dock.json?.did === "string", "the dock is created (Create a new dock)", dock);
   t.made.dock = `${DOCK}/api/d/${dock.json.did}`;
   const dockState = async () => (await call(`${t.made.dock}/state`)).json;
   const agent = (await dockState())?.agents?.[0];
