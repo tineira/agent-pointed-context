@@ -30,32 +30,42 @@ test("Float's state: a click whose resize threw leaves the notice (P3-1)", () =>
   assert.equal(run([{ type: "open", id: "p1", outer: small, ok: false }]).opened, null);
 });
 
-test("Float's state: the last decision shrinks, and the earlier size is kept until a resize confirms it (P2-2)", () => {
-  let s = run([{ type: "open", id: "p1", outer: small, ok: true }, { type: "decide", last: true }]);
+test("Float's state: decide and idle never shrink Float by themselves (errors, wrong codes and fallbacks stay visible)", () => {
+  let s = run([
+    { type: "open", id: "p1", outer: small, ok: true },
+    { type: "decide", last: true },
+  ]);
+  assert.deepEqual(s, { before: small, opened: "p1", wantShrink: false });
+  s = floatSizeReducer(s, { type: "idle" });
+  assert.deepEqual(s, { before: small, opened: null, wantShrink: false });
+  // A subsequent request must not overwrite `before` with the still-large size.
+  s = floatSizeReducer(s, { type: "grow", outer: big });
+  assert.equal(s.before, small);
+  assert.equal(s.wantShrink, false);
+});
+
+test("Float's state: only Done or dismiss (shrink) asks to shrink back, and the earlier size is kept until resize confirms it", () => {
+  let s = run([
+    { type: "open", id: "p1", outer: small, ok: true },
+    { type: "idle" },
+    { type: "shrink" },
+  ]);
   assert.deepEqual(s, { before: small, opened: null, wantShrink: true });
-  s = floatSizeReducer(s, { type: "resize", outer: big }); // refused: still card-sized
+  s = floatSizeReducer(s, { type: "resize", outer: big }); // still card-sized
   assert.equal(s.before, small);
   assert.equal(s.wantShrink, true);
-  s = floatSizeReducer(s, { type: "grow", outer: big }); // the next request must not record the big size
-  assert.equal(s.before, small);
-  s = floatSizeReducer(s, { type: "decide", last: true });
   s = floatSizeReducer(s, { type: "resize", outer: small });
   assert.deepEqual(s, FLOAT_START);
 });
 
-test("Float's state: a request decided elsewhere shrinks on the next click in the window (P2-2)", () => {
-  const s = run([{ type: "open", id: "p1", outer: small, ok: true }, { type: "idle" }]);
-  assert.deepEqual(s, { before: small, opened: null, wantShrink: true });
+test("Float's state: shrink with no saved earlier size does nothing", () => {
+  assert.deepEqual(floatSizeReducer(FLOAT_START, { type: "shrink" }), FLOAT_START);
 });
 
-test("Float's state: after a decision, a replacing request shows the notice again (P2-1)", () => {
-  const s = run([{ type: "open", id: "p1", outer: small, ok: true }, { type: "decide", last: true }]);
-  assert.equal(s.opened, null); // p2 is not the request the card was opened for
-});
-
-test("Float's state: a decision with another request waiting keeps the size, and the window closing resets", () => {
-  let s = run([{ type: "open", id: "p1", outer: small, ok: true }, { type: "decide", last: false }]);
-  assert.deepEqual(s, { before: small, opened: null, wantShrink: false });
-  s = floatSizeReducer(s, { type: "reset" });
+test("Float's state: reset clears everything when the window closes", () => {
+  const s = run([
+    { type: "open", id: "p1", outer: small, ok: true },
+    { type: "reset" },
+  ]);
   assert.deepEqual(s, FLOAT_START);
 });

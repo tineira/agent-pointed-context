@@ -7,8 +7,9 @@
  * APC 0.9), never a URL or a grant. The dock keeps a fresh ticket per agent so the drag can start at once,
  * refreshed below 180 s left on a 10 s check (so about three minutes), and the app's two-minute consent fits in it.
  *
- * A request whose app sent a pairing code (APC 0.9, TIN-859) is approved with that code: typed on the dock's
- * page or an agent's page (pairing-request.tsx); Float, the strip and the pets send the person to the dock.
+ * A request whose app sent a pairing code (APC 0.9, TIN-859) is approved with that code: typed on the card
+ * everywhere except the pet bubble (pairing-request.tsx). Connect requests (APC 0.13, TIN-916) and
+ * multi-computer join requests show across the same surfaces.
  */
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -30,9 +31,10 @@ import { ExtensionOutdatedNotice } from "./extension.tsx";
 import { FloatIcon, PlusIcon } from "./icons.tsx";
 import { DecisionNotice, NotVerified } from "./unverified.tsx";
 import { PairingRequest } from "./pairing-request.tsx";
-import { ComputersPanel, JoinPanel, JoinRequests, LinkPanel } from "./computers.tsx";
+import { ConnectApp, ConnectRequest, mergeConnectItems, type BlockedConnect, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
+import { ComputersPanel, JoinPanel, JoinRequests, LinkPanel, pendingJoins, useNow } from "./computers.tsx";
 import { REMOVED_CLOSE } from "../worker/devices.ts";
-import { decisionNotice, inFlightOf, isCodeRetryError, isConnectingAnswer, kindOf, landed, mayAnswer, sentOut, type CodeError, type InFlight, type Sent } from "./request-state.ts";
+import { approveAndOpen, beginAnswer, decisionNotice, endAnswer, inFlightOf, isCodeRetryError, isConnectingAnswer, type CodeError, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "where your agents point"];
@@ -108,8 +110,9 @@ export function HubDock() {
   // A new object on each failure, so a failed retry sets up the next one.
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
-  /** Answers on their way per request (Review round 1 and Fix check 2 on #120): which buttons are off until they land, on every surface. */
-  const [deciding, setDeciding] = useState<Sent>(new Map());
+  /** Answers on their way per request (Review round 1 and Fix check 2 on #120): ref guards double-clicks before re-render. */
+  const decidingRef = useRef<Sent>(new Map());
+  const [deciding, setDeciding] = useState<Sent>(decidingRef.current);
   /** What the hub said when it refused the last answer (Fix check 4 on #120), shown on every surface of this page. */
   const [notice, setNotice] = useState<string | null>(null);
   /**
@@ -117,6 +120,9 @@ export function HubDock() {
    * (a wrong, malformed or missing code). Every other refusal is the notice above.
    */
   const [codeErrors, setCodeErrors] = useState<ReadonlyMap<string, CodeError>>(new Map());
+  /** Approved Connect requests whose popup was blocked (outside desktop shell): kept until clicked or dismissed. */
+  const [blockedConnects, setBlockedConnects] = useState<BlockedConnect[]>([]);
+  const joinNow = useNow(!!state && (state.joins ?? []).some((j) => j.status === "pending"));
   // It stays a while, then goes by itself; the person can close it sooner.
   useEffect(() => {
     if (!notice) return;
@@ -342,6 +348,11 @@ export function HubDock() {
     const keep = new Set(pendingIds.split(","));
     setCodeErrors((m) => ([...m.keys()].every((id) => keep.has(id)) ? m : new Map([...m].filter(([id]) => keep.has(id)))));
   }, [pendingIds]);
+  // A blocked-open Connect card goes if its agent leaves the dock.
+  useEffect(() => {
+    const keep = new Set(ids ? ids.split(",") : []);
+    setBlockedConnects((list) => (list.every((b) => keep.has(b.agentId)) ? list : list.filter((b) => keep.has(b.agentId))));
+  }, [ids]);
 
   // The pets tell the app the dock's agents on every change, so a pet comes and goes with each (TIN-479),
   // with their names for the tray's Float menu (TIN-698).
@@ -406,10 +417,10 @@ export function HubDock() {
   const decide = (pid: string, action: Decision, code?: string) => {
     // Never the same kind twice, and no yes once anything is on its way; a Deny still goes while an Approve is
     // on its way, from this surface too, so a misclick can be undone (Fix check 2 on #120). The hub lets it win.
-    const kind = kindOf(action);
     const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
-    if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
-    setDeciding((m) => sentOut(m, pid, kind));
+    const kind = beginAnswer(decidingRef, pid, action, approving);
+    if (!kind) return;
+    setDeciding(decidingRef.current);
     setNotice(null);
     // The code, typed on the card, goes in the body (APC 0.9): compared in the hub, then dropped.
     void call<{ ok?: boolean; error?: unknown; attempts_left?: unknown }>(`${base}/pairings/${pid}`, { action, ...(code ? { code } : {}) })
@@ -429,12 +440,57 @@ export function HubDock() {
       .catch(() => setNotice(decisionNotice("unreachable")))
       .finally(() => {
         // Answered or failed: that kind clears, and only it (a failed Deny can be sent again).
-        setDeciding((m) => landed(m, pid, kind));
+        setDeciding(endAnswer(decidingRef, pid, kind));
         refresh();
       });
   };
-  /** What is on its way for a request: Approve off while a yes is, both off while a Deny is (request-state.ts). */
+  const joins = pendingJoins(state, joinNow);
+  const agentNameById = (agentId: string) => state.agents.find((a) => a.id === agentId)?.name ?? "your agent";
   const inFlight = (p: { id: string }) => inFlightOf(deciding.get(p.id));
+  const connectItems = mergeConnectItems(state.connects ?? [], blockedConnects, agentNameById, (id) => inFlightOf(deciding.get(id)));
+  const decideConnect = (c: DockConnect, action: ConnectAction, opener?: Window) => {
+    const kind = beginAnswer(decidingRef, c.id, action);
+    if (!kind) return;
+    setDeciding(decidingRef.current);
+    setNotice(null);
+    if (action === "deny") {
+      void call<{ ok?: boolean; error?: unknown }>(`${base}/connects/${c.id}/deny`, {})
+        .then((r) => {
+          if (r?.ok === false) setNotice(decisionNotice(r.error, "connect"));
+        })
+        .catch(() => setNotice(decisionNotice("unreachable", "connect")))
+        .finally(() => {
+          setDeciding(endAnswer(decidingRef, c.id, kind));
+          refresh();
+        });
+      return;
+    }
+    void approveAndOpen({
+      approve: () => call<{ ok?: boolean; url?: string; error?: unknown }>(`${base}/connects/${c.id}/approve`, action === "approve_unverified" ? { action } : {}),
+      opener: opener ?? window,
+      desktop: DESKTOP_SHELL,
+      kind: c.kind,
+    })
+      .then((res) => {
+        if (res.status === "blocked") {
+          setBlockedConnects((list) => [
+            ...list.filter((b) => b.id !== c.id),
+            { id: c.id, agentId: c.agent, agentName: agentNameById(c.agent), origin: c.origin, host: c.host, name: c.name, verified: c.verified, url: res.url },
+          ]);
+        } else if (res.status === "error") {
+          setNotice(decisionNotice(res.error, "connect"));
+        }
+      })
+      .catch(() => setNotice(decisionNotice("unreachable", "connect")))
+      .finally(() => {
+        setDeciding(endAnswer(decidingRef, c.id, kind));
+        refresh();
+      });
+  };
+  const dismissBlockedConnect = (id: string) => setBlockedConnects((list) => list.filter((b) => b.id !== id));
+  const openBlockedConnect = (id: string) => setTimeout(() => dismissBlockedConnect(id), 0);
+
+  /** What is on its way for a request: Approve off while a yes is, both off while a Deny is (request-state.ts). */
   const dragProps = (a: DockAgent) => ({
     // An agent not connected yet does not drag (TIN-908): Connect this agent, under its tile, connects it.
     draggable: canDrag(a),
@@ -507,6 +563,7 @@ export function HubDock() {
     inFlight: inFlight(pairing),
     approving: !!pairing.approving,
     ...(pairing.code ? { code: true } : {}),
+    error: codeErrors.get(pairing.id) ?? null,
     ...(pairing.app.unverified ? { unverified: { declared: pairing.app.declared_name ?? null, warning: !!pairing.warning } } : {}),
   }));
   const floatDrag = (a: DockAgent) => ({ startDrag: (e: DragEvent) => startDrag(e, a.id), endDrag: () => endDrag(a.id) });
@@ -523,7 +580,10 @@ export function HubDock() {
       <PetView
         agent={agent}
         requests={floatRequests.filter((r) => r.agentId === agent.id)}
+        connects={connectItems.filter((c) => c.connect.agent === agent.id)}
         decide={(id, action) => decide(id, action)}
+        decideConnect={(c, action) => decideConnect(c, action)}
+        dismissBlockedConnect={dismissBlockedConnect}
         startDrag={(e) => startDrag(e, agent.id)}
         endDrag={() => endDrag(agent.id)}
         refusal={noticeEl}
@@ -532,7 +592,26 @@ export function HubDock() {
   }
 
   // The APC dock for Windows' always-on-top strip (#84), in its builds before the pets: only what Float shows.
-  if (STRIP) return <FloatAgents agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} refusal={noticeEl} />;
+  if (STRIP)
+    return (
+      <FloatAgents
+        state={state}
+        base={base}
+        refresh={refresh}
+        agents={state.agents}
+        joinsCount={joins.length}
+        connects={connectItems}
+        requests={floatRequests}
+        decide={decide}
+        decideConnect={(c, action) => decideConnect(c, action)}
+        dismissBlockedConnect={dismissBlockedConnect}
+        openBlockedConnect={openBlockedConnect}
+        onJoinError={setNotice}
+        dragProps={floatDrag}
+        refusal={notice}
+        onDismissRefusal={() => setNotice(null)}
+      />
+    );
 
   const pageOf = agentRoute(path);
   if (pageOf) {
@@ -556,8 +635,12 @@ export function HubDock() {
         <AgentPage
           agent={agent}
           base={base}
+          apps={state.apps ?? []}
           requests={agent.pairings.filter((p) => p.status === "pending").map((p) => ({ id: p.id, kind: p.kind, app: p.app, warning: p.warning, inFlight: inFlight(p), approving: !!p.approving, code: !!p.code, error: codeErrors.get(p.id) ?? null }))}
+          connects={connectItems.filter((c) => c.connect.agent === agent.id)}
           decide={decide}
+          decideConnect={(c, action) => decideConnect(c, action)}
+          dismissBlockedConnect={dismissBlockedConnect}
           refresh={refresh}
           back={back}
           dragProps={dragProps(agent)}
@@ -599,12 +682,26 @@ export function HubDock() {
           {panel === "link" ? <LinkPanel state={state} base={base} back={() => setPanel(null)} refresh={refresh} /> : <ComputersPanel state={state} base={base} back={() => setPanel(null)} link={() => setPanel("link")} refresh={refresh} />}
         </main>
       );
+    const connectRequests = connectItems.map((item) => (
+      <section key={item.connect.id} className={`request${item.connect.verified ? "" : " unverified"}`}>
+        <ConnectRequest
+          connect={item.connect}
+          agentName={item.agentName}
+          inFlight={item.inFlight}
+          blockedUrl={item.blockedUrl}
+          decide={(action) => decideConnect(item.connect, action)}
+          onOpenLink={() => openBlockedConnect(item.connect.id)}
+          onDismiss={() => dismissBlockedConnect(item.connect.id)}
+        />
+      </section>
+    ));
     return (
     <main className="dock">
       <Header />
       <BadgeSources agents={state.agents} />
       {noticeEl}
       {joinRequests}
+      {connectRequests}
       {requests}
       {state.agents.length === 0 && <p className="empty">No agents. Add one with <b>+</b> below, then connect it.</p>}
       <ul className="tiles">
@@ -669,6 +766,10 @@ export function HubDock() {
                   <RemoveAgent agent={a} apps={[]} remove={() => call(`${base}/agents/${a.id}/remove`, {}).then(refresh)} />
                 </details>
               )}
+              <details className="tile-details">
+                <summary>Connect an app</summary>
+                <ConnectApp apps={state.apps ?? []} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={refresh} />
+              </details>
             </li>
           );
         })}
@@ -711,7 +812,25 @@ export function HubDock() {
     );
   };
   return (
-    <KeepAtHand agents={state.agents} requests={floatRequests} decide={(id, action) => decide(id, action)} dragProps={floatDrag} onUsed={keptAtHand} refusal={noticeEl}>
+    <KeepAtHand
+      state={state}
+      base={base}
+      refresh={refresh}
+      agents={state.agents}
+      joinsCount={joins.length}
+      firstJoinId={joins[0]?.id ?? null}
+      connects={connectItems}
+      requests={floatRequests}
+      decide={decide}
+      decideConnect={decideConnect}
+      dismissBlockedConnect={dismissBlockedConnect}
+      openBlockedConnect={openBlockedConnect}
+      onJoinError={setNotice}
+      dragProps={floatDrag}
+      onUsed={keptAtHand}
+      refusal={notice}
+      dismissRefusal={() => setNotice(null)}
+    >
       {renderDock}
     </KeepAtHand>
   );
@@ -737,8 +856,10 @@ interface FloatRequest {
   inFlight?: InFlight;
   /** The hub is still introducing itself to the app: Approve is off, Deny stays on (Fix check 1 on #120). */
   approving?: boolean;
-  /** The app sent a pairing code (APC 0.9): approved in the dock only, where the code is typed. */
+  /** The app sent a pairing code (APC 0.9): typed on the card everywhere except pets. */
   code?: boolean;
+  /** The last wrong/missing code error on this request. */
+  error?: CodeError | null;
 }
 
 /** What the person answers a request with; "approve_unverified" is only the warning's Approve (TIN-581). */
@@ -753,16 +874,29 @@ interface FloatChoice {
 }
 
 interface FloatProps {
+  state: DockState;
+  base: string;
+  refresh: () => void;
   agents: DockAgent[];
   onUsed: () => void;
+  /** Pending multi-computer join requests (TIN-838 / TIN-916). */
+  joinsCount: number;
+  firstJoinId: string | null;
+  /** Connect requests (APC 0.13 / TIN-916), including any blocked-open card waiting for a click. */
+  connects: ConnectCardItem[];
   /** Pairing requests waiting in the dock (TIN-413): the dock's window is usually hidden while Float is on. */
   requests: FloatRequest[];
-  decide: (id: string, action: Decision) => void;
+  decide: (id: string, action: Decision, code?: string) => void;
+  decideConnect: (c: DockConnect, action: ConnectAction, opener?: Window) => void;
+  dismissBlockedConnect: (id: string) => void;
+  openBlockedConnect: (id: string) => void;
+  onJoinError: (message: string) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => boolean; endDrag: () => void };
   /** The controls (for the checklist and the footer), and each agent's Float mark where Float is there to choose for. */
   children: (controls: ReactNode, float: FloatChoice | null) => ReactNode;
   /** The hub's refusal of the last answer (Fix check 4 on #120). */
-  refusal?: ReactNode;
+  refusal?: string | null;
+  dismissRefusal?: () => void;
 }
 
 /** One Float window and install event, with controls in both the checklist and permanent footer. */
@@ -868,8 +1002,11 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
   const sized = useRef(size);
   sized.current = size;
   const [inner, setInner] = useState({ width: 0, height: 0 });
-  const asking = props.requests.length > 0;
-  const showCard = (asking && size.opened === props.requests[0]!.id) || (!!win && fitsCard(inner));
+  const totalItems = props.joinsCount + props.connects.length + props.requests.length;
+  const asking = totalItems > 0;
+  const firstId = props.firstJoinId ?? props.connects[0]?.connect.id ?? props.requests[0]?.id ?? null;
+  const showCard = (asking && firstId !== null && size.opened === firstId) || (!!win && fitsCard(inner));
+  const canDone = !!win && size.before !== null && !asking && !props.refusal && fitsCard(inner);
   const outerOf = (w: Window) => ({ width: w.outerWidth, height: w.outerHeight });
   /** Try the card size; false when the browser threw (a refusal without a throw shows in the resize event). */
   function grow(): boolean {
@@ -904,47 +1041,70 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
     win.addEventListener("resize", measure);
     return () => win.removeEventListener("resize", measure);
   }, [win]);
-  // A shrink that was refused (no click) is retried on the next click or key press in the window; not on pointerdown, which would shrink it under a drag of a logo.
-  useEffect(() => {
-    if (!win || !size.wantShrink) return;
-    const retry = () => shrink();
-    win.document.addEventListener("click", retry);
-    win.document.addEventListener("keyup", retry);
-    return () => {
-      win.document.removeEventListener("click", retry);
-      win.document.removeEventListener("keyup", retry);
-    };
-  }, [win, size.wantShrink]);
   useEffect(() => {
     if (!win) return;
     root.current ??= createRoot(win.document.body);
+    const shrinkOnClick = () => {
+      dispatch({ type: "shrink" });
+      shrink();
+    };
     root.current.render(
       <FloatAgents
+        state={props.state}
+        base={props.base}
+        refresh={props.refresh}
         agents={props.agents}
         floats={(id) => marked({ unmarked }, id)}
+        joinsCount={props.joinsCount}
+        connects={props.connects}
         requests={props.requests}
         refusal={props.refusal}
-        decide={(id, action) => {
-          // The click is a user activation: the last decision gives the logos' size back at once.
-          const last = latest.current.requests.length <= 1;
-          dispatch({ type: "decide", last });
-          if (last) shrink();
-          latest.current.decide(id, action);
+        onDismissRefusal={() => {
+          latest.current.dismissRefusal?.();
+          if (latest.current.joinsCount + latest.current.connects.length + latest.current.requests.length === 0 && sized.current.before !== null) {
+            shrinkOnClick();
+          }
         }}
+        decide={(id, action, code) => {
+          // Never shrink on Allow/Deny/Connect itself: wrong codes, tries left and errors stay visible.
+          const last = latest.current.joinsCount + latest.current.connects.length + latest.current.requests.length <= 1;
+          dispatch({ type: "decide", last });
+          latest.current.decide(id, action, code);
+        }}
+        decideConnect={(c, action) => {
+          const last = latest.current.joinsCount + latest.current.connects.length + latest.current.requests.length <= 1;
+          dispatch({ type: "decide", last });
+          latest.current.decideConnect(c, action, win);
+        }}
+        dismissBlockedConnect={(id) => {
+          latest.current.dismissBlockedConnect(id);
+          if (latest.current.joinsCount + latest.current.connects.length + latest.current.requests.length <= 1 && !latest.current.refusal && sized.current.before !== null) {
+            shrinkOnClick();
+          }
+        }}
+        openBlockedConnect={(id) => {
+          latest.current.openBlockedConnect(id);
+          if (latest.current.joinsCount + latest.current.connects.length + latest.current.requests.length <= 1 && !latest.current.refusal && sized.current.before !== null) {
+            shrinkOnClick();
+          }
+        }}
+        onJoinError={props.onJoinError}
         dragProps={(a) => latest.current.dragProps(a)}
         notice={{
           open: showCard,
           focus: size.opened !== null,
           onOpen: () => {
-            const first = latest.current.requests[0];
-            if (first) dispatch({ type: "open", id: first.id, outer: outerOf(win), ok: grow() });
+            const first = latest.current.firstJoinId ?? latest.current.connects[0]?.connect.id ?? latest.current.requests[0]?.id;
+            if (first) dispatch({ type: "open", id: first, outer: outerOf(win), ok: grow() });
           },
         }}
+        onDone={canDone ? shrinkOnClick : undefined}
       />,
     );
-  }, [win, props.agents, unmarked, props.requests, props.refusal, showCard, size.opened]);
+  }, [win, props.state, props.base, props.refresh, props.agents, unmarked, props.joinsCount, props.firstJoinId, props.connects, props.requests, props.refusal, showCard, size.opened, canDone]);
   // Where a browser allows a resize without a click, the card shows at once (the window then fits);
-  // otherwise the notice stays until the click. With no request left, back to the logos' size.
+  // otherwise the notice stays until the click. When no request is left, Float never shrinks by itself:
+  // it keeps its size until the person clicks Done or dismisses a card/notice.
   useEffect(() => {
     if (!win) return;
     if (asking) {
@@ -952,7 +1112,6 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
       grow();
     } else {
       dispatch({ type: "idle" });
-      shrink();
     }
   }, [win, asking]);
   const dismiss = () => {
@@ -1050,50 +1209,87 @@ function Float(props: Omit<FloatProps, "children"> & { children: (button: ReactN
  * (#84, ?view=strip): the agents' logos, each draggable, or the pairing requests while any waits.
  */
 function FloatAgents(props: {
+  state: DockState;
+  base: string;
+  refresh: () => void;
   agents: DockAgent[];
   /** Float per agent (TIN-698): which agents show here. The strip (older Windows builds) shows them all. */
   floats?: (id: string) => boolean;
+  joinsCount: number;
+  connects: ConnectCardItem[];
   requests: FloatRequest[];
-  decide: (id: string, action: Decision) => void;
+  decide: (id: string, action: Decision, code?: string) => void;
+  decideConnect: (c: DockConnect, action: ConnectAction) => void;
+  dismissBlockedConnect: (id: string) => void;
+  openBlockedConnect: (id: string) => void;
+  onJoinError?: (message: string) => void;
   dragProps: (a: DockAgent) => { startDrag: (e: DragEvent) => boolean; endDrag: () => void };
   /** Float's Picture-in-Picture window only (TIN-480): until `open`, a compact notice stands for the requests. The strip passes none and shows the card. */
   notice?: { open: boolean; /** The card was opened by a click: focus the card (not Allow, so a held Enter cannot approve it). */ focus: boolean; onOpen: () => void };
   /** The hub's refusal of the last answer (Fix check 4 on #120): shown above the requests or the logos. */
-  refusal?: ReactNode;
+  refusal?: string | null;
+  onDismissRefusal?: () => void;
+  /** Shown after Float opened for a request and nothing is waiting now: shrinks Float back on click. */
+  onDone?: () => void;
 }) {
   // Which agent the person is dragging here: its pet stretches while held (TIN-483).
   const [dragging, setDragging] = useState<string | null>(null);
-  if (props.requests.length > 0 && props.notice && !props.notice.open) {
-    const first = props.agents.find((a) => a.id === props.requests[0]!.agentId) ?? props.agents[0];
-    const n = props.requests.length;
+  const totalItems = props.joinsCount + props.connects.length + props.requests.length;
+  if (totalItems > 0 && props.notice && !props.notice.open) {
+    const firstAgentId = props.connects[0]?.connect.agent ?? props.requests[0]?.agentId;
+    const first = (firstAgentId ? props.agents.find((a) => a.id === firstAgentId) : undefined) ?? props.agents[0];
     return (
       <div className="float float-notice-wrap" role="status" aria-live="polite">
         <button type="button" className="float-notice" onClick={props.notice.onOpen} title="Open the request">
           <span className="chip">
             {first && <AgentPet agent={first} size={40} decorative />}
             <span className="float-notice-badge" aria-hidden="true">
-              {n}
+              {totalItems}
             </span>
           </span>
           <span>
-            {n} {n === 1 ? "request" : "requests"}
+            {totalItems} {totalItems === 1 ? "request" : "requests"}
           </span>
           <b>Review</b>
         </button>
       </div>
     );
   }
-  // A request with a pairing code (APC 0.9) shows no Allow here: Float shrinks as an answer leaves, which would hide a
-  // wrong code and its retry, so the code is typed in the dock. Requests without one keep their buttons.
-  if (props.requests.length > 0)
+  const refusalEl = props.refusal ? <DecisionNotice notice={props.refusal} dismiss={() => props.onDismissRefusal?.()} /> : null;
+  if (totalItems > 0)
     return (
       <div className="float float-requests">
-        {props.refusal}
-        {props.requests.map((r) => (
+        {refusalEl}
+        <JoinRequests state={props.state} base={props.base} refresh={props.refresh} compact onError={props.onJoinError} />
+        {props.connects.map((item, i) => (
+          <div
+            key={item.connect.id}
+            className={`float-request${item.connect.verified ? "" : " unverified"}`}
+            tabIndex={-1}
+            autoFocus={props.joinsCount === 0 && i === 0 && item.connect.verified && !item.blockedUrl && props.notice?.focus}
+          >
+            <ConnectRequest
+              connect={item.connect}
+              agentName={item.agentName}
+              inFlight={item.inFlight}
+              blockedUrl={item.blockedUrl}
+              decide={(action) => props.decideConnect(item.connect, action)}
+              onOpenLink={() => props.openBlockedConnect(item.connect.id)}
+              onDismiss={() => props.dismissBlockedConnect(item.connect.id)}
+              compact
+            />
+          </div>
+        ))}
+        {props.requests.map((r, i) => (
           // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused.
-          <div key={r.id} className={`float-request${r.unverified ? " unverified" : ""}`} tabIndex={-1} autoFocus={!r.unverified && props.notice?.focus && r === props.requests[0]}>
+          <div
+            key={r.id}
+            className={`float-request${r.unverified ? " unverified" : ""}`}
+            tabIndex={-1}
+            autoFocus={props.joinsCount === 0 && props.connects.length === 0 && !r.unverified && props.notice?.focus && i === 0}
+          >
             <PairingRequest
-              entry="dock"
+              entry="field"
               kind={r.kind}
               app={r.app}
               host={r.host}
@@ -1111,18 +1307,20 @@ function FloatAgents(props: {
               }
               {...(r.unverified ? { unverified: r.unverified } : {})}
               code={!!r.code}
+              error={r.error ?? null}
+              focusField={props.joinsCount === 0 && props.connects.length === 0 && i === 0 && !!r.code && !!props.notice?.focus}
               inFlight={r.inFlight}
               approving={!!r.approving}
-              decide={(action) => props.decide(r.id, action)}
+              decide={(action, code) => props.decide(r.id, action, code)}
               compact
             />
           </div>
         ))}
       </div>
     );
-  if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;
   // A refusal with no request left: said in place of the logos until it is closed.
-  if (props.refusal) return <div className="float float-requests">{props.refusal}</div>;
+  if (refusalEl) return <div className="float float-requests">{refusalEl}</div>;
+  if (props.agents.length === 0) return <div className="float float-empty">Add an agent in your dock.</div>;
   const shown = props.floats ? props.agents.filter((a) => props.floats!(a.id)) : props.agents;
   if (shown.length === 0) return <div className="float float-empty">{NONE_SELECTED}. Turn one on with the Float icon on its card in your dock.</div>;
   return (
@@ -1147,6 +1345,13 @@ function FloatAgents(props: {
           </div>
         );
       })}
+      {props.onDone && (
+        <div className="float-done-row">
+          <button type="button" className="float-done" onClick={props.onDone}>
+            Done
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -26,6 +26,17 @@ export function NotVerified() {
   );
 }
 
+export const VERIFIED = "Verified";
+
+/** The badge on a verified app's connect request. */
+export function Verified() {
+  return (
+    <span className="verified-badge" title="This app is verified by this dock.">
+      {VERIFIED}
+    </span>
+  );
+}
+
 /**
  * An app's host on one line that never wraps (Review round 1 on #120): the domain someone registered
  * (`site`) is always shown whole, and the labels before it are shortened from the left when they do not
