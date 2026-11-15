@@ -62,14 +62,16 @@ export function cardInFlight(page: InFlight | undefined, approveClicked: boolean
  * What the dock tells the person when the hub refuses an answer (Fix check 4 on #120): a 400 with
  * { ok: false, error } is shown, never dropped.
  */
-export function decisionNotice(error: unknown): string {
+export function decisionNotice(error: unknown, context: "pairing" | "connect" = "pairing"): string {
   switch (error) {
     case "approval_withdrawn":
       return "Approval was withdrawn; ask again. This app's domain was denied, unpaired or removed elsewhere in your dock while it was being approved, so it was not paired. Drop your agent on the app again to see the warning.";
     case "unknown_pairing":
       return "That request is no longer waiting: it was answered elsewhere, removed, or it expired. Drop your agent on the app again to ask again.";
     case "warning_required":
-      return "This app is not verified, so it needs its warning: its request now shows it. Read it, then approve or deny.";
+      return context === "connect"
+        ? "This app is not verified, so it needs its warning: its request now shows it. Read it, then connect or deny."
+        : "This app is not verified, so it needs its warning: its request now shows it. Read it, then approve or deny.";
     case "app_blocked":
       return "The dock does not pair with this app right now, so it was not paired.";
     case "revoked":
@@ -139,29 +141,108 @@ export function connectCheckErrorText(error: unknown): string {
   }
 }
 
+/**
+ * Synchronous ref-backed guard + state transition for answering requests so two clicks before a
+ * re-render cannot send a duplicate Approve/Connect while one is in flight.
+ */
+export function beginAnswer(ref: { current: Sent }, id: string, action: string, approving = false): InFlight | null {
+  const kind = kindOf(action);
+  if (!mayAnswer(action, { inFlight: inFlightOf(ref.current.get(id)), approving })) return null;
+  ref.current = sentOut(ref.current, id, kind);
+  return kind;
+}
+
+/** Record that an in-flight answer settled, returning the updated map for React state. */
+export function endAnswer(ref: { current: Sent }, id: string, kind: InFlight): Sent {
+  ref.current = landed(ref.current, id, kind);
+  return ref.current;
+}
+
 export type ApproveConnectResult =
   | { status: "opened"; url: string }
   | { status: "blocked"; url: string }
   | { status: "paired" }
   | { status: "error"; error: unknown };
 
+export interface OpenedWindow {
+  closed?: boolean;
+  opener?: unknown;
+  location?: { replace(url: string): void };
+  close(): void;
+}
+
+export interface WindowOpener {
+  open(url?: string, target?: string, features?: string): OpenedWindow | null | undefined;
+}
+
+function closeQuietly(w: OpenedWindow | null | undefined): void {
+  try {
+    w?.close();
+  } catch {
+    // window may already be closed or inaccessible
+  }
+}
+
 /**
- * APC 0.13 Connect approval: calls the hub's approve route (never making an outbound fetch there),
- * then opens the returned `dock_connect` URL in a new tab with `noopener` when one is returned (app
- * requests). Reader requests return no URL and pair at once. When `window.open` returns `null` outside
- * the desktop shell, the caller keeps the card with a one-click link.
+ * APC 0.13 Connect approval: in a browser (`!desktop`), opens a blank tab synchronously inside the
+ * click before awaiting `approve()` (never passing `"noopener"`, which makes `window.open` return
+ * `null` per spec), then clears `opener` and replaces its location with the returned `dock_connect`
+ * URL—or closes the blank tab if approval fails. In the Dock for Windows shell (`desktop`), keeps
+ * `window.open(url, "_blank")` after approve because `on_new_window` hands it to the OS browser.
+ * Reader requests (`kind === "reader"`) pair directly without opening a tab. Any blocked open or
+ * navigation failure returns `{ status: "blocked", url }` so the caller keeps the recovery link.
  */
 export async function approveAndOpen(o: {
   approve: () => Promise<{ ok?: boolean; url?: unknown; error?: unknown }>;
-  opener?: { open(url: string, target?: string, features?: string): unknown };
+  opener?: WindowOpener;
   desktop?: boolean;
+  kind?: "app" | "reader";
 }): Promise<ApproveConnectResult> {
-  const r = await o.approve();
-  if (r?.ok === false) return { status: "error", error: r.error };
-  if (typeof r?.url === "string" && r.url) {
-    const win = (o.opener ?? window).open(r.url, "_blank", "noopener");
-    return win || o.desktop ? { status: "opened", url: r.url } : { status: "blocked", url: r.url };
+  const win = o.opener ?? window;
+  let pre: OpenedWindow | null = null;
+  if (!o.desktop && o.kind !== "reader") {
+    try {
+      pre = win.open("", "_blank") ?? null;
+    } catch {
+      pre = null;
+    }
   }
+
+  let r: { ok?: boolean; url?: unknown; error?: unknown };
+  try {
+    r = await o.approve();
+  } catch (e) {
+    closeQuietly(pre);
+    throw e;
+  }
+
+  if (r?.ok === false) {
+    closeQuietly(pre);
+    return { status: "error", error: r.error };
+  }
+
+  if (typeof r?.url === "string" && r.url) {
+    if (o.desktop) {
+      try {
+        win.open(r.url, "_blank");
+        return { status: "opened", url: r.url };
+      } catch {
+        return { status: "blocked", url: r.url };
+      }
+    }
+    if (!pre) return { status: "blocked", url: r.url };
+    try {
+      if (pre.closed) return { status: "blocked", url: r.url };
+      pre.opener = null;
+      pre.location!.replace(r.url);
+      return { status: "opened", url: r.url };
+    } catch {
+      closeQuietly(pre);
+      return { status: "blocked", url: r.url };
+    }
+  }
+
+  closeQuietly(pre);
   return { status: "paired" };
 }
 

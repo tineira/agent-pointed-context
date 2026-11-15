@@ -34,7 +34,7 @@ import { PairingRequest } from "./pairing-request.tsx";
 import { ConnectApp, ConnectRequest, mergeConnectItems, type BlockedConnect, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
 import { ComputersPanel, JoinPanel, JoinRequests, LinkPanel, pendingJoins, useNow } from "./computers.tsx";
 import { REMOVED_CLOSE } from "../worker/devices.ts";
-import { approveAndOpen, decisionNotice, inFlightOf, isCodeRetryError, isConnectingAnswer, kindOf, landed, mayAnswer, sentOut, type CodeError, type InFlight, type Sent } from "./request-state.ts";
+import { approveAndOpen, beginAnswer, decisionNotice, endAnswer, inFlightOf, isCodeRetryError, isConnectingAnswer, type CodeError, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
 const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "where your agents point"];
@@ -110,8 +110,9 @@ export function HubDock() {
   // A new object on each failure, so a failed retry sets up the next one.
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
-  /** Answers on their way per request (Review round 1 and Fix check 2 on #120): which buttons are off until they land, on every surface. */
-  const [deciding, setDeciding] = useState<Sent>(new Map());
+  /** Answers on their way per request (Review round 1 and Fix check 2 on #120): ref guards double-clicks before re-render. */
+  const decidingRef = useRef<Sent>(new Map());
+  const [deciding, setDeciding] = useState<Sent>(decidingRef.current);
   /** What the hub said when it refused the last answer (Fix check 4 on #120), shown on every surface of this page. */
   const [notice, setNotice] = useState<string | null>(null);
   /**
@@ -416,10 +417,10 @@ export function HubDock() {
   const decide = (pid: string, action: Decision, code?: string) => {
     // Never the same kind twice, and no yes once anything is on its way; a Deny still goes while an Approve is
     // on its way, from this surface too, so a misclick can be undone (Fix check 2 on #120). The hub lets it win.
-    const kind = kindOf(action);
     const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
-    if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(pid)), approving })) return;
-    setDeciding((m) => sentOut(m, pid, kind));
+    const kind = beginAnswer(decidingRef, pid, action, approving);
+    if (!kind) return;
+    setDeciding(decidingRef.current);
     setNotice(null);
     // The code, typed on the card, goes in the body (APC 0.9): compared in the hub, then dropped.
     void call<{ ok?: boolean; error?: unknown; attempts_left?: unknown }>(`${base}/pairings/${pid}`, { action, ...(code ? { code } : {}) })
@@ -439,7 +440,7 @@ export function HubDock() {
       .catch(() => setNotice(decisionNotice("unreachable")))
       .finally(() => {
         // Answered or failed: that kind clears, and only it (a failed Deny can be sent again).
-        setDeciding((m) => landed(m, pid, kind));
+        setDeciding(endAnswer(decidingRef, pid, kind));
         refresh();
       });
   };
@@ -448,18 +449,18 @@ export function HubDock() {
   const inFlight = (p: { id: string }) => inFlightOf(deciding.get(p.id));
   const connectItems = mergeConnectItems(state.connects ?? [], blockedConnects, agentNameById, (id) => inFlightOf(deciding.get(id)));
   const decideConnect = (c: DockConnect, action: ConnectAction, opener?: Window) => {
-    const kind = kindOf(action);
-    if (!mayAnswer(action, { inFlight: inFlightOf(deciding.get(c.id)) })) return;
-    setDeciding((m) => sentOut(m, c.id, kind));
+    const kind = beginAnswer(decidingRef, c.id, action);
+    if (!kind) return;
+    setDeciding(decidingRef.current);
     setNotice(null);
     if (action === "deny") {
       void call<{ ok?: boolean; error?: unknown }>(`${base}/connects/${c.id}/deny`, {})
         .then((r) => {
-          if (r?.ok === false) setNotice(decisionNotice(r.error));
+          if (r?.ok === false) setNotice(decisionNotice(r.error, "connect"));
         })
-        .catch(() => setNotice(decisionNotice("unreachable")))
+        .catch(() => setNotice(decisionNotice("unreachable", "connect")))
         .finally(() => {
-          setDeciding((m) => landed(m, c.id, kind));
+          setDeciding(endAnswer(decidingRef, c.id, kind));
           refresh();
         });
       return;
@@ -468,6 +469,7 @@ export function HubDock() {
       approve: () => call<{ ok?: boolean; url?: string; error?: unknown }>(`${base}/connects/${c.id}/approve`, action === "approve_unverified" ? { action } : {}),
       opener: opener ?? window,
       desktop: DESKTOP_SHELL,
+      kind: c.kind,
     })
       .then((res) => {
         if (res.status === "blocked") {
@@ -476,12 +478,12 @@ export function HubDock() {
             { id: c.id, agentId: c.agent, agentName: agentNameById(c.agent), origin: c.origin, host: c.host, name: c.name, verified: c.verified, url: res.url },
           ]);
         } else if (res.status === "error") {
-          setNotice(decisionNotice(res.error));
+          setNotice(decisionNotice(res.error, "connect"));
         }
       })
-      .catch(() => setNotice(decisionNotice("unreachable")))
+      .catch(() => setNotice(decisionNotice("unreachable", "connect")))
       .finally(() => {
-        setDeciding((m) => landed(m, c.id, kind));
+        setDeciding(endAnswer(decidingRef, c.id, kind));
         refresh();
       });
   };

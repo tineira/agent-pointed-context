@@ -2,11 +2,12 @@
  * APC 0.13 Connect requests and "Connect an app" (TIN-916): shown on the dock page, an agent's page,
  * Float, the strip and the pet bubble.
  *
- * Approving an app Connect request calls `/api/d/:did/connects/:cr/approve` and opens the returned
- * `dock_connect` URL (carrying `#apc_connect=...`) in a new tab with `noopener`. If `window.open`
- * returns `null`, the card stays and offers a one-click `<a target="_blank" rel="noopener">Open ...</a>`
- * link until clicked or dismissed. Reader requests show the 4-digit check from the extension and
- * approve directly without opening a tab.
+ * Approving an app Connect request pre-opens a blank tab on click in browsers (or opens post-approve
+ * in the Dock for Windows shell), calls `/api/d/:did/connects/:cr/approve`, and navigates the tab
+ * with `opener = null` and `location.replace(url)`. If opening or navigation fails, the card stays
+ * and offers a one-click `<a target="_blank" rel="noopener">Open ...</a>` link until clicked or
+ * dismissed. Reader requests show the 4-digit check from the extension and approve directly without
+ * opening a tab (disabling Connect if no check is present).
  */
 import { useId, useState } from "react";
 import { unverifiedWarning } from "../worker/trust.ts";
@@ -90,17 +91,24 @@ export function ConnectRequest(props: ConnectRequestProps) {
   }
 
   if (c.kind === "reader") {
+    const hasCheck = Boolean(c.check?.trim());
     return (
       <>
         <p>
-          Connect the APC extension to <b>{props.agentName}</b>? Allow only if your extension shows{" "}
-          <b className="join-check">{c.check}</b>.
+          Connect the APC extension to <b>{props.agentName}</b>?{" "}
+          {hasCheck ? (
+            <>
+              Allow only if your extension shows <b className="join-check">{c.check}</b>.
+            </>
+          ) : (
+            "No check code was received; ask your extension again."
+          )}
         </p>
         <div className="row">
           <button type="button" disabled={off.deny} onClick={() => props.decide("deny")}>
             Deny
           </button>
-          <button type="button" disabled={off.approve} onClick={() => props.decide("approve")}>
+          <button type="button" disabled={off.approve || !hasCheck} onClick={() => props.decide("approve")}>
             Connect
           </button>
         </div>

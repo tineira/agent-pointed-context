@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { approveAndOpen, CODE_IN_DOCK, connectCheckErrorText, decisionNotice } from "../src/web/request-state.ts";
+import { approveAndOpen, beginAnswer, CODE_IN_DOCK, connectCheckErrorText, decisionNotice, endAnswer, type OpenedWindow, type Sent } from "../src/web/request-state.ts";
 import { fakeApp, manifestOf, world } from "./hostile-world.ts";
 
 test("request-state: connect approval & check errors produce clear copy", () => {
@@ -15,6 +15,8 @@ test("request-state: connect approval & check errors produce clear copy", () => 
   assert.match(decisionNotice("app_not_allowed"), /cannot connect to this app/i);
   assert.match(decisionNotice("reader_not_allowed"), /browser extension/i);
   assert.match(decisionNotice("unknown_agent"), /no longer in your dock/i);
+  assert.match(decisionNotice("warning_required", "connect"), /request now shows it.*connect or deny/i);
+  assert.match(decisionNotice("warning_required"), /request now shows it.*approve or deny/i);
 
   assert.match(connectCheckErrorText("apc_json_missing"), /apc\.json/i);
   assert.match(connectCheckErrorText("app_blocked"), /does not pair/i);
@@ -23,62 +25,174 @@ test("request-state: connect approval & check errors produce clear copy", () => 
   assert.match(connectCheckErrorText("unreachable"), /Could not reach/i);
 });
 
-test("approveAndOpen: calls approve then window.open(url, _blank, noopener); returns blocked when null", async () => {
-  const calls: Array<{ url: string; target: string; features: string }> = [];
+function makeFakeWindow() {
+  const replaced: string[] = [];
+  let closedCount = 0;
+  const win: OpenedWindow = {
+    closed: false,
+    opener: { marker: true },
+    location: {
+      replace(u: string) {
+        replaced.push(u);
+      },
+    },
+    close() {
+      closedCount++;
+      win.closed = true;
+    },
+  };
+  return { win, replaced, getClosedCount: () => closedCount };
+}
+
+test("approveAndOpen: browser pre-opens synchronously without noopener, navigates via location.replace, handles blocks/failures, and shell opens post-approve", async () => {
   const url = "https://shop.example/connect/dock#apc_connect=tok";
 
+  // 1. noopener-faithful stub (returns null whenever noopener is in features): must succeed without false "blocked".
+  const calls: Array<{ url: string; target: string; features: string }> = [];
+  const w1 = makeFakeWindow();
+  let callsAtApproveStart = -1;
   const opened = await approveAndOpen({
-    approve: async () => ({ ok: true, url }),
+    approve: async () => {
+      callsAtApproveStart = calls.length;
+      return { ok: true, url };
+    },
     opener: {
-      open(u, target, features) {
-        calls.push({ url: u ?? "", target: target ?? "", features: features ?? "" });
-        return { closed: false };
+      open(u = "", target = "", features = "") {
+        calls.push({ url: u, target, features });
+        if (features.split(",").map((f) => f.trim().toLowerCase()).includes("noopener")) return null;
+        return w1.win;
       },
     },
   });
+  assert.equal(callsAtApproveStart, 1, "pre-open happened synchronously before awaiting approve");
+  assert.deepEqual(calls, [{ url: "", target: "_blank", features: "" }]);
+  assert.equal(w1.win.opener, null);
+  assert.deepEqual(w1.replaced, [url]);
   assert.deepEqual(opened, { status: "opened", url });
-  assert.deepEqual(calls, [{ url, target: "_blank", features: "noopener" }]);
 
+  // 2. Blocked pre-open (open("", "_blank") returns null) shows the fallback after approve.
   const blocked = await approveAndOpen({
     approve: async () => ({ ok: true, url }),
     opener: { open: () => null },
   });
   assert.deepEqual(blocked, { status: "blocked", url });
 
-  // Inside Dock for Windows (WebView2 on_new_window returns null after handing URL to OS browser).
-  const desktopOpened = await approveAndOpen({
+  // 3. Thrown pre-open (e.g. closed PiP window) still approves and shows the fallback.
+  const thrownOpen = await approveAndOpen({
     approve: async () => ({ ok: true, url }),
-    opener: { open: () => null },
-    desktop: true,
-  });
-  assert.deepEqual(desktopOpened, { status: "opened", url });
-
-  // Reader connect approves without opening any tab.
-  let openCalls = 0;
-  const reader = await approveAndOpen({
-    approve: async () => ({ ok: true }),
     opener: {
       open() {
-        openCalls++;
+        throw new Error("PiP closed");
+      },
+    },
+  });
+  assert.deepEqual(thrownOpen, { status: "blocked", url });
+
+  // 4. Pre-opened window closed during approve, or location.replace throwing, returns fallback so ticket is not lost.
+  const wClosed = makeFakeWindow();
+  const closedDuringApprove = await approveAndOpen({
+    approve: async () => {
+      wClosed.win.closed = true;
+      return { ok: true, url };
+    },
+    opener: { open: () => wClosed.win },
+  });
+  assert.deepEqual(closedDuringApprove, { status: "blocked", url });
+  assert.deepEqual(wClosed.replaced, []);
+
+  const wThrowNav = makeFakeWindow();
+  wThrowNav.win.location = {
+    replace() {
+      throw new Error("navigation failed");
+    },
+  };
+  const failedNav = await approveAndOpen({
+    approve: async () => ({ ok: true, url }),
+    opener: { open: () => wThrowNav.win },
+  });
+  assert.deepEqual(failedNav, { status: "blocked", url });
+  assert.equal(wThrowNav.getClosedCount(), 1);
+
+  // 5. Approve failure (ok: false or rejected promise) closes the pre-opened window.
+  const wErr = makeFakeWindow();
+  const failed = await approveAndOpen({
+    approve: async () => ({ ok: false, error: "not_found" }),
+    opener: { open: () => wErr.win },
+  });
+  assert.deepEqual(failed, { status: "error", error: "not_found" });
+  assert.equal(wErr.getClosedCount(), 1);
+
+  const wReject = makeFakeWindow();
+  await assert.rejects(
+    () =>
+      approveAndOpen({
+        approve: async () => {
+          throw new Error("network down");
+        },
+        opener: { open: () => wReject.win },
+      }),
+    /network down/,
+  );
+  assert.equal(wReject.getClosedCount(), 1);
+
+  // 6. Dock for Windows shell (desktop: true): opens post-approve via window.open(url, "_blank"); null from on_new_window still means opened.
+  const shellCalls: Array<{ url: string; target: string; features: string }> = [];
+  let shellCallsBeforeApprove = -1;
+  const desktopOpened = await approveAndOpen({
+    approve: async () => {
+      shellCallsBeforeApprove = shellCalls.length;
+      return { ok: true, url };
+    },
+    opener: {
+      open(u = "", target = "", features = "") {
+        shellCalls.push({ url: u, target, features });
+        return null;
+      },
+    },
+    desktop: true,
+  });
+  assert.equal(shellCallsBeforeApprove, 0, "shell must not pre-open before approve");
+  assert.deepEqual(shellCalls, [{ url, target: "_blank", features: "" }]);
+  assert.deepEqual(desktopOpened, { status: "opened", url });
+
+  // Shell open throwing still recovers with the fallback card.
+  const desktopThrown = await approveAndOpen({
+    approve: async () => ({ ok: true, url }),
+    opener: {
+      open() {
+        throw new Error("shell open failed");
+      },
+    },
+    desktop: true,
+  });
+  assert.deepEqual(desktopThrown, { status: "blocked", url });
+
+  // 7. Reader connect approves without opening any tab.
+  let readerOpenCalls = 0;
+  const reader = await approveAndOpen({
+    approve: async () => ({ ok: true }),
+    kind: "reader",
+    opener: {
+      open() {
+        readerOpenCalls++;
         return null;
       },
     },
   });
   assert.deepEqual(reader, { status: "paired" });
-  assert.equal(openCalls, 0);
+  assert.equal(readerOpenCalls, 0);
+});
 
-  // Error from hub does not attempt window.open.
-  const failed = await approveAndOpen({
-    approve: async () => ({ ok: false, error: "not_found" }),
-    opener: {
-      open() {
-        openCalls++;
-        return null;
-      },
-    },
-  });
-  assert.deepEqual(failed, { status: "error", error: "not_found" });
-  assert.equal(openCalls, 0);
+test("beginAnswer/endAnswer: synchronous ref guard blocks double approve before re-render while allowing deny", () => {
+  const ref: { current: Sent } = { current: new Map() };
+  assert.equal(beginAnswer(ref, "cr1", "approve"), "approve");
+  assert.equal(beginAnswer(ref, "cr1", "approve"), null, "second approve before re-render is blocked");
+  assert.equal(beginAnswer(ref, "cr1", "approve_unverified"), null, "second yes is blocked");
+  assert.equal(beginAnswer(ref, "cr1", "deny"), "deny", "deny can still undo an in-flight approve");
+  assert.equal(beginAnswer(ref, "cr1", "deny"), null, "second deny is blocked");
+  endAnswer(ref, "cr1", "deny");
+  endAnswer(ref, "cr1", "approve");
+  assert.equal(beginAnswer(ref, "cr1", "approve"), "approve", "approve allowed again after settling");
 });
 
 test("approveAndOpen against real Hub DO approveConnect with blocked and allowed window.open", async (t) => {
@@ -88,7 +202,7 @@ test("approveAndOpen against real Hub DO approveConnect with blocked and allowed
   const agent = (await w.agent()).id as string;
   w.apps.set(SHOP, fakeApp(SHOP, "Shop", { apcJson: () => Response.json(manifestOf(SHOP, "Shop", { standard: "0.13.0", dock_connect: `${SHOP}/connect/dock` })) }));
 
-  const approveReal = async (openReturn: unknown) => {
+  const approveReal = async (openFn: (u: string, tgt: string, feat: string) => OpenedWindow | null) => {
     const { ticket } = await w.hub.ticket(agent);
     assert.equal((await w.hub.requestConnect({ ticket, agent, app: { origin: SHOP } })).ok, true);
     const id = (await w.state()).connects[0].id as string;
@@ -96,25 +210,29 @@ test("approveAndOpen against real Hub DO approveConnect with blocked and allowed
     const res = await approveAndOpen({
       approve: () => w.hub.asOwner(owner, "approveConnect", [id, undefined, "https://dock.test"]) as Promise<{ ok?: boolean; url?: string; error?: unknown }>,
       opener: {
-        open(u, tgt, feat) {
-          seen.push([u ?? "", tgt ?? "", feat ?? ""]);
-          return openReturn;
+        open(u = "", tgt = "", feat = "") {
+          seen.push([u, tgt, feat]);
+          return openFn(u, tgt, feat);
         },
       },
     });
     return { res, seen };
   };
 
-  const blocked = await approveReal(null);
+  const blocked = await approveReal(() => null);
   assert.equal(blocked.res.status, "blocked");
-  assert.equal(blocked.seen.length, 1);
-  assert.equal(blocked.seen[0]![1], "_blank");
-  assert.equal(blocked.seen[0]![2], "noopener");
-  assert.match(blocked.seen[0]![0], /^https:\/\/shop\.example\/connect\/dock#apc_connect=/);
+  assert.deepEqual(blocked.seen, [["", "_blank", ""]]);
+  if (blocked.res.status === "blocked") {
+    assert.match(blocked.res.url, /^https:\/\/shop\.example\/connect\/dock#apc_connect=/);
+  }
 
-  const opened = await approveReal({ closed: false });
+  const fake = makeFakeWindow();
+  const opened = await approveReal(() => fake.win);
   assert.equal(opened.res.status, "opened");
-  assert.equal(opened.seen.length, 1);
+  assert.deepEqual(opened.seen, [["", "_blank", ""]]);
+  assert.equal(fake.win.opener, null);
+  assert.equal(fake.replaced.length, 1);
+  assert.match(fake.replaced[0]!, /^https:\/\/shop\.example\/connect\/dock#apc_connect=/);
 });
 
 // ---- SSR rendering of APC 0.13 components ----
@@ -208,7 +326,19 @@ test("ConnectRequest: verified, unverified, reader and blocked-popup states", ()
   assert.match(readerHtml, /Allow only if your extension shows/);
   assert.match(readerHtml, /4821/);
   assert.ok(readerHtml.indexOf(">Deny<") < readerHtml.indexOf(">Connect<"));
+  assert.doesNotMatch(readerHtml, /<button[^>]*disabled=""[^>]*>Connect<\/button>/);
   assert.doesNotMatch(readerHtml, /connect-open/);
+
+  for (const check of [undefined, ""]) {
+    const missingCheckHtml = ssr(ConnectRequest, {
+      connect: { id: "cr3b", kind: "reader", agent: "a1", origin: "chrome-extension://abc", host: "chrome-extension://abc", name: "APC extension", verified: true, check, expires_at: 9999999999999 },
+      agentName: "Claude",
+      decide: () => {},
+    });
+    assert.match(missingCheckHtml, /ask your extension again/i);
+    assert.match(missingCheckHtml, /<button[^>]*disabled=""[^>]*>Connect<\/button>/);
+    assert.doesNotMatch(missingCheckHtml, /<button[^>]*disabled=""[^>]*>Deny<\/button>/);
+  }
 
   const blockedUrl = "https://shop.example/connect/dock#apc_connect=tok";
   const blockedHtml = ssr(ConnectRequest, {
