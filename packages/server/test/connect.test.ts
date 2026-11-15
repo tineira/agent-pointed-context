@@ -7,7 +7,7 @@ const HUB = "https://dock.test";
 const body = { ticket: "a".repeat(32) + "." + "b".repeat(32), agent: "ag_1", app: { origin: "https://app.test" } };
 const success = { ok: true, status: "connect_requested" };
 const responding = (answer: () => Response | Promise<Response>) => (async () => answer()) as typeof fetch;
-test("requestConnect distinguishes only a real 404, keeping M1 to M4 fail-closed guards", async () => {
+test("requestConnect falls back only on a 404 whose JSON object says not_found, keeping M1 to M4 fail-closed guards", async () => {
   let sent = 0;
   const sender = (async (url: string | URL | Request, init?: RequestInit) => {
     sent++;

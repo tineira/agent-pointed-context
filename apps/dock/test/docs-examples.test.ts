@@ -385,4 +385,38 @@ test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to 
   const confirmed = await (await post("/api/drop", drop)).json() as { ok: boolean; status: string };
   assert.equal(confirmed.ok, true);
   assert.equal(new URL(called.at(-1)!.url).pathname, "/apc/confirm");
+
+  // 5. The hub's initialize makes it live; a re-Connect the hub refuses leaves that grant serving.
+  const oldUrl = String(called.filter((c) => new URL(c.url).pathname === "/apc/pair").at(-1)!.body.mcp_url);
+  const rpc = (url: string, method: string, params: Record<string, unknown> = {}) =>
+    app.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }));
+  const meta = { "apc.tineira.com/pairing_id": "pr_" + "a".repeat(32), "apc.tineira.com/agent": "ag_o1" };
+  assert.equal((await rpc(oldUrl, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", version: "1" }, _meta: meta })).status, 200);
+  const serves = async (what: string) => {
+    const served = await rpc(oldUrl, "tools/call", { name: "list_orders", arguments: {} });
+    assert.equal(served.status, 200, what);
+    assert.equal(((await served.json()) as { result: { isError?: boolean } }).result.isError ?? false, false, what);
+  };
+  await serves("live");
+  const again = { hub: HUB, agent: "ag_o1", ticket: `${"e".repeat(32)}.${"f".repeat(32)}` };
+  const reAsked = await (await post("/api/connect/dock", again)).json() as { error: string; consent: string; replaces?: boolean };
+  assert.equal(reAsked.error, "consent_required");
+  assert.equal(reAsked.replaces, true, "the card says it replaces the current connection");
+  pairAnswer = () => Response.json({ ok: false, error: "ticket_expired" }, { status: 400 });
+  assert.deepEqual(await (await post("/api/connect/dock", { ...again, consent: reAsked.consent })).json(), { ok: false, error: "ticket_expired" });
+  await serves("a refused re-Connect leaves the old grant serving");
+  // An acknowledged re-Connect replaces it.
+  pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "b".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });
+  const reYes = await (await post("/api/connect/dock", again)).json() as { consent: string };
+  const replaced = await (await post("/api/connect/dock", { ...again, consent: reYes.consent })).json() as { ok: boolean; status: string };
+  assert.equal(replaced.ok, true);
+  assert.equal(replaced.status, "pending");
+  assert.notEqual((await rpc(oldUrl, "tools/call", { name: "list_orders", arguments: {} })).status, 200, "the replaced grant no longer serves");
+});
+
+test("Orders 0.13: without the dock profile, apc.json has no dock_connect and GET /connect/dock is 404", async () => {
+  const app = new OrdersApp({ origin: "https://orders.test", profiles: ["direct"], hubs: [], signedIn: () => true });
+  const manifest = await (await app.fetch(new Request("https://orders.test/.well-known/apc.json"))).json() as Record<string, unknown>;
+  assert.equal("dock_connect" in manifest, false);
+  assert.equal((await app.fetch(new Request("https://orders.test/connect/dock"))).status, 404);
 });
