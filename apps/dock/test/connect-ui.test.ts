@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { approveAndOpen, beginAnswer, CODE_IN_DOCK, connectCheckErrorText, decisionNotice, endAnswer, type OpenedWindow, type Sent } from "../src/web/request-state.ts";
 import { fakeApp, manifestOf, world } from "./hostile-world.ts";
+import { connectList } from "../src/worker/trust.ts";
 
 test("request-state: connect approval & check errors produce clear copy", () => {
   assert.match(decisionNotice("not_found"), /no longer waiting/i);
@@ -521,4 +522,19 @@ test("the pet takes the code only on an app that can activate the pet (TIN-922)"
   assert.equal(petCodeEntry(null), "dock");
   assert.equal(petCodeEntry([]), "dock");
   assert.equal(petCodeEntry(["code_field"]), "field");
+});
+
+test("Connect an app lists only CONNECT_APPS among the verified apps, and marks an app already paired", () => {
+  const verified = ["https://pulse.test/#id=pulse&name=Pulse", "https://signals.test/#id=signals&name=Signals", "https://private.test/#id=surplus&name=Surplus"];
+  assert.deepEqual(connectList(verified, null), ["https://pulse.test", "https://signals.test", "https://private.test"]);
+  // A private verified app is left out of the list (it is still connected by typing its host); a listed app not verified is never added.
+  assert.deepEqual(connectList(verified, ["https://pulse.test", "https://signals.test/", "https://other.test"]), ["https://pulse.test", "https://signals.test"]);
+  const html = ssr(ConnectApp, {
+    apps: [{ origin: "https://pulse.test", name: "Pulse" }, { origin: "https://signals.test", name: "Signals" }],
+    connected: new Set(["https://pulse.test"]),
+    create: async () => ({ ok: true }),
+    refresh: () => {},
+  });
+  assert.match(html, /class="connected" disabled=""[^>]*>✓ <!-- -->Pulse<\/button>|class="connected"[^>]*disabled[^>]*>✓ (<!-- -->)?Pulse<\/button>/);
+  assert.match(html, />Signals<\/button>/);
 });

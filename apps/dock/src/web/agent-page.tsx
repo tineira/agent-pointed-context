@@ -455,7 +455,7 @@ export function AgentPage(props: {
         )}
         <div className="connect-app-section">
           <h3>Connect an app</h3>
-          <ConnectApp apps={props.apps} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={props.refresh} />
+          <ConnectApp apps={props.apps} connected={new Set(paired.map((p) => p.app.origin))} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={props.refresh} />
         </div>
       </section>
 

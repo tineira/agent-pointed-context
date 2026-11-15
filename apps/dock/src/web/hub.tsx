@@ -768,7 +768,7 @@ export function HubDock() {
               )}
               <details className="tile-details">
                 <summary>Connect an app</summary>
-                <ConnectApp apps={state.apps ?? []} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={refresh} />
+                <ConnectApp apps={state.apps ?? []} connected={new Set(a.pairings.filter((p) => p.status === "paired").map((p) => p.app.origin))} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={refresh} />
               </details>
             </li>
           );
