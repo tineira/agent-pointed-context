@@ -214,7 +214,7 @@ button.primary.icon-button[aria-pressed="true"] { color: #fff; }
 .pet-grip svg { display: block; pointer-events: none; }
 .pet-hover .pet-grip { opacity: 1; visibility: visible; }
 @media (prefers-reduced-motion: reduce) { .pet-grip { transition: none; } }
-.pet-bubble { position: absolute; left: 0; top: 0; width: 240px; padding: 10px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--fg); font-size: 13px; display: flex; flex-direction: column; gap: 12px; }
+.pet-bubble { position: absolute; left: 0; top: 0; width: 240px; max-height: 600px; overflow-y: auto; padding: 10px; border: 1px solid var(--accent); border-radius: 12px; background: var(--card); color: var(--fg); font-size: 13px; display: flex; flex-direction: column; gap: 12px; }
 .pet-left .pet-bubble { left: auto; right: 0; }
 .pet-down .pet-bubble { top: calc(118px + var(--pet-gap)); }
 .pet-measuring .pet-bubble { visibility: hidden; }
