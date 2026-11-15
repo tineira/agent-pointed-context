@@ -582,17 +582,28 @@ pub fn pet_grip(app: AppHandle, window: WebviewWindow, shown: bool) {
     reshape(&app, &window);
 }
 
-/// A pairing request's bubble on this pet (its size, logical px), or none: the window grows for it
-/// and shrinks back after. Says which way the bubble opens, for the page to lay it out.
+/// Keep room for every message until the page explicitly dismisses the bubble with None.
+fn bubble_size(previous: Option<(f64, f64)>, measured: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    let (w, h) = measured?;
+    if !(1.0..=600.0).contains(&w) || !(1.0..=800.0).contains(&h) {
+        return previous;
+    }
+    Some(previous.map_or((w, h), |(pw, ph)| (pw.max(w), ph.max(h))))
+}
+
+/// The bubble's measured size, or None on Done: grow as messages change, shrink only on that click.
+/// Says which way the bubble opens, for the page to lay it out.
 #[tauri::command]
 pub fn pet_bubble(app: AppHandle, window: WebviewWindow, bubble: Option<(f64, f64)>) -> Option<Side> {
     let key = key(&window)?;
-    let bubble = bubble.filter(|(w, h)| (1.0..=600.0).contains(w) && (1.0..=800.0).contains(h));
     let state = app.state::<Pets>();
-    match bubble {
-        Some(b) => state.bubbles.lock().unwrap().insert(key.clone(), b),
-        None => state.bubbles.lock().unwrap().remove(&key),
-    };
+    {
+        let mut bubbles = state.bubbles.lock().unwrap();
+        match bubble_size(bubbles.get(&key).copied(), bubble) {
+            Some(b) => bubbles.insert(key.clone(), b),
+            None => bubbles.remove(&key),
+        };
+    }
     // During a grip move, placing would put the pet back on its old spot: the move's end places it,
     // with this bubble, and tells the page which way it opens then.
     if state.moving.lock().unwrap().contains_key(&key) {
@@ -612,6 +623,18 @@ mod tests {
     use super::*;
 
     const SCREEN: Rect = Rect { x: 0, y: 0, w: 1920, h: 1032 };
+
+    #[test]
+    fn a_bubble_keeps_its_room_until_done() {
+        let first = bubble_size(None, Some((240.0, 180.0)));
+        let larger = bubble_size(first, Some((240.0, 500.0)));
+        assert_eq!(larger, Some((240.0, 500.0)));
+        assert_eq!(bubble_size(larger, Some((240.0, 60.0))), larger);
+        assert_eq!(bubble_size(larger, Some((f64::NAN, 100.0))), larger);
+        assert_eq!(bubble_size(larger, Some((240.0, 900.0))), larger);
+        assert_eq!(bubble_size(larger, None), None);
+        assert_eq!(bubble_size(None, Some((240.0, 80.0))), Some((240.0, 80.0)));
+    }
 
     #[test]
     fn clamp_keeps_the_pet_on_the_work_area() {

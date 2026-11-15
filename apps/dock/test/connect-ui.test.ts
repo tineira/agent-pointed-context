@@ -246,6 +246,8 @@ let JoinRequests: unknown;
 let AgentPage: unknown;
 let PetView: unknown;
 let PairingRequest: unknown;
+let petApp: { bubble(size: { width: number; height: number } | null): Promise<unknown> };
+let petInvoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> = async () => null;
 
 let restoredGlobals: (() => void) | null = null;
 
@@ -253,7 +255,7 @@ before(async () => {
   const g = globalThis as Record<string, unknown>;
   const prevWin = g.window;
   const prevLoc = g.location;
-  if (!g.window) g.window = {};
+  g.window = { ...(prevWin as object | undefined), __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Record<string, unknown>) => petInvoke(cmd, args) } };
   if (!g.location) g.location = { search: "", origin: "https://dock.test", href: "https://dock.test/dock" };
   restoredGlobals = () => {
     if (prevWin === undefined) delete g.window;
@@ -284,8 +286,60 @@ before(async () => {
   JoinRequests = computersMod.JoinRequests;
   AgentPage = agentMod.AgentPage;
   PetView = petMod.PetView;
+  petApp = petMod.petApp as typeof petApp;
   PairingRequest = pairingMod.PairingRequest;
   ssr = (comp, props) => renderToStaticMarkup(createElement(comp as never, props as never));
+});
+
+test("pet native resize commands preserve order when Done follows a slow measurement", async () => {
+  const calls: unknown[] = [];
+  let finish: (value: null) => void = () => {};
+  petInvoke = async (cmd, args) => {
+    calls.push({ cmd, args });
+    if (calls.length === 1) return new Promise<null>((resolve) => { finish = resolve; });
+    return null;
+  };
+  try {
+    const grown = petApp.bubble({ width: 240, height: 400 });
+    const done = petApp.bubble(null);
+    await Promise.resolve();
+    assert.deepEqual(calls, [{ cmd: "pet_bubble", args: { bubble: [240, 400] } }]);
+    finish(null);
+    await Promise.all([grown, done]);
+    assert.deepEqual(calls, [
+      { cmd: "pet_bubble", args: { bubble: [240, 400] } },
+      { cmd: "pet_bubble", args: { bubble: null } },
+    ]);
+  } finally {
+    petInvoke = async () => null;
+  }
+});
+
+test("pet bubble renders idle, unverified, reader, fallback and refusal states", () => {
+  const props = {
+    agent: { id: "a1", name: "Claude", client_name: "Claude Desktop", client_icon: null, client_ua: null, waiting: false, calls: 0, pairings: [] },
+    requests: [], decide: () => {}, decideConnect: () => {}, startDrag: () => false, endDrag: () => {},
+  };
+  assert.doesNotMatch(ssr(PetView, props), /pet-bubble/);
+  const connect = { id: "cr1", kind: "app", agent: "a1", origin: "https://xn--bcher-kva.example", host: "xn--bcher-kva.example", name: "Books", verified: false, expires_at: 9999999999999 };
+  const unverified = ssr(PetView, { ...props, connects: [{ connect, agentName: "Claude", inFlight: "approve" }] });
+  assert.match(unverified, /pet-request unverified/);
+  assert.match(unverified, /Not verified/);
+  assert.match(unverified, /xn--bcher-kva\.example/);
+  assert.match(unverified, /<button[^>]*autofocus=""[^>]*>Deny<\/button>/);
+  assert.match(unverified, /<button[^>]*disabled=""[^>]*>Connect<\/button>/);
+  const reader = ssr(PetView, { ...props, connects: [{ connect: { ...connect, kind: "reader", verified: true, check: "4821" }, agentName: "Claude", inFlight: "deny" }] });
+  assert.match(reader, /Connect the APC extension/);
+  assert.match(reader, /4821/);
+  assert.match(reader, /<button[^>]*disabled=""[^>]*>Deny<\/button>/);
+  assert.match(reader, /<button[^>]*disabled=""[^>]*>Connect<\/button>/);
+  const url = "https://xn--bcher-kva.example/connect/dock#apc_connect=fixture";
+  const fallback = ssr(PetView, { ...props, connects: [{ connect, agentName: "Claude", blockedUrl: url }] });
+  assert.ok(fallback.includes(`href="${url}" target="_blank" rel="noopener"`));
+  assert.match(fallback, />Dismiss<\/button>/);
+  const refusal = ssr(PetView, { ...props, refusal: "This request is no longer waiting." });
+  assert.match(refusal, /pet-bubble/);
+  assert.match(refusal, /This request is no longer waiting/);
 });
 
 after(async () => {

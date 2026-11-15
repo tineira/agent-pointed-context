@@ -66,11 +66,19 @@ fn in_shell(url: &Url, dock: &Url) -> bool {
 /// (Pulse, Signals, downloads, extension installation) opens in the person's browser instead.
 /// Any other address (file:, mailto:, an app's own scheme) goes nowhere.
 fn stays(url: &Url) -> bool {
+    stays_with(url, &origin(), |address| {
+        let _ = tauri_plugin_opener::open_url(address, None::<&str>);
+    })
+}
+
+/// The same navigation policy with a testable browser boundary. Pass the entire address, including
+/// the APC connect fragment, to the default browser; never rebuild it from path or query parts.
+fn stays_with(url: &Url, dock: &Url, open: impl FnOnce(&str)) -> bool {
     match url.scheme() {
         "about" if url.as_str() == "about:blank" => true,
-        "http" | "https" if in_shell(url, &origin()) => true,
+        "http" | "https" if in_shell(url, dock) => true,
         "http" | "https" => {
-            let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+            open(url.as_str());
             false
         }
         _ => false,
@@ -289,6 +297,18 @@ mod tests {
     fn keeps(path: &str) -> bool {
         let dock = Url::parse(DOCK_ORIGIN).unwrap();
         in_shell(&dock.join(path).unwrap(), &dock)
+    }
+
+    #[test]
+    fn connect_opens_the_default_browser_with_the_whole_fragment() {
+        let dock = Url::parse(DOCK_ORIGIN).unwrap();
+        let address = "https://shop.example/connect/dock?lang=en#apc_connect=eyJ2IjoxLCJ0aWNrZXQiOiJmaXh0dXJlIn0";
+        let mut opened = Vec::new();
+        assert!(!stays_with(&Url::parse(address).unwrap(), &dock, |url| opened.push(url.to_owned())));
+        assert_eq!(opened, vec![address]);
+        for address in ["about:blank", "https://apc.tineira.com/dock", "file:///tmp/example", "mailto:test@example.com", "javascript:alert(1)"] {
+            stays_with(&Url::parse(address).unwrap(), &dock, |_| panic!("must not open a browser"));
+        }
     }
 
     #[test]

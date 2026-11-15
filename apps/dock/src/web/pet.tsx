@@ -8,7 +8,7 @@
  *
  * A pet draws the APC character (apc-pet.tsx, TIN-483): the same one as Float and the dock's tiles.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
 import type { Marks } from "./float-marks.ts";
 import { AgentPet } from "./apc-pet.tsx";
@@ -18,6 +18,7 @@ import type { UnverifiedAction } from "./unverified.tsx";
 import type { InFlight } from "./request-state.ts";
 import { PairingRequest } from "./pairing-request.tsx";
 import { ConnectRequest, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
+import { PET_BUBBLE_START, petBubbleReducer } from "./pet-bubble.ts";
 
 const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -34,6 +35,8 @@ interface Side {
 /** The app's commands for its pets (pets.rs); outside the app they do nothing. */
 const tauri = typeof window !== "undefined" ? (window as { __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } }).__TAURI_INTERNALS__ : undefined;
 const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T | null> => (tauri ? tauri.invoke<T>(cmd, args).catch(() => null) : Promise.resolve(null));
+// A queued measurement must finish before Done closes the bubble, even if native commands are slow.
+let bubbleCommand: Promise<Side | null> = Promise.resolve(null);
 export const petApp = {
   /** The dock's agents: the app opens a pet for each and closes the others, and lists them by name in its tray's Float menu (TIN-698; an older app ignores the names). */
   agents: (ids: string[], names: string[]) => void invoke("pet_agents", { agents: ids, names }),
@@ -45,7 +48,7 @@ export const petApp = {
    */
   move: () => invoke<Side>("pet_move"),
   /** The bubble's size, or null when it goes: the app sizes the window and says which way it opens. */
-  bubble: (size: { width: number; height: number } | null) => invoke<Side>("pet_bubble", { bubble: size && [size.width, size.height] }),
+  bubble: (size: { width: number; height: number } | null) => (bubbleCommand = bubbleCommand.then(() => invoke<Side>("pet_bubble", { bubble: size && [size.width, size.height] }))),
   openDock: () => void invoke("pet_open_dock"),
 };
 
@@ -92,21 +95,43 @@ export function PetView(props: {
   const [dragging, setDragging] = useState(false);
   // null while the app sizes the window for a bubble: it is laid out hidden, to be measured.
   const [side, setSide] = useState<Side | null>(null);
+  const [review, updateReview] = useReducer(petBubbleReducer, PET_BUBBLE_START);
   const connects = props.connects ?? [];
   const asking = [...connects.map((c) => `${c.connect.id}:${c.blockedUrl ? "open" : "ask"}`), ...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
+  const shown = !!asking || review.shown;
   useLayoutEffect(() => {
-    let live = true;
-    setSide(null);
+    if (asking) updateReview({ type: "show" });
+  }, [asking]);
+  // Content can grow without a new request id (a warning, a refusal or a blocked browser). Measure
+  // those changes too, and retain the largest size through expiry and answers on another surface.
+  useLayoutEffect(() => {
+    if (!shown) return;
     const el = bubble.current;
-    void petApp.bubble(asking && el ? { width: el.offsetWidth, height: el.offsetHeight } : null).then((s) => live && setSide(s ?? { left: false, up: true }));
+    if (!el) return;
+    const measure = () => updateReview({ type: "measure", width: el.offsetWidth, height: el.offsetHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [shown]);
+  useLayoutEffect(() => {
+    if (!review.size) return;
+    let live = true;
+    void petApp.bubble(review.size).then((s) => live && setSide(s ?? { left: false, up: true }));
     return () => {
       live = false;
     };
-  }, [asking]);
+  }, [review.size]);
+  const done = () => {
+    // No timer, state broadcast or request disappearance sends the native shrink command.
+    updateReview({ type: "done" });
+    setSide(null);
+    void petApp.bubble(null);
+  };
   const a = props.agent;
   const where = side ? `${side.left ? "pet-left" : "pet-right"} ${side.up ? "pet-up" : "pet-down"}` : "pet-measuring";
-  const requests = asking ? (
-    <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
+  const requests = shown ? (
+    <div ref={bubble} className="pet-bubble" style={{ minHeight: review.size?.height }} role="status" aria-live="polite">
       {props.refusal}
       {connects.map((c) => (
         <div key={c.connect.id} className={`pet-request${!c.connect.verified ? " unverified" : ""}`}>
@@ -127,6 +152,8 @@ export function PetView(props: {
         // code (APC 0.9): Deny, and the code is typed in the dock, which the bubble opens; its content is fixed per request.
         <div key={r.id} className={`pet-request${r.unverified ? " unverified" : ""}`}>
           <PairingRequest
+            // Keep code entry in the dock until native keyboard input after SW_SHOWNOACTIVATE
+            // has been verified. A web field alone cannot establish that Windows activates it.
             entry="dock"
             kind={r.kind}
             app={r.app}
@@ -153,6 +180,12 @@ export function PetView(props: {
           />
         </div>
       ))}
+      {!asking && (
+        <div className="pet-request">
+          <p>No requests waiting.</p>
+          <button type="button" onClick={done}>Done</button>
+        </div>
+      )}
     </div>
   ) : null;
   return (
