@@ -419,25 +419,33 @@ export function HubDock() {
     // on its way, from this surface too, so a misclick can be undone (Fix check 2 on #120). The hub lets it win.
     const approving = pending.some((x) => x.pairing.id === pid && x.pairing.approving);
     const kind = beginAnswer(decidingRef, pid, action, approving);
-    if (!kind) return;
+    if (!kind) return Promise.resolve(false);
     setDeciding(decidingRef.current);
     setNotice(null);
-    // The code, typed on the card, goes in the body (APC 0.9): compared in the hub, then dropped.
-    void call<{ ok?: boolean; error?: unknown; attempts_left?: unknown }>(`${base}/pairings/${pid}`, { action, ...(code ? { code } : {}) })
+    // The code, typed on the card, goes in the body (APC 0.9): compared in the hub, then dropped. It resolves
+    // true when the hub took the answer (the pet confirms only then), false when it said no or was not reached.
+    return call<{ ok?: boolean; error?: unknown; attempts_left?: unknown }>(`${base}/pairings/${pid}`, { action, ...(code ? { code } : {}) })
       // A refusal (400 with { ok: false, error }) is said, never dropped (Fix check 4 on #120); so is a call that failed.
       // A wrong, malformed or missing code is said on the request's own card, which stays to try again; any other
       // refusal (the last wrong code included: the request is gone) is the dock's notice.
       .then((r) => {
-        if (r?.ok !== false) return setCodeErrors((m) => (m.has(pid) ? new Map([...m].filter(([id]) => id !== pid)) : m));
+        if (r?.ok !== false) {
+          setCodeErrors((m) => (m.has(pid) ? new Map([...m].filter(([id]) => id !== pid)) : m));
+          return true;
+        }
         // The hub is already connecting this request (APC 0.10): its card says so; nothing was counted, nothing to say.
-        if (isConnectingAnswer(r.error)) return;
+        if (isConnectingAnswer(r.error)) return false;
         // On its card only when the card has the field (a request with a code); otherwise, the notice.
         if (isCodeRetryError(r.error) && pending.some((x) => x.pairing.id === pid && x.pairing.code)) {
           const error: CodeError = { error: r.error, at: Date.now(), ...(typeof r.attempts_left === "number" ? { attempts_left: r.attempts_left } : {}) };
           setCodeErrors((m) => new Map(m).set(pid, error));
         } else setNotice(decisionNotice(r.error));
+        return false;
       })
-      .catch(() => setNotice(decisionNotice("unreachable")))
+      .catch(() => {
+        setNotice(decisionNotice("unreachable"));
+        return false;
+      })
       .finally(() => {
         // Answered or failed: that kind clears, and only it (a failed Deny can be sent again).
         setDeciding(endAnswer(decidingRef, pid, kind));
@@ -450,22 +458,28 @@ export function HubDock() {
   const connectItems = mergeConnectItems(state.connects ?? [], blockedConnects, agentNameById, (id) => inFlightOf(deciding.get(id)));
   const decideConnect = (c: DockConnect, action: ConnectAction, opener?: Window) => {
     const kind = beginAnswer(decidingRef, c.id, action);
-    if (!kind) return;
+    if (!kind) return Promise.resolve(false);
     setDeciding(decidingRef.current);
     setNotice(null);
+    // Resolves true when the hub took the answer, as decide() does.
     if (action === "deny") {
-      void call<{ ok?: boolean; error?: unknown }>(`${base}/connects/${c.id}/deny`, {})
+      return call<{ ok?: boolean; error?: unknown }>(`${base}/connects/${c.id}/deny`, {})
         .then((r) => {
-          if (r?.ok === false) setNotice(decisionNotice(r.error, "connect"));
+          if (r?.ok !== false) return true;
+          setNotice(decisionNotice(r.error, "connect"));
+          return false;
         })
-        .catch(() => setNotice(decisionNotice("unreachable", "connect")))
+        .catch(() => {
+          setNotice(decisionNotice("unreachable", "connect"));
+          return false;
+        })
         .finally(() => {
           setDeciding(endAnswer(decidingRef, c.id, kind));
           refresh();
         });
       return;
     }
-    void approveAndOpen({
+    return approveAndOpen({
       approve: () => call<{ ok?: boolean; url?: string; error?: unknown }>(`${base}/connects/${c.id}/approve`, action === "approve_unverified" ? { action } : {}),
       opener: opener ?? window,
       desktop: DESKTOP_SHELL,
@@ -479,9 +493,14 @@ export function HubDock() {
           ]);
         } else if (res.status === "error") {
           setNotice(decisionNotice(res.error, "connect"));
+          return false;
         }
+        return true;
       })
-      .catch(() => setNotice(decisionNotice("unreachable", "connect")))
+      .catch(() => {
+        setNotice(decisionNotice("unreachable", "connect"));
+        return false;
+      })
       .finally(() => {
         setDeciding(endAnswer(decidingRef, c.id, kind));
         refresh();

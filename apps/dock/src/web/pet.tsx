@@ -97,8 +97,9 @@ export function PetView(props: {
   requests: PetRequest[];
   connects?: ConnectCardItem[];
   /** The code typed in the bubble goes with an approval (TIN-922): without it the hub refuses the Allow. */
-  decide: (id: string, action: UnverifiedAction, code?: string) => void;
-  decideConnect?: (connect: DockConnect, action: ConnectAction) => void;
+  /** Each resolves true once the hub accepted the answer: only then does the bubble confirm it. */
+  decide: (id: string, action: UnverifiedAction, code?: string) => Promise<boolean> | void;
+  decideConnect?: (connect: DockConnect, action: ConnectAction) => Promise<boolean> | void;
   dismissBlockedConnect?: (id: string) => void;
   /** Whether the drag went ahead (an agent not connected yet does not drag, TIN-908). */
   startDrag: (e: DragEvent) => boolean;
@@ -120,29 +121,34 @@ export function PetView(props: {
     };
   }, []);
   const connects = props.connects ?? [];
-  // What the person answered here (id to its confirmation), and what left the bubble since it opened: once
-  // nothing waits, the bubble confirms and closes, or says the request left on its own (pet-bubble.ts).
-  const answered = useRef(new Map<string, string>());
-  const waitingIds = useRef<string[]>([]);
-  const [left, setLeft] = useState<string[]>([]);
+  // The answers given here (id to its confirmation once the hub accepted it, null while on its way), and every
+  // request seen since the bubble opened: once nothing waits, the bubble confirms and closes, or says the
+  // request left on its own (pet-bubble.ts). What left is worked out in the render, so it is never a step late.
+  const [answers, setAnswers] = useState<ReadonlyMap<string, string | null>>(new Map());
+  const seen = useRef(new Set<string>());
   const [hover, setHover] = useState(false);
+  const waitingIds = [...connects.map((c) => c.connect.id), ...props.requests.map((r) => r.id)];
+  const answer = (id: string, text: string, sent: Promise<boolean> | void) => {
+    setAnswers((m) => new Map(m).set(id, null));
+    void Promise.resolve(sent).then((ok) =>
+      setAnswers((m) => {
+        const next = new Map(m);
+        if (ok) next.set(id, text);
+        else next.delete(id);
+        return next;
+      }),
+    );
+  };
   const asking = [...connects.map((c) => `${c.connect.id}:${c.blockedUrl ? "open" : "ask"}`), ...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
   const shown = !!asking || review.shown;
   useLayoutEffect(() => {
     if (asking) updateReview({ type: "show" });
-    const now = [...connects.map((c) => c.connect.id), ...props.requests.map((r) => r.id)];
-    const gone = waitingIds.current.filter((id) => !now.includes(id));
-    waitingIds.current = now;
-    if (gone.length) setLeft((l) => [...l, ...gone]);
+    for (const id of waitingIds) seen.current.add(id);
   }, [asking]);
-  // A refusal is about the last answer: it says what happened, so nothing before it is confirmed or explained.
+  // A refusal says what happened to the last answer: what left before it needs no other word once dismissed.
   useLayoutEffect(() => {
-    if (!props.refusal) return;
-    answered.current.clear();
-    setLeft([]);
+    if (props.refusal) seen.current = new Set(waitingIds);
   }, [props.refusal]);
-  // A code refused on its card: that answer did not go through.
-  for (const r of props.requests) if (r.error) answered.current.delete(r.id);
   // Content can grow without a new request id (a warning, a refusal or a blocked browser). Measure
   // those changes too, and retain the largest size through expiry and answers on another surface.
   useLayoutEffect(() => {
@@ -171,13 +177,14 @@ export function PetView(props: {
   const done = () => {
     // Only Done, a dismissed refusal or the person's own accepted answer (below) sends the native shrink
     // command: never a request that left on its own, nor a timer while the pointer is on the bubble.
-    answered.current.clear();
-    setLeft([]);
+    seen.current = new Set();
+    setAnswers(new Map());
     updateReview({ type: "done" });
     setSide(null);
     void petApp.bubble(null);
   };
-  const end = shown && !asking ? petBubbleEnd(answered.current, left) : null;
+  const left = [...seen.current].filter((id) => !waitingIds.includes(id));
+  const end = shown && !asking ? petBubbleEnd(answers, left) : null;
   const endKey = end ? (end.type === "answered" ? `answered:${end.text}` : end.type) : "";
   useEffect(() => {
     if (endKey === "close") return done();
@@ -206,10 +213,7 @@ export function PetView(props: {
             agentName={c.agentName}
             inFlight={c.inFlight}
             blockedUrl={c.blockedUrl}
-            decide={(action) => {
-              answered.current.set(c.connect.id, petAnswerText(action, c.connect.name, true));
-              props.decideConnect?.(c.connect, action);
-            }}
+            decide={(action) => answer(c.connect.id, petAnswerText(action, c.connect.name, true), props.decideConnect?.(c.connect, action))}
             onOpenLink={() => setTimeout(() => props.dismissBlockedConnect?.(c.connect.id), 0)}
             onDismiss={() => props.dismissBlockedConnect?.(c.connect.id)}
             compact
@@ -251,10 +255,7 @@ export function PetView(props: {
             inFlight={r.inFlight}
             approving={!!r.approving}
             error={r.error ?? null}
-            decide={(action, code) => {
-              answered.current.set(r.id, petAnswerText(action, r.app, false));
-              props.decide(r.id, action, code);
-            }}
+            decide={(action, code) => answer(r.id, petAnswerText(action, r.app, false), props.decide(r.id, action, code))}
             openDock={petApp.openDock}
             compact
           />

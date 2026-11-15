@@ -35,6 +35,10 @@ test("a bubble confirms the person's own answers and explains a request that lef
   // Something left that was not answered here (expired, or answered in the dock): the bubble says so, until Done.
   assert.deepEqual(petBubbleEnd(answered, ["p1", "p2"]), { type: "gone" });
   assert.deepEqual(petBubbleEnd(new Map(), ["p2"]), { type: "gone" });
+  // An answer still on its way: no word yet, neither a confirmation nor "left on its own".
+  assert.deepEqual(petBubbleEnd(new Map([["p1", null]]), ["p1"]), { type: "waiting" });
+  // Refused or not reached: the answer is dropped, so the request reads as having left on its own.
+  assert.deepEqual(petBubbleEnd(new Map(), ["p1"]), { type: "gone" });
   // Nothing left (a dismissed refusal): it closes at once.
   assert.deepEqual(petBubbleEnd(answered, []), { type: "close" });
   assert.equal(petAnswerText("deny", "Pulse", false), "Pulse denied.");
