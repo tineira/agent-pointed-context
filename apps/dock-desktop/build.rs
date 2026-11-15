@@ -7,6 +7,8 @@ fn main() {
             "pet_grip",
             "pet_move",
             "pet_open_dock",
+            "pet_caps",
+            "pet_focus",
             "float_state",
             "float_set",
         ])),
