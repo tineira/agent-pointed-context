@@ -12,6 +12,8 @@ export function petBubbleReducer(
 ): PetBubbleState {
   if (event.type === "done") return PET_BUBBLE_START;
   if (event.type === "show") return state.shown ? state : { ...state, shown: true };
+  // A frame not laid out yet measures 0: wait for a real size.
+  if (!(event.width >= 1 && event.height >= 1)) return state;
   const width = Math.max(state.size?.width ?? 0, event.width);
   const height = Math.max(state.size?.height ?? 0, event.height);
   if (width === state.size?.width && height === state.size?.height) return state;

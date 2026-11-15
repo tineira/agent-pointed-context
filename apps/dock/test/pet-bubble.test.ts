@@ -20,3 +20,9 @@ test("pet bubble retains its room through expiry, denial, approval and blocked-b
     shown: true, size: { width: 240, height: 120 },
   });
 });
+
+test("a pet bubble ignores a frame measured before layout (0 x 0)", () => {
+  assert.equal(petBubbleReducer(PET_BUBBLE_START, { type: "measure", width: 0, height: 0 }), PET_BUBBLE_START);
+  const sized = petBubbleReducer(PET_BUBBLE_START, { type: "measure", width: 240, height: 200 });
+  assert.equal(petBubbleReducer(sized, { type: "measure", width: 240, height: 0 }), sized);
+});

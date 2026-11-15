@@ -114,6 +114,11 @@ export function PetView(props: {
     observer.observe(el);
     return () => observer.disconnect();
   }, [shown]);
+  // A fresh view knows no bubble: clear any size a previous mount left in the window (a reload, or
+  // a refresh error that swapped this view for PetWaiting). Queued, so a bubble measured now follows it.
+  useLayoutEffect(() => {
+    void petApp.bubble(null);
+  }, []);
   useLayoutEffect(() => {
     if (!review.size) return;
     let live = true;
@@ -268,6 +273,9 @@ function PetFrame(props: { where: string; name?: string; children: ReactNode; be
 
 /** The empty dock's one pet: a click opens the dock, where agents are added. */
 export function PetHint(props: { note?: string }) {
+  useLayoutEffect(() => {
+    void petApp.bubble(null);
+  }, []);
   return (
     <PetFrame where="pet-right pet-up">
       <button type="button" className="pet-logo pet-hint" title={props.note ?? "No agents yet: open your dock to add one"} aria-label={props.note ?? "Open your dock to add an agent"} onClick={petApp.openDock}>
@@ -279,6 +287,9 @@ export function PetHint(props: { note?: string }) {
 
 /** A pet while its page opens the dock, or tries again. */
 export function PetWaiting(props: { note: string }) {
+  useLayoutEffect(() => {
+    void petApp.bubble(null);
+  }, []);
   return (
     <PetFrame where="pet-right pet-up">
       <div className="pet-logo" title={props.note}>
