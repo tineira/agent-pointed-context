@@ -560,7 +560,7 @@ An unknown or ended grant carries no `RevokedAnswer`: it is a 404 (a secret URL)
 
 | Code | Routes and meaning |
 |---|---|
-| `invalid` | `/apc/connect`: malformed body; `/apc/reader/status`: malformed claim; owner create: malformed host or agent |
+| `invalid` | `/apc/connect`: malformed body; owner create: malformed host or agent |
 | `dock_expired` | `/apc/connect`, `/apc/pair`: dock no longer exists |
 | `ticket_expired` | `/apc/connect`, `/apc/pair`: absent, expired, consumed ticket or removed agent; `/apc/connect` also refuses an agent mismatch |
 | `ticket_not_for_pairing` | drop ticket on `/apc/pair`; connect ticket on `/apc/connect` or `/apc/confirm`; every call to the obsolete `/apc/reader`; no ticket is spent on these refusals |
@@ -574,7 +574,7 @@ An unknown or ended grant carries no `RevokedAnswer`: it is a 404 (a secret URL)
 | `forbidden` | owner routes: absent/wrong owner cookie or cross-origin/site request (HTTP 403) |
 | `dock_expired` | owner routes: cookie no longer opens a live dock (HTTP 404) |
 
-`/apc/reader/status` returns HTTP 200 `denied` for an unknown, expired, consumed or other-origin claim. It never exposes a token for one of these claims.
+`/apc/reader/status` returns HTTP 200 `denied` for a malformed, unknown, expired, consumed or other-origin claim. It never exposes a token for one of these claims.
 
 **A hub, to the dock's owner, on an approval** (the dock's page)
 

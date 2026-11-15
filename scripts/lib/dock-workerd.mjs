@@ -66,4 +66,3 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
   }
   return runtime;
 }
-
