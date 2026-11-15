@@ -6,7 +6,7 @@
  */
 // #region imports
 import { apcConformance, runConformance, standInHub, type AgentConnection, type ApcAppAdapter, type ApcDockDropOutcome, type ApcDockLifecycleAdapter } from "@tineira/apc-conformance";
-import { LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
+import { LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, decodeApcConnect, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { OrdersApp, newOrdersStore, type OrdersAppOptions } from "./orders-app.ts";
 // #endregion
@@ -20,8 +20,10 @@ const SESSION = { cookie: "orders_session=owner" };
 export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean } = {}): { app: OrdersApp; adapter: ApcAppAdapter } {
   // #region hub
   /**
-   * A dock's hub, from the suite: it takes pairings (`/apc/pair`) and keeps their pairing codes, confirms them
-   * (`/apc/confirm`), and calls the app back (`/apc/revoke`, and `initialize` once approved) through `app`.
+   * A dock's hub, from the suite: it takes a first drop's Connect request (`/apc/connect`, APC 0.13) and, once its
+   * owner approves (`hub.approveConnect`), opens the app's `dock_connect` page with a connect ticket; it takes pairings
+   * (`/apc/pair`) and keeps their pairing codes, confirms them (`/apc/confirm`), and calls the app back
+   * (`/apc/revoke`, and `initialize` once approved) through `app`.
    */
   // Its clock starts on the day 0.12.0 was tagged, inside the window the suite checks for hubs before 0.12.
   const started = Date.now();
@@ -32,6 +34,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     origin: ORIGIN,
     profiles: ["direct", "dock"],
     hubs: [HUB],
+    // Orders' calls to the hub go to the stand-in, which takes a first drop's Connect request (APC 0.13) as a dock does.
     fetch: hub.fetch,
     now: () => Date.now() + skew,
     signedIn: (request) => request.headers.get("cookie") === SESSION.cookie,
@@ -44,6 +47,26 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     (await app.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", headers: { ...SESSION, "content-type": "application/json", origin: ORIGIN }, body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
 
   // #region connect
+  /**
+   * A first drop asks the hub to connect (APC 0.13): the dock's owner approves, and the dock opens Orders'
+   * `dock_connect` page with `#apc_connect=...`; its script asks the person there (`/api/connect/dock`) with the
+   * connect ticket. A hub before 0.13 answers 404, and the drop asks the person itself. The Allow goes where they were asked.
+   */
+  async function ask(first: { hub: string; agent: string; ticket: string; target?: unknown }) {
+    let drop = first;
+    let route = "/api/drop";
+    let asked = await call(route, drop);
+    if (asked.ok === true && asked.status === "connect_requested") {
+      const approved = await hub.approveConnect(first.agent);
+      const opened = approved.url ? decodeApcConnect(new URL(approved.url).hash) : null;
+      if (!opened) throw new Error(`the dock opened no #apc_connect URL: ${JSON.stringify(approved)}`);
+      drop = opened;
+      route = "/api/connect/dock";
+      asked = await call(route, drop);
+    }
+    if (asked.error !== "consent_required") throw new Error(`expected consent_required, got ${JSON.stringify(asked)}`);
+    return { asked, route, drop };
+  }
   let drops = 0;
   /** A new agent with full access, made the way each profile makes one. */
   async function connect(path: ApcProfile): Promise<AgentConnection> {
@@ -55,10 +78,8 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     // The person drops an agent from a dock: the app asks first, and the Allow brings the nonce back.
     drops++;
     const agent = `ag_${drops}`;
-    const drop = { hub: HUB, agent, ticket: hub.ticket(agent), target: { kind: "order", id: "ord_1001" } };
-    const asked = await call("/api/drop", drop);
-    if (asked.error !== "consent_required") throw new Error(`expected consent_required, got ${JSON.stringify(asked)}`);
-    const paired = await call("/api/drop", { ...drop, consent: asked.consent });
+    const { asked, route, drop } = await ask({ hub: HUB, agent, ticket: hub.ticket(agent), target: { kind: "order", id: "ord_1001" } });
+    const paired = await call(route, { ...drop, consent: asked.consent });
     if (!paired.ok) throw new Error(`pairing failed: ${JSON.stringify(paired)}`);
     // The person types the code in their dock: the hub approves and connects (its initialize makes the grant live).
     const pairing = hub.pairings.filter((p) => p.agent === agent).at(-1)!;
@@ -71,30 +92,44 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
   // #endregion
 
   // #region dock
-  /** What the page shows on a drop: the consent with its code and the Allow, the waiting card, or a refusal. */
-  async function dropAgent(d: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome> {
-    const drop = { hub: d.hub, agent: d.agent, ticket: d.ticket, target: d.target ?? { kind: "order", id: "ord_1001" } };
-    const r = await call("/api/drop", drop);
+  /**
+   * What the page shows for an answer of the drop (`/api/drop`) or of the dock_connect page (`/api/connect/dock`):
+   * the consent with its code and the Allow, the waiting card, connecting, or a refusal.
+   */
+  function shownFor(r: Record<string, unknown>, route: string, drop: Record<string, unknown>): ApcDockDropOutcome {
     if (r.error === "consent_required" && typeof r.pairing_code === "string") {
       return {
         page: "consent",
         // orders-page.ts shows it formatted, K7M-4P2.
         code: formatPairingCode(r.pairing_code),
         allow: async (over) => {
-          const a = await call("/api/drop", { ...drop, ...(over?.hub !== undefined ? { hub: over.hub } : {}), consent: r.consent });
+          const a = await call(route, { ...drop, ...(over?.hub !== undefined ? { hub: over.hub } : {}), consent: r.consent });
           return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
         },
       };
     }
     if (r.ok === true && r.status === "pending") return { page: "waiting", code: formatPairingCode((r.pairing as { code: string }).code) };
-    if (r.ok === true && r.status === "connecting") return { page: "connecting" };
+    // The dock took the code and is connecting (APC 0.10), or it will open dock_connect for a first drop (APC 0.13).
+    if (r.ok === true && (r.status === "connecting" || r.status === "connect_requested")) return { page: "connecting" };
     if (r.ok === true) return { page: "pinned" };
     return { page: "refused", error: String(r.error) };
+  }
+  async function dropAgent(d: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome> {
+    const drop = { hub: d.hub, agent: d.agent, ticket: d.ticket, target: d.target ?? { kind: "order", id: "ord_1001" } };
+    return shownFor(await call("/api/drop", drop), "/api/drop", drop);
+  }
+  /** The dock opens dock_connect with `#apc_connect=...` (APC 0.13): the page asks the person with the connect ticket. */
+  async function connectDock(url: string): Promise<ApcDockDropOutcome> {
+    const opened = decodeApcConnect(new URL(url).hash);
+    if (!opened) return { page: "refused", error: "invalid_connect_fragment" };
+    const drop = { ...opened };
+    return shownFor(await call("/api/connect/dock", drop), "/api/connect/dock", drop);
   }
 
   /** The pairing code (APC 0.9): what the consent shows, and the person's Allow on it. */
   async function dropOnPage(agent: string, ticket: string) {
-    const shown = await dropAgent({ agent, ticket, hub: HUB });
+    const { asked, route, drop } = await ask({ hub: HUB, agent, ticket, target: { kind: "order", id: "ord_1001" } });
+    const shown = shownFor(asked, route, drop);
     if (shown.page !== "consent") throw new Error(`expected the consent, got ${JSON.stringify(shown)}`);
     return { shown: shown.code, allow: () => shown.allow() };
   }
@@ -104,9 +139,8 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
   /** A grant in handoff, for an endpoint's body: dropped and allowed, the dock has not connected. */
   async function waitingGrant(): Promise<string> {
     const agent = `ag_owner_${++drops}`;
-    const shown = await dropAgent({ agent, ticket: hub.ticket(agent), hub: HUB });
-    if (shown.page !== "consent") throw new Error(`expected the consent, got ${JSON.stringify(shown)}`);
-    return (await shown.allow()).grantId!;
+    const { asked, route, drop } = await ask({ hub: HUB, agent, ticket: hub.ticket(agent), target: { kind: "order", id: "ord_1001" } });
+    return (await call(route, { ...drop, consent: asked.consent })).grant_id as string;
   }
   /**
    * The Dock profile as built (APC 0.10): how the suite puts a grant into each state (the drop, Cancel, the
@@ -114,6 +148,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
    */
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
+    connectDock,
     // The page's Allow sends the drop again with the nonce, hub included: the app checks it against its allowlist again (M1).
     allowCarriesHub: true,
     cancel: async (grantId) => (await call("/api/cancel", { grant_id: grantId })).ok === true,
@@ -140,11 +175,12 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
       origin: ORIGIN,
       session: SESSION,
       drop: { path: "/api/drop", body: () => ({ hub: HUB, agent: `ag_owner_${++drops}`, ticket: hub.ticket(`ag_owner_${drops}`) }) },
+      // A first drop's consent is asked on the dock_connect page (APC 0.13), so its Allow goes there.
       allow: {
-        path: "/api/drop",
+        path: "/api/connect/dock",
         body: async () => {
-          const drop = { hub: HUB, agent: `ag_owner_${++drops}`, ticket: hub.ticket(`ag_owner_${drops}`) };
-          return { ...drop, consent: (await call("/api/drop", drop)).consent };
+          const { asked, drop } = await ask({ hub: HUB, agent: `ag_owner_${++drops}`, ticket: hub.ticket(`ag_owner_${drops}`) });
+          return { ...drop, consent: asked.consent };
         },
       },
       heartbeat: { path: "/api/heartbeat", body: () => ({}) },

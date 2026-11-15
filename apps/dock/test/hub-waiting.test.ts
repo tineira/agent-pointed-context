@@ -16,7 +16,7 @@ test("the dock shows an agent waiting while its wait holds its place, and not pa
   const shop = fakeApp(SHOP, "Shop");
   w.apps.set(SHOP, shop);
   const who = await w.agent();
-  const { ticket } = await w.hub.ticket(who.id);
+  const { ticket } = await w.connectTicket(who.id, SHOP);
   const asked = (await w.hub.pair({ ticket, agent: who.id, app: { name: shop.name, origin: shop.origin }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}`, pairing_code: "K7M4P2" })) as { ok: boolean; pairing_id: string };
   assert.equal(asked.ok, true);
   assert.deepEqual(await w.hub.decide(asked.pairing_id, "approve", "K7M4P2"), { ok: true });

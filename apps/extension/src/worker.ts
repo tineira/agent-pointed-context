@@ -8,12 +8,9 @@
  */
 import { chooseSensitive, shapeReadingCounted, type PageReading } from "../../dock/src/worker/reading.ts";
 import { openDock } from "./open-dock.ts";
-import { agentName, AGENT_FALLBACK, askingSite, mayWriteTimeout, type WaitPhase, browserLabel, HELD_MS, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
+import { agentName, AGENT_FALLBACK, askingSite, askReaderConnect, mayWriteTimeout, pollReaderStatus, type WaitPhase, browserLabel, HELD_MS, decide, frameConsent, scriptMatches, frameTitle, frameOutside, grantedAlone, originOf, replyTarget, devHubHosts, heldForInclude, holdReading, hubAllowed, hubPatterns, includeSensitive, isSensitive, readingId, type Held, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, NOTICE_SITES, readerKey, reask, sensitiveMode, sitePattern, type Consent, type DirectOnlyLookup, type DropStatus, type Mode, type PinMark, type SensitiveMode, type SiteChoice } from "./drop.ts";
 
 const SCRIPT_ID = "apc-drop";
-/** How long the extension waits for the person's answer in the dock. */
-const ASK_MS = 60_000;
-const POLL_MS = 2_000;
 
 interface Drop {
   type: "drop";
@@ -284,6 +281,8 @@ async function injectOpenTabs(origins?: string[]): Promise<void> {
  */
 interface DropReply {
   status: DropStatus;
+  claim?: string;
+  check?: string;
   pin?: PinMark;
   sensitive?: Sensitive;
   /** The drop this answers, so the page offers "Include them this time" for that drop and no other. */
@@ -360,8 +359,9 @@ async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sen
     delete tokens[key];
     await chrome.storage.local.set({ readers: tokens });
   }
-  const asked = await post(`${hub}/apc/reader`, { ticket, agent, label: browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent) });
-  if (!asked?.ok || typeof asked.claim !== "string") return { status: await note(hub, reading.url, asked?.error === "ticket_expired" ? "no_ticket" : "error"), ...(id ? { id } : {}) };
+  const label = browserLabel(navigator.userAgentData?.brands, navigator.userAgentData?.platform, navigator.userAgent);
+  const asked = await askReaderConnect(hub, { ticket, agent, label });
+  if (!asked.ok) return { status: await note(hub, reading.url, asked.status), ...(id ? { id } : {}) };
   // Kept before the page hears "asking", so a waiting card on screen always has its entry (TIN-786).
   const askedAt = new Date().toISOString();
   if (id) {
@@ -369,7 +369,7 @@ async function handleDrop(m: Drop, from: { tabId: number; frameId: number }, sen
     await setWaiting(id, { state: "polling", hub, url: reading.url, askedAt });
   }
   void waitForAnswer(hub, agent, asked.claim, reading, from, { ...sensitive, ...(id ? { id } : {}), ...(holdUntil ? { holdUntil } : {}) });
-  return { status: await note(hub, reading.url, "asking", {}, askedAt), ...(id ? { id } : {}) };
+  return { status: await note(hub, reading.url, "asking", {}, askedAt), ...(asked.check ? { check: asked.check } : {}), ...(id ? { id } : {}) };
 }
 
 /**
@@ -472,31 +472,27 @@ async function consent(origin: string, answer: Consent | undefined, frameOrigin:
 
 /** Poll the dock until the person answers; then send the held reading, or drop it. */
 async function waitForAnswer(hub: string, agent: string, claim: string, reading: PageReading, to: { tabId: number; frameId: number }, about: { sensitive?: Sensitive; id?: string; holdUntil?: number }): Promise<void> {
-  const until = Date.now() + ASK_MS;
-  let status: DropStatus = "timeout";
   let pin: PinMark | undefined;
   let name: string | undefined;
-  while (Date.now() < until) {
-    await new Promise((r) => setTimeout(r, POLL_MS));
+  const poll = await pollReaderStatus(hub, claim, {
     // An extension API call keeps the service worker alive between polls (it stops after 30 s idle, 13.1).
+    tick: async () => { await chrome.storage.local.get("readers"); },
+  });
+  let status: DropStatus;
+  if (poll.status === "paired") {
+    // Before anything else is awaited: from here a lost wait may no longer say the dock did not answer.
+    if (about.id) phases.set(about.id, "sending");
     const tokens = ((await chrome.storage.local.get("readers")).readers ?? {}) as Record<string, string>;
-    const answer = await post(`${hub}/apc/reader/status`, { claim });
-    if (answer?.status === "pending") continue;
-    if (answer?.status === "paired" && typeof answer.token === "string") {
-      // Before anything else is awaited: from here a lost wait may no longer say the dock did not answer.
-      if (about.id) phases.set(about.id, "sending");
-      tokens[readerKey(hub, agent)] = answer.token;
-      await chrome.storage.local.set({ readers: tokens });
-      // From here the reading may go: a waiting card that hears nothing no longer makes the popup say "timeout".
-      if (about.id) await setWaiting(about.id, { state: "sending", hub, url: reading.url });
-      const sent = await send(hub, answer.token, reading);
-      status = sent.result === true ? "sent" : "error";
-      pin = sent.pin;
-      name = sent.agent;
-    } else {
-      status = answer ? "denied" : "error";
-    }
-    break;
+    tokens[readerKey(hub, agent)] = poll.token;
+    await chrome.storage.local.set({ readers: tokens });
+    // From here the reading may go: a waiting card that hears nothing no longer makes the popup say "timeout".
+    if (about.id) await setWaiting(about.id, { state: "sending", hub, url: reading.url });
+    const sent = await send(hub, poll.token, reading);
+    status = sent.result === true ? "sent" : "error";
+    pin = sent.pin;
+    name = sent.agent;
+  } else {
+    status = poll.status;
   }
   await note(hub, reading.url, status, status === "sent" ? sentExtra(name, about) : {});
   if (about.id) {
@@ -534,15 +530,6 @@ async function send(hub: string, token: string, reading: unknown): Promise<{ res
     }
   }
   return { result: false };
-}
-
-async function post(url: string, body: unknown): Promise<Record<string, unknown> | null> {
-  try {
-    const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    return (await r.json()) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 /**

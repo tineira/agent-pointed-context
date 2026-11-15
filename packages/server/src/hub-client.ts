@@ -1,5 +1,5 @@
 import { badContentLength, bareOrigin, LOOPBACK_HOST, readCapped, utf8 } from "./util.ts";
-import { declaredBinding, HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, isStoredPairingId, PAIRING_CODE_ACK, type DockPairRequest, type HubCallError, type PAIRING_BINDING } from "@tineira/apc-protocol";
+import { declaredBinding, HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, isStoredPairingId, PAIRING_CODE_ACK, type DockConnectRequest, type DockConnectAnswer, type DockPairRequest, type HubCallError, type PAIRING_BINDING } from "@tineira/apc-protocol";
 
 /**
  * An app's calls to a dock's hub, server to server (the Dock profile; APC 0.9, hardened in 0.10):
@@ -90,7 +90,7 @@ class Expired extends Error {}
 
 export { badContentLength };
 
-async function post(hub: string | URL, path: string, body: unknown, options: HubCallOptions): Promise<Answer> {
+async function post(hub: string | URL, path: string, body: unknown, options: HubCallOptions, allowNotFound = false): Promise<Answer> {
   const origin = hubCallOrigin(hub);
   if (!origin) return { error: "hub_not_allowed" };
   const send = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
@@ -128,8 +128,8 @@ async function post(hub: string | URL, path: string, body: unknown, options: Hub
       discard();
       return { error: "hub_refused" };
     }
-    // Only a 200 or the hub's own 400 is ever believed: the body of anything else is not read.
-    if (response.status !== 200 && response.status !== 400) {
+    // Only a 200, the hub's own 400, or (when allowed) a 404 is ever believed: the body of anything else is not read.
+    if (response.status !== 200 && response.status !== 400 && !(allowNotFound && response.status === 404)) {
       discard();
       return { error: "hub_refused" };
     }
@@ -179,6 +179,22 @@ export async function pairWithHub(hub: string | URL, body: DockPairRequest, opti
   const binding = declaredBinding(a.body);
   if (binding === "refused") return { ok: false, error: "hub_refused" };
   return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding };
+}
+
+/** First pairing (APC 0.13). Only an HTTP 404 whose JSON object body has `error: "not_found"` permits an app's temporary 0.12 fallback. */
+export async function requestConnect(hub: string | URL, body: DockConnectRequest, options: HubCallOptions = {}): Promise<DockConnectAnswer> {
+  const a = await post(hub, "/apc/connect", body, options, true);
+  if ("error" in a) return { ok: false, error: a.error };
+  if (a.status === 404) return a.body?.error === "not_found" ? { ok: false, error: "not_found" } : { ok: false, error: "hub_refused" };
+  const refused = refusal(a);
+  if (refused) return { ok: false, error: refused };
+  if (a.status !== 200 || a.body?.ok !== true || a.body.status !== "connect_requested") return { ok: false, error: "hub_refused" };
+  if (body.reader) {
+    if (typeof a.body.claim !== "string" || !/^[0-9a-f]{32}\.[0-9a-f]{32}$/.test(a.body.claim) || typeof a.body.check !== "string" || !/^\d{4}$/.test(a.body.check)) return { ok: false, error: "hub_refused" };
+    return { ok: true, status: "connect_requested", claim: a.body.claim, check: a.body.check };
+  }
+  if (a.body.claim !== undefined || a.body.check !== undefined) return { ok: false, error: "hub_refused" };
+  return { ok: true, status: "connect_requested" };
 }
 
 /** `POST {hub}/apc/confirm` on a drop of an agent the app holds a grant for: whether the hub still pairs them. */

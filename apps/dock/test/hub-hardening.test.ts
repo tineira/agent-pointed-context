@@ -33,7 +33,7 @@ async function verifiedWorld(t: TestContext) {
   for (const a of [shop, market, elsewhere]) w.apps.set(a.origin, a);
   const pair = async (a: FakeApp) => {
     const who = await w.agent();
-    const { ticket } = await w.hub.ticket(who.id);
+    const { ticket } = await w.connectTicket(who.id, a.origin);
     const answer = await w.hub.pair({ ticket, agent: who.id, app: { name: a.name, origin: a.origin }, mcp_url: grantUrl(a), pairing_code: CODE });
     assert.equal(answer.ok, true, answer.error);
     assert.deepEqual(await w.hub.decide(answer.pairing_id, "approve", CODE), { ok: true });
@@ -147,7 +147,7 @@ test("the give-backs kept to try again are capped, the oldest dropped first", as
   w.shop.revoke = () => new Response("down", { status: 503 });
   const who = await w.agent();
   for (let i = 0; i < 53; i++) {
-    const { ticket } = await w.hub.ticket(who.id);
+    const { ticket } = await w.connectTicket(who.id, SHOP);
     const answer = await w.hub.pair({ ticket, agent: who.id, app: { name: w.shop.name, origin: SHOP }, mcp_url: `${SHOP}/mcp/${i.toString(16).padStart(32, "0")}`, pairing_code: CODE });
     assert.equal(answer.ok, true, answer.error);
     await w.hub.decide(answer.pairing_id, "deny");
@@ -191,7 +191,7 @@ test("a dock found expired by a request, before its alarm, gives every grant bac
   await w.pair(w.shop);
   w.hubRoom.db.prepare("update meta set value = ? where key = 'expires_at'").run(String(Date.now() - 1));
   const who = (await w.hubRoom.db.prepare("select id from agents").get()) as { id: string };
-  await w.hub.reader({ ticket: "x", agent: who.id }, EXTENSION);
+  await w.hub.requestConnect({ ticket: "x", agent: who.id, reader: true }, EXTENSION);
   await w.hub.idle();
   assert.equal(w.revokes(w.shop), 1);
 });
@@ -239,11 +239,11 @@ test("a new reader request leaves the browser already paired as it is until the 
   const who = await w.agent();
   const ask = async () => {
     const { ticket } = await w.hub.ticket(who.id);
-    return (await w.hub.reader({ ticket, agent: who.id, label: "Chrome on Windows" }, EXTENSION)).claim as string;
+    return (await w.hub.requestConnect({ ticket, agent: who.id, reader: true, label: "Chrome on Windows" }, EXTENSION)).claim as string;
   };
-  const readers = async () => ((await w.agent()).pairings as Json[]).filter((p) => p.kind === "reader");
+  const readers = async () => [...((await w.agent()).pairings as Json[]).filter((p) => p.kind === "reader"), ...(await w.state()).connects.map((c: Json) => ({ ...c, status: "pending" }))];
   const claim = await ask();
-  await w.hub.decide((await readers())[0]!.id, "approve");
+  await w.hub.approveConnect((await readers())[0]!.id, undefined, "https://dock.test");
   const token = (await w.hub.readerStatus({ claim }, EXTENSION)).token as string;
   const reading = { reading: { url: "https://news.example/a", title: "A", text: "Hello", element: null } };
   assert.equal((await w.hub.reading(reading, token, EXTENSION)).ok, true);
@@ -257,7 +257,7 @@ test("a new reader request leaves the browser already paired as it is until the 
   assert.equal((await w.hub.readerStatus({ claim: second }, EXTENSION)).status, "pending");
   // Allowed: the one the person allows replaces every other.
   const secondId = (await readers()).filter((r) => r.status === "pending")[0]!.id;
-  await w.hub.decide(secondId, "approve");
+  await w.hub.approveConnect(secondId as string, undefined, "https://dock.test");
   assert.equal((await readers()).length, 1);
   assert.equal((await w.hub.readerStatus({ claim: third }, EXTENSION)).status, "denied", "the other request went");
   assert.equal((await w.hub.reading(reading, token, EXTENSION)).error, "not_paired");

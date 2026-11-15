@@ -62,14 +62,16 @@ export function cardInFlight(page: InFlight | undefined, approveClicked: boolean
  * What the dock tells the person when the hub refuses an answer (Fix check 4 on #120): a 400 with
  * { ok: false, error } is shown, never dropped.
  */
-export function decisionNotice(error: unknown): string {
+export function decisionNotice(error: unknown, context: "pairing" | "connect" = "pairing"): string {
   switch (error) {
     case "approval_withdrawn":
       return "Approval was withdrawn; ask again. This app's domain was denied, unpaired or removed elsewhere in your dock while it was being approved, so it was not paired. Drop your agent on the app again to see the warning.";
     case "unknown_pairing":
       return "That request is no longer waiting: it was answered elsewhere, removed, or it expired. Drop your agent on the app again to ask again.";
     case "warning_required":
-      return "This app is not verified, so it needs its warning: its request now shows it. Read it, then approve or deny.";
+      return context === "connect"
+        ? "This app is not verified, so it needs its warning: its request now shows it. Read it, then connect or deny."
+        : "This app is not verified, so it needs its warning: its request now shows it. Read it, then approve or deny.";
     case "app_blocked":
       return "The dock does not pair with this app right now, so it was not paired.";
     case "revoked":
@@ -93,9 +95,155 @@ export function decisionNotice(error: unknown): string {
     // Only a request without a code lands here (a coded one says it on its card): an app from before 0.9 (TIN-885).
     case "pairing_code_required":
       return "This app uses an older APC version that has no pairing code, so it was not paired. Ask its maker to update it, and Deny this request.";
+    // APC 0.13 Connect errors.
+    case "not_found":
+      return "That request is no longer waiting: it was answered elsewhere, removed, or it expired. Drop your agent again, or use Connect an app.";
+    case "app_not_allowed":
+      return "The dock cannot connect to this app right now.";
+    case "https_required":
+      return "This app needs HTTPS to connect.";
+    case "reader_not_allowed":
+      return "This browser extension is not allowed to send readings to this dock.";
+    case "unknown_agent":
+      return "That agent is no longer in your dock.";
     default:
       return `That did not go through (${typeof error === "string" ? error.slice(0, 40) : "error"}). Try again.`;
   }
+}
+
+/** What the "Check" step of Connect an app tells the person when the hub refuses a host (APC 0.13). */
+export function connectCheckErrorText(error: unknown): string {
+  switch (error) {
+    case "app_not_allowed":
+      return "The dock cannot connect to this host (use an HTTPS domain like app.example).";
+    case "https_required":
+      return "This app must use HTTPS.";
+    case "app_blocked":
+      return "The dock does not pair with this app right now.";
+    case "too_many_requests":
+      return "Too many pending connect requests. Answer or deny one first.";
+    case "unknown_agent":
+      return "That agent is no longer in your dock.";
+    case "apc_json_missing":
+      return "No APC manifest (/.well-known/apc.json) was found on that host.";
+    case "apc_json_redirected":
+      return "That host's APC manifest redirected, which the dock does not follow.";
+    case "apc_json_unreachable":
+      return "Could not reach that host's APC manifest. Try again.";
+    case "apc_json_invalid":
+      return "That app's APC manifest is invalid or does not support APC 0.13 Dock connect.";
+    case "dock_not_offered":
+      return "That app does not offer the Dock profile.";
+    case "unreachable":
+      return "Could not reach your dock. Try again.";
+    default:
+      return `Could not check that app (${typeof error === "string" ? error.slice(0, 40) : "error"}).`;
+  }
+}
+
+/**
+ * Synchronous ref-backed guard + state transition for answering requests so two clicks before a
+ * re-render cannot send a duplicate Approve/Connect while one is in flight.
+ */
+export function beginAnswer(ref: { current: Sent }, id: string, action: string, approving = false): InFlight | null {
+  const kind = kindOf(action);
+  if (!mayAnswer(action, { inFlight: inFlightOf(ref.current.get(id)), approving })) return null;
+  ref.current = sentOut(ref.current, id, kind);
+  return kind;
+}
+
+/** Record that an in-flight answer settled, returning the updated map for React state. */
+export function endAnswer(ref: { current: Sent }, id: string, kind: InFlight): Sent {
+  ref.current = landed(ref.current, id, kind);
+  return ref.current;
+}
+
+export type ApproveConnectResult =
+  | { status: "opened"; url: string }
+  | { status: "blocked"; url: string }
+  | { status: "paired" }
+  | { status: "error"; error: unknown };
+
+export interface OpenedWindow {
+  closed?: boolean;
+  opener?: unknown;
+  location?: { replace(url: string): void };
+  close(): void;
+}
+
+export interface WindowOpener {
+  open(url?: string, target?: string, features?: string): OpenedWindow | null | undefined;
+}
+
+function closeQuietly(w: OpenedWindow | null | undefined): void {
+  try {
+    w?.close();
+  } catch {
+    // window may already be closed or inaccessible
+  }
+}
+
+/**
+ * APC 0.13 Connect approval: in a browser (`!desktop`), opens a blank tab synchronously inside the
+ * click before awaiting `approve()` (never passing `"noopener"`, which makes `window.open` return
+ * `null` per spec), then clears `opener` and replaces its location with the returned `dock_connect`
+ * URL—or closes the blank tab if approval fails. In the Dock for Windows shell (`desktop`), keeps
+ * `window.open(url, "_blank")` after approve because `on_new_window` hands it to the OS browser.
+ * Reader requests (`kind === "reader"`) pair directly without opening a tab. Any blocked open or
+ * navigation failure returns `{ status: "blocked", url }` so the caller keeps the recovery link.
+ */
+export async function approveAndOpen(o: {
+  approve: () => Promise<{ ok?: boolean; url?: unknown; error?: unknown }>;
+  opener?: WindowOpener;
+  desktop?: boolean;
+  kind?: "app" | "reader";
+}): Promise<ApproveConnectResult> {
+  const win = o.opener ?? window;
+  let pre: OpenedWindow | null = null;
+  if (!o.desktop && o.kind !== "reader") {
+    try {
+      pre = win.open("", "_blank") ?? null;
+    } catch {
+      pre = null;
+    }
+  }
+
+  let r: { ok?: boolean; url?: unknown; error?: unknown };
+  try {
+    r = await o.approve();
+  } catch (e) {
+    closeQuietly(pre);
+    throw e;
+  }
+
+  if (r?.ok === false) {
+    closeQuietly(pre);
+    return { status: "error", error: r.error };
+  }
+
+  if (typeof r?.url === "string" && r.url) {
+    if (o.desktop) {
+      try {
+        win.open(r.url, "_blank");
+        return { status: "opened", url: r.url };
+      } catch {
+        return { status: "blocked", url: r.url };
+      }
+    }
+    if (!pre) return { status: "blocked", url: r.url };
+    try {
+      if (pre.closed) return { status: "blocked", url: r.url };
+      pre.opener = null;
+      pre.location!.replace(r.url);
+      return { status: "opened", url: r.url };
+    } catch {
+      closeQuietly(pre);
+      return { status: "blocked", url: r.url };
+    }
+  }
+
+  closeQuietly(pre);
+  return { status: "paired" };
 }
 
 /** Two views of what is on its way (the page's, and a card's own click before the page re-renders) as one. */

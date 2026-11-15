@@ -12,7 +12,7 @@ import { CopyRow } from "./setup.tsx";
 import { agoLabel } from "../worker/reading.ts";
 
 /** Now, again every second while `on`: for the countdowns. */
-function useNow(on = true): number {
+export function useNow(on = true): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!on) return;
@@ -36,26 +36,30 @@ export function pendingJoins(state: DockState, now: number): DockJoin[] {
  * "A new computer wants to join this dock": on every linked computer's dock, above the agents, as a
  * pairing request is. Allow gives it the dock: every agent, where they point, pairing them with apps.
  */
-export function JoinRequests(props: { state: DockState; base: string; refresh: () => void }) {
+export function JoinRequests(props: { state: DockState; base: string; refresh: () => void; compact?: boolean; onError?: (message: string) => void }) {
   const now = useNow((props.state.joins ?? []).some((j) => j.status === "pending"));
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const reportError = (msg: string) => {
+    if (props.onError) props.onError(msg);
+    else setError(msg);
+  };
   const decide = (id: string, action: "approve" | "deny") => {
     setSending(id);
-    setError(null);
+    if (!props.onError) setError(null);
     void call<{ ok?: boolean }>(`${props.base}/joins/${id}`, { action })
-      .then((r) => r?.ok === false && setError("That request is no longer waiting: its time ran out, or another computer answered it."))
-      .catch(() => setError("Could not reach your dock. Try again."))
+      .then((r) => r?.ok === false && reportError("That request is no longer waiting: its time ran out, or another computer answered it."))
+      .catch(() => reportError("Could not reach your dock. Try again."))
       .finally(() => {
         setSending(null);
         props.refresh();
       });
   };
   const joins = pendingJoins(props.state, now);
-  if (!joins.length && !error) return null;
+  if (!joins.length && (!error || props.onError)) return null;
   return (
     <>
-      {error && (
+      {!props.onError && error && (
         <div className="decision-notice" role="status">
           <p>{error}</p>
           <button type="button" onClick={() => setError(null)}>
@@ -63,42 +67,46 @@ export function JoinRequests(props: { state: DockState; base: string; refresh: (
           </button>
         </div>
       )}
-      {joins.map((j) => (
-        <section key={j.id} className="request join-request" role="alertdialog" aria-labelledby={`join-${j.id}`}>
-          <h2 id={`join-${j.id}`} className="join-title">
-            A new computer wants to join this dock
-          </h2>
-          <dl className="join-facts">
-            <dt>Computer</dt>
-            <dd>
-              <b>{j.label}</b>
-            </dd>
-            {j.check && (
-              <>
-                <dt>Its number</dt>
-                <dd>
-                  <b className="join-check">{j.check}</b>
-                </dd>
-              </>
-            )}
-            <dt>Asked</dt>
-            <dd>{j.asked_at ? agoLabel(j.asked_at, now) : "just now"}</dd>
-            <dt>Answer within</dt>
-            <dd>{clock((j.answer_by ?? now) - now)}</dd>
-          </dl>
-          <p>
-            It will use <b>every agent here</b>, point them and see where they point, and pair them with apps. Allow it only if you just entered this dock's code on a computer of yours{j.check ? <>, and that computer shows the same number, <b>{j.check}</b></> : null}.
-          </p>
-          <div className="row">
-            <button type="button" className="primary" disabled={sending === j.id} onClick={() => decide(j.id, "approve")}>
-              Allow
-            </button>
-            <button type="button" disabled={sending === j.id} onClick={() => decide(j.id, "deny")}>
-              Deny
-            </button>
-          </div>
-        </section>
-      ))}
+      {joins.map((j) => {
+        const Tag = props.compact ? "div" : "section";
+        const cls = props.compact ? "float-request join-request" : "request join-request";
+        return (
+          <Tag key={j.id} className={cls} role="alertdialog" aria-labelledby={`join-${j.id}`}>
+            <h2 id={`join-${j.id}`} className="join-title">
+              A new computer wants to join this dock
+            </h2>
+            <dl className="join-facts">
+              <dt>Computer</dt>
+              <dd>
+                <b>{j.label}</b>
+              </dd>
+              {j.check && (
+                <>
+                  <dt>Its number</dt>
+                  <dd>
+                    <b className="join-check">{j.check}</b>
+                  </dd>
+                </>
+              )}
+              <dt>Asked</dt>
+              <dd>{j.asked_at ? agoLabel(j.asked_at, now) : "just now"}</dd>
+              <dt>Answer within</dt>
+              <dd>{clock((j.answer_by ?? now) - now)}</dd>
+            </dl>
+            <p>
+              It will use <b>every agent here</b>, point them and see where they point, and pair them with apps. Allow it only if you just entered this dock's code on a computer of yours{j.check ? <>, and that computer shows the same number, <b>{j.check}</b></> : null}.
+            </p>
+            <div className="row">
+              <button type="button" className="primary" disabled={sending === j.id} onClick={() => decide(j.id, "approve")}>
+                Allow
+              </button>
+              <button type="button" disabled={sending === j.id} onClick={() => decide(j.id, "deny")}>
+                Deny
+              </button>
+            </div>
+          </Tag>
+        );
+      })}
     </>
   );
 }

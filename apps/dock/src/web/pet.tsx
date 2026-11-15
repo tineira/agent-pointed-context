@@ -17,8 +17,9 @@ import { READER_NOTICE } from "../worker/reading.ts";
 import type { UnverifiedAction } from "./unverified.tsx";
 import type { InFlight } from "./request-state.ts";
 import { PairingRequest } from "./pairing-request.tsx";
+import { ConnectRequest, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
 
-const params = new URLSearchParams(location.search);
+const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
 export const PET = params.get("view") === "pet";
 export const PET_AGENT = PET ? params.get("agent") : null;
@@ -31,7 +32,7 @@ interface Side {
 }
 
 /** The app's commands for its pets (pets.rs); outside the app they do nothing. */
-const tauri = (window as { __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } }).__TAURI_INTERNALS__;
+const tauri = typeof window !== "undefined" ? (window as { __TAURI_INTERNALS__?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } }).__TAURI_INTERNALS__ : undefined;
 const invoke = <T,>(cmd: string, args?: Record<string, unknown>): Promise<T | null> => (tauri ? tauri.invoke<T>(cmd, args).catch(() => null) : Promise.resolve(null));
 export const petApp = {
   /** The dock's agents: the app opens a pet for each and closes the others, and lists them by name in its tray's Float menu (TIN-698; an older app ignores the names). */
@@ -73,11 +74,14 @@ export interface PetRequest {
   code?: boolean;
 }
 
-/** One agent's pet, and the bubble of its pairing requests while any waits. */
+/** One agent's pet, and the bubble of its pairing and connect requests while any waits. */
 export function PetView(props: {
   agent: DockAgent;
   requests: PetRequest[];
+  connects?: ConnectCardItem[];
   decide: (id: string, action: UnverifiedAction) => void;
+  decideConnect?: (connect: DockConnect, action: ConnectAction) => void;
+  dismissBlockedConnect?: (id: string) => void;
   /** Whether the drag went ahead (an agent not connected yet does not drag, TIN-908). */
   startDrag: (e: DragEvent) => boolean;
   endDrag: () => void;
@@ -88,7 +92,8 @@ export function PetView(props: {
   const [dragging, setDragging] = useState(false);
   // null while the app sizes the window for a bubble: it is laid out hidden, to be measured.
   const [side, setSide] = useState<Side | null>(null);
-  const asking = [...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
+  const connects = props.connects ?? [];
+  const asking = [...connects.map((c) => `${c.connect.id}:${c.blockedUrl ? "open" : "ask"}`), ...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
   useLayoutEffect(() => {
     let live = true;
     setSide(null);
@@ -103,6 +108,20 @@ export function PetView(props: {
   const requests = asking ? (
     <div ref={bubble} className="pet-bubble" role="status" aria-live="polite">
       {props.refusal}
+      {connects.map((c) => (
+        <div key={c.connect.id} className={`pet-request${!c.connect.verified ? " unverified" : ""}`}>
+          <ConnectRequest
+            connect={c.connect}
+            agentName={c.agentName}
+            inFlight={c.inFlight}
+            blockedUrl={c.blockedUrl}
+            decide={(action) => props.decideConnect?.(c.connect, action)}
+            onOpenLink={() => setTimeout(() => props.dismissBlockedConnect?.(c.connect.id), 0)}
+            onDismiss={() => props.dismissBlockedConnect?.(c.connect.id)}
+            compact
+          />
+        </div>
+      ))}
       {props.requests.map((r) => (
         // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused. A request with a pairing
         // code (APC 0.9): Deny, and the code is typed in the dock, which the bubble opens; its content is fixed per request.

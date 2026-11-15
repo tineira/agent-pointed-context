@@ -54,12 +54,31 @@ import {
   type PresenceMessage,
   type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, REVOKED_PROBES, attentionOf, checkCoreToolList, checkNothingButGrants, checkFocusShape, checkMcpEndpoints, checkRevokedBody, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
-import type { StandInHub } from "./hub.ts";
+import { ConformanceError, ISO, REVOKED_PROBES, attentionOf, checkCoreToolList, checkDockConnectUrl, checkNothingButGrants, checkFocusShape, checkMcpEndpoints, checkRevokedBody, checkView, data, expect, hasNoReferrerPolicy, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
+import type { StandInHub, StandInHubMode } from "./hub.ts";
 import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
 export { ConformanceError } from "./shared.ts";
-export { standInHub, type StandInHold, type StandInHub, type StandInHubMode, type StandInHubOptions, type StandInPairing } from "./hub.ts";
+export { standInHub, type StandInConnectRequest, type StandInHold, type StandInHub, type StandInHubMode, type StandInHubOptions, type StandInPairing } from "./hub.ts";
+export {
+  standInApp,
+  type StandInApcJsonMode,
+  type StandInApp,
+  type StandInAppCall,
+  type StandInAppOptions,
+  type StandInMcpMode,
+  type StandInRevokeMode,
+} from "./app.ts";
+export {
+  hubConformance,
+  runHubConformance,
+  type ApcHubAdapter,
+  type ApcHubApproveConnectResult,
+  type ApcHubApproveResult,
+  type ApcHubPendingConnect,
+  type HubConformanceCheck,
+  type HubConformanceReport,
+} from "./hub-conformance.ts";
 export {
   HttpConformanceUsageError,
   IN_PROCESS_ONLY,
@@ -205,9 +224,9 @@ export interface ApcDockOwnerEndpoints {
  * The Dock profile as built (APC 0.10), from an app that claims 0.10.0 or later on the Dock profile: what the suite
  * needs to put a grant into each state, and to reach the owner's endpoints. The app pairs with the `hub` of
  * `ApcDockAdapter`; its `apc.json` is read at `owner.origin`. Every hub call the app makes goes through `hub.fetch`
- * (as the app's fetch, or routed there). While a check runs, the suite also wraps the global `fetch`: an `/apc/pair`
- * or `/apc/confirm` sent through it to any origin but the stand-in's is logged as a call past the hub and not sent.
- * A request that leaves another way (another HTTP client) is not seen.
+ * (as the app's fetch, or routed there). While a check runs, the suite also wraps the global `fetch`: an `/apc/pair`,
+ * `/apc/confirm` or `/apc/connect` sent through it to any origin but the stand-in's is logged as a call past the hub
+ * and not sent. A request that leaves another way (another HTTP client) is not seen.
  */
 export interface ApcDockLifecycleAdapter {
   /**
@@ -215,6 +234,11 @@ export interface ApcDockLifecycleAdapter {
    * `target` (one of the adapter's `targets` when left out): what the page shows.
    */
   dropAgent(drop: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome>;
+  /**
+   * Opens the `dock_connect` URL (with `#apc_connect=...`) returned by `hub.approveConnect` (APC 0.13), showing the
+   * consent outcome to Allow pairing via `/apc/pair`.
+   */
+  connectDock?(url: string, target?: FocusTarget): Promise<ApcDockDropOutcome>;
   /**
    * Whether the page's Allow carries the hub (true: the app re-checks it against the allowlist, M1), or the server
    * binds the hub to the consent (false: `allow({ hub })` is ignored, and the suite checks the Allow calls only the
@@ -540,8 +564,21 @@ export function apcConformance(adapter: ApcAppAdapter): ConformanceCheck[] {
       const covered = mcpUrlCoverage(m, conn.mcpUrl, { profile: app.profile, shared });
       expect(covered.covered, `the grant's MCP URL is not covered for ${app.profile} by ${describeMcpCoverage(m)}${covered.covered ? "" : `: ${covered.reason}`}`);
       if (m.profiles.includes("direct")) expect(m.direct && new URL(m.direct.connect).origin === origin, "direct.connect is the app's own page");
+      let dockConnectNote: string | undefined;
+      if (m.profiles.includes("dock")) {
+        if (compareStandard(m.standard, "0.13.0") < 0) {
+          dockConnectNote = `standard ${m.standard} is pre-0.13 (Dock first-pairing check requires >= 0.13)`;
+        } else {
+          const connectUrl = checkDockConnectUrl(m.dock_connect, origin, origin.startsWith("http:"), m.standard);
+          const connectRes = await (app.fetch ? app.fetch : fetch)(new Request(connectUrl.toString(), { method: "GET", redirect: "manual", credentials: "omit" }));
+          await connectRes.body?.cancel().catch(() => {});
+          expect(!(connectRes.status >= 300 && connectRes.status < 400) && connectRes.type !== "opaqueredirect" && !connectRes.redirected, `GET ${connectUrl.pathname}: answered with a redirect (HTTP ${connectRes.status}); dock_connect must answer 200`);
+          expect(connectRes.status === 200, `GET ${connectUrl.pathname}: HTTP ${connectRes.status}, expected 200`);
+          expect(hasNoReferrerPolicy(connectRes.headers), `GET ${connectUrl.pathname}: missing Referrer-Policy: no-referrer (got ${JSON.stringify(connectRes.headers.get("referrer-policy") ?? "")})`);
+        }
+      }
       const endpoints = checkMcpEndpoints(body, m);
-      const notes = [support.note, endpoints].filter((n): n is string => !!n);
+      const notes = [support.note, dockConnectNote, endpoints].filter((n): n is string => !!n);
       if (notes.length) return { note: notes.join("; ") };
     }),
 
@@ -924,11 +961,21 @@ async function claimedStandard(app: ApcAppAdapter, conn: AgentConnection): Promi
 function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): ConformanceCheck[] {
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (dock): pairing code: ${name}`, run);
   let n = 0;
-  /** A new agent's drop, Allowed: what the consent showed, the app's answer, and the pairing the hub got. */
-  const allowNew = async (d: ApcDockAdapter) => {
+  /**
+   * A new agent's drop, Allowed: what the consent showed, the app's answer, and the pairing the hub got. With `mode`,
+   * the stand-in hub answers in it only while the Allow runs: from 0.13 the drop itself calls the hub (`/apc/connect`),
+   * and a mode meant for the Allow's `/apc/pair` must not stop the drop from reaching the consent.
+   */
+  const allowNew = async (d: ApcDockAdapter, mode?: StandInHubMode) => {
     const agent = `ag_code_${++n}_${Date.now().toString(36)}`;
     const drop = await d.drop(agent, d.hub.ticket(agent));
-    const answer = await drop.allow();
+    if (mode) d.hub.mode = mode;
+    let answer: Awaited<ReturnType<typeof drop.allow>>;
+    try {
+      answer = await drop.allow();
+    } finally {
+      if (mode) d.hub.mode = "ack";
+    }
     return { agent, shown: drop.shown, answer, sent: d.hub.received.at(-1), pairing: d.hub.pairings.find((p) => p.agent === agent) };
   };
   /** The HTTP status the app gives a grant's MCP URL: 404 once it holds no grant there. */
@@ -975,8 +1022,7 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
       if (!(await claims09())) return NOT_09;
       try {
         for (const mode of ["no_ack", "redirect", "error_500"] as const) {
-          dock.hub.mode = mode;
-          const { answer, sent } = await allowNew(dock);
+          const { answer, sent } = await allowNew(dock, mode);
           expect(!answer.ok, `with a hub that answers ${mode}, the Allow says it paired: the app must refuse it`);
           expect(isObject(sent) && typeof sent.mcp_url === "string", `with a hub that answers ${mode}, the app sent no MCP URL to check`);
           const status = await statusOf(sent.mcp_url);

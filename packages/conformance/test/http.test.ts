@@ -36,6 +36,8 @@ interface FakeOptions {
   revokedBy?: string;
   /** A GET of any unknown path is the single-page app's page (HTTP 200, text/html), as a static host's fallback serves it. */
   spaFallback?: boolean;
+  /** Answer for GET /connect/dock (default: 200 with Referrer-Policy: no-referrer). */
+  dockConnect?: { status?: number; location?: string; referrerPolicy?: string | null };
 }
 
 /** A small APC app behind a fetch: apc.json, one live grant and one revoked. */
@@ -56,6 +58,14 @@ function fakeApp(o: FakeOptions = {}): { fetch: (r: Request) => Promise<Response
       if (url.pathname === "/.well-known/apc.json") {
         if (o.redirectManifest) return new Response(null, { status: 302, headers: { location: "https://elsewhere.example/apc.json" } });
         return json(o.manifest ?? { name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/?connect` } });
+      }
+      if (url.pathname === "/connect/dock" && request.method === "GET") {
+        const dc = o.dockConnect ?? {};
+        if (dc.location) return new Response(null, { status: dc.status ?? 302, headers: { location: dc.location } });
+        const headers: Record<string, string> = { "content-type": "text/html" };
+        const rp = dc.referrerPolicy === undefined ? "no-referrer" : dc.referrerPolicy;
+        if (rp !== null) headers["referrer-policy"] = rp;
+        return new Response("<!doctype html><title>Dock Connect</title>", { status: dc.status ?? 200, headers });
       }
       if (url.href === (o.revokedUrl ?? REVOKED)) {
         if (o.revokedServes && request.method === "POST") {
@@ -109,12 +119,12 @@ test("a conforming app passes every HTTP check, and the in-process ones are repo
   const report = await run({ then: true });
   assert.equal(report.failed, 0, JSON.stringify(report.results.filter((r) => r.status === "fail"), null, 2));
   assert.equal(report.passed, 12);
-  // The in-process checks, and the {secret} one: this apc.json has no mcp.endpoints.
-  assert.equal(report.skipped, IN_PROCESS_ONLY.length + 1);
+  // The in-process checks, {secret} (no mcp.endpoints), and dock_connect (direct only).
+  assert.equal(report.skipped, IN_PROCESS_ONLY.length + 2);
   assert.equal(report.coverage.ran, 12);
-  assert.equal(report.coverage.total, 12 + IN_PROCESS_ONLY.length + 1);
+  assert.equal(report.coverage.total, 12 + IN_PROCESS_ONLY.length + 2);
   assert.equal(report.coverage.in_process, IN_PROCESS_ONLY.length);
-  assert.equal(report.coverage.http_total, 13);
+  assert.equal(report.coverage.http_total, 14);
   assert.equal(report.coverage.http_ran, 12);
   // A full run (--grant and --revoked) is no "mostly skipped", however many checks need the adapter.
   assert.equal(report.coverage.mostly_skipped, false);
@@ -344,17 +354,17 @@ test("from 1.0 the suite passes a newer minor of its major with a note, checks p
   const next = standardSupport("2.0.0", "1.4.0");
   assert.equal(next.ok, false);
   assert.match("reason" in next ? next.reason : "", /apc-conformance@2/);
-  assert.equal(standardSupport("0.13.0", "0.12.0").ok, false, "at 0.x a newer minor still fails");
+  assert.equal(standardSupport("0.14.0", "0.13.0").ok, false, "at 0.x a newer minor still fails");
 });
 
-test("pre-1.0 claims stop at 0.12, the last 0.x, and only a 1.x suite checks them; another major names its suite (versioning and compatibility)", () => {
-  assert.equal(standardSupport("0.12.3", "1.0.0").ok, true);
-  for (const claimed of ["0.13.0", "0.99.0"]) {
+test("pre-1.0 claims stop at 0.13, the last 0.x, and only a 1.x suite checks them; another major names its suite (versioning and compatibility)", () => {
+  assert.equal(standardSupport("0.13.3", "1.0.0").ok, true);
+  for (const claimed of ["0.14.0", "0.99.0"]) {
     const r = standardSupport(claimed, "1.0.0");
     assert.equal(r.ok, false, `${claimed} was never a version a 1.x suite checks`);
-    assert.match("reason" in r ? r.reason : "", /0\.10\.0 to 0\.12\.x; use @tineira\/apc-conformance@0/);
+    assert.match("reason" in r ? r.reason : "", /0\.10\.0 to 0\.13\.x; use @tineira\/apc-conformance@0/);
   }
-  const pre = standardSupport("0.12.0", "2.0.0");
+  const pre = standardSupport("0.13.0", "2.0.0");
   assert.equal(pre.ok, false, "a 2.x suite does not check pre-1.0 claims");
   assert.match("reason" in pre ? pre.reason : "", /@tineira\/apc-conformance@1 .* or @0/);
   const prev = standardSupport("1.0.0", "2.0.0");
@@ -365,7 +375,16 @@ test("pre-1.0 claims stop at 0.12, the last 0.x, and only a 1.x suite checks the
 test("mcp.endpoints (APC 0.11): the grant is checked for the profile given, as a hub checks it; the file's entries are checked as readers take them", async () => {
   const TG = `${ORIGIN}/mcp/AbCdEfGhIjKlMnOpQrStUv`;
   const TR = `${ORIGIN}/mcp/ZyXwVuTsRqPoNmLkJiHgFe`;
-  const file = (mcp: unknown, profiles: string[] = ["direct", "dock"], over: Record<string, unknown> = {}) => ({ name: "Fake", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles, mcp, direct: { connect: `${ORIGIN}/?connect` }, ...over });
+  const file = (mcp: unknown, profiles: string[] = ["direct", "dock"], over: Record<string, unknown> = {}) => ({
+    name: "Fake",
+    standard: APC_STANDARD_VERSION,
+    origin: ORIGIN,
+    profiles,
+    mcp,
+    direct: { connect: `${ORIGIN}/?connect` },
+    ...(profiles.includes("dock") ? { dock_connect: `${ORIGIN}/connect/dock` } : {}),
+    ...over,
+  });
   const go = (manifest: unknown, extra: Partial<HttpConformanceOptions> = {}) => run({ manifest, grantUrl: TG, revokedUrl: TR }, { grant: TG, revoked: TR, ...extra });
   const detail = (report: Awaited<ReturnType<typeof run>>, id: string) => report.results.find((r) => r.id === id);
 
@@ -499,4 +518,37 @@ test("under a {secret} entry nothing but grants is served: a fallback page there
   assert.equal(status(crash, "apc-json-secret-children"), "fail");
   // Without a {secret} entry there is nothing to check: skipped, never failed.
   assert.equal(status(await run({ spaFallback: true }), "apc-json-secret-children"), "skip");
+});
+
+test("dock_connect (APC 0.13, M13): checked only for dock profile claiming >= 0.13; pre-0.13 dock apps pass with note", async () => {
+  const dock013 = {
+    name: "Fake",
+    standard: "0.13.0",
+    origin: ORIGIN,
+    profiles: ["dock"],
+    mcp: { path: "/mcp/" },
+    dock_connect: `${ORIGIN}/connect/dock`,
+  };
+  assert.equal(status(await run({ manifest: dock013 }), "apc-json-dock-connect"), "pass");
+
+  // Pre-0.13 apps (0.10-0.12) without dock_connect keep passing with a note (Dock first-pairing floor is 0.13).
+  for (const std of ["0.10.0", "0.12.0"]) {
+    const pre = await run({ manifest: { name: "Fake", standard: std, origin: ORIGIN, profiles: ["dock"], mcp: { path: "/mcp/" } } });
+    assert.equal(status(pre, "apc-json-dock-connect"), "pass", std);
+    assert.match(pre.results.find((r) => r.id === "apc-json-dock-connect")!.note ?? "", /pre-0\.13/);
+  }
+
+  // Bad dock_connect URLs or GET answers fail on 0.13 dock (cross-origin / fragment / http fail in apc-json-valid; missing/GET fail in apc-json-dock-connect).
+  const withoutConnect = { name: "Fake", standard: "0.13.0", origin: ORIGIN, profiles: ["dock"], mcp: { path: "/mcp/" } };
+  assert.equal(status(await run({ manifest: withoutConnect }), "apc-json-dock-connect"), "fail", "missing dock_connect");
+  const cross = await run({ manifest: { ...dock013, dock_connect: "https://other.example/connect/dock" } });
+  assert.ok(cross.failed > 0 && status(cross, "apc-json-valid") === "fail", "cross-origin");
+  const frag = await run({ manifest: { ...dock013, dock_connect: `${ORIGIN}/connect/dock#frag` } });
+  assert.ok(frag.failed > 0 && status(frag, "apc-json-valid") === "fail", "fragment");
+  const plainHttp = await run({ manifest: { ...dock013, dock_connect: "http://app.example/connect/dock" } });
+  assert.ok(plainHttp.failed > 0 && (status(plainHttp, "apc-json-valid") === "fail" || status(plainHttp, "apc-json-dock-connect") === "fail"), "http");
+  assert.equal(status(await run({ manifest: dock013, dockConnect: { status: 302, location: `${ORIGIN}/other` } }), "apc-json-dock-connect"), "fail", "302 redirect");
+  assert.equal(status(await run({ manifest: dock013, dockConnect: { status: 404 } }), "apc-json-dock-connect"), "fail", "404");
+  assert.equal(status(await run({ manifest: dock013, dockConnect: { referrerPolicy: null } }), "apc-json-dock-connect"), "fail", "missing Referrer-Policy");
+  assert.equal(status(await run({ manifest: dock013, dockConnect: { referrerPolicy: "origin" } }), "apc-json-dock-connect"), "fail", "wrong Referrer-Policy");
 });

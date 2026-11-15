@@ -48,7 +48,7 @@ import {
   type DockGrantState,
   type FocusTarget,
 } from "@tineira/apc-protocol";
-import { ConformanceError, ISO, expect, isObject, resultKey, rpcBody, sameJson, text, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, ISO, checkDockConnectUrl, expect, hasNoReferrerPolicy, isObject, resultKey, rpcBody, sameJson, text, type ToolCallResult } from "./shared.ts";
 import type { StandInHold, StandInHubMode } from "./hub.ts";
 import type { ApcAppAdapter, ApcDockAdapter, ApcDockDropOutcome, ApcDockLifecycleAdapter, ApcDockOwnerEndpoint } from "./index.ts";
 
@@ -166,7 +166,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     const original = globalThis.fetch;
     const guarded = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
-      if ((url.pathname === "/apc/pair" || url.pathname === "/apc/confirm") && url.origin !== hub.origin) {
+      if ((url.pathname === "/apc/pair" || url.pathname === "/apc/confirm" || url.pathname === "/apc/connect") && url.origin !== hub.origin) {
         hub.requests.push(url.href);
         throw new TypeError(`apc-conformance: a hub call to ${url.href}, past the stand-in hub, was not sent`);
       }
@@ -434,9 +434,18 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
   };
   const drop =(life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, hub = d.hub.origin, target?: FocusTarget) => life.dropAgent({ agent, ticket: d.hub.ticket(agent), hub, ...(target ? { target } : {}) });
 
+  const finishConnect = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, outcome: ApcDockDropOutcome): Promise<ApcDockDropOutcome> => {
+    if (outcome.page === "connecting" && life.connectDock) {
+      const approved = await d.hub.approveConnect(agent);
+      expect(approved.ok && approved.url, `stand-in hub approveConnect failed: ${approved.error ?? "missing url"}`);
+      return await life.connectDock(approved.url);
+    }
+    return outcome;
+  };
+
   /** The person drops a new agent from the stand-in hub (or `hub`): the consent, which must be one. */
   const consent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent = newAgent(), hub = d.hub.origin) => {
-    const shown = await drop(life, d, agent, hub);
+    const shown = await finishConnect(life, d, agent, await drop(life, d, agent, hub));
     expect(shown.page === "consent", `a drop of an agent the app holds no grant for shows the consent, got ${JSON.stringify(shown).slice(0, 200)}`);
     expect(normalizePairingCode(shown.code), `the consent shows ${JSON.stringify(shown.code)}, not a pairing code`);
     return { agent, ...shown };
@@ -646,16 +655,32 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     }
   };
 
-  /** A check of the binding (APC 0.12): run on an app that claims 0.12.0 or later, noted as not checked before. */
-  const check12 = (name: string, body: (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, m: ApcManifest) => Promise<void | { note: string }>): Named => {
+  /** Runs a version-gated Dock lifecycle check (`>= minStandard`), returning a pre-version skip note otherwise. */
+  const checkSince = (
+    minStandard: string,
+    label: string,
+    missingFeature: string,
+    name: string,
+    body: (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, m: ApcManifest) => Promise<void | { note: string }>,
+  ): Named => {
     const named = check(name, async (life, d) => {
       const m = await manifestOf(life);
-      if (compareStandard(m.standard, "0.12.0") < 0) return { note: `not checked: the app's apc.json claims ${m.standard}, before 0.12.0, which has no binding` };
+      if (compareStandard(m.standard, minStandard) < 0) {
+        return { note: `not checked: the app's apc.json claims ${m.standard}, before ${minStandard}, which has no ${missingFeature}` };
+      }
       return body(life, d, m);
     });
-    named.name = named.name.replace(": 0.10: ", ": 0.12: ");
+    named.name = named.name.replace(": 0.10: ", `: ${label}: `);
     return named;
   };
+
+  /** A check of the binding (APC 0.12): run on an app that claims 0.12.0 or later, noted as not checked before. */
+  const check12 = (name: string, body: (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, m: ApcManifest) => Promise<void | { note: string }>): Named =>
+    checkSince("0.12.0", "0.12", "binding", name, body);
+
+  /** A check of origin-bound first pairing (APC 0.13, M13): run only on apps claiming 0.13.0 or later. */
+  const check13 = (name: string, body: (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, m: ApcManifest) => Promise<void | { note: string }>): Named =>
+    checkSince("0.13.0", "0.13", "/apc/connect first pairing", name, body);
 
   return [
     check("the lifecycle adapter is given, and its owner origin is the app's (required of an app that claims 0.10.0 or later on the Dock profile)", async (life, d) => {
@@ -1312,7 +1337,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     check("one pending pairing: not_paired from /apc/confirm ends the grant and starts a fresh consent", async (life, d) => {
       const g = await handoff(life, d);
       d.hub.forget(g.pairing.id);
-      const again = await drop(life, d, g.agent);
+      const again = await finishConnect(life, d, g.agent, await drop(life, d, g.agent));
       expect(again.page === "consent", `a drop the hub answers not_paired starts a fresh consent, got ${JSON.stringify(again).slice(0, 200)}`);
       expect(normalizePairingCode(again.code) !== g.code, "the fresh consent shows the old code: every consent makes a new one");
       await expectState(g.mcpUrl, "not_found", "the old grant, after not_paired");
@@ -1322,7 +1347,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       const g = await handoff(life, d);
       // The hub still says pending (the stand-in never expires a pairing by itself): the app's own expiry decides.
       await life.advance(PAIRING_CODE_TTL_MS + 1000);
-      const again = await drop(life, d, g.agent);
+      const again = await finishConnect(life, d, g.agent, await drop(life, d, g.agent));
       expect(again.page === "consent", `a drop past the stored expiry starts a fresh consent (no old code), got ${JSON.stringify(again).slice(0, 200)}`);
       expect(normalizePairingCode(again.code) !== g.code, "past the stored expiry the page still shows the old code");
       await expectState(g.mcpUrl, "not_found", "the old grant, past its stored expiry");
@@ -1489,6 +1514,34 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         const s = await send(g.mcpUrl, method, params);
         expect(!JSON.stringify(s.body).includes(g.pairing.id), `${method} on the grant carries the pairing_id`);
       }
+    }),
+
+    // Origin-bound first pairing (M13, APC 0.13): gated on standard >= 0.13.0 so 0.10-0.12 apps keep passing.
+    // Note: the dock_connect page's synchronous/inline <head> script clearing #apc_connect into sessionStorage
+    // is reference behaviour (verified during end-to-end use, not over plain HTTP/in-process conformance).
+    check13("M13: apc.json declares dock_connect (https, same origin, no fragment) and GET dock_connect answers 200 (never 3xx) with Referrer-Policy: no-referrer", async (life, _d, m) => {
+      const origin = life.owner.origin;
+      const url = checkDockConnectUrl(m.dock_connect, origin, origin.startsWith("http:"), m.standard);
+      const res = await fetchApp(new Request(url.toString(), { method: "GET", redirect: "manual", credentials: "omit" }));
+      await res.body?.cancel().catch(() => {});
+      expect(!(res.status >= 300 && res.status < 400) && res.type !== "opaqueredirect" && !res.redirected, `GET ${url.pathname}: answered with a redirect (HTTP ${res.status}); dock_connect must answer 200`);
+      expect(res.status === 200, `GET ${url.pathname}: HTTP ${res.status}, expected 200`);
+      expect(hasNoReferrerPolicy(res.headers), `GET ${url.pathname}: missing Referrer-Policy: no-referrer (got ${JSON.stringify(res.headers.get("referrer-policy") ?? "")})`);
+    }),
+
+    check13("M13: a first drop with no link calls /apc/connect on the stand-in hub (not /apc/pair)", async (life, d) => {
+      const freshAgent = newAgent();
+      const beforePairs = d.hub.received.length;
+      const beforeConnects = d.hub.connectReceived.length;
+      const beforeRequests = d.hub.requests.length;
+      await drop(life, d, freshAgent);
+      expect(d.hub.received.length === beforePairs, `first drop with no link called /apc/pair (${d.hub.received.length - beforePairs} call(s)); APC 0.13 must call /apc/connect instead`);
+      const newRequests = d.hub.requests.slice(beforeRequests);
+      expect(newRequests.includes(`${d.hub.origin}/apc/connect`), `first drop with no link did not call ${d.hub.origin}/apc/connect (called ${JSON.stringify(newRequests)})`);
+      const sent = d.hub.connectReceived.slice(beforeConnects).find((b) => b.agent === freshAgent);
+      expect(sent, `no /apc/connect body for agent ${freshAgent} was received`);
+      const appInfo = sent.app as { origin?: unknown } | undefined;
+      expect(appInfo?.origin === life.owner.origin, `/apc/connect sent app.origin=${JSON.stringify(appInfo?.origin)}, expected ${life.owner.origin}`);
     }),
   ];
 }

@@ -210,7 +210,7 @@ test("HTTP instead of HTTPS: an unverified app must use HTTPS, and the hub never
   // The MCP URL must be on the origin it declares.
   const other = fakeApp("https://evil.example", "Evil");
   w.apps.set(other.origin, other);
-  const { ticket } = await w.hub.ticket((await w.agent()).id);
+  const { ticket } = await w.connectTicket((await w.agent()).id, "https://evil.example");
   assert.deepEqual(await w.hub.pair({ ticket, agent: (await w.agent()).id, app: { name: "Evil", origin: "https://evil.example" }, mcp_url: "http://evil.example/mcp/x" }), { ok: false, error: "app_not_allowed" });
   assert.equal((w.hits.get("http://evil.example") ?? 0) + (w.hits.get("http://localhost:8788") ?? 0) + (w.hits.get("https://evil.example") ?? 0), 0);
   assert.deepEqual((await w.agent()).pairings, []);
@@ -279,7 +279,7 @@ test("the pairing cap: one dock holds a fixed number of app pairings across its 
   }
   assert.deepEqual(await w.pairApp(fakeApp("https://one-more.example", "One more"), { approve: false, agentIndex: 1 }), { ok: false, error: "too_many_apps" });
   // Pulse too: the cap counts every app.
-  const { ticket } = await w.hub.ticket((await w.agent()).id);
+  const { ticket } = await w.connectTicket((await w.agent()).id, PULSE);
   assert.deepEqual(await w.hub.pair({ ticket, agent: (await w.agent()).id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/x` }), { ok: false, error: "too_many_apps" });
   // Denying one frees a place.
   const one = (await w.agent()).pairings[0];

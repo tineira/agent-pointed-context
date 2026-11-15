@@ -5,6 +5,7 @@
  * nothing else is reachable, so "the hub never called it" is checked, not assumed. Shared by
  * hostile-app.test.ts and open-pairing.test.ts; not a test file itself.
  */
+import { approvedConnectTicket } from "./connect-fixture.ts";
 import assert from "node:assert/strict";
 import type { TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
@@ -127,6 +128,7 @@ export async function world(t: TestContext, env: Json = {}) {
     throw new TypeError(`no network in this test: ${url}`);
   });
 
+  const connectTicket = (agent: string, origin: string) => approvedConnectTicket(hub, hubRoom.db, agent, origin);
   const state = async () => hub.state(DOCK);
   const agent = async (i = 0) => (await state()).agents[i];
   const first = await agent();
@@ -148,10 +150,11 @@ export async function world(t: TestContext, env: Json = {}) {
   /** The person drops an agent on Pulse and allows it there: Pulse asks first (consent in the app, TIN-606), the Allow sends the nonce back. */
   const dropOnPulse = async (drag: { agent: string; ticket: string }) => {
     const drop = { hub: DOCK, ...drag, target: { kind: "customer", id: customers[0]!.id } };
-    const asked = await pulse.pairHub(SID, PULSE, drop);
+    drop.ticket = (await connectTicket(drag.agent, PULSE)).ticket;
+    const asked = await pulse.pairHub(SID, PULSE, drop, true);
     assert.equal(asked.error, "consent_required");
     // The code Pulse's consent showed (APC 0.9), for the person to type in the dock.
-    return { ...(await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent })), code: asked.pairing_code as string };
+    return { ...(await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent }, true)), code: asked.pairing_code as string };
   };
   /** The person drops the agent on Pulse, allows it there and in the dock. */
   const pairPulse = async () => {
@@ -168,14 +171,14 @@ export async function world(t: TestContext, env: Json = {}) {
   const pairApp = async (app: FakeApp, o: { approve?: boolean; agentIndex?: number } = {}) => {
     apps.set(app.origin, app);
     const who = await agent(o.agentIndex ?? 0);
-    const { ticket } = await hub.ticket(who.id);
+    const { ticket } = await connectTicket(who.id, app.origin);
     const answer = await hub.pair({ ticket, agent: who.id, app: { name: app.name, origin: app.origin }, mcp_url: `${app.origin}/mcp/${"c".repeat(32)}` });
     if (answer.ok && o.approve !== false) assert.equal((await hub.decide(answer.pairing_id, "approve_unverified")).ok, true);
     return answer as { ok: boolean; error?: string; pairing_id?: string };
   };
   const pairingOf = async (origin: string) => (await agent()).pairings.find((p: { app: { origin: string } }) => p.app.origin === origin);
 
-  return { hub, hubRoom, hubEnv, pulse, pulseRoom, customers, apps, hits, state, agent, rpcHub, callHub, listHub, dropOnPulse, pairPulse, pairApp, pairingOf };
+  return { connectTicket, hub, hubRoom, hubEnv, pulse, pulseRoom, customers, apps, hits, state, agent, rpcHub, callHub, listHub, dropOnPulse, pairPulse, pairApp, pairingOf };
 }
 
 /** Shorter time limits for one test. */

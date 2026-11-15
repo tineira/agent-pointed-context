@@ -3,6 +3,7 @@
  * SQLite, the real Pulse sandbox and Pulse's Worker for the apc.json it serves, and simulated apps for
  * what Pulse would never serve. fetch is routed by origin and counted.
  */
+import { approvedConnectTicket } from "./connect-fixture.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
@@ -32,8 +33,10 @@ type Json = Record<string, unknown>;
 type Serve = (init?: RequestInit) => Response | Promise<Response>;
 
 async function world(t: TestContext, env: Json = {}) {
-  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent", ...env });
+  const hubRoom = durableObjectRoom();
+  const hub = new Hub(hubRoom.ctx, { APP_ORIGINS: PULSE, PAIRING_CODE: "when_sent", ...env });
   await hub.init(DID);
+  const connectTicket = (agent: string, origin = PULSE) => approvedConnectTicket(hub, hubRoom.db, agent, origin);
   const pulse = new Sandbox(durableObjectRoom().ctx, PULSE_ENV);
   await pulse.init();
   const customers = demoDataset().customers;
@@ -63,19 +66,19 @@ async function world(t: TestContext, env: Json = {}) {
   const agent = (await hub.state(DOCK)).agents[0];
   /** The person drops the agent on Pulse and allows it there: Pulse makes a grant and asks the hub to pair it. */
   const dropOnPulse = async () => {
-    const { ticket } = await hub.ticket(agent.id);
+    const { ticket } = await connectTicket(agent.id, PULSE);
     const drop = { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } };
     // Pulse asks the person first (consent in the app, TIN-606); their Allow sends the nonce back.
-    const asked = await pulse.pairHub(SID, PULSE, drop);
-    return (await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent })) as { ok: boolean; error?: string };
+    const asked = await pulse.pairHub(SID, PULSE, drop, true);
+    return (await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent }, true)) as { ok: boolean; error?: string };
   };
   /** An app outside APP_ORIGINS asks to pair (as unverified: the person approves the warning in the dock before it pairs, TIN-581). */
   const shopPairs = async (mcpUrl = `${SHOP}/mcp/${"c".repeat(32)}`) => {
-    const { ticket } = await hub.ticket(agent.id);
+    const { ticket } = await connectTicket(agent.id, SHOP);
     return (await hub.pair({ ticket, agent: agent.id, app: { name: "Shop", origin: SHOP }, mcp_url: mcpUrl })) as { ok: boolean; error?: string };
   };
   const pairings = async () => (await hub.state(DOCK)).agents[0].pairings as Array<{ id: string; app: { origin: string }; status: string }>;
-  return { hub, pulse, agent, apcJson, reads, redirects, dropOnPulse, shopPairs, pairings };
+  return { connectTicket, hub, pulse, agent, apcJson, reads, redirects, dropOnPulse, shopPairs, pairings };
 }
 
 const manifest = (origin: string, over: Json = {}): Json => ({ name: "Pulse", standard: "0.5.0", origin, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${origin}/agents` }, ...over });
@@ -84,7 +87,7 @@ test("Pulse and Signals serve a valid apc.json; the dock serves one that says it
   const pulse = await (await pulseWorker.fetch(new Request(`${PULSE}${APC_JSON_PATH}`), PULSE_ENV)).json();
   const parsed = parseApcManifest(pulse, PULSE);
   assert.equal(parsed.ok, true, JSON.stringify(parsed));
-  assert.deepEqual(pulse, { name: "Pulse", standard: APC_STANDARD_VERSION, origin: PULSE, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${PULSE}/agents` } });
+  assert.deepEqual(pulse, { name: "Pulse", standard: APC_STANDARD_VERSION, origin: PULSE, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${PULSE}/agents` }, dock_connect: `${PULSE}/connect/dock` });
 
   const directOnly = await (await pulseWorker.fetch(new Request(`${PULSE}${APC_JSON_PATH}`), { APC_V2: "1", APC_PROFILES: "direct" })).json();
   assert.deepEqual(directOnly.profiles, ["direct"], "a Pulse that offers only Direct says so");
@@ -92,7 +95,7 @@ test("Pulse and Signals serve a valid apc.json; the dock serves one that says it
   const SIGNALS = "https://signals.test";
   const signals = await (await signalsWorker.fetch(new Request(`${SIGNALS}${APC_JSON_PATH}`), { APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: SIGNALS })).json();
   assert.equal(parseApcManifest(signals, SIGNALS).ok, true);
-  assert.deepEqual(signals, { name: "Signals", standard: APC_STANDARD_VERSION, origin: SIGNALS, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${SIGNALS}/?connect` } });
+  assert.deepEqual(signals, { name: "Signals", standard: APC_STANDARD_VERSION, origin: SIGNALS, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${SIGNALS}/?connect` }, dock_connect: `${SIGNALS}/connect/dock` });
 
   const response = await dockWorker.fetch(new Request(`${DOCK}${APC_JSON_PATH}`), {});
   assert.equal(response.headers.get("access-control-allow-origin"), "*");
@@ -239,7 +242,7 @@ test("a verified app whose apc.json redirects is refused: a redirect is the orig
 test("a verified app is held to the MCP path its apc.json declares", async (t) => {
   const w = await world(t);
   const pulsePairs = async (mcp_url: string) => {
-    const { ticket } = await w.hub.ticket(w.agent.id);
+    const { ticket } = await w.connectTicket(w.agent.id, PULSE);
     return (await w.hub.pair({ ticket, agent: w.agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url })) as { ok: boolean; error?: string };
   };
   for (const outside of [`${PULSE}/tenant/mcp/abc`, `${PULSE}/mcp/%2e%2e%2fadmin`, `${PULSE}/mcp/..%2f..%2fadmin`, `${PULSE}/mcp/`]) {
@@ -312,17 +315,17 @@ test("mcp.endpoints (APC 0.11): the hub pairs only a {secret} entry that lists d
   assert.deepEqual((await w.pairings()).map((p) => p.app.origin), [SHOP]);
 });
 
-test("the copy the hub keeps is { v: 2, manifest }: a row an older hub wrote is read again (APC 0.11)", async (t) => {
+test("the copy the hub keeps is { v: 3, manifest }: a row an older hub wrote is read again (APC 0.11)", async (t) => {
   const w = await world(t);
   const sql = (w.hub as unknown as { sql: { exec: <T>(q: string, ...a: unknown[]) => { toArray: () => T[] } } }).sql;
   assert.equal((await w.dropOnPulse()).ok, true);
   const row = sql.exec<{ body: string }>("select body from apc_json where origin = ?", PULSE).toArray()[0]!;
   const copy = JSON.parse(row.body) as { v: number; manifest: Json };
-  assert.equal(copy.v, 2);
+  assert.equal(copy.v, 3);
   assert.equal(parseApcManifest(copy.manifest, PULSE).ok, true);
   await w.hub.decide((await w.pairings())[0]!.id, "deny");
   assert.equal((await w.dropOnPulse()).ok, true);
-  assert.equal(w.reads.get(PULSE), 1, "a fresh v2 copy is used");
+  assert.equal(w.reads.get(PULSE), 1, "a fresh v3 copy is used");
   await w.hub.decide((await w.pairings())[0]!.id, "deny");
   // A row as a 0.10 hub wrote it: the bare manifest. It is no copy for this hub.
   sql.exec("update apc_json set body = ? where origin = ?", JSON.stringify(copy.manifest), PULSE);
@@ -330,7 +333,7 @@ test("the copy the hub keeps is { v: 2, manifest }: a row an older hub wrote is 
   assert.equal(w.reads.get(PULSE), 2, "the old row was not used: the file was read again");
 });
 
-test("a kept { v: 2 } copy with mcp.endpoints decides within its minute as the file did: a dropped entry still covers nothing", async (t) => {
+test("a kept { v: 3 } copy with mcp.endpoints decides within its minute as the file did: a dropped entry still covers nothing", async (t) => {
   const w = await world(t);
   const secret = "c".repeat(32);
   // An entry this hub drops (a key it does not know) at /mcp/{secret}, and a usable one at /agents/{secret}.

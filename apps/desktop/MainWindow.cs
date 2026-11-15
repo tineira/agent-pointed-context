@@ -410,7 +410,8 @@ public sealed class MainWindow : Window
         await Try(async () =>
         {
             var r = await client.HubPairAsync(drag, target, null, null);
-            if (r.Error == "consent_required" && r.Consent is not null && r.PairingCode is not null) await ConsentAsync(drag, target, r.Consent);
+            if (r.FirstPairingMessage is { } firstPairingMessage) Say(firstPairingMessage);
+            else if (r.Error == "consent_required" && r.Consent is not null && r.PairingCode is not null) await ConsentAsync(drag, target, r.Consent);
             else if (r.Ok && r.Status == "pending" && r.Pairing is not null) Say($"Waiting for your dock: type the code in the card above there to allow it.{PinNote(r.PinError)}");
             else if (r.Ok) Say($"Pinned {state?.grants.FirstOrDefault(g => g.id == r.GrantId)?.Name ?? "your agent"}. Now ask it about \"this\".");
             else Say($"Not pinned: {Describe(r.Error)}");
@@ -475,7 +476,7 @@ public sealed class MainWindow : Window
         string? scope = region.SelectedIndex switch { 1 => "latam", 2 => "na", 3 => "emea", _ => null };
         var r = await client.HubPairAsync(drag, target, scope, consent);
         // Paired: the card in the window shows the code until the dock connects. Not paired: said.
-        Say(r.Ok ? $"Paired with the dock at {host}. Type the code in the card above there to allow it, then ask your agent about \"this\".{PinNote(r.PinError)}" : $"Not paired: {Describe(r.Error)}");
+        Say(r.FirstPairingMessage ?? (r.Ok ? $"Paired with the dock at {host}. Type the code in the card above there to allow it, then ask your agent about \"this\".{PinNote(r.PinError)}" : $"Not paired: {Describe(r.Error)}"));
     }
 
     /// <summary>

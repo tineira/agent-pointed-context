@@ -8,8 +8,8 @@ import { test } from "node:test";
 import { apcConformance, ConformanceError, type ApcAppAdapter, type ConformanceCheck } from "../src/index.ts";
 import { dockFixture, type FixtureBreak, type FixtureOptions } from "./dock-fixture.ts";
 
-/** The Dock checks: those of 0.10, and the binding's of 0.12 (TIN-910). */
-const ours = (checks: ConformanceCheck[]) => checks.filter((c) => c.name.includes("(dock): 0.10: ") || c.name.includes("(dock): 0.12: "));
+/** The Dock checks: those of 0.10, 0.12 (TIN-910), and 0.13 (M13, TIN-916). */
+const ours = (checks: ConformanceCheck[]) => checks.filter((c) => c.name.includes("(dock): 0.10: ") || c.name.includes("(dock): 0.12: ") || c.name.includes("(dock): 0.13: "));
 const named = (checks: ConformanceCheck[], part: string) => {
   const found = ours(checks).filter((c) => c.name.includes(part));
   assert.equal(found.length, 1, `one Dock check named "${part}", found ${found.length}`);
@@ -28,9 +28,10 @@ const DOCK_ONLY_NOTE = /0\.12: M12:/;
 {
   const { adapter, hub } = dockFixture();
   const checks = ours(apcConformance(adapter));
-  test("the suite has the Dock checks of 0.10 (31) and of 0.12 (6)", () => {
+  test("the suite has the Dock checks of 0.10 (31), 0.12 (6), and 0.13 (2)", () => {
     assert.equal(checks.filter((c) => c.name.includes(": 0.10: ")).length, 31);
     assert.equal(checks.filter((c) => c.name.includes(": 0.12: ")).length, 6);
+    assert.equal(checks.filter((c) => c.name.includes(": 0.13: ")).length, 2);
   });
   for (const check of checks) {
     test(`the conforming fixture passes, and every grant the check made is given back: ${check.name}`, async () => {
@@ -246,6 +247,15 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["binding_shown", "0.12: the binding is never shown", /initialize on the grant carries the pairing_id/],
   ["direct_serves_hub", "0.12: M12:", /the pairing is paired/, { bothProfiles: true }],
   ["direct_first_message_only", "0.12: M12:", /the hub's introduction in a batch on a Direct grant was served/, { bothProfiles: true }],
+  // Origin-bound first pairing (APC 0.13, M13).
+  ["dock_connect_missing", "0.13: M13: apc.json declares dock_connect", /dock_connect/],
+  ["dock_connect_cross_origin", "0.13: M13: apc.json declares dock_connect", /origin/],
+  ["dock_connect_fragment", "0.13: M13: apc.json declares dock_connect", /fragment/],
+  ["dock_connect_http", "0.13: M13: apc.json declares dock_connect", /https/],
+  ["dock_connect_redirect", "0.13: M13: apc.json declares dock_connect", /redirect/],
+  ["dock_connect_404", "0.13: M13: apc.json declares dock_connect", /HTTP 404/],
+  ["dock_connect_no_referrer_policy", "0.13: M13: apc.json declares dock_connect", /Referrer-Policy: no-referrer/],
+  ["drop_pairs_without_connect", "0.13: M13: a first drop with no link", /\/apc\/connect/],
 ];
 
 for (const [brk, part, message, options] of broken) {
@@ -255,7 +265,17 @@ for (const [brk, part, message, options] of broken) {
   });
 }
 
-test("every Dock check (0.10 and 0.12) has a broken app that fails it", () => {
+test("an app claiming 0.10-0.12 passes existing Dock checks without dock_connect or /apc/connect (0.13 first-pairing floor)", async () => {
+  const { adapter } = dockFixture({ standard: "0.12.0" });
+  const m13Checks = ours(apcConformance(adapter)).filter((c) => c.name.includes(": 0.13: "));
+  assert.equal(m13Checks.length, 2);
+  for (const c of m13Checks) {
+    await c.run();
+    assert.match(c.note ?? "", /before 0\.13\.0/);
+  }
+});
+
+test("every Dock check (0.10, 0.12 and 0.13) has a broken app that fails it", () => {
   const { adapter } = dockFixture();
   const covered = new Set(broken.map(([, part]) => named(apcConformance(adapter), part).name));
   assert.deepEqual(ours(apcConformance(adapter)).map((c) => c.name).filter((n) => !covered.has(n)), []);

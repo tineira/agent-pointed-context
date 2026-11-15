@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { apcConformance, runConformance, standInHub, type ApcAppAdapter, type StandInHub } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
-import { APC_JSON_PATH, APC_STANDARD_VERSION, formatPairingCode, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
+import { APC_JSON_PATH, APC_STANDARD_VERSION, decodeApcConnect, formatPairingCode, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { LAST_MONTH } from "../src/model/seed.ts";
 import { demoDataset } from "../src/model/demo-world.ts";
@@ -28,11 +28,16 @@ const SID = "5".repeat(32);
  * The stand-in hubs, by origin: one per Pulse under test, reached by Pulse's server through fetch, and nothing else
  * leaves the process. Each records what it was sent.
  */
-const hubs = new Map<string, { hub: StandInHub; calls: string[] }>();
+const hubs = new Map<string, { hub: StandInHub; calls: string[]; connect: boolean }>();
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input instanceof Request ? input.url : input));
   const h = hubs.get(url.origin);
   if (!h) throw new Error(`no network in this test: ${url}`);
+  if (url.pathname === "/apc/connect") {
+    // A 0.13 hub (the conformance runs) takes the Connect request; a hub before 0.13 answers 404, and the drop asks
+    // itself (the fallback). Neither counts as pairing traffic in `calls`.
+    return h.connect ? h.hub.fetch(input, init) : Response.json({ error: "not_found" }, { status: 404 });
+  }
   h.calls.push(url.href);
   return h.hub.fetch(input, init);
 }) as typeof fetch;
@@ -42,7 +47,7 @@ let hubCount = 0;
 const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
 /** Pulse as the suite sees it: its MCP endpoint, and the page through the sandbox's own methods. */
-async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response> } = {}) {
+async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response>; connect?: boolean } = {}) {
   const room = durableObjectRoom();
   // A hub of its own, on its own origin: Pulse pairs with it, and it calls Pulse back (a give-back, its introduction).
   const hubOrigin = `https://dock-${++hubCount}.test`;
@@ -58,10 +63,15 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
     // The hub's clock runs from the day 0.12.0 was tagged, inside the window for hubs before 0.12, whatever day this runs.
     now: ((started) => () => Date.parse("2026-11-14T12:00:00Z") + (Date.now() - started))(Date.now()),
     // The hub reaches Pulse as it does in production: the grant's MCP URL, and the public /apc/revoke (M7, APC 0.10).
-    app: async (request) => (new URL(request.url).pathname === "/apc/revoke" ? worker.fetch(request, workerEnv) : sandbox.fetch(request)),
+    // A 0.13 hub reads apc.json (dock_connect) before it takes a Connect request.
+    app: async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === APC_JSON_PATH) return options.apcJson?.(request) ?? worker.fetch(request, env);
+      return path === "/apc/revoke" ? worker.fetch(request, workerEnv) : sandbox.fetch(request);
+    },
   });
   const calls: string[] = [];
-  hubs.set(hubOrigin, { hub, calls });
+  hubs.set(hubOrigin, { hub, calls, connect: options.connect ?? false });
   const data = demoDataset();
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "customer", id: data.customers[0]!.id, part: null, params: null },
@@ -69,6 +79,26 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   ];
   let agents = 0;
   const secretOf = async (grantId: string): Promise<string> => ((await sandbox.state()).grants as Array<{ id: string; secret: string }>).find((g) => g.id === grantId)!.secret;
+  /**
+   * A dock agent dropped on Pulse, and the person asked (TIN-606). With a 0.13 hub the drop asks the hub to open Pulse's
+   * dock_connect page (APC 0.13), whose script asks there with the hub's connect ticket; with a hub before 0.13 the
+   * drop itself asks (the fallback). The Allow goes where the person was asked.
+   */
+  const ask = async (drop: { hub: string; agent: string; ticket: string; target: FocusTarget }) => {
+    let on = drop;
+    let connect = false;
+    let asked = await sandbox.pairHub(SID, ORIGIN, drop);
+    if (asked.ok && asked.status === "connect_requested") {
+      const approved = await hub.approveConnect(drop.agent);
+      const decoded = approved.url ? decodeApcConnect(new URL(approved.url).hash) : null;
+      assert.ok(decoded, `the hub's approveConnect gave no #apc_connect URL: ${JSON.stringify(approved)}`);
+      on = { ...drop, hub: decoded.hub, agent: decoded.agent, ticket: decoded.ticket };
+      connect = true;
+      asked = await sandbox.pairHub(SID, ORIGIN, on, true);
+    }
+    assert.equal(asked.error, "consent_required");
+    return { asked, allow: () => sandbox.pairHub(SID, ORIGIN, { ...on, consent: asked.consent }, connect) };
+  };
   const connectOn = async (path: "direct" | "dock") => {
     let grantId: string;
     if (path === "direct") {
@@ -80,9 +110,8 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       const agent = `ag_${agents}`;
       const drop = { hub: hubOrigin, agent, ticket: hub.ticket(agent), target: targets[0] };
       // Pulse asks the person on its page first (TIN-606); their Allow brings the nonce back.
-      const asked = await sandbox.pairHub(SID, ORIGIN, drop);
-      assert.equal(asked.error, "consent_required");
-      const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+      const { asked, allow } = await ask(drop);
+      const paired = await allow();
       assert.equal(paired.ok, true, `pairing: ${paired.error}`);
       grantId = paired.grant_id!;
       // The dock owner types the code, and the hub introduces itself (APC 0.10): only then does the grant serve calls.
@@ -103,7 +132,8 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       const path = new URL(request.url).pathname;
       if (path === APC_JSON_PATH) return options.apcJson?.(request) ?? worker.fetch(request, options.env ?? DEPLOY);
       if (isHandshake(request)) return inProcessHandshake(worker, workerEnv, request);
-      return path.startsWith("/api/") || path.startsWith("/apc/") ? worker.fetch(request, workerEnv) : sandbox.fetch(request);
+      // The dock_connect page (APC 0.13) is the Worker's, as deployed.
+      return path.startsWith("/api/") || path.startsWith("/apc/") || path === "/connect/dock" ? worker.fetch(request, workerEnv) : sandbox.fetch(request);
     },
     connect: () => connectOn(profile),
     // The pairing code (APC 0.9): what Pulse's consent shows (hub-consent.tsx formats it), and the Allow on it.
@@ -112,13 +142,11 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
           dock: {
             hub,
             async drop(agent: string, ticket: string) {
-              const drop = { hub: hubOrigin, agent, ticket, target: targets[0] };
-              const asked = await sandbox.pairHub(SID, ORIGIN, drop);
-              assert.equal(asked.error, "consent_required");
+              const { asked, allow } = await ask({ hub: hubOrigin, agent, ticket, target: targets[0] });
               return {
                 shown: formatPairingCode(asked.pairing_code!),
                 allow: async () => {
-                  const r = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+                  const r = await allow();
                   return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
                 },
               };
@@ -138,6 +166,7 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
               object: () => sandbox,
               restart: () => void (sandbox = new Sandbox(room.ctx, sandboxEnv)),
               directGrant: () => connectOn("direct"),
+              connect: options.connect ?? false,
             }),
           },
         }
@@ -195,9 +224,48 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   return { app, sandbox, room, hub, calls, workerEnv };
 }
 
+test("native first drops create no Connect request across separate native/browser sessions; existing native pairings still confirm", async () => {
+  const native = await pulse("dock", { connect: true });
+  const browserSid = "6".repeat(32);
+  const browser = new Sandbox(durableObjectRoom().ctx, { ...DEPLOY, HUB_ORIGINS: native.hub.origin });
+  const browserOwner = (await browser.init()).owner;
+  // Two independent session cookies, as HttpClient and the system browser have in production.
+  const nativeOwner = (await native.sandbox.init()).owner;
+  native.workerEnv.SANDBOX.get = (id: string) => id === browserSid ? browser : native.sandbox;
+  const target = { kind: "customer", id: "cus_0002" };
+  const drop = { hub: native.hub.origin, agent: "ag_new", ticket: native.hub.ticket("ag_new"), target };
+  const connectCalls = native.hub.requests;
+  const post = async (sid: string, owner: string, body: unknown, desktop: boolean) => {
+    const res = await worker.fetch(new Request(`${ORIGIN}/api/s/${sid}/hub/pair`, {
+      method: "POST",
+      headers: { cookie: `apc_session=${sid}.${owner}`, "content-type": "application/json", ...(desktop ? { "user-agent": "PulseDesktop/0.1" } : {}) },
+      body: JSON.stringify(body),
+    }), native.workerEnv);
+    return await res.json() as Record<string, unknown>;
+  };
+  assert.deepEqual(await post(SID, nativeOwner, drop, true), { ok: true, status: "native_first_pairing_unsupported" });
+  assert.equal(connectCalls.length, 0, "native first pairing must not call the hub or spend its ticket");
+  assert.equal((await native.hub.approveConnect("ag_new")).ok, false, "there is nothing to approve in a different sandbox");
+  assert.equal((await native.sandbox.state()).grants.filter((g: { dock: boolean }) => g.dock).length, 0);
+  assert.equal((await browser.state()).grants.filter((g: { dock: boolean }) => g.dock).length, 0);
+  // The browser can independently request Connect with the still-unspent drop ticket.
+  assert.deepEqual(await post(browserSid, browserOwner, drop, false), { ok: true, status: "connect_requested" });
+  assert.equal(connectCalls.filter((url) => url.endsWith("/apc/connect")).length, 1);
+  assert.equal((await native.sandbox.state()).grants.filter((g: { dock: boolean }) => g.dock).length, 0);
+
+  const paired = await native.app.connect(); // an existing native pairing (established separately)
+  const confirmed = await post(SID, nativeOwner, { ...drop, agent: "ag_1", ticket: native.hub.ticket("ag_1") }, true);
+  assert.equal(confirmed.ok, true);
+  assert.equal(confirmed.grant_id, paired.grantId);
+  assert.equal(confirmed.status, "paired");
+  assert.equal(connectCalls.filter((url) => url.endsWith("/apc/connect")).length, 2, "only the browser drop and setup pairing requested Connect");
+  assert.ok(connectCalls.some((url) => url.endsWith("/apc/confirm")));
+});
+
 for (const profile of ["direct", "dock"] as const) {
-  // The apc_link checks once, with the Direct run: they make agents on both paths themselves.
-  const { app } = await pulse(profile, { link: profile === "direct" });
+  // The apc_link checks once, with the Direct run: they make agents on both paths themselves. The hub is a 0.13 one: a
+  // first drop takes the real Connect path (M13), as deployed.
+  const { app } = await pulse(profile, { link: profile === "direct", connect: true });
   for (const check of apcConformance(app)) test(check.name, check.run);
 }
 // The direct-only setup (no dock, the agent of its own at start) still passes the core.
@@ -234,7 +302,7 @@ test("a link code is never written to the sandbox's log or kept in clear", async
 
 test("the suite catches an apc.json that leaves out a profile the app serves, names another origin, or another MCP path", async () => {
   const served = (manifest: Record<string, unknown>) => async () => Response.json(manifest);
-  const base = { name: "Pulse", standard: "0.5.0", origin: ORIGIN, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/agents` } };
+  const base = { name: "Pulse", standard: "0.5.0", origin: ORIGIN, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/agents` }, dock_connect: `${ORIGIN}/connect/dock` };
   const checkOf = (app: ApcAppAdapter) => apcConformance(app).find((c) => c.name.includes("apc.json"))!;
   await assert.rejects(checkOf((await pulse("dock", { apcJson: served({ ...base, profiles: ["direct"] }) })).app).run(), /leave out dock/);
   await assert.rejects(checkOf((await pulse("direct", { link: true, apcJson: served({ ...base, profiles: ["direct"] }) })).app).run(), /offers both/);
@@ -245,6 +313,9 @@ test("the suite catches an apc.json that leaves out a profile the app serves, na
   const newerPatch = checkOf((await pulse("direct", { apcJson: served({ ...base, standard: `${major}.${minor}.${patch + 1}` }) })).app);
   await newerPatch.run();
   assert.match(newerPatch.note ?? "", /newer patch .* never changes the contract/, "a newer patch passes, and the note is kept");
+  // From 0.13 a manifest that lists dock names its dock_connect page (M13).
+  const { dock_connect: _left, ...noDockConnect } = base;
+  await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...noDockConnect, standard: APC_STANDARD_VERSION }) })).app).run(), /dock_connect is required/);
   await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, standard: `${major}.${minor + 1}.0` }) })).app).run(), /newer than/);
   await assert.rejects(checkOf((await pulse("direct", { apcJson: async () => Response.json({ error: "not_found" }, { status: 404 }) })).app).run(), /HTTP 404/);
 });
@@ -369,6 +440,7 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
   const calls: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     calls.push(url);
     if (url === `${HUB}/apc/pair`) {
       pairAsked();

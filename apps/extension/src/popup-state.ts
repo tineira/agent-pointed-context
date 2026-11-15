@@ -3,7 +3,7 @@
  * here, so the tests run them. popup.ts reads storage and Chrome, asks these what to draw, and carries out the
  * plan a click returns. Nothing here changes what a stored value means: `decide` in drop.ts is the one reader of them.
  */
-import { agentName, grantedAlone, isolate, isSensitive, STATUS_TEXT, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
+import { agentName, grantedAlone, isolate, isSensitive, STATUS_TEXT, WAIT_LOST_MS, type DropStatus, type Mode, type SiteChoice } from "./drop.ts";
 
 /** The agent's name as the popup draws it: the same cleaner the page's notes and `last` use (drop.ts). */
 export { agentName };
@@ -195,6 +195,14 @@ export const STATUS_KIND: Record<DropStatus, "sent" | "waiting" | "failed" | "no
   denied: "failed",
   timeout: "failed",
   no_ticket: "failed",
+  ticket_not_for_pairing: "failed",
+  ticket_origin_mismatch: "failed",
+  too_many_requests: "failed",
+  reader_not_allowed: "failed",
+  dock_expired: "failed",
+  unknown_agent: "failed",
+  invalid: "failed",
+  refused: "failed",
   unknown_dock: "failed",
   error: "failed",
   blocked: "failed",
@@ -207,8 +215,8 @@ export const STATUS_KIND: Record<DropStatus, "sent" | "waiting" | "failed" | "no
   consent_update: "none",
 };
 
-/** A wait for the dock ends within 60 s; after this long a `last` still saying "asking" is a wait nobody is on. */
-export const WAIT_STALE_MS = 75_000;
+/** A wait for the dock ends within 135 s (150 s with slack); after this long a `last` still saying "asking" is a wait nobody is on. */
+export const WAIT_STALE_MS = WAIT_LOST_MS;
 
 export type LastView =
   | { kind: "sent"; lead: string; at: string; detail: string }

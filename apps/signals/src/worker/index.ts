@@ -2,6 +2,7 @@
  * Signals' Worker (TIN-384): the page's API (owner only, by cookie), pairing with a dock's hub,
  * and each grant's MCP URL (the secret in it is the grant). The page is static assets.
  */
+import { dockConnectPage } from "../../../demo/src/worker/dock-connect-page.ts";
 import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { apcJsonResponse, apcManifest, handleDockGiveBack, profilesRefusal } from "@tineira/apc-server";
@@ -126,6 +127,16 @@ app.post("/api/s/:sid/hub/pair", async (c) => {
   const result = await stub(c).pairHub(c.var.sid, origin, await c.req.json().catch(() => null));
   return c.json(result, result.ok ? 200 : 400);
 });
+/** Origin-bound first pairing: only this owner endpoint runs connect-ticket consent. */
+app.post("/api/s/:sid/connect/dock", async (c) => {
+  const origin = publicOrigin(c.env, c.req.url);
+  if (!origin) return c.json({ ok: false, error: "not_available" }, 400);
+  const body = await c.req.json().catch(() => null);
+  const result = await stub(c).pairHub(c.var.sid, origin, body, true);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.get("/connect/dock", (c) => profilesRefusal(c.env.APC_PROFILES, "Signals") ?? (servedProfiles(c.env).includes("dock") ? dockConnectPage("Signals") : c.json({ error: "not_found" }, 404)));
+
 /** Cancel on the waiting card (APC 0.10): revokes a dock grant the dock has not connected to yet, and only then. */
 app.post("/api/s/:sid/hub/cancel", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { grant_id?: unknown } | null;
@@ -169,7 +180,7 @@ app.all("/mcp/:sid/:secret", async (c) => {
  * What Signals is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles
  * it offers (APC_PROFILES), where its MCP URLs live, and its Connect panel (?connect).
  */
-app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: servedProfiles(c.env), connect: "/?connect" })));
+app.get("/.well-known/apc.json", (c) => { const profiles = servedProfiles(c.env); return apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles, connect: "/?connect", ...(profiles.includes("dock") ? { dockConnect: "/connect/dock" } : {}) })); });
 
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));

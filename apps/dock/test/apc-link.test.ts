@@ -5,6 +5,7 @@
  * offers a code on the new connection, the agent sends it back on the other one, and Pulse's agent
  * bar shows one agent. Both directions: the code relayed by the hub, and the code sent through it.
  */
+import { approvedConnectTicket } from "./connect-fixture.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
@@ -35,8 +36,10 @@ async function rpc(fetcher: (r: Request) => Promise<Response>, url: string, meth
 }
 
 async function world(t: TestContext) {
-  const hub = new Hub(durableObjectRoom().ctx, { APP_ORIGINS: PULSE });
+  const hubRoom = durableObjectRoom();
+  const hub = new Hub(hubRoom.ctx, { APP_ORIGINS: PULSE });
   await hub.init(DID);
+  const connectTicket = (agent: string, origin = PULSE) => approvedConnectTicket(hub, hubRoom.db, agent, origin);
   const pulse = new Sandbox(durableObjectRoom().ctx, PULSE_ENV);
   await pulse.init();
   const customers = demoDataset().customers;
@@ -64,10 +67,10 @@ async function world(t: TestContext) {
 
   /** The person drops the agent from the dock on Pulse and says yes in Pulse, then in the dock: the hub introduces it. */
   const dropAndAllow = async () => {
-    const { ticket } = await hub.ticket(agent.id);
+    const { ticket } = await connectTicket(agent.id);
     const drop = { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } };
-    const asked = await pulse.pairHub(SID, PULSE, drop);
-    const paired = await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent });
+    const asked = await pulse.pairHub(SID, PULSE, drop, true);
+    const paired = await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent }, true);
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     const pending = (await hub.state(DOCK)).agents[0].pairings.find((p: { status: string }) => p.status === "pending");
     assert.equal((await hub.decide(pending.id, "approve", asked.pairing_code)).ok, true);

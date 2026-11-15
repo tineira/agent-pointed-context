@@ -7,6 +7,7 @@ export * from "./pin-badge.ts";
 export * from "./direct-agents.ts";
 export * from "./handoff-card.ts";
 export * from "./strings.ts";
+export * from "./connect.ts";
 export * from "./pet-state.ts";
 export * from "./pet-scheme.ts";
 export * from "./brands.ts";

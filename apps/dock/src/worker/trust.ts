@@ -184,8 +184,19 @@ export function appVerdict(origin: string, mcpUrl: string, o: { allowed: readonl
     return { ok: false, error: "app_not_allowed" };
   }
   if (url.origin !== origin || url.username || url.password) return { ok: false, error: "app_not_allowed" };
+  return originVerdict(origin, o);
+}
+
+/** Origin-only guard, run before fetching apc.json (APC 0.13). */
+export function originVerdict(origin: string, o: { allowed: readonly string[]; blocked: readonly string[]; open: boolean; dev: boolean }): AppVerdict {
+  let url: URL;
+  try { url = new URL(origin); } catch { return { ok: false, error: "app_not_allowed" }; }
+  if (url.origin !== origin || url.username || url.password) return { ok: false, error: "app_not_allowed" };
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, error: "app_not_allowed" };
+  const loopback = o.dev && url.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
+  if (url.protocol !== "https:" && !loopback) return { ok: false, error: "https_required" };
   if (isBlocked(origin, o.blocked)) return { ok: false, error: "app_blocked" };
-  if (o.allowed.some((a) => allowedOrigin(a) === origin) || (o.dev && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin))) return { ok: true, verified: true };
+  if (o.allowed.some((a) => allowedOrigin(a) === origin) || loopback) return { ok: true, verified: true };
   if (!o.open) return { ok: false, error: "app_not_allowed" };
   if (url.protocol === "http:") return { ok: false, error: "https_required" };
   if (url.protocol !== "https:") return { ok: false, error: "app_not_allowed" };

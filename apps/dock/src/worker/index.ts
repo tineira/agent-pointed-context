@@ -4,6 +4,9 @@
  * The page is static assets: the landing of the APC standard at / (TIN-420; always, whoever asks, TIN-610) and the hub dock at /dock. /v1 belongs to V1
  * (apc-demo, by zone routes); if a request for it still gets here, it is sent on or refused, never the dock page (TIN-605).
  */
+import { connectInput } from "./connect.ts";
+import { readerAllowed } from "./reading.ts";
+import { envList } from "./trust.ts";
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
@@ -116,9 +119,10 @@ app.post("/api/dock", async (c) => {
  * would move the person into a dock someone else holds, and their drops to that dock's agents.
  */
 function fromThisSite(c: Context): boolean {
+  if (!["same-origin", "none", undefined].includes(c.req.header("sec-fetch-site"))) return false;
   const origin = c.req.header("origin");
   if (origin) return origin === new URL(c.req.url).origin;
-  return ["same-origin", "none", undefined].includes(c.req.header("sec-fetch-site"));
+  return true;
 }
 app.use("/api/dock/new", async (c, next) => (fromThisSite(c) ? next() : c.json({ ok: false, error: "forbidden" }, 403)));
 /**
@@ -222,6 +226,19 @@ app.post("/api/d/:did/devices/:id/remove", async (c) => {
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/d/:did/agents", async (c) => c.json(await owned(c, "addAgent")));
+app.post("/api/d/:did/connects", async (c) => {
+  const result = await owned(c, "createConnect", await c.req.json().catch(() => null), c.var.owner);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/d/:did/connects/:cr/approve", async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { action?: unknown };
+  const result = await owned(c, "approveConnect", c.req.param("cr"), body?.action, new URL(c.req.url).origin);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/d/:did/connects/:cr/deny", async (c) => {
+  const result = await owned(c, "denyConnect", c.req.param("cr"));
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/d/:did/kept", async (c) => c.json(await owned(c, "keptAtHand")));
 /** Start over (TIN-411): the dock gives its grants back and forgets everything, and its cookie goes. */
 app.post("/api/d/:did/reset", async (c) => {
@@ -272,6 +289,17 @@ app.get("/api/d/:did/ws", async (c) => {
  * An app pairs with an agent (DESIGN.md 12.1), server to server: the ticket came from the agent's
  * drag and names the dock; the hub checks it, the app's origin, and waits for the person's yes.
  */
+app.post("/apc/connect", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const readerOrigin = c.req.header("origin") ?? null;
+  const development = !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
+  const parsed = connectInput(body, readerOrigin, (origin) => readerAllowed(origin, envList(c.env.READER_ORIGINS), development), development);
+  if (!parsed.ok) return c.json(parsed, 400);
+  const did = parsed.ticket.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1];
+  if (!did) return c.json({ ok: false, error: "ticket_expired" }, 400);
+  const result = await stubFor(c.env, did).requestConnect(body, c.req.header("origin") ?? null);
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/apc/pair", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { ticket?: unknown } | null;
   const did = typeof body?.ticket === "string" ? body.ticket.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1] : undefined;
@@ -296,13 +324,7 @@ const dockOf = (value: unknown) => (typeof value === "string" ? value.match(/^([
  * The browser extension asks to send an agent page readings (TIN-421, DESIGN.md 13.5), with the
  * ticket from the agent's drag. Only an allowed extension origin is taken: a page cannot send one.
  */
-app.post("/apc/reader", async (c) => {
-  const body = (await c.req.json().catch(() => null)) as { ticket?: unknown } | null;
-  const did = dockOf(body?.ticket);
-  if (!did) return c.json({ ok: false, error: "ticket_expired" }, 400);
-  const result = await stubFor(c.env, did).reader(body, c.req.header("origin") ?? null);
-  return c.json(result, result.ok ? 200 : 400);
-});
+app.post("/apc/reader", (c) => c.json({ ok: false, error: "ticket_not_for_pairing" }, 400));
 app.post("/apc/reader/status", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { claim?: unknown } | null;
   const did = dockOf(body?.claim);

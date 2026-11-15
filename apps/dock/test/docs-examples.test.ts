@@ -5,9 +5,9 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MCP_BODY_MAX_BYTES, OrdersApp } from "../src/docs/examples/orders-app.ts";
+import { MCP_BODY_MAX_BYTES, OrdersApp, type OrdersStore } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
-import type { PresenceMessage, PresenceWaitEvent } from "@tineira/apc-protocol";
+import { decodeApcConnect, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
 for (const profile of ["direct", "dock"] as const) {
@@ -88,16 +88,74 @@ test("the pairing-code checks fail an app that keeps a grant the hub did not ack
 test("Orders: a drop that pairs but cannot pin its target answers ok with the waiting code and pin_error, which its page shows", async () => {
   const { app, adapter } = ordersUnderTest("dock");
   const hub = adapter.dock!.hub;
-  const call = async (body: unknown) =>
-    (await app.fetch(new Request("https://orders.test/api/drop", { method: "POST", headers: { ...adapter.dock!.lifecycle!.owner.session, "content-type": "application/json" }, body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
-  const drop = { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target: { kind: "order", id: "ord_9999" } };
-  const asked = await call(drop);
-  const paired = await call({ ...drop, consent: asked.consent });
+  const call = async (path: string, body: unknown) =>
+    (await app.fetch(new Request(`https://orders.test${path}`, { method: "POST", headers: { ...adapter.dock!.lifecycle!.owner.session, "content-type": "application/json" }, body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
+  // A first drop asks the hub to connect (APC 0.13); the dock opens dock_connect, whose page asks with the connect ticket.
+  const target = { kind: "order", id: "ord_9999" };
+  assert.deepEqual(await call("/api/drop", { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target }), { ok: true, status: "connect_requested" });
+  const opened = decodeApcConnect(new URL((await hub.approveConnect("ag_pin")).url!).hash)!;
+  const drop = { ...opened };
+  const asked = await call("/api/connect/dock", drop);
+  const paired = await call("/api/connect/dock", { ...drop, consent: asked.consent });
   assert.equal(paired.ok, true);
   assert.equal(paired.status, "pending");
   assert.equal((paired.pairing as { code: string }).code, asked.pairing_code);
   assert.equal(paired.pin_error, "invalid_target");
   assert.deepEqual(app.agents().find((a) => a.id === paired.grant_id)?.pairing, paired.pairing, "the page's waiting row has the code");
+});
+
+test("Orders retains a non-default first-drop target through the real fragment-only Connect payload and a restart, then clears it", async () => {
+  const { app, adapter } = ordersUnderTest("dock");
+  const hub = adapter.dock!.hub;
+  const lifecycle = adapter.dock!.lifecycle!;
+  const dropped = await lifecycle.dropAgent({ hub: hub.origin, agent: "ag_target", ticket: hub.ticket("ag_target"), target: { kind: "order", id: "ord_1002", part: null, params: null } });
+  assert.equal(dropped.page, "connecting");
+  const opened = await hub.approveConnect("ag_target");
+  assert.ok(opened.url);
+  // Restart on the same per-person store before the fragment reaches the Connect page.
+  await lifecycle.restart!();
+  const consent = await lifecycle.connectDock!(opened.url);
+  assert.equal(consent.page, "consent");
+  if (consent.page !== "consent") throw new Error("no consent");
+  const paired = await consent.allow();
+  assert.equal(paired.ok, true);
+  const pairing = hub.pairings.find((p) => p.agent === "ag_target")!;
+  assert.equal((await hub.decide(pairing.id, "approve", consent.code)).ok, true);
+  const response = await adapter.fetch!(new Request(pairing.mcp_url, {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_current_view", arguments: {} } }),
+  }));
+  const body = await response.json() as { result: { structuredContent: { focus: { id: string } } } };
+  assert.equal(body.result.structuredContent.focus.id, "ord_1002");
+  // The old object and restarted object share the durable per-person store.
+  const store = (app as unknown as { store: OrdersStore }).store;
+  assert.deepEqual(store.kv.list("connect-target:"), []);
+});
+
+test("Orders discards an expired retained target and never recovers another agent's target", async () => {
+  for (const scenario of ["expired", "other-agent"]) {
+    const { app, adapter } = ordersUnderTest("dock");
+    const hub = adapter.dock!.hub;
+    const lifecycle = adapter.dock!.lifecycle!;
+    await lifecycle.dropAgent({ hub: hub.origin, agent: "ag_saved", ticket: hub.ticket("ag_saved"), target: { kind: "order", id: "ord_1002", part: null, params: null } });
+    const agent = scenario === "expired" ? "ag_saved" : "ag_other";
+    if (scenario === "expired") await lifecycle.advance(360_000);
+    else {
+      // Connect an app from the dock, with no drop in Orders for this other agent.
+      const requested = await hub.fetch(`${hub.origin}/apc/connect`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent, ticket: hub.ticket(agent), app: { origin: "https://orders.test" } }),
+      });
+      assert.equal(requested.ok, true);
+    }
+    const opened = await hub.approveConnect(agent);
+    const consent = await lifecycle.connectDock!(opened.url!);
+    assert.equal(consent.page, "consent");
+    if (consent.page !== "consent") throw new Error("no consent");
+    const paired = await consent.allow();
+    assert.equal(paired.ok, true);
+    assert.equal(app.agents().find((a) => a.id === paired.grantId)!.pin, null, scenario);
+  }
 });
 
 test("Orders: the heartbeat's answer carries the T_idle in effect, so the page beats within half of it", async () => {
@@ -152,8 +210,11 @@ test("Orders: agent traffic stamps nothing: ping and tools/list in handoff, and 
   const grants = (app as unknown as { store: { grants: Map<string, Record<string, unknown>> } }).store.grants;
   const snapshot = (url: string) => JSON.stringify(grants.get(url.split("/").pop()!));
 
-  // Handoff: dropped and allowed, the dock has not connected.
-  const shown = await life.dropAgent({ agent: "ag_quiet", ticket: hub.ticket("ag_quiet"), hub: hub.origin });
+  // Handoff: dropped and allowed, the dock has not connected. A first drop asks the hub to connect (APC 0.13), and the
+  // person is asked on the dock_connect page the dock opens.
+  const dropped = await life.dropAgent({ agent: "ag_quiet", ticket: hub.ticket("ag_quiet"), hub: hub.origin });
+  assert.equal(dropped.page, "connecting");
+  const shown = await life.connectDock!((await hub.approveConnect("ag_quiet")).url!);
   assert.equal(shown.page, "consent");
   assert.equal((await (shown as Extract<typeof shown, { page: "consent" }>).allow()).ok, true);
   const waiting = hub.pairings.filter((p) => p.agent === "ag_quiet").at(-1)!.mcp_url;
@@ -318,4 +379,105 @@ test("the wait-event probe runs once per run, and each check makes one agent (AP
   await named(checks, "a cancelled wait publishes closed").run();
   assert.equal(probes, 1);
   assert.equal(agents, 2);
+});
+
+test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to /apc/pair), and /connect/dock pairs signed-in account", async () => {
+  const HUB = "https://dock.test";
+  const ORIGIN = "https://orders.test";
+  let connectAnswer = () => Response.json({ ok: true, status: "connect_requested" });
+  let pairAnswer = () => Response.json({ ok: false, error: "ticket_not_for_pairing" }, { status: 400 });
+  const called: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let cookie = "orders_session=1";
+
+  const app = new OrdersApp({
+    origin: ORIGIN,
+    profiles: ["direct", "dock"],
+    hubs: [HUB],
+    account: "demo@orders.test",
+    connectScript: "/connect-dock.js",
+    signedIn: (r) => r.headers.get("cookie") === cookie,
+    fetch: async (input, init) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      const body = (await req.clone().json()) as Record<string, unknown>;
+      called.push({ url: req.url, body });
+      if (req.url === `${HUB}/apc/connect`) return connectAnswer();
+      if (req.url === `${HUB}/apc/pair`) return pairAnswer();
+      if (req.url === `${HUB}/apc/confirm`) return Response.json({ ok: true, status: "paired", agent: { name: "Agent", icon: null } });
+      return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+    },
+  });
+
+  // 1. apc.json declares dock_connect; GET /connect/dock answers 200 (even signed out) with no-referrer and no third-party script.
+  const manifest = await (await app.fetch(new Request(`${ORIGIN}/.well-known/apc.json`))).json() as { dock_connect?: string };
+  assert.equal(manifest.dock_connect, `${ORIGIN}/connect/dock`);
+  const page = await app.fetch(new Request(`${ORIGIN}/connect/dock`, { redirect: "manual" }));
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  const html = await page.text();
+  assert.match(html, /data-session="false" data-signed-in="false"/);
+  assert.match(html, /history\.replaceState/);
+  assert.equal(/<script[^>]+src=["'](?:https?:)?\/\//i.test(html), false);
+
+  const post = (path: string, body: unknown) =>
+    app.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) }));
+
+  // 2. Unlinked drop calls requestConnect and does not ask for consent or call /apc/pair.
+  const dropTicket = `${"a".repeat(32)}.${"b".repeat(32)}`;
+  const drop = { hub: HUB, agent: "ag_o1", ticket: dropTicket, target: { kind: "order", id: "ord_1001" } };
+  assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: true, status: "connect_requested" });
+  assert.deepEqual(called.map((c) => new URL(c.url).pathname), ["/apc/connect"]);
+
+  // 3. Only 404 falls back to 0.12 path; Allow calls /apc/pair with drop ticket and returns ticket_not_for_pairing.
+  connectAnswer = () => Response.json({ ok: false, error: "not_found" }, { status: 404 });
+  const askedFallback = await (await post("/api/drop", drop)).json() as { error: string; consent: string };
+  assert.equal(askedFallback.error, "consent_required");
+  const pairFallback = await (await post("/api/drop", { ...drop, consent: askedFallback.consent })).json();
+  assert.deepEqual(pairFallback, { ok: false, error: "ticket_not_for_pairing" });
+  assert.equal(called.at(-1)?.body.ticket, dropTicket);
+
+  // 4. Full /api/connect/dock consent -> Allow -> pending + pairing code, then drop on linked agent confirms.
+  pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "a".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });
+  const connectTicket = `${"c".repeat(32)}.${"d".repeat(32)}`;
+  const connectAsked = await (await post("/api/connect/dock", { hub: HUB, agent: "ag_o1", ticket: connectTicket })).json() as { error: string; consent: string };
+  assert.equal(connectAsked.error, "consent_required");
+  const paired = await (await post("/api/connect/dock", { hub: HUB, agent: "ag_o1", ticket: connectTicket, consent: connectAsked.consent })).json() as { ok: boolean; status: string };
+  assert.equal(paired.ok, true);
+  assert.equal(paired.status, "pending");
+  const confirmed = await (await post("/api/drop", drop)).json() as { ok: boolean; status: string };
+  assert.equal(confirmed.ok, true);
+  assert.equal(new URL(called.at(-1)!.url).pathname, "/apc/confirm");
+
+  // 5. The hub's initialize makes it live; a re-Connect the hub refuses leaves that grant serving.
+  const oldUrl = String(called.filter((c) => new URL(c.url).pathname === "/apc/pair").at(-1)!.body.mcp_url);
+  const rpc = (url: string, method: string, params: Record<string, unknown> = {}) =>
+    app.fetch(new Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }));
+  const meta = { "apc.tineira.com/pairing_id": "pr_" + "a".repeat(32), "apc.tineira.com/agent": "ag_o1" };
+  assert.equal((await rpc(oldUrl, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "apc-hub", version: "1" }, _meta: meta })).status, 200);
+  const serves = async (what: string) => {
+    const served = await rpc(oldUrl, "tools/call", { name: "list_orders", arguments: {} });
+    assert.equal(served.status, 200, what);
+    assert.equal(((await served.json()) as { result: { isError?: boolean } }).result.isError ?? false, false, what);
+  };
+  await serves("live");
+  const again = { hub: HUB, agent: "ag_o1", ticket: `${"e".repeat(32)}.${"f".repeat(32)}` };
+  const reAsked = await (await post("/api/connect/dock", again)).json() as { error: string; consent: string; replaces?: boolean };
+  assert.equal(reAsked.error, "consent_required");
+  assert.equal(reAsked.replaces, true, "the card says it replaces the current connection");
+  pairAnswer = () => Response.json({ ok: false, error: "ticket_expired" }, { status: 400 });
+  assert.deepEqual(await (await post("/api/connect/dock", { ...again, consent: reAsked.consent })).json(), { ok: false, error: "ticket_expired" });
+  await serves("a refused re-Connect leaves the old grant serving");
+  // An acknowledged re-Connect replaces it.
+  pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "b".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });
+  const reYes = await (await post("/api/connect/dock", again)).json() as { consent: string };
+  const replaced = await (await post("/api/connect/dock", { ...again, consent: reYes.consent })).json() as { ok: boolean; status: string };
+  assert.equal(replaced.ok, true);
+  assert.equal(replaced.status, "pending");
+  assert.notEqual((await rpc(oldUrl, "tools/call", { name: "list_orders", arguments: {} })).status, 200, "the replaced grant no longer serves");
+});
+
+test("Orders 0.13: without the dock profile, apc.json has no dock_connect and GET /connect/dock is 404", async () => {
+  const app = new OrdersApp({ origin: "https://orders.test", profiles: ["direct"], hubs: [], signedIn: () => true });
+  const manifest = await (await app.fetch(new Request("https://orders.test/.well-known/apc.json"))).json() as Record<string, unknown>;
+  assert.equal("dock_connect" in manifest, false);
+  assert.equal((await app.fetch(new Request("https://orders.test/connect/dock"))).status, 404);
 });
