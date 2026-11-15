@@ -430,7 +430,7 @@ test("a running call is cut by its own grant, never by a grant id a later grant 
   assert.equal(gone.body.error, "unknown_grant");
 });
 
-test("a double-clicked Allow in Pulse pairs once: the second request changes nothing (Grok on #123)", async (t) => {
+test("a double-clicked Allow on Pulse's 0.13 Connect path pairs once: the second request changes nothing (Grok on #123)", async (t) => {
   const { sandbox } = await pulse("dock");
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -439,8 +439,8 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
   const calls: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url.endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     calls.push(url);
+    if (url === `${HUB}/apc/connect`) return Response.json({ ok: true, status: "connect_requested" });
     if (url === `${HUB}/apc/pair`) {
       pairAsked();
       await held;
@@ -449,14 +449,17 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
     throw new Error(`no network in this test: ${url}`);
   });
   const drop = { hub: HUB, agent: "ag_8", ticket: `${"d".repeat(32)}.${"8".repeat(16)}`, target: { kind: "customer", id: demoDataset().customers[0]!.id } };
-  const { consent } = await sandbox.pairHub(SID, ORIGIN, drop);
-  const first = sandbox.pairHub(SID, ORIGIN, { ...drop, consent });
+  assert.equal((await sandbox.pairHub(SID, ORIGIN, drop)).status, "connect_requested");
+  const connectDrop = { ...drop, ticket: `${"d".repeat(32)}.${"c".repeat(32)}` };
+  const { consent } = await sandbox.pairHub(SID, ORIGIN, connectDrop, true);
+  assert.equal(typeof consent, "string");
+  const first = sandbox.pairHub(SID, ORIGIN, { ...connectDrop, consent }, true);
   await asked;
-  assert.deepEqual(await sandbox.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  assert.deepEqual(await sandbox.pairHub(SID, ORIGIN, { ...connectDrop, consent }, true), { ok: false, error: "pairing_in_progress" });
   release();
   const done = await first;
   assert.equal(done.ok, true, done.error);
-  assert.deepEqual(calls, [`${HUB}/apc/pair`]);
+  assert.deepEqual(calls, [`${HUB}/apc/connect`, `${HUB}/apc/pair`]);
   const state = await sandbox.state();
   assert.deepEqual(state.grants.map((g: { id: string }) => g.id), [done.grant_id]);
   assert.deepEqual(state.hub_links.map((l: { grant_id: string }) => l.grant_id), [done.grant_id]);

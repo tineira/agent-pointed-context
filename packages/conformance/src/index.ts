@@ -237,6 +237,8 @@ export interface ApcDockLifecycleAdapter {
   /**
    * Opens the `dock_connect` URL (with `#apc_connect=...`) returned by `hub.approveConnect` (APC 0.13), showing the
    * consent outcome to Allow pairing via `/apc/pair`.
+   * Forward the decoded payload to the server without normalizing its hub: M9 supplies a trailing slash to
+   * probe server validation independently of the production page's stricter fragment decoder.
    */
   connectDock?(url: string, target?: FocusTarget): Promise<ApcDockDropOutcome>;
   /**

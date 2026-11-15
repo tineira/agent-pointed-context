@@ -11,7 +11,7 @@
  *   with exactly HTTP 404 `{"error":"not_found"}`, for tests of the temporary fallback.
  * - **`POST {hub}/apc/pair`**: checks the body before it spends the ticket (a `pairing_code` present but not a
  *   code is `invalid_pairing_code`), keeps the code with the pending pairing and answers the acknowledgement
- *   (`pairing_code: "required"`). An app that sends no code still pairs, as a hub in `when_sent` mode lets it.
+ *   (`pairing_code: "required"`). Missing codes are refused unless `pairingCode: "when_sent"` is explicit.
  * - **`POST {hub}/apc/confirm`**: whether it still pairs that agent with that MCP URL.
  * - **The dock owner's answer** (`decide`): approving a pairing with a code needs that code; wrong ones count, and
  *   the last of `PAIRING_CODE_MAX_ATTEMPTS` removes the pairing and gives the grant back
@@ -120,6 +120,10 @@ export interface StandInHubOptions {
   now?: () => number;
   /** Explicit pre-0.13 hub: `/apc/connect` is HTTP 404 `{"error":"not_found"}` and `/apc/pair` accepts drop tickets. Omit for APC 0.13 (H9). */
   legacy?: "0.12";
+  /** Explicit pre-0.9 compatibility: accept an omitted pairing code. Defaults to "required", including in legacy 0.12 mode. */
+  pairingCode?: "required" | "when_sent";
+  /** Allow HTTP loopback app origins, like the reference hub's development mode. Defaults to false. */
+  development?: boolean;
 }
 
 export interface StandInHub {
@@ -233,9 +237,18 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   };
 
   const connect = async (b: Record<string, unknown>): Promise<Response> => {
-    if (typeof b.ticket !== "string" || typeof b.agent !== "string") return json({ ok: false, error: "invalid" }, 400);
+    if (typeof b.ticket !== "string" || typeof b.agent !== "string" || !/^[\w.:-]{1,128}$/.test(b.agent)) return json({ ok: false, error: "invalid" }, 400);
+    if (b.reader !== undefined || b.label !== undefined) return json({ ok: false, error: "invalid" }, 400);
     const app = b.app as { origin?: unknown } | undefined;
-    if (typeof app?.origin !== "string" || !app.origin) return json({ ok: false, error: "app_not_allowed" }, 400);
+    if (typeof app?.origin !== "string") return json({ ok: false, error: "invalid" }, 400);
+    let url: URL;
+    try { url = new URL(app.origin); } catch { return json({ ok: false, error: "invalid" }, 400); }
+    if (url.origin !== app.origin) return json({ ok: false, error: "app_not_allowed" }, 400);
+    const loopback = options.development && url.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname);
+    if (url.protocol === "http:" && !loopback) return json({ ok: false, error: "https_required" }, 400);
+    if (url.protocol !== "https:" && !loopback) return json({ ok: false, error: "app_not_allowed" }, 400);
+    const ct = connectTickets.get(b.ticket);
+    if (ct && ct.expires_at > now()) return json({ ok: false, error: "ticket_not_for_pairing" }, 400);
     if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
     let dockConnect = `${app.origin}/connect/dock`;
     if (options.app) {
@@ -245,9 +258,11 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       const parsed = parseApcManifest(raw, app.origin);
       if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
       if (!parsed.manifest.profiles.includes("dock")) return json({ ok: false, error: "dock_not_offered" }, 400);
-      if (!parsed.manifest.dock_connect) return json({ ok: false, error: "dock_connect_missing" }, 400);
+      if (!parsed.manifest.dock_connect) return json({ ok: false, error: "apc_json_invalid" }, 400);
       dockConnect = parsed.manifest.dock_connect;
     }
+    // Another request or the clock can spend/expire this ticket while the manifest is being read.
+    if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
     tickets.delete(b.ticket);
     connects.push({
       id: `cn_${randomHex(8)}`,
@@ -261,25 +276,37 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   const pair = (b: Record<string, unknown>): Response => {
     if (typeof b.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return json({ ok: false, error: "invalid" }, 400);
     const app = b.app as { name?: unknown; origin?: unknown } | undefined;
-    if (typeof app?.name !== "string" || !app.name || typeof app.origin !== "string") return json({ ok: false, error: "app_not_allowed" }, 400);
+    const name = typeof app?.name === "string" ? app.name.slice(0, 40).trim() : "";
+    const appOrigin = typeof app?.origin === "string" ? app.origin : "";
+    if (!name) return json({ ok: false, error: "app_not_allowed" }, 400);
     const ct = connectTickets.get(b.ticket);
     if (options.legacy !== "0.12") {
       if (tickets.has(b.ticket)) return json({ ok: false, error: "ticket_not_for_pairing" }, 400);
       if (!ct || ct.expires_at <= now()) return json({ ok: false, error: "ticket_expired" }, 400);
-      if (ct.agent !== b.agent || ct.origin !== app.origin) return json({ ok: false, error: "ticket_origin_mismatch" }, 400);
+      if (ct.agent !== b.agent || ct.origin !== appOrigin) return json({ ok: false, error: "ticket_origin_mismatch" }, 400);
     } else if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
     // As in the reference hub, validate the code after the ticket's kind/binding, before spending it.
+    if (b.pairing_code === undefined && options.pairingCode !== "when_sent") return json({ ok: false, error: "pairing_code_required" }, 400);
     const code = b.pairing_code === undefined ? null : normalizePairingCode(b.pairing_code);
     if (b.pairing_code !== undefined && !code) return json({ ok: false, error: "invalid_pairing_code" }, 400);
     if (options.legacy === "0.12") tickets.delete(b.ticket);
     else connectTickets.delete(b.ticket);
+    // As in appVerdict, URL checks follow consumption. Manifest coverage is deliberately left to M12's app probe.
+    let mcp: URL;
+    try { mcp = new URL(b.mcp_url); } catch { return json({ ok: false, error: "app_not_allowed" }, 400); }
+    if (mcp.origin !== appOrigin || mcp.username || mcp.password || !["http:", "https:"].includes(mcp.protocol)) return json({ ok: false, error: "app_not_allowed" }, 400);
+    const loopback = options.development && mcp.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(mcp.hostname);
+    if (mcp.protocol !== "https:" && !loopback) return json({ ok: false, error: "https_required" }, 400);
     // 128 random bits, unique (H8, APC 0.12); the binding is declared unless the mode is a hub before 0.12.
-    const p: StandInPairing = { id: `pr_${randomHex(16)}`, agent: b.agent, mcp_url: b.mcp_url, app_origin: app.origin, status: "pending", pairing_code: code, attempts: 0, bound: true, calls: [] };
+    const p: StandInPairing = { id: `pr_${randomHex(16)}`, agent: b.agent, mcp_url: b.mcp_url, app_origin: appOrigin, status: "pending", pairing_code: code, attempts: 0, bound: true, calls: [] };
     pairings.push(p);
     return json({ ok: true, pairing_id: p.id, status: "pending", agent: { name: "Agent via dock", icon: null }, ...(code ? { pairing_code: PAIRING_CODE_ACK } : {}), binding: PAIRING_BINDING });
   };
 
   const confirm = (body: Record<string, unknown>): Response => {
+    if (typeof body.ticket !== "string" || typeof body.agent !== "string" || typeof body.mcp_url !== "string") return json({ ok: false, error: "invalid" }, 400);
+    const ct = connectTickets.get(body.ticket);
+    if (ct && ct.expires_at > now()) return json({ ok: false, error: "ticket_not_for_pairing" }, 400);
     if (!live(body.ticket, body.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
     const p = pairings.find((x) => x.agent === body.agent && x.mcp_url === body.mcp_url);
     // A pairing the app refused to be introduced to is ended at the hub (H5): not paired.
@@ -314,7 +341,9 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       return elsewhere;
     }
     if (mode === "error_500") return json(path === "/apc/pair" ? { ...yes, pairing_id: "pr_500" } : yes, 500);
-    const answer = path === "/apc/connect" ? await connect(body) : path === "/apc/pair" ? pair(body) : confirm(body);
+    // A simulated Connect fault is not an accepted request: leave its ticket and pending requests untouched.
+    const acceptsConnect = ["ack", "ack_unbound", "ack_unknown_binding", "length_mismatch", "ack_with_length"].includes(mode);
+    const answer = path === "/apc/connect" ? (acceptsConnect ? await connect(body) : json(yes)) : path === "/apc/pair" ? pair(body) : confirm(body);
     if (mode === "ack") return answer;
     const text = await answer.text();
     if (mode === "ack_unbound" || mode === "ack_unknown_binding") {

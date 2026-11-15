@@ -37,6 +37,7 @@ import {
   T_CONNECT_MAX_MS,
   canonicalTarget,
   compareStandard,
+  decodeApcConnect,
   dockGrantAnswer,
   dockGrantCallOf,
   formatPairingCode,
@@ -447,25 +448,33 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     return approved.ticket;
   };
 
-  const finishConnect = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, outcome: ApcDockDropOutcome): Promise<ApcDockDropOutcome> => {
+  const finishConnect = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, outcome: ApcDockDropOutcome, rawHub?: string): Promise<ApcDockDropOutcome> => {
     if (outcome.page === "connecting" && life.connectDock) {
       const approved = await d.hub.approveConnect(agent);
       expect(approved.ok && approved.url, `stand-in hub approveConnect failed: ${approved.error ?? "missing url"}`);
-      return await life.connectDock(approved.url);
+      const url = new URL(approved.url);
+      if (rawHub !== undefined) {
+        const fragment = decodeApcConnect(url.hash);
+        expect(fragment, "the approved URL has a valid Connect fragment");
+        // Deliberately noncanonical input: M9 probes the server, independently of a page's fragment validation.
+        const bytes = new TextEncoder().encode(JSON.stringify({ ...fragment, hub: rawHub }));
+        url.hash = "apc_connect=" + btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      }
+      return await life.connectDock(url.href);
     }
     return outcome;
   };
 
   /** The person drops a new agent from the stand-in hub (or `hub`): the consent, which must be one. */
-  const consent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent = newAgent(), hub = d.hub.origin) => {
-    const shown = await finishConnect(life, d, agent, await drop(life, d, agent, hub));
+  const consent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent = newAgent(), hub = d.hub.origin, rawHub?: string) => {
+    const shown = await finishConnect(life, d, agent, await drop(life, d, agent, hub), rawHub);
     expect(shown.page === "consent", `a drop of an agent the app holds no grant for shows the consent, got ${JSON.stringify(shown).slice(0, 200)}`);
     expect(normalizePairingCode(shown.code), `the consent shows ${JSON.stringify(shown.code)}, not a pairing code`);
     return { agent, ...shown };
   };
   /** A grant in handoff: dropped, Allowed, acknowledged by the hub, with no initialize yet. */
-  const handoff = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, hub = d.hub.origin) => {
-    const c = await consent(life, d, newAgent(), hub);
+  const handoff = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, hub = d.hub.origin, rawHub?: string) => {
+    const c = await consent(life, d, newAgent(), hub, rawHub);
     const answer = await c.allow();
     expect(answer.ok, `the Allow did not pair: ${answer.error}`);
     expect(typeof answer.grantId === "string" && answer.grantId.length > 0, "the Allow gives the grant's id (ApcDockAllowAnswer.grantId)");
@@ -1091,20 +1100,20 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       return { note: `${note}. Serialization across instances (an advisory lock and a partial unique index, say) cannot be seen from one process` };
     }),
 
-    check("M9: hub requests (/apc/pair and /apc/confirm) go to the parsed origin, never to the raw hub string", async (life, d) => {
+    check("M9: hub requests (/apc/connect, /apc/pair and /apc/confirm) go to the parsed origin, never to the raw hub string", async (life, d) => {
       const raw = `${d.hub.origin}/`;
       const before = d.hub.requests.length;
       const where = () => `called ${JSON.stringify(d.hub.requests.slice(before))}`;
       let g: Awaited<ReturnType<typeof handoff>>;
       try {
-        g = await handoff(life, d, raw);
+        g = await handoff(life, d, raw, raw);
       } catch (error) {
         throw new ConformanceError(`M9: with the drop's hub "${raw}", the Allow failed (${error instanceof Error ? error.message : String(error)}); the app ${where()}`);
       }
       const shown = await drop(life, d, g.agent, raw);
       expect(shown.page === "waiting", `M9: with the drop's hub "${raw}", a second drop shows the waiting card: got ${JSON.stringify(shown).slice(0, 200)}; the app ${where()}`);
       const called = d.hub.requests.slice(before);
-      for (const path of ["/apc/pair", "/apc/confirm"]) expect(called.includes(`${d.hub.origin}${path}`), `with the drop's hub "${raw}", the app never called ${d.hub.origin}${path}: it called ${JSON.stringify(called)}`);
+      for (const path of [...(compareStandard(await claimed(life), "0.13.0") >= 0 ? ["/apc/connect"] : []), "/apc/pair", "/apc/confirm"]) expect(called.includes(`${d.hub.origin}${path}`), `with the drop's hub "${raw}", the app never called ${d.hub.origin}${path}: it called ${JSON.stringify(called)}`);
       const wrong = called.filter((u) => !u.startsWith(`${d.hub.origin}/apc/`));
       expect(wrong.length === 0, `with the drop's hub "${raw}", the app called ${JSON.stringify(wrong)}`);
     }),

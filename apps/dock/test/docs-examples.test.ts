@@ -71,8 +71,8 @@ test("the pairing-code checks fail an app that sends the hub no code", async () 
     delete body.pairing_code;
     return send(url, { ...init, body: JSON.stringify(body) });
   }) as typeof fetch);
-  // Its own pairWithHub then refuses the hub that took no code (no acknowledgement), so the check fails either way.
-  await assert.rejects(named(checks, "sends that code").run(), /without pairing_code|hub_ignores_pairing_code/);
+  // The default hub refuses the omitted code before pairing; the app cannot complete the suite's setup.
+  await assert.rejects(named(checks, "sends that code").run(), /pairing_code_required/);
 });
 
 test("the pairing-code checks fail an app that keeps a grant the hub did not acknowledge", async () => {

@@ -120,8 +120,8 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
   }
   /** The dock opens dock_connect with `#apc_connect=...` (APC 0.13): the page asks the person with the connect ticket. */
   async function connectDock(url: string): Promise<ApcDockDropOutcome> {
-    const opened = decodeApcConnect(new URL(url).hash);
-    if (!opened) return { page: "refused", error: "invalid_connect_fragment" };
+    // Forward the suite's payload verbatim: M9 probes server validation, even if a page would reject the fragment.
+    const opened = JSON.parse(atob(new URL(url).hash.slice(13).replace(/-/g, "+").replace(/_/g, "/"))) as { hub: string; agent: string; ticket: string };
     const drop = { ...opened };
     return shownFor(await call("/api/connect/dock", drop), "/api/connect/dock", drop);
   }
