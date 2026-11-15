@@ -12,7 +12,7 @@
  */
 import { APC_AGENT_TYPE, APC_DROPS_ATTR, parseAgentDrag } from "../../../packages/web/src/pinning.ts";
 import { CONTEXT_MAX } from "../../dock/src/worker/reading.ts";
-import { AGENT_FALLBACK, agentName, CARD_LABELS, connectLabel, CONSENT_QUESTION, consentReason, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, includeLabel, isApcApp, isolate, NOT_TAKEN_TEXT, NOTE_TEXT, pinState, SENT_TO, sensitiveMode, sensitiveNote, sentWithout, STATUS_TEXT, WAIT_LOST_MS, WAIT_LOST_TEXT, WAITING_TEXT, WHATS_SENT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type NoteText, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
+import { AGENT_FALLBACK, agentName, CARD_LABELS, connectLabel, CONSENT_QUESTION, consentReason, directOnlyGate, appTakes, notTaken, frameNote, hubAllowed, includeLabel, isApcApp, isolate, NOT_TAKEN_TEXT, NOTE_TEXT, pinState, SENT_TO, sensitiveMode, sensitiveNote, sentWithout, STATUS_TEXT, WAIT_LOST_MS, WAIT_LOST_TEXT, waitingText, WHATS_SENT, type Consent, type DirectOnly, type DirectOnlyLookup, type DropStatus, type NoteText, type PinMark, type PinState, type SensitiveMode } from "./drop.ts";
 import { chartAxes, describeMark, describeNamed, isMark, isOutlineCopy, type Axes, type Chart, type ChartLabel, type MarkReading, type SvgText } from "./chart.ts";
 import { altText, ANYWHERE, blockAbove, BOX_MAX, cardOf, CARD_CONTROLS_MAX, clipPathHides, controlVisible, filterOpacity, classify, formState, intersect, isHeading, isItem, isTitleControl, namesBox, OPACITY_MIN, ownsHeadings, pageLevel, selectTitle, showsIn, tableContext, titleOf, visibleWords, visuallyHidden, within, type Control, type Rect, type Seen } from "./read.ts";
 
@@ -417,6 +417,7 @@ function listen(): void {
 /** The service worker's answer to a drop, a moved pin or "Include them this time". */
 interface Reply {
   status: DropStatus;
+  check?: string;
   pin?: PinMark;
   /** The sensitive values the outline held (TIN-619): how many, the setting, and whether the person may still include them. */
   sensitive?: { count: number; mode: SensitiveMode; offer: boolean };
@@ -470,7 +471,7 @@ function sent(r: Reply, target: Target, id: string | null): void {
   stopWait(id);
   const point = below(target.x, target.y);
   if (r.status === "asking") {
-    if (id) waitingCard(id, target.hub, point);
+    if (id) waitingCard(id, target.hub, point, r.check);
     return;
   }
   if (r.status !== "sent") return say(r.status, point);
@@ -1821,18 +1822,19 @@ function stopWait(id: string | null): void {
 }
 
 /**
- * The first drop of an agent in this browser (TIN-786): a card at the drop until the dock answers (the service
- * worker asks it for up to 60 s), with Open dock, which opens that drop's own dock. With no word by WAIT_LOST_MS, one
+ * The first drop of an agent in this browser (TIN-786, APC 0.13): a card at the drop until the dock answers (the
+ * service worker asks it for up to 135 s), showing the 4-digit check code ("Confirm in your dock: <check>", or the
+ * legacy prompt on an older hub) and Open dock, which opens that drop's own dock. With no word by WAIT_LOST_MS, one
  * line says so, claiming neither that the reading went nor that it did not, and the service worker is told.
  */
-function waitingCard(id: string, hub: string, at: Point): void {
+function waitingCard(id: string, hub: string, at: Point, check?: string): void {
   demoteInclude(id);
   const { host, box } = panel("card");
   box.setAttribute("role", "status");
   box.setAttribute("aria-label", "APC");
   box.dataset.apcNote = "asking";
   const text = line("", "lead");
-  text.append(Object.assign(document.createElement("span"), { className: "spin" }), WAITING_TEXT);
+  text.append(Object.assign(document.createElement("span"), { className: "spin" }), waitingText(check));
   const row = Object.assign(document.createElement("div"), { className: "row" });
   const open = button(CARD_LABELS.openDock, true);
   open.dataset.apcOpenDock = "";
