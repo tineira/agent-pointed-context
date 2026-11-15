@@ -92,6 +92,8 @@ A dock's hub for the Dock profile: `standInHub` from the suite, a hub in your ow
 
 <!-- include orders-conformance.ts#hub -->
 
+The default stand-in follows APC 0.13 H9: `hub.ticket(agent)` is a drop ticket for `/apc/connect`, never `/apc/pair`. After `hub.approveConnect`, use the connect ticket from the returned URL with its bound app origin and agent. Direct drop-ticket pairing answers HTTP 400 `ticket_not_for_pairing`; a connect ticket for another origin or agent answers HTTP 400 `ticket_origin_mismatch`. Both refusals leave the ticket usable on its intended path. For a test that needs a pre-0.13 hub, explicitly create `standInHub({ legacy: "0.12", … })`: `/apc/connect` then answers exactly HTTP 404 `{"error":"not_found"}` and `/apc/pair` accepts drop tickets. This legacy option is separate from the broken-answer `mode`.
+
 `connect` makes a new agent with full access, the way each profile makes one: on Direct the person makes an agent on the page; on Dock the person drops one from the dock, is asked, and allows it (from 0.13 a first drop asks the hub to connect: `hub.approveConnect` plays the dock owner, and the person is asked on the app's `dock_connect` page with the connect ticket from its `#apc_connect` fragment). An app whose agents use a bearer token returns it in the connection's `headers` (`{ grantId, mcpUrl, headers: { authorization: "Bearer …" } }`), and `mcpUrl` may then be the URL every grant shares: see [the complete Direct app](/docs/integrate#a-complete-direct-app-with-a-bearer-token).
 
 <!-- include orders-conformance.ts#connect -->

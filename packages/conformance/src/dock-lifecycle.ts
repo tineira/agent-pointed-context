@@ -434,6 +434,19 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
   };
   const drop =(life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, hub = d.hub.origin, target?: FocusTarget) => life.dropAgent({ agent, ticket: d.hub.ticket(agent), hub, ...(target ? { target } : {}) });
 
+  /** Even an attacker pairing a copied URL needs the owner's origin-bound connect ticket (H9). */
+  const pairingTicket = async (d: ApcDockAdapter, agent: string, origin: string) => {
+    const ticket = d.hub.ticket(agent);
+    const response = await d.hub.fetch(`${d.hub.origin}/apc/connect`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent, app: { origin } }) });
+    const answer = await response.json() as { ok?: boolean; status?: string; error?: string };
+    // Only the explicitly configured 0.12 stand-in takes this fallback.
+    if (response.status === 404 && answer.error === "not_found") return ticket;
+    expect(response.status === 200 && answer.ok && answer.status === "connect_requested", `stand-in hub /apc/connect failed: ${response.status} ${answer.error}`);
+    const approved = await d.hub.approveConnect(agent);
+    expect(approved.ok && approved.ticket, `stand-in hub approveConnect failed: ${approved.error ?? "missing ticket"}`);
+    return approved.ticket;
+  };
+
   const finishConnect = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, outcome: ApcDockDropOutcome): Promise<ApcDockDropOutcome> => {
     if (outcome.page === "connecting" && life.connectDock) {
       const approved = await d.hub.approveConnect(agent);
@@ -1384,9 +1397,11 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       const direct = await life.directGrant!();
       const agent = newAgent();
       // The suite plays the attacker: the Direct URL handed to the hub, with a code it chose.
-      const posted = await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket: d.hub.ticket(agent), agent, app: { name: app.name, origin: new URL(direct.mcpUrl).origin }, mcp_url: direct.mcpUrl, pairing_code: "K7M4P2" }) });
+      const origin = new URL(direct.mcpUrl).origin;
+      const ticket = await pairingTicket(d, agent, origin);
+      const posted = await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent, app: { name: app.name, origin }, mcp_url: direct.mcpUrl, pairing_code: "K7M4P2" }) });
       const pairing = d.hub.pairings.find((p) => p.agent === agent);
-      expect(posted.status === 200 && pairing, "the stand-in hub took the request (it checks no apc.json)");
+      expect(posted.status === 200 && pairing, "the stand-in hub took the request with its owner-approved ticket (it checks no mcp_url coverage)");
       const decided = await d.hub.decide(pairing.id, "approve", "K7M4P2");
       expect(decided.ok, `the stand-in hub did not approve: ${decided.error}`);
       expect(pairing.status === "refused", `the hub's introduction (initialize naming a pairing) on a Direct grant was served: the pairing is ${pairing.status}. A grant that is not a Dock grant refuses it (HTTP 404, or any refusal: 401 for a bearer grant)`);
@@ -1472,7 +1487,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     check12("M10: a later hub answer never rebinds a grant (a /apc/confirm naming another pairing, a second pairing of its URL), and an acknowledgement with a binding no app knows holds no grant", async (life, d) => {
       const a = await liveGrant(life, d);
       // A second pairing of the grant's URL at the hub, and another drop whose /apc/confirm answer names it: neither rebinds the grant.
-      const ticket = d.hub.ticket(a.agent);
+      const ticket = await pairingTicket(d, a.agent, life.owner.origin);
       await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent: a.agent, app: { name: app.name, origin: life.owner.origin }, mcp_url: a.mcpUrl, pairing_code: "K7M4P2" }) });
       const later = d.hub.pairings.filter((p) => p.mcp_url === a.mcpUrl).at(-1)!;
       expect(later.id !== a.pairing.id, "the stand-in made a second pairing for the grant");

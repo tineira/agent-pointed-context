@@ -1,9 +1,14 @@
 /**
  * A stand-in for a dock's hub (the Dock profile), for testing an app in process: what `@tineira/apc-conformance`
  * checks a Dock app against, and what an app's own tests can pair with. It is faithful to the parts of a hub an
- * app meets, as of APC 0.9:
+ * app meets, as of APC 0.13:
  *
  * - **Tickets**: `ticket(agent)` mints a single-use ticket for an agent, valid `TICKET_TTL_MS`.
+ * - **Since 0.13** (H9): a drop ticket requests `/apc/connect`; `approveConnect` plays the owner approving it
+ *   and mints a connect ticket bound to the app origin and agent. `/apc/pair` refuses drop tickets with
+ *   `ticket_not_for_pairing`, and connect tickets for another origin or agent with `ticket_origin_mismatch`,
+ *   without spending them. Only `legacy: "0.12"` accepts drop tickets on `/apc/pair` and answers `/apc/connect`
+ *   with exactly HTTP 404 `{"error":"not_found"}`, for tests of the temporary fallback.
  * - **`POST {hub}/apc/pair`**: checks the body before it spends the ticket (a `pairing_code` present but not a
  *   code is `invalid_pairing_code`), keeps the code with the pending pairing and answers the acknowledgement
  *   (`pairing_code: "required"`). An app that sends no code still pairs, as a hub in `when_sent` mode lets it.
@@ -113,13 +118,15 @@ export interface StandInHubOptions {
   app?: (request: Request) => Promise<Response>;
   /** Milliseconds since the epoch, for tickets; Date.now by default. */
   now?: () => number;
+  /** Explicit pre-0.13 hub: `/apc/connect` is HTTP 404 `{"error":"not_found"}` and `/apc/pair` accepts drop tickets. Omit for APC 0.13 (H9). */
+  legacy?: "0.12";
 }
 
 export interface StandInHub {
   readonly origin: string;
   /** What the app's server calls the hub with (pass it as the app's fetch, or route the hub's origin to it). */
   readonly fetch: typeof fetch;
-  /** How the hub answers `/apc/pair`: "ack" (a hub of 0.9) unless a check sets another. */
+  /** How the hub answers `/apc/pair`: "ack" (APC 0.13) unless a check sets another. Independent of the explicit `legacy` option. */
   mode: StandInHubMode;
   /** How the hub answers `/apc/confirm`: "ack" (plainly) unless a check sets one of the M2 to M4 modes. */
   confirmMode: StandInHubMode;
@@ -255,18 +262,17 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     if (typeof b.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return json({ ok: false, error: "invalid" }, 400);
     const app = b.app as { name?: unknown; origin?: unknown } | undefined;
     if (typeof app?.name !== "string" || !app.name || typeof app.origin !== "string") return json({ ok: false, error: "app_not_allowed" }, 400);
-    // The body first: a malformed code leaves the ticket good.
+    const ct = connectTickets.get(b.ticket);
+    if (options.legacy !== "0.12") {
+      if (tickets.has(b.ticket)) return json({ ok: false, error: "ticket_not_for_pairing" }, 400);
+      if (!ct || ct.expires_at <= now()) return json({ ok: false, error: "ticket_expired" }, 400);
+      if (ct.agent !== b.agent || ct.origin !== app.origin) return json({ ok: false, error: "ticket_origin_mismatch" }, 400);
+    } else if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
+    // As in the reference hub, validate the code after the ticket's kind/binding, before spending it.
     const code = b.pairing_code === undefined ? null : normalizePairingCode(b.pairing_code);
     if (b.pairing_code !== undefined && !code) return json({ ok: false, error: "invalid_pairing_code" }, 400);
-    const ct = connectTickets.get(b.ticket);
-    if (ct) {
-      if (ct.expires_at <= now() || ct.agent !== b.agent) return json({ ok: false, error: "ticket_expired" }, 400);
-      if (ct.origin !== app.origin) return json({ ok: false, error: "ticket_origin_mismatch" }, 400);
-      connectTickets.delete(b.ticket);
-    } else {
-      if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
-      tickets.delete(b.ticket);
-    }
+    if (options.legacy === "0.12") tickets.delete(b.ticket);
+    else connectTickets.delete(b.ticket);
     // 128 random bits, unique (H8, APC 0.12); the binding is declared unless the mode is a hub before 0.12.
     const p: StandInPairing = { id: `pr_${randomHex(16)}`, agent: b.agent, mcp_url: b.mcp_url, app_origin: app.origin, status: "pending", pairing_code: code, attempts: 0, bound: true, calls: [] };
     pairings.push(p);
@@ -460,6 +466,7 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       const body = (parsed ?? {}) as Record<string, unknown>;
       if (url.pathname === "/apc/connect") {
         connectReceived.push(body);
+        if (options.legacy === "0.12") return json({ error: "not_found" }, 404);
         return answerIn("/apc/connect", body, hub.mode, init?.redirect ?? request.redirect, init?.signal ?? request.signal);
       }
       if (url.pathname === "/apc/pair") {

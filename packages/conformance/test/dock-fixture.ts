@@ -912,7 +912,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   // The hub's clock runs from a fixed start inside the 0.12 window (it closes 2027-05-14), so the window's check runs
   // whatever day these tests run on.
   const started = Date.now();
-  const hub = standInHub({ origin: HUB, app: (request) => current.fetch(request), now: () => HUB_CLOCK_START + (Date.now() - started) });
+  // Only fixtures claiming the old standard need a pre-0.13 hub without Connect.
+  const hub = standInHub({ origin: HUB, app: (request) => current.fetch(request), now: () => HUB_CLOCK_START + (Date.now() - started), ...(compareStandard(config.standard, "0.13.0") < 0 ? { legacy: "0.12" as const } : {}) });
   current = new Fixture(storage, config, clock, hub);
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "order", id: "ord_1", part: null, params: null },
