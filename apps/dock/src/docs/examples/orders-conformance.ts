@@ -60,7 +60,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
       const approved = await hub.approveConnect(first.agent);
       const opened = approved.url ? decodeApcConnect(new URL(approved.url).hash) : null;
       if (!opened) throw new Error(`the dock opened no #apc_connect URL: ${JSON.stringify(approved)}`);
-      drop = { hub: opened.hub, agent: opened.agent, ticket: opened.ticket, ...(first.target ? { target: first.target } : {}) };
+      drop = opened;
       route = "/api/connect/dock";
       asked = await call(route, drop);
     }
@@ -119,10 +119,10 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     return shownFor(await call("/api/drop", drop), "/api/drop", drop);
   }
   /** The dock opens dock_connect with `#apc_connect=...` (APC 0.13): the page asks the person with the connect ticket. */
-  async function connectDock(url: string, target?: FocusTarget): Promise<ApcDockDropOutcome> {
+  async function connectDock(url: string): Promise<ApcDockDropOutcome> {
     const opened = decodeApcConnect(new URL(url).hash);
     if (!opened) return { page: "refused", error: "invalid_connect_fragment" };
-    const drop = { hub: opened.hub, agent: opened.agent, ticket: opened.ticket, target: target ?? { kind: "order", id: "ord_1001" } };
+    const drop = { ...opened };
     return shownFor(await call("/api/connect/dock", drop), "/api/connect/dock", drop);
   }
 

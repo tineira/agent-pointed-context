@@ -55,6 +55,10 @@ const brokenChecks: Array<[HubBreak, string]> = [
   ["ignores-connect-ticket-origin", "hub.pair-ticket"],
   ["spends-mismatched-connect-ticket", "hub.pair-ticket"],
   ["unauth-approve-exposes-ticket", "hub.connect-ticket-containment"],
+  ["no-owner-csrf", "hub.connect-ticket-containment"],
+  ["preapproval-ticket-leak", "hub.connect-ticket-containment"],
+  ["preapproval-ticket-leak-nested", "hub.connect-ticket-containment"],
+  ["preapproval-ticket-leak-fragment", "hub.connect-ticket-containment"],
   ["state-exposes-connect-ticket", "hub.connect-ticket-containment"],
   ["double-approve-mints-ticket", "hub.connect-ticket-containment"],
 ];
@@ -67,6 +71,25 @@ for (const [broken, checkId] of brokenChecks) {
     await assert.rejects(check.run, ConformanceError);
   });
 }
+
+test("H10 detects removed CSRF protection and independent leaked tickets for the intended reason", async () => {
+  for (const broken of ["no-owner-csrf", "preapproval-ticket-leak", "preapproval-ticket-leak-nested", "preapproval-ticket-leak-fragment"] as const) {
+    const check = hubConformance(hubFixture({ broken })).find((c) => c.id === "hub.connect-ticket-containment")!;
+    await assert.rejects(check.run, broken === "no-owner-csrf" ? /authenticated cross-site approve succeeded/ : /candidate can pair before owner approval/);
+  }
+});
+
+test("H10 cannot pass without both owner-route probes or with an unauthenticated owner transport", async () => {
+  for (const missing of ["ownerFetch", "connectApproveEndpoint"] as const) {
+    const adapter = hubFixture();
+    delete adapter[missing];
+    const report = await runHubConformance(adapter);
+    assert.ok(report.failed.some((c) => c.id === "hub.connect-ticket-containment" && c.error.includes(missing)));
+  }
+  const adapter = hubFixture();
+  adapter.ownerFetch = adapter.fetch;
+  await assert.rejects(hubConformance(adapter).find((c) => c.id === "hub.connect-ticket-containment")!.run, /authenticated same-origin approve failed/);
+});
 
 test("waitForRevoke and async revoke timeouts still fail promptly when Date is frozen", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_700_000_000_000 });

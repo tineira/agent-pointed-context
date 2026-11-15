@@ -674,8 +674,20 @@ export class OrdersApp {
 
   private async dropOnce(hub: string, agent: string, ticket: string, target: unknown, consent: unknown, connect: boolean): Promise<DropAnswer> {
     const scope = `${agent} ${ticket} ${connect ? "connect" : "fallback"}`;
+    // This store belongs to one person. Keep their drop across the hub's fragment-only Connect handoff,
+    // for at most six minutes (the request plus ticket lifetimes), including across a server restart.
+    const targetKey = `connect-target:${hub} ${agent}`;
+    for (const [key, value] of this.store.kv.list("connect-target:")) {
+      const saved = JSON.parse(value) as { target?: unknown; expiresAt: number };
+      if (saved.expiresAt <= this.now()) this.store.kv.delete(key);
+    }
+    if (connect && target === undefined) {
+      const saved = this.store.kv.get(targetKey);
+      if (saved) target = (JSON.parse(saved) as { target?: unknown }).target;
+    }
     const requestFirst = async (): Promise<DropAnswer> => {
       const answer = await requestConnect(hub, { ticket, agent, app: { origin: this.origin } }, { fetch: this.send });
+      if (answer.ok) this.store.kv.put(targetKey, JSON.stringify({ target, expiresAt: this.now() + 360_000 }));
       return !answer.ok && answer.error === "not_found" ? askFirst() : answer;
     };
     // The newest consent asked for this agent: a new drop replaces the one before it.
@@ -760,6 +772,7 @@ export class OrdersApp {
     if (answer.agent.name) grant.name = answer.agent.name.replace(/[\p{C}]/gu, "").slice(0, 60);
     this.publish({ type: "agents" });
     const pinned = target === undefined ? { ok: true } : this.pin(id, target);
+    this.store.kv.delete(targetKey);
     return { ok: true, grant_id: id, status: "pending", pairing: grant.pairing, ...(pinned.ok ? {} : { pin_error: pinned.error }) };
   }
 

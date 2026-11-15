@@ -593,7 +593,7 @@ export class Sandbox extends DurableObject<Env> {
    * for gets `consent_required` and a nonce; the page shows its consent with it, and only a request that
    * brings it back (once, for the same dock and agent, within two minutes) makes a grant.
    */
-  async pairHub(sid: string, origin: string, raw: unknown, connect = false): Promise<PairHubAnswer> {
+  async pairHub(sid: string, origin: string, raw: unknown, connect = false, native = false): Promise<PairHubAnswer> {
     if (this.env.APC_V2 !== "1" || !this.offers("dock")) return { ok: false, error: "not_available" };
     // The hub allowlist (M1, APC 0.10), on the drop and again on the Allow: both are this request. The hub is parsed,
     // must be a bare https origin on HUB_ORIGINS, and the hub calls below go to that parsed origin (M9).
@@ -608,7 +608,7 @@ export class Sandbox extends DurableObject<Env> {
     if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
     this.pairing.add(key);
     try {
-      return await this.pairHubOnce(sid, origin, hub, agent, ticket, b.region, b.target, b.consent, connect);
+      return await this.pairHubOnce(sid, origin, hub, agent, ticket, b.region, b.target, b.consent, connect, native);
     } finally {
       this.pairing.delete(key);
     }
@@ -702,7 +702,7 @@ export class Sandbox extends DurableObject<Env> {
     this.log("revoked", id, { via: link ? "dock" : "direct", ...note });
   }
 
-  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown, connect: boolean): Promise<PairHubAnswer> {
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown, connect: boolean, native: boolean): Promise<PairHubAnswer> {
     // Consent belongs to this ticket and this entry point. Only a real 404 can ask on the drop path.
     const scope = `${agent} ${ticket} ${connect ? "connect" : "fallback"}`;
     const kv = sqlKv(this.sql);
@@ -714,6 +714,7 @@ export class Sandbox extends DurableObject<Env> {
       } catch { /* no remembered target; Connect an app does not need one */ }
     }
     const requestFirst = async (): Promise<PairHubAnswer> => {
+      if (native) return { ok: true, status: "native_first_pairing_unsupported" };
       const answer = await requestConnect(hub, { ticket, agent, app: { origin } }, hubCallOptions(this.env));
       if (!answer.ok) return answer.error === "not_found" ? askFirst() : answer;
       kv.put(targetKey, JSON.stringify({ target, at: Date.now() }));
@@ -787,6 +788,7 @@ export class Sandbox extends DurableObject<Env> {
     if (!connect && linkOf()) return { ok: false, error: "pairing_in_progress" };
     // A drop (no nonce) is asked, and its consent replaces the one before. An Allow on a consent a newer drop
     // replaced is refused before the nonce is looked at: one pending consent per dock and agent.
+    if (native && !connect) return requestFirst();
     if (consent === undefined || consent === null) return connect ? askFirst() : requestFirst();
     // Used or not, a nonce that was sent goes: it works once.
     if (this.latestConsent(hub, agent) !== consent) return (this.consent.takeConsent(consent, hub, scope), { ok: false, error: "consent_expired" });

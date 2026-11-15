@@ -98,6 +98,11 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
       const request = input instanceof Request ? input : new Request(input, init);
       return Promise.resolve(dockWorker.fetch(request, workerEnv as never));
     },
+    ownerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+      const request = new Request(input, init);
+      request.headers.set("cookie", `apc_dock=${DID}.${ownerSecret}`);
+      return Promise.resolve(dockWorker.fetch(request, workerEnv as never));
+    },
     async ticket(agent: string): Promise<string> {
       const { ticket } = await hub.ticket(agent);
       return ticket;

@@ -10,7 +10,13 @@ using System.Text.Json;
 namespace PulseDesktop;
 
 /// <summary>What a dock agent's drop answers (apps/demo/src/worker/sandbox.ts, PairHubAnswer).</summary>
-public sealed record HubPairResult(bool Ok, string? Error, string? GrantId, string? Status, string? Consent, string? PairingCode, DockPairing? Pairing, string? PinError);
+public sealed record HubPairResult(bool Ok, string? Error, string? GrantId, string? Status, string? Consent, string? PairingCode, DockPairing? Pairing, string? PinError)
+{
+    // Also handle connect_requested from a Worker deployed before the native capability gate.
+    public string? FirstPairingMessage => Status is "connect_requested" or "native_first_pairing_unsupported"
+        ? "Pulse for Windows can't make a first pairing yet. Pair this agent in Pulse on the web (pulse.apc.tineira.com); agents already paired here keep working."
+        : null;
+}
 
 public sealed class PulseClient : IDisposable
 {
@@ -77,8 +83,8 @@ public sealed class PulseClient : IDisposable
 
     /// <summary>
     /// A dock agent dropped here: every drop goes to Pulse, which decides (TIN-606). An agent Pulse holds no grant for
-    /// comes back consent_required with the nonce and the pairing code to show (APC 0.9); the Allow sends the nonce
-    /// back (`consent`). A paired agent is pinned once its dock confirms (TIN-389); one still waiting for its code in
+    /// comes back native_first_pairing_unsupported: native Connect needs a handoff to this client's session.
+    /// A paired agent is pinned once its dock confirms (TIN-389); one still waiting for its code in
     /// the dock comes back with `pairing`.
     /// </summary>
     public async Task<HubPairResult> HubPairAsync(AgentDrag drag, Target target, string? region, string? consent)

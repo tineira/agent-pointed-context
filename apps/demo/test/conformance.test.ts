@@ -224,6 +224,44 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   return { app, sandbox, room, hub, calls, workerEnv };
 }
 
+test("native first drops create no Connect request across separate native/browser sessions; existing native pairings still confirm", async () => {
+  const native = await pulse("dock", { connect: true });
+  const browserSid = "6".repeat(32);
+  const browser = new Sandbox(durableObjectRoom().ctx, { ...DEPLOY, HUB_ORIGINS: native.hub.origin });
+  const browserOwner = (await browser.init()).owner;
+  // Two independent session cookies, as HttpClient and the system browser have in production.
+  const nativeOwner = (await native.sandbox.init()).owner;
+  native.workerEnv.SANDBOX.get = (id: string) => id === browserSid ? browser : native.sandbox;
+  const target = { kind: "customer", id: "cus_0002" };
+  const drop = { hub: native.hub.origin, agent: "ag_new", ticket: native.hub.ticket("ag_new"), target };
+  const connectCalls = native.hub.requests;
+  const post = async (sid: string, owner: string, body: unknown, desktop: boolean) => {
+    const res = await worker.fetch(new Request(`${ORIGIN}/api/s/${sid}/hub/pair`, {
+      method: "POST",
+      headers: { cookie: `apc_session=${sid}.${owner}`, "content-type": "application/json", ...(desktop ? { "user-agent": "PulseDesktop/0.1" } : {}) },
+      body: JSON.stringify(body),
+    }), native.workerEnv);
+    return await res.json() as Record<string, unknown>;
+  };
+  assert.deepEqual(await post(SID, nativeOwner, drop, true), { ok: true, status: "native_first_pairing_unsupported" });
+  assert.equal(connectCalls.length, 0, "native first pairing must not call the hub or spend its ticket");
+  assert.equal((await native.hub.approveConnect("ag_new")).ok, false, "there is nothing to approve in a different sandbox");
+  assert.equal((await native.sandbox.state()).grants.filter((g: { dock: boolean }) => g.dock).length, 0);
+  assert.equal((await browser.state()).grants.filter((g: { dock: boolean }) => g.dock).length, 0);
+  // The browser can independently request Connect with the still-unspent drop ticket.
+  assert.deepEqual(await post(browserSid, browserOwner, drop, false), { ok: true, status: "connect_requested" });
+  assert.equal(connectCalls.filter((url) => url.endsWith("/apc/connect")).length, 1);
+  assert.equal((await native.sandbox.state()).grants.filter((g: { dock: boolean }) => g.dock).length, 0);
+
+  const paired = await native.app.connect(); // an existing native pairing (established separately)
+  const confirmed = await post(SID, nativeOwner, { ...drop, agent: "ag_1", ticket: native.hub.ticket("ag_1") }, true);
+  assert.equal(confirmed.ok, true);
+  assert.equal(confirmed.grant_id, paired.grantId);
+  assert.equal(confirmed.status, "paired");
+  assert.equal(connectCalls.filter((url) => url.endsWith("/apc/connect")).length, 2, "only the browser drop and setup pairing requested Connect");
+  assert.ok(connectCalls.some((url) => url.endsWith("/apc/confirm")));
+});
+
 for (const profile of ["direct", "dock"] as const) {
   // The apc_link checks once, with the Direct run: they make agents on both paths themselves. The hub is a 0.13 one: a
   // first drop takes the real Connect path (M13), as deployed.

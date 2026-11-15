@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MCP_BODY_MAX_BYTES, OrdersApp } from "../src/docs/examples/orders-app.ts";
+import { MCP_BODY_MAX_BYTES, OrdersApp, type OrdersStore } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
 import { decodeApcConnect, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
@@ -94,7 +94,7 @@ test("Orders: a drop that pairs but cannot pin its target answers ok with the wa
   const target = { kind: "order", id: "ord_9999" };
   assert.deepEqual(await call("/api/drop", { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target }), { ok: true, status: "connect_requested" });
   const opened = decodeApcConnect(new URL((await hub.approveConnect("ag_pin")).url!).hash)!;
-  const drop = { hub: opened.hub, agent: opened.agent, ticket: opened.ticket, target };
+  const drop = { ...opened };
   const asked = await call("/api/connect/dock", drop);
   const paired = await call("/api/connect/dock", { ...drop, consent: asked.consent });
   assert.equal(paired.ok, true);
@@ -102,6 +102,60 @@ test("Orders: a drop that pairs but cannot pin its target answers ok with the wa
   assert.equal((paired.pairing as { code: string }).code, asked.pairing_code);
   assert.equal(paired.pin_error, "invalid_target");
   assert.deepEqual(app.agents().find((a) => a.id === paired.grant_id)?.pairing, paired.pairing, "the page's waiting row has the code");
+});
+
+test("Orders retains a non-default first-drop target through the real fragment-only Connect payload and a restart, then clears it", async () => {
+  const { app, adapter } = ordersUnderTest("dock");
+  const hub = adapter.dock!.hub;
+  const lifecycle = adapter.dock!.lifecycle!;
+  const dropped = await lifecycle.dropAgent({ hub: hub.origin, agent: "ag_target", ticket: hub.ticket("ag_target"), target: { kind: "order", id: "ord_1002", part: null, params: null } });
+  assert.equal(dropped.page, "connecting");
+  const opened = await hub.approveConnect("ag_target");
+  assert.ok(opened.url);
+  // Restart on the same per-person store before the fragment reaches the Connect page.
+  await lifecycle.restart!();
+  const consent = await lifecycle.connectDock!(opened.url);
+  assert.equal(consent.page, "consent");
+  if (consent.page !== "consent") throw new Error("no consent");
+  const paired = await consent.allow();
+  assert.equal(paired.ok, true);
+  const pairing = hub.pairings.find((p) => p.agent === "ag_target")!;
+  assert.equal((await hub.decide(pairing.id, "approve", consent.code)).ok, true);
+  const response = await adapter.fetch!(new Request(pairing.mcp_url, {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_current_view", arguments: {} } }),
+  }));
+  const body = await response.json() as { result: { structuredContent: { focus: { id: string } } } };
+  assert.equal(body.result.structuredContent.focus.id, "ord_1002");
+  // The old object and restarted object share the durable per-person store.
+  const store = (app as unknown as { store: OrdersStore }).store;
+  assert.deepEqual(store.kv.list("connect-target:"), []);
+});
+
+test("Orders discards an expired retained target and never recovers another agent's target", async () => {
+  for (const scenario of ["expired", "other-agent"]) {
+    const { app, adapter } = ordersUnderTest("dock");
+    const hub = adapter.dock!.hub;
+    const lifecycle = adapter.dock!.lifecycle!;
+    await lifecycle.dropAgent({ hub: hub.origin, agent: "ag_saved", ticket: hub.ticket("ag_saved"), target: { kind: "order", id: "ord_1002", part: null, params: null } });
+    const agent = scenario === "expired" ? "ag_saved" : "ag_other";
+    if (scenario === "expired") await lifecycle.advance(360_000);
+    else {
+      // Connect an app from the dock, with no drop in Orders for this other agent.
+      const requested = await hub.fetch(`${hub.origin}/apc/connect`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent, ticket: hub.ticket(agent), app: { origin: "https://orders.test" } }),
+      });
+      assert.equal(requested.ok, true);
+    }
+    const opened = await hub.approveConnect(agent);
+    const consent = await lifecycle.connectDock!(opened.url!);
+    assert.equal(consent.page, "consent");
+    if (consent.page !== "consent") throw new Error("no consent");
+    const paired = await consent.allow();
+    assert.equal(paired.ok, true);
+    assert.equal(app.agents().find((a) => a.id === paired.grantId)!.pin, null, scenario);
+  }
 });
 
 test("Orders: the heartbeat's answer carries the T_idle in effect, so the page beats within half of it", async () => {

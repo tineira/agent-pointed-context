@@ -192,7 +192,9 @@ app.post("/api/s/:sid/hub/pair", async (c) => {
   // The MCP URL Pulse hands the hub lives on its configured origin, never on this request's (APC 0.10).
   const origin = publicOrigin(c.env, c.req.url);
   if (!origin) return c.json({ ok: false, error: "not_available" }, 400);
-  const result = await rpc(c.env, c.var.sid, (s) => s.pairHub(c.var.sid, origin, body), 1);
+  // The native client has its own cookie jar. Opening Connect in a browser would pair a different sandbox.
+  const native = /^PulseDesktop\//i.test(c.req.header("user-agent") ?? "");
+  const result = await rpc(c.env, c.var.sid, (s) => s.pairHub(c.var.sid, origin, body, false, native), 1);
   return c.json(result, result.ok ? 200 : 400);
 });
 /** Origin-bound first pairing: only this owner endpoint runs connect-ticket consent. */

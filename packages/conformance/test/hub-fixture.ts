@@ -51,6 +51,10 @@ export type HubBreak =
   | "ignores-connect-ticket-origin"
   | "spends-mismatched-connect-ticket"
   | "unauth-approve-exposes-ticket"
+  | "no-owner-csrf"
+  | "preapproval-ticket-leak"
+  | "preapproval-ticket-leak-nested"
+  | "preapproval-ticket-leak-fragment"
   | "state-exposes-connect-ticket"
   | "double-approve-mints-ticket";
 
@@ -232,9 +236,9 @@ export function hubFixture(
     },
 
     async approveConnect(id: string): Promise<ApcHubApproveConnectResult> {
-      const res = await adapter.fetch(`${origin}/owner/connects/${id}/approve`, {
+      const res = await adapter.ownerFetch!(`${origin}/owner/connects/${id}/approve`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-hub-owner": "owner-secret" },
+        headers: { "content-type": "application/json", origin, "sec-fetch-site": "same-origin" },
         body: "{}",
       });
       const body = (await res.json()) as { ok?: boolean; url?: string; error?: string };
@@ -247,6 +251,12 @@ export function hubFixture(
 
     connectApproveEndpoint(id: string): { path: string; method: string; body: unknown } {
       return { path: `/owner/connects/${id}/approve`, method: "POST", body: {} };
+    },
+
+    ownerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+      const request = new Request(input, init);
+      request.headers.set("x-hub-owner", "owner-secret");
+      return adapter.fetch(request);
     },
 
     observeState(): unknown {
@@ -318,10 +328,11 @@ export function hubFixture(
     },
 
     async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
+      const request = new Request(input, init);
+      const url = new URL(request.url);
       let body: Record<string, unknown> | null = null;
       try {
-        const text = typeof init?.body === "string" ? init.body : "";
+        const text = await request.text();
         const raw: unknown = text ? JSON.parse(text) : null;
         if (raw && typeof raw === "object" && !Array.isArray(raw)) body = raw as Record<string, unknown>;
       } catch {
@@ -363,14 +374,27 @@ export function hubFixture(
           dockConnect: dockConnectUrl.toString(),
           expiresAt: now + TICKET_TTL_MS,
         });
+        // Mutants mint a usable, independent ticket before approval, leaving the owner flow unchanged.
+        if (broken?.startsWith("preapproval-ticket-leak")) {
+          const leaked = issueConnectTicket(agentStr, appOrigin);
+          const fragment = encodeApcConnect({ v: 1, ticket: leaked, hub: origin, agent: agentStr });
+          const extra = broken === "preapproval-ticket-leak-nested" ? { details: [{ credentials: { connect_ticket: leaked } }] }
+            : broken === "preapproval-ticket-leak-fragment" ? { details: [{ link: `${dockConnectUrl.href}${fragment}` }] }
+            : { connect_ticket: leaked };
+          return jsonRes({ ok: true, status: "connect_requested", ...extra });
+        }
         return jsonRes({ ok: true, status: "connect_requested" }, 200);
       }
 
       const approveMatch = url.pathname.match(/^\/owner\/connects\/([^/]+)\/approve$/);
       if (approveMatch) {
-        const hasOwnerHeader = new Headers(init?.headers).get("x-hub-owner") === "owner-secret";
+        const hasOwnerHeader = request.headers.get("x-hub-owner") === "owner-secret";
         if (!hasOwnerHeader && broken !== "unauth-approve-exposes-ticket") {
           return jsonRes({ ok: false, error: "unauthorized" }, 401);
+        }
+        if (broken !== "no-owner-csrf" && ((request.headers.has("origin") && request.headers.get("origin") !== origin)
+          || ![null, "same-origin", "none"].includes(request.headers.get("sec-fetch-site")))) {
+          return jsonRes({ ok: false, error: "forbidden" }, 403);
         }
         const id = decodeURIComponent(approveMatch[1]!);
         const cr = connectRequests.get(id);

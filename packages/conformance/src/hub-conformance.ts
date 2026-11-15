@@ -50,9 +50,15 @@ export interface ApcHubAdapter {
   approveConnect?(id: string): Promise<ApcHubApproveConnectResult>;
   /**
    * Unauthenticated endpoint descriptor matching the owner connect-approve route, probed via `adapter.fetch`
-   * without owner credentials and with cross-site headers to verify H10 auth containment.
+   * without owner credentials to verify H10 auth containment. Required for an H10 pass.
    */
   connectApproveEndpoint?(id: string): { path: string; method?: string; body?: unknown };
+  /**
+   * Same transport as fetch, adding a valid owner session without changing the supplied Origin or
+   * Sec-Fetch-Site. H10 requires this probe, checks each hostile header independently, and proves the
+   * session works by approving through this transport with same-origin headers afterwards.
+   */
+  ownerFetch?(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   /**
    * Snapshot of the hub's owner-visible state and any WebSocket broadcasts observed by the adapter,
    * inspected by H10 to verify connect tickets are never exposed in state or broadcasts.
@@ -100,6 +106,24 @@ interface HttpJsonResult {
   status: number;
   text: string;
   json: Record<string, unknown> | null;
+}
+
+/** Every string value, including nested arrays/objects and the ticket inside a Connect fragment. */
+function credentialCandidates(value: unknown): Set<string> {
+  const candidates = new Set<string>();
+  const visit = (v: unknown): void => {
+    if (typeof v === "string") {
+      candidates.add(v);
+      const marker = v.indexOf("#apc_connect=");
+      if (marker !== -1) {
+        const payload = decodeApcConnect(v.slice(marker));
+        if (payload) candidates.add(payload.ticket);
+      }
+    } else if (Array.isArray(v)) v.forEach(visit);
+    else if (v && typeof v === "object") Object.values(v).forEach(visit);
+  };
+  visit(value);
+  return candidates;
 }
 
 const VALID_CODE_A = "K7M4P2";
@@ -905,6 +929,15 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
           expect(typeof adapter.pendingConnects === "function", "H10: ApcHubAdapter must implement pendingConnects()");
           expect(typeof adapter.approveConnect === "function", "H10: ApcHubAdapter must implement approveConnect()");
           expect(typeof adapter.observeState === "function", "H10: ApcHubAdapter must implement observeState()");
+          expect(typeof adapter.connectApproveEndpoint === "function", "H10: ApcHubAdapter must implement connectApproveEndpoint(); owner-route coverage is required");
+          expect(typeof adapter.ownerFetch === "function", "H10: ApcHubAdapter must implement ownerFetch(); authenticated CSRF coverage is required");
+
+          const refuseCandidates = async (body: unknown): Promise<void> => {
+            for (const ticket of credentialCandidates(body)) {
+              const paired = await pairApp(adapter, app, { ticket });
+              expect(!paired.ok && paired.status >= 400 && paired.status < 500, `H10: unauthenticated response candidate can pair before owner approval: ${paired.status} ${paired.text}`);
+            }
+          };
 
           await adapter.observeState!();
 
@@ -915,7 +948,8 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
             app: { origin: app.origin },
           });
           expect(connectRes.status === 200 && connectRes.json?.ok === true && connectRes.json?.status === "connect_requested", `H10: /apc/connect failed: ${connectRes.status} ${JSON.stringify(connectRes.json)}`);
-          expect(connectRes.json?.url === undefined && connectRes.json?.ticket === undefined && !connectRes.text.includes("#apc="), `H10: /apc/connect exposed connect ticket or url: ${connectRes.text}`);
+          await refuseCandidates(connectRes.json);
+          expect(connectRes.json?.url === undefined && connectRes.json?.ticket === undefined && !connectRes.text.includes("#apc_connect="), `H10: /apc/connect exposed connect ticket or url: ${connectRes.text}`);
 
           const pending = await adapter.pendingConnects!();
           const cr = pending.find((c) => c.origin === app.origin && (c.agent === undefined || c.agent === adapter.agent));
@@ -923,24 +957,39 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
 
           const stateBefore = await adapter.observeState!();
 
-          if (adapter.connectApproveEndpoint) {
-            const ep = adapter.connectApproveEndpoint(cr.id);
+          const ep = adapter.connectApproveEndpoint!(cr.id);
+          const approveRequest = (extraHeaders: Record<string, string>) => new Request(new URL(ep.path, adapter.origin), {
+            method: ep.method ?? "POST",
+            headers: { "content-type": "application/json", ...extraHeaders },
+            body: JSON.stringify(ep.body ?? {}),
+          });
+          {
             for (const extraHeaders of [{}, { origin: "https://evil.example", "sec-fetch-site": "cross-site" }] as Array<Record<string, string>>) {
-              const res = await adapter.fetch(new Request(`${adapter.origin}${ep.path}`, {
-                method: ep.method ?? "POST",
-                headers: { "content-type": "application/json", ...extraHeaders },
-                body: JSON.stringify(ep.body ?? {}),
-              }));
+              const res = await adapter.fetch(approveRequest(extraHeaders));
               const bodyText = await res.text().catch(() => "");
               expect(!res.ok, `H10: unauthenticated request to ${ep.path} succeeded with HTTP ${res.status}: ${bodyText}`);
-              expect(!bodyText.includes("#apc=") && !/"url"\s*:/.test(bodyText), `H10: unauthenticated response exposed a connect URL/ticket: ${bodyText}`);
+              let body: unknown = bodyText;
+              try { body = JSON.parse(bodyText); } catch { /* a refusal need not be JSON */ }
+              await refuseCandidates(body);
+              expect(!bodyText.includes("#apc_connect=") && !/"url"\s*:/.test(bodyText), `H10: unauthenticated response exposed a connect URL/ticket: ${bodyText}`);
             }
             const stillPending = await adapter.pendingConnects!();
             expect(stillPending.some((c) => c.id === cr.id), "H10: unauthenticated approve call consumed or deleted the pending connect request");
           }
 
-          const approved = await adapter.approveConnect!(cr.id);
-          expect(approved.ok === true && typeof approved.url === "string", `H10: owner approveConnect failed: ${JSON.stringify(approved)}`);
+          for (const headers of [
+            { origin: "https://evil.example", "sec-fetch-site": "same-origin" },
+            { origin: adapter.origin, "sec-fetch-site": "cross-site" },
+          ]) {
+            const res = await adapter.ownerFetch!(approveRequest(headers));
+            expect(!res.ok, `H10: authenticated cross-site approve succeeded with HTTP ${res.status}`);
+            expect((await adapter.pendingConnects!()).some((c) => c.id === cr.id), "H10: authenticated cross-site approve consumed the connect request");
+          }
+
+          // Positive control: the very same owner transport must work with trusted headers.
+          const approvedRes = await adapter.ownerFetch!(approveRequest({ origin: adapter.origin, "sec-fetch-site": "same-origin" }));
+          const approved = await approvedRes.json() as ApcHubApproveConnectResult;
+          expect(approvedRes.ok && approved.ok === true && typeof approved.url === "string", `H10: authenticated same-origin approve failed: ${JSON.stringify(approved)}`);
 
           let connectUrl: URL;
           try {
@@ -950,7 +999,7 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
           }
           expect(connectUrl.origin === app.origin && connectUrl.pathname === "/connect/dock", `H10: approveConnect URL ${approved.url} does not match app dock_connect ${app.origin}/connect/dock`);
           const payload = decodeApcConnect(connectUrl.hash);
-          expect(payload && payload.v === 1 && payload.hub === adapter.origin && payload.agent === adapter.agent && payload.ticket.length > 0, `H10: approveConnect URL missing valid #apc= payload: ${approved.url}`);
+          expect(payload && payload.v === 1 && payload.hub === adapter.origin && payload.agent === adapter.agent && payload.ticket.length > 0, `H10: approveConnect URL missing valid #apc_connect= payload: ${approved.url}`);
 
           const secondApprove = await adapter.approveConnect!(cr.id);
           expect(!secondApprove.ok, `H10: second owner approveConnect on ${cr.id} must be refused, got ${JSON.stringify(secondApprove)}`);
