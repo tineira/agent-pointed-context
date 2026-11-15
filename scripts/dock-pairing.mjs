@@ -2,7 +2,7 @@
 /**
  * One real Dock pairing between the dock and Pulse (TIN-900), the way a person and an agent make one:
  *
- *   the dock opens → its agent connects → the person drops it on a customer in Pulse → Allow → Pulse calls the
+ *   the dock opens → its agent connects → the owner requests Connect → opens Pulse with the connect ticket → Allow → Pulse calls the
  *   hub's /apc/pair (pairWithHub) → the dock owner approves with the pairing code → the hub's `initialize` to
  *   Pulse → the agent reads Pulse through its dock → a second drop (confirmWithHub, /apc/confirm) → the dock
  *   removes the agent and gives the grant back (/apc/revoke) → Pulse ends the grant.
@@ -180,8 +180,19 @@ async function pair(t) {
 
   // The drop, and Allow: Pulse asks the hub (pairWithHub) and shows the pairing code.
   const ticket = async () => (await call(`${t.made.dock}/agents/${agent.id}/ticket`, { method: "POST" })).json?.ticket;
-  const drop = { hub: DOCK, agent: agent.id, ticket: await ticket(), target };
-  must(typeof drop.ticket === "string", "the dock gives the agent's drag a ticket");
+  const connectTicket = async () => {
+    const checked = await call(`${t.made.dock}/connects`, { method: "POST", body: { agent: agent.id, host: PULSE } });
+    must(checked.status === 200 && typeof checked.json?.request?.id === "string", "the owner checks Pulse for Connect", checked);
+    const opened = await call(`${t.made.dock}/connects/${checked.json.request.id}/approve`, { method: "POST", body: {} });
+    must(opened.status === 200 && typeof opened.json?.url === "string", "the owner approves Connect and gets its app URL", opened);
+    const url = new URL(opened.json.url);
+    must(url.origin === PULSE && url.hash.startsWith("#apc_connect="), "the connect ticket is in Pulse's declared page fragment");
+    const fragment = JSON.parse(Buffer.from(url.hash.slice("#apc_connect=".length), "base64url").toString("utf8"));
+    return fragment.ticket;
+  };
+  // The app-page branch supplies /connect/dock; its existing consent endpoint takes this same handoff here.
+  const drop = { hub: DOCK, agent: agent.id, ticket: await connectTicket(), target };
+  must(typeof drop.ticket === "string", "the dock gives the owner-approved app handoff a connect ticket");
   const asked = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: drop });
   must(asked.json?.error === "consent_required" && typeof asked.json?.consent === "string", "the drop asks the person to Allow", asked);
   const allowed = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: { ...drop, consent: asked.json.consent } });
@@ -221,7 +232,7 @@ async function pair(t) {
   if (!PRODUCTION) {
     const direct = await call(`${t.made.pulse}/grants/agent`, { method: "POST" });
     must(direct.status === 200 && typeof direct.json?.secret === "string", "Pulse makes a Direct agent", direct);
-    const posted = await call(`${DOCK}/apc/pair`, { method: "POST", body: { ticket: await ticket(), agent: agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${pulse.json.sid}/${direct.json.secret}`, pairing_code: "K7M4P2" } });
+    const posted = await call(`${DOCK}/apc/pair`, { method: "POST", body: { ticket: await connectTicket(), agent: agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${pulse.json.sid}/${direct.json.secret}`, pairing_code: "K7M4P2" } });
     must(posted.status === 200 && posted.json?.binding === "pairing_id" && /^pr_[0-9a-f]{32}$/.test(posted.json?.pairing_id ?? ""), "the hub takes a Direct URL it cannot tell apart, and declares the binding", posted);
     const forced = await call(`${t.made.dock}/pairings/${posted.json.pairing_id}`, { method: "POST", body: { action: "approve", code: "K7M4P2" } });
     check(forced.status === 400 && forced.json?.error === "pairing_ended", "the Direct grant never goes live: Pulse refuses the hub's introduction (pairing_ended)", forced);
@@ -259,7 +270,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 async function main() {
-  if (!PRODUCTION) runtime = await startWorkerd();
+  if (!PRODUCTION) runtime = await startWorkerd({ connectManifestFixture: true });
   // The docs first, once: they make nothing, and a failure here never starts a pairing (no dock or sandbox is made).
   const docs = newTry(0, "");
   tries.push(docs);
