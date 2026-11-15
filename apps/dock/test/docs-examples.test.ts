@@ -120,7 +120,7 @@ test("Orders retains a non-default first-drop target through the real fragment-o
   const paired = await consent.allow();
   assert.equal(paired.ok, true);
   const pairing = hub.pairings.find((p) => p.agent === "ag_target")!;
-  assert.equal((await hub.decide(pairing.id, "approve", consent.code)).ok, true);
+  assert.equal((await hub.decide(pairing.id, "approve", paired.code)).ok, true);
   const response = await adapter.fetch!(new Request(pairing.mcp_url, {
     method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_current_view", arguments: {} } }),
@@ -427,8 +427,18 @@ test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to 
   assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: true, status: "connect_requested" });
   assert.deepEqual(called.map((c) => new URL(c.url).pathname), ["/apc/connect"]);
 
-  // 3. Only 404 falls back to 0.12 path; Allow calls /apc/pair with drop ticket and returns ticket_not_for_pairing.
-  connectAnswer = () => Response.json({ ok: false, error: "not_found" }, { status: 404 });
+  // 3. Only the exact legacy 404 falls back; a refusal saying not_found cannot ask for consent.
+  for (const [status, body, error] of [
+    [404, { error: "not_found", detail: "missing route" }, "hub_refused"],
+    [400, { ok: false, error: "not_found" }, "not_found"],
+    [409, { ok: false, error: "not_found" }, "hub_refused"],
+    [429, { ok: false, error: "not_found" }, "hub_refused"],
+  ] as const) {
+    connectAnswer = () => Response.json(body, { status });
+    assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: false, error });
+  }
+  // Allow on the legacy path calls /apc/pair with the drop ticket.
+  connectAnswer = () => Response.json({ error: "not_found" }, { status: 404 });
   const askedFallback = await (await post("/api/drop", drop)).json() as { error: string; consent: string };
   assert.equal(askedFallback.error, "consent_required");
   const pairFallback = await (await post("/api/drop", { ...drop, consent: askedFallback.consent })).json();

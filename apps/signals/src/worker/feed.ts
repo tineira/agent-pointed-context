@@ -402,7 +402,7 @@ export class Feed extends DurableObject<Env> {
     }
     const requestFirst = async (): Promise<PairHubAnswer> => {
       const answer = await requestConnect(hub, { ticket, agent, app: { origin } }, hubCallOptions(this.env));
-      if (!answer.ok) return answer.error === "not_found" ? askFirst() : answer;
+      if (!answer.ok) return "legacyAbsent" in answer && answer.legacyAbsent ? askFirst() : answer;
       kv.put(targetKey, JSON.stringify({ target, at: Date.now() }));
       return { ok: true, status: "connect_requested" };
     };

@@ -39,6 +39,18 @@ import {
 import { standInHub, type ApcAppAdapter, type ApcDockDropOutcome, type ApcDockLifecycleAdapter, type StandInHub } from "../src/index.ts";
 
 export type FixtureBreak =
+  | "consent_code_wrong"
+  | "consent_code_invalid"
+  | "pair_code_reused"
+  | "reconsent_code_reused"
+  | "replacement_code_reused"
+  | "transmitted_code_in_confirm"
+  | "transmitted_code_in_mcp"
+  | "reconsent_waiting_code_wrong"
+  // Only the owner's Allow response is broken; the consent and stored code remain correct.
+  | "allow_code_missing"
+  | "allow_code_wrong"
+  | "allow_code_reused"
   // The adapter.
   | "owner_origin_slash"
   | "apc_json_unreadable"
@@ -160,6 +172,8 @@ export type FixtureBreak =
   | "drop_pairs_without_connect";
 
 export interface FixtureOptions {
+  /** The page withholds its code until Allow; the consent adapter omits code. */
+  withholdCode?: boolean;
   break?: FixtureBreak;
   /** Standard string served in apc.json (APC_STANDARD_VERSION by default). */
   standard?: string;
@@ -496,7 +510,7 @@ class Fixture {
         if (this.has("pin_before_confirm") && target) g.pin = target;
         if (this.has("wake_before_confirm") && (st === "live" || st === "dormant")) g.lastWake = this.now();
         const base = this.has("raw_hub_string") || this.has("raw_hub_on_confirm") ? String(b.hub) : hub;
-        const answer = await this.hubCall(base, "/apc/confirm", { ticket, agent, mcp_url: this.urlOf(g), ...(this.has("code_in_confirm") ? { pairing_code: g.code } : {}) });
+        const answer = await this.hubCall(base, "/apc/confirm", { ticket, agent, mcp_url: this.urlOf(g), ...(this.has("code_in_confirm") || this.has("transmitted_code_in_confirm") ? { pairing_code: g.code } : {}) });
         if (this.dead) return { ok: false, error: "gone" };
         const a = answer.body as { ok?: unknown; status?: unknown; error?: unknown; pairing_id?: unknown } | undefined;
         const status = a?.ok === true ? a.status : a?.error === "not_paired" ? "not_paired" : null;
@@ -506,7 +520,8 @@ class Fixture {
         if (st === "handoff") {
           if (status === "pending" && !this.has("new_code_on_pending")) {
             if (target && !this.has("keeps_first_pin")) g.pin = target;
-            return { ok: true, status: "pending", grant_id: g.id, pairing: { code: g.code, expires_at: new Date(g.codeExpiresAt).toISOString() } };
+            const shown = this.has("reconsent_waiting_code_wrong") && this.storage.grants.some((old) => old !== g && old.agent === agent) ? "ZZZZZZ" : g.code;
+            return { ok: true, status: "pending", grant_id: g.id, pairing: { code: shown, expires_at: new Date(g.codeExpiresAt).toISOString() } };
           }
           if (status === "paired") {
             if (target && !this.has("keeps_first_pin")) g.pin = target;
@@ -538,11 +553,12 @@ class Fixture {
       return { ok: true, status: "connect_requested" };
     }
     // A new consent replaces the pending one, before the acknowledgement.
+    const replaced = [...this.storage.consents.values()].find((c) => c.hub === hub && c.agent === agent);
     if (!this.has("stale_allow_accepted")) for (const [nonce, c] of this.storage.consents) if (c.hub === hub && c.agent === agent) this.storage.consents.delete(nonce);
     const nonce = random(32);
-    const code = random(6, CROCKFORD);
+    const code = this.has("replacement_code_reused") && replaced ? replaced.code : random(6, CROCKFORD);
     this.storage.consents.set(nonce, { agent, hub, code, expiresAt: this.now() + PAIRING_CODE_TTL_MS });
-    return { ok: false, error: "consent_required", consent: nonce, pairing_code: code };
+    return { ok: false, error: "consent_required", consent: nonce, pairing_code: this.has("consent_code_wrong") ? (code === "AAAAAA" ? "BBBBBB" : "AAAAAA") : this.has("consent_code_invalid") ? "invalid!" : code };
   }
 
   private async allow(nonce: string, agent: string, ticket: string, hub: string, base: string, target: FocusTarget | null): Promise<Record<string, unknown>> {
@@ -557,9 +573,12 @@ class Fixture {
       // (nonce_reusable: the nonce is kept, so the same Allow pairs again.)
       if (!this.has("nonce_reusable")) this.storage.consents.delete(nonce);
       const now = this.now();
+      const previous = this.storage.grants.findLast((old) => old.agent === agent);
+      const wireCode = this.has("pair_code_reused") ? "DDDDDD" : this.has("reconsent_code_reused") && previous ? previous.code : this.has("transmitted_code_in_confirm") || this.has("transmitted_code_in_mcp") ? (c.code === "AAAAAA" ? "BBBBBB" : "AAAAAA") : c.code;
       const g: Grant = { id: `g_${random(8)}`, secret: random(22), agent, hub, state: "in_flight", allowedAt: now, ackedAt: 0, liveAt: 0, lastWake: now, served: false, code: c.code, codeExpiresAt: 0, pin: null, pinnedAt: 0, pinUnread: false, revokedAt: null, pairingId: null, declared: false, direct: false };
       this.storage.grants.push(g);
-      const answer = await this.hubCall(base, "/apc/pair", { ticket, agent, app: { name: "Fixture", origin: ORIGIN }, mcp_url: this.urlOf(g), pairing_code: c.code });
+      g.code = wireCode;
+      const answer = await this.hubCall(base, "/apc/pair", { ticket, agent, app: { name: "Fixture", origin: ORIGIN }, mcp_url: this.urlOf(g), pairing_code: wireCode });
       if (this.dead) return { ok: false, error: "gone" };
       const a = answer.body as { ok?: unknown; pairing_code?: unknown; error?: unknown; pairing_id?: unknown; binding?: unknown } | undefined;
       // (ignores_3xx: any status under 400 with a yes in it counts, as a careless app's check does.)
@@ -583,7 +602,8 @@ class Fixture {
       g.ackedAt = this.now();
       g.codeExpiresAt = g.ackedAt + PAIRING_CODE_TTL_MS;
       g.pin = target;
-      return { ok: true, status: "pending", grant_id: g.id, pairing: { code: g.code, expires_at: new Date(g.codeExpiresAt).toISOString() } };
+      const shown = this.has("allow_code_wrong") ? (g.code === "AAAAAA" ? "BBBBBB" : "AAAAAA") : this.has("allow_code_reused") ? "CCCCCC" : c.code;
+      return { ok: true, status: "pending", grant_id: g.id, pairing: { ...(this.has("allow_code_missing") ? {} : { code: shown }), expires_at: new Date(g.codeExpiresAt).toISOString() } };
     } finally {
       held.release();
     }
@@ -791,6 +811,7 @@ class Fixture {
     // A notification has no id, or is any notifications/* method (broken: by the id alone).
     const call = this.has("notification_by_id_only") && rpc.id !== undefined && rpc.method.startsWith("notifications/") ? "other_method" : dockGrantCallOf({ method: rpc.method, ...(rpc.id !== undefined ? { id: rpc.id } : {}), params: rpc.params });
     const notification = call === "notification";
+    if (this.has("transmitted_code_in_mcp") && !notification) return rpcResult(rpc.id, toolResult({ pairing_code: g.code }));
     if (st === "in_flight") st = "handoff";
     const commits = st === "handoff" && call === "initialize";
     const as = st === "handoff" && this.has("handoff_serves_data") && !commits ? "live" : st;
@@ -923,14 +944,14 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     if (r.error === "consent_required") {
       return {
         page: "consent",
-        code: String(r.pairing_code),
+        ...(!options.withholdCode ? { code: String(r.pairing_code) } : {}),
         async allow(over) {
           // An app whose hub is bound to the consent sends no hub with the Allow.
           const { hub: dropHub, ...rest } = baseDrop;
           const { agent: _agent, ...noAgent } = rest;
           const sent = options.hubBoundToConsent ? (config.allowNoAgent ? noAgent : rest) : { ...rest, [hubKey]: allowCarriesHub ? (over?.hub ?? dropHub) : dropHub };
           const a = await post("/api/drop", { ...sent, consent: r.consent });
-          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
+          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}), ...(a.ok === true && a.pairing ? { code: String((a.pairing as { code: string }).code) } : {}) };
         },
       };
     }
@@ -967,7 +988,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     if (shown.page !== "consent") throw new Error(`expected a consent, got ${shown.page}`);
     const allowed = await shown.allow();
     if (!allowed.ok) throw new Error(`the Allow did not pair: ${allowed.error}`);
-    return { agent, code: shown.code, grantId: allowed.grantId! };
+    return { agent, code: allowed.code!, grantId: allowed.grantId! };
   };
   // (cancelPrepaired: grants paired now, when the adapter is made, handed out one per Cancel body.)
   const prepaired = options.cancelPrepaired ? Promise.all(Array.from({ length: 40 }, () => handoffGrant())) : null;
@@ -1063,7 +1084,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
           shown = await connectDock(approved.url);
         }
         if (shown.page !== "consent") throw new Error(`expected a consent, got ${shown.page}`);
-        return { shown: shown.code, allow: () => shown.allow() };
+        return { ...(shown.code !== undefined ? { code: shown.code } : {}), allow: () => shown.allow() };
       },
       lifecycle,
     },

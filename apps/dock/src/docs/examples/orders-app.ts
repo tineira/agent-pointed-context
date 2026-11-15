@@ -688,7 +688,7 @@ export class OrdersApp {
     const requestFirst = async (): Promise<DropAnswer> => {
       const answer = await requestConnect(hub, { ticket, agent, app: { origin: this.origin } }, { fetch: this.send });
       if (answer.ok) this.store.kv.put(targetKey, JSON.stringify({ target, expiresAt: this.now() + 360_000 }));
-      return !answer.ok && answer.error === "not_found" ? askFirst() : answer;
+      return "legacyAbsent" in answer && answer.legacyAbsent ? askFirst() : answer;
     };
     // The newest consent asked for this agent: a new drop replaces the one before it.
     const newest = `asked:${hub} ${agent}`;

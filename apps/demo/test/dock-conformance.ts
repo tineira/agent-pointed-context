@@ -71,10 +71,9 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
     if (r.error === "consent_required") {
       return {
         page: "consent",
-        code: String(r.pairing_code),
         async allow(over) {
           const a = await post(route, { ...drop, ...(over?.hub !== undefined ? { hub: over.hub } : {}), consent: r.consent });
-          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
+          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}), ...(a.ok === true && a.pairing ? { code: String((a.pairing as { code: string }).code) } : {}) };
         },
       };
     }
@@ -115,14 +114,14 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
       r = await post("/connect/dock", drop);
     }
     if (r.error !== "consent_required") throw new Error(`expected a consent, got ${JSON.stringify(r)}`);
-    return { ...drop, consent: r.consent, code: String(r.pairing_code) };
+    return { ...drop, consent: r.consent };
   };
   /** A grant in handoff for a new agent: the Allow went through and the hub acknowledged it. */
   const handoff = async () => {
-    const { code, ...allow } = await asked();
+    const allow = await asked();
     const r = await post(consentRoute, allow);
     if (r.ok !== true) throw new Error(`the Allow did not pair: ${JSON.stringify(r)}`);
-    return { agent: allow.agent, code, grantId: String(r.grant_id) };
+    return { agent: allow.agent, code: String((r.pairing as { code: string }).code), grantId: String(r.grant_id) };
   };
   // The clock's offset so far, given again to an object that starts after a restart: the app's clock is one clock.
   let skew = 0;
@@ -172,8 +171,7 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
       allow: {
         path: `/api/s/${o.sid}${consentRoute}`,
         async body() {
-          const { code: _code, ...allow } = await asked();
-          return allow;
+          return asked();
         },
       },
       // The page's heartbeat is its WebSocket: the handshake carries the session and is held to the same Origin rule.
