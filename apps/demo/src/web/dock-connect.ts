@@ -32,7 +32,7 @@ export async function mountDockConnect(): Promise<void> {
       const session = await post("/api/session", {});
       if (!session.sid) throw new Error("Open the app to start a sandbox, then connect again.");
       base = `/api/s/${session.sid}`;
-      account.textContent = `${main.dataset.app} sandbox: ${session.sid}`;
+      account.textContent = `Your ${main.dataset.app} sandbox in this browser`;
     } else if (main.dataset.signedIn === "false") {
       account.textContent = main.dataset.account || "No account signed in.";
       message.textContent = "Sign in first, then return here to finish connecting.";

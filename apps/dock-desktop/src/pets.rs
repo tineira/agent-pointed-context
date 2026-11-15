@@ -416,7 +416,9 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
             .permission("allow-pet-bubble")
             .permission("allow-pet-grip")
             .permission("allow-pet-move")
-            .permission("allow-pet-open-dock"),
+            .permission("allow-pet-open-dock")
+            .permission("allow-pet-caps")
+            .permission("allow-pet-focus"),
     )?;
     for key in keys {
         open(app, &key)?;
@@ -751,5 +753,21 @@ mod tests {
         assert!(!is_agent("ag_"));
         assert!(!is_agent("hint"));
         assert!(!is_agent("ag_12/../x"));
+    }
+
+    /// A pet command the page calls needs three things: the handler in main.rs, the command in build.rs's app
+    /// manifest, and its permission in the pets' capability. Missing one, the call is refused silently (TIN-922).
+    #[test]
+    fn every_pet_command_is_registered_and_granted() {
+        let main = include_str!("main.rs");
+        let build = include_str!("../build.rs");
+        let pets = include_str!("pets.rs");
+        let handlers: Vec<&str> = main.split("pets::").skip(1).filter_map(|s| s.split(|c: char| !(c.is_alphanumeric() || c == '_')).next()).filter(|n| n.starts_with("pet_")).collect();
+        assert!(handlers.contains(&"pet_caps") && handlers.contains(&"pet_focus"), "{handlers:?}");
+        for h in handlers {
+            assert!(build.contains(&format!("\"{h}\"")), "{h} missing from build.rs");
+            let permission = format!("allow-{}", h.replace('_', "-"));
+            assert!(pets.contains(&format!("\"{permission}\"")), "{permission} missing from the pets capability");
+        }
     }
 }
