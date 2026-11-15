@@ -31,10 +31,8 @@
  * Exit code 0 only when the pairing passed; the last line is the summary. On a failure in GitHub Actions the first
  * failing step is also an `::error::` annotation.
  */
-import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+
+import { startWorkerd } from "./lib/dock-workerd.mjs";
 
 const PRODUCTION = process.argv.includes("--production");
 const DOCK = "https://apc.tineira.com";
@@ -51,62 +49,6 @@ const CLIENT = { name: PRODUCTION ? "apc-deploy-smoke" : "apc-workerd-pairing", 
 const USER_AGENT = `${CLIENT.name}/1.0 (+https://github.com/tineira/agent-pointed-context, TIN-900)`;
 const where = PRODUCTION ? "production" : "workerd";
 const CI = !!process.env.GITHUB_ACTIONS;
-
-/** The two Workers in workerd, and the fetch that reaches them. */
-async function startWorkerd() {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  // wrangler is the dock's devDependency, and Miniflare is wrangler's: the versions `vite dev` and `wrangler deploy` use.
-  const wranglerPath = createRequire(join(root, "apps/dock/package.json")).resolve("wrangler");
-  const fileUrl = (p) => new URL(`file:///${p.replaceAll("\\", "/")}`).href;
-  const { unstable_getMiniflareWorkerOptions } = await import(fileUrl(wranglerPath));
-  const { Miniflare, convertV4MiniflareOptions } = await import(fileUrl(createRequire(wranglerPath).resolve("miniflare")));
-  if (typeof unstable_getMiniflareWorkerOptions !== "function" || typeof convertV4MiniflareOptions !== "function" || typeof Miniflare !== "function") {
-    throw new Error("wrangler no longer exports unstable_getMiniflareWorkerOptions, or Miniflare convertV4MiniflareOptions: update scripts/dock-pairing.mjs for the new wrangler");
-  }
-
-  /** A built Worker as Miniflare runs it: its options from its wrangler.json, its bundle beside it. */
-  const builtWorker = (name, configPath) => {
-    const path = join(root, configPath);
-    if (!existsSync(path)) throw new Error(`${configPath} is missing: run pnpm build first`);
-    // The rules wrangler gives are the default ones (ESModule for .js and .mjs); Miniflare 5 takes the modules listed instead.
-    const { workerOptions: { modulesRules: _rules, ...workerOptions }, main } = unstable_getMiniflareWorkerOptions(path);
-    const dir = dirname(path);
-    // Every module of the bundle, entry first, as wrangler deploy uploads them (no_bundle, the ESModule rule): the
-    // entry imports its chunks (assets/*.js), some dynamically, which Miniflare would not find by itself.
-    const entry = resolve(dir, main ?? "index.js");
-    const chunks = readdirSync(dir, { recursive: true })
-      .map((f) => resolve(dir, String(f)))
-      .filter((f) => /\.m?js$/.test(f) && f !== entry);
-    return { ...workerOptions, name, modules: [entry, ...chunks].map((p) => ({ type: "ESModule", path: p })), modulesRoot: dir, outboundService: "internet" };
-  };
-  const internet = {
-    name: "internet",
-    modules: true,
-    compatibilityDate: "2026-10-01",
-    script: `export default {
-      fetch(request, env) {
-        const host = new URL(request.url).hostname;
-        if (host === "apc.tineira.com") return env.DOCK.fetch(request);
-        if (host === "pulse.apc.tineira.com") return env.PULSE.fetch(request);
-        return new Response("no network in this test: " + host, { status: 502 });
-      },
-    };`,
-    serviceBindings: { DOCK: "apc-dock", PULSE: "apc-pulse" },
-  };
-  const mf = new Miniflare(
-    convertV4MiniflareOptions({
-      workers: [internet, builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json")],
-    }),
-  );
-  const runtime = { send: (url, init) => mf.dispatchFetch(url, init), stop: () => mf.dispose() };
-  try {
-    await mf.ready;
-  } catch (error) {
-    await runtime.stop().catch(() => {});
-    throw error;
-  }
-  return runtime;
-}
 
 /** What a failure prints of an answer: its status and its error word, never its body (codes, nonces, URLs). */
 const brief = (r) => (r && typeof r === "object" && "status" in r ? `HTTP ${r.status}${r.json?.error ? ` ${r.json.error}` : ""}` : String(r ?? ""));
