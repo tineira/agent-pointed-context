@@ -110,12 +110,12 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       const agent = `ag_${agents}`;
       const drop = { hub: hubOrigin, agent, ticket: hub.ticket(agent), target: targets[0] };
       // Pulse asks the person on its page first (TIN-606); their Allow brings the nonce back.
-      const { asked, allow } = await ask(drop);
+      const { allow } = await ask(drop);
       const paired = await allow();
       assert.equal(paired.ok, true, `pairing: ${paired.error}`);
       grantId = paired.grant_id!;
       // The dock owner types the code, and the hub introduces itself (APC 0.10): only then does the grant serve calls.
-      const approved = await hub.decide(hub.pairings.find((p) => p.agent === agent)!.id, "approve", asked.pairing_code);
+      const approved = await hub.decide(hub.pairings.find((p) => p.agent === agent)!.id, "approve", paired.pairing!.code);
       assert.equal(approved.ok, true, `the dock's Allow: ${approved.error}`);
       await sandbox.unpin(grantId);
       // A dock grant's MCP URL is its hub's alone (I4): the page's state never carries its secret.
@@ -136,18 +136,17 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       return path.startsWith("/api/") || path.startsWith("/apc/") || path === "/connect/dock" ? worker.fetch(request, workerEnv) : sandbox.fetch(request);
     },
     connect: () => connectOn(profile),
-    // The pairing code (APC 0.9): what Pulse's consent shows (hub-consent.tsx formats it), and the Allow on it.
+    // The pairing code (APC 0.9): what Pulse answers and shows after Allow (hub-consent.tsx formats it).
     ...(profile === "dock"
       ? {
           dock: {
             hub,
             async drop(agent: string, ticket: string) {
-              const { asked, allow } = await ask({ hub: hubOrigin, agent, ticket, target: targets[0] });
+              const { allow } = await ask({ hub: hubOrigin, agent, ticket, target: targets[0] });
               return {
-                shown: formatPairingCode(asked.pairing_code!),
                 allow: async () => {
                   const r = await allow();
-                  return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
+                  return { ok: r.ok, ...(r.error ? { error: r.error } : {}), ...(r.ok && r.pairing ? { code: formatPairingCode(r.pairing.code) } : {}) };
                 },
               };
             },

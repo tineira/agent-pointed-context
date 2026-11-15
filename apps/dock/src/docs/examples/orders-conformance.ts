@@ -83,7 +83,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     if (!paired.ok) throw new Error(`pairing failed: ${JSON.stringify(paired)}`);
     // The person types the code in their dock: the hub approves and connects (its initialize makes the grant live).
     const pairing = hub.pairings.filter((p) => p.agent === agent).at(-1)!;
-    const approved = await hub.decide(pairing.id, "approve", asked.pairing_code);
+    const approved = await hub.decide(pairing.id, "approve", (paired.pairing as { code: string }).code);
     if (!approved.ok) throw new Error(`the dock did not approve: ${JSON.stringify(approved)}`);
     const grantId = paired.grant_id as string;
     await call(`/api/agents/${grantId}/unpin`); // the suite starts from no pin
@@ -94,17 +94,15 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
   // #region dock
   /**
    * What the page shows for an answer of the drop (`/api/drop`) or of the dock_connect page (`/api/connect/dock`):
-   * the consent with its code and the Allow, the waiting card, connecting, or a refusal.
+   * the consent and its Allow, then the waiting card with its code, connecting, or a refusal.
    */
   function shownFor(r: Record<string, unknown>, route: string, drop: Record<string, unknown>): ApcDockDropOutcome {
-    if (r.error === "consent_required" && typeof r.pairing_code === "string") {
+    if (r.error === "consent_required") {
       return {
         page: "consent",
-        // orders-page.ts shows it formatted, K7M-4P2.
-        code: formatPairingCode(r.pairing_code),
         allow: async (over) => {
           const a = await call(route, { ...drop, ...(over?.hub !== undefined ? { hub: over.hub } : {}), consent: r.consent });
-          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
+          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}), ...(a.ok === true && a.pairing ? { code: formatPairingCode((a.pairing as { code: string }).code) } : {}) };
         },
       };
     }
@@ -126,12 +124,12 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     return shownFor(await call("/api/connect/dock", drop), "/api/connect/dock", drop);
   }
 
-  /** The pairing code (APC 0.9): what the consent shows, and the person's Allow on it. */
+  /** The pairing code: what the app answers and shows after the person Allows the consent. */
   async function dropOnPage(agent: string, ticket: string) {
     const { asked, route, drop } = await ask({ hub: HUB, agent, ticket, target: { kind: "order", id: "ord_1001" } });
     const shown = shownFor(asked, route, drop);
     if (shown.page !== "consent") throw new Error(`expected the consent, got ${JSON.stringify(shown)}`);
-    return { shown: shown.code, allow: () => shown.allow() };
+    return { allow: () => shown.allow() };
   }
   // #endregion
 

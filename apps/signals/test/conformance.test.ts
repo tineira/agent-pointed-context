@@ -104,11 +104,11 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
     const agent = `ag_${agents}`;
     const drop = { hub: hubOrigin, agent, ticket: hub.ticket(agent), target: targets[0] };
     // Signals asks the person on its page first (TIN-606); their Allow brings the nonce back.
-    const { asked, allow } = await ask(drop);
+    const { allow } = await ask(drop);
     const paired = await allow();
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     // The dock owner types the code, and the hub introduces itself (APC 0.10): only then does the grant serve calls.
-    const approved = await hub.decide(hub.pairings.find((p) => p.agent === agent)!.id, "approve", asked.pairing_code);
+    const approved = await hub.decide(hub.pairings.find((p) => p.agent === agent)!.id, "approve", paired.pairing!.code);
     assert.equal(approved.ok, true, `the dock's Allow: ${approved.error}`);
     await feed.unpin(paired.grant_id);
     return { grantId: paired.grant_id as string, mcpUrl: urlOf(paired.grant_id) };
@@ -126,18 +126,17 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       return path.startsWith("/api/") || path.startsWith("/apc/") || path === "/connect/dock" ? worker.fetch(request, workerEnv) : feed.fetch(request);
     },
     connect: () => connectOn(profile),
-    // The pairing code (APC 0.9): what Signals' consent shows (formatted, as app.tsx shows it), and the Allow on it.
+    // The pairing code (APC 0.9): what Signals answers and shows after Allow (formatted, as app.tsx shows it).
     ...(profile === "dock"
       ? {
           dock: {
             hub,
             async drop(agent: string, ticket: string) {
-              const { asked, allow } = await ask({ hub: hubOrigin, agent, ticket, target: targets[0] });
+              const { allow } = await ask({ hub: hubOrigin, agent, ticket, target: targets[0] });
               return {
-                shown: formatPairingCode(asked.pairing_code),
                 allow: async () => {
                   const r = await allow();
-                  return { ok: r.ok, ...(r.error ? { error: r.error } : {}) };
+                  return { ok: r.ok, ...(r.error ? { error: r.error } : {}), ...(r.ok && r.pairing ? { code: formatPairingCode(r.pairing.code) } : {}) };
                 },
               };
             },

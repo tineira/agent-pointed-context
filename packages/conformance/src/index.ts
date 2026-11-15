@@ -153,11 +153,11 @@ export interface ApcMobilePage {
 export interface ApcDockAdapter {
   hub: StandInHub;
   /**
-   * The person drops an agent the app holds no grant for, with a ticket from `hub.ticket(agent)`: the pairing code
-   * the app's consent shows, as the person sees it (formatted or not), and their Allow on that consent, with what
-   * the app answered the page.
+   * The person drops an agent the app holds no grant for, with a ticket from `hub.ticket(agent)`, then Allows the
+   * consent. The Allow result carries the pairing code the app shows afterwards (formatted or not), read from
+   * the app's answer to the page, never from storage or the hub's copy.
    */
-  drop(agent: string, ticket: string): Promise<{ shown: string; allow(): Promise<{ ok: boolean; error?: string }> }>;
+  drop(agent: string, ticket: string): Promise<{ allow(): Promise<ApcDockAllowAnswer> }>;
   /** The Dock profile as built (APC 0.10): required of an app that claims 0.10.0 or later on the Dock profile. */
   lifecycle?: ApcDockLifecycleAdapter;
 }
@@ -167,12 +167,14 @@ export interface ApcDockAllowAnswer {
   ok: boolean;
   error?: string;
   grantId?: string;
+  /** The code shown on the owner's page after a successful Allow, from the app's answer (formatted or not). */
+  code?: string;
 }
 
 /**
  * What the app's page shows on a drop (APC 0.10):
  *
- * - `consent`: the consent with its pairing code (as the person sees it, formatted or not), and the Allow on it.
+ * - `consent`: the consent and the Allow on it; the Allow result carries the code shown afterwards.
  *   `allow({ hub })` sends the Allow with another `hub` than the drop's, as a tampered page would (M1).
  * - `waiting`: the grant is pending at the hub, and the page shows the waiting card with this code.
  * - `connecting`: the hub says paired but the app has not seen `initialize`: no code.
@@ -180,7 +182,7 @@ export interface ApcDockAllowAnswer {
  * - `refused`: the app answered `error` (`hub_not_allowed`, `pairing_in_progress`, …), with no consent.
  */
 export type ApcDockDropOutcome =
-  | { page: "consent"; code: string; allow(over?: { hub?: string }): Promise<ApcDockAllowAnswer> }
+  | { page: "consent"; allow(over?: { hub?: string }): Promise<ApcDockAllowAnswer> }
   | { page: "waiting"; code: string }
   | { page: "connecting" }
   | { page: "pinned" }
@@ -956,7 +958,7 @@ async function claimedStandard(app: ApcAppAdapter, conn: AgentConnection): Promi
 }
 
 /**
- * The pairing code (APC 0.9), on the Dock profile: the consent shows a well-formed code, new for every consent,
+ * The pairing code (APC 0.9), on the Dock profile: after Allow the app shows a well-formed code, new for every consent,
  * and the app sends that code to the hub; the app keeps no grant unless the hub acknowledges the code with a
  * plain 200; five wrong codes, or the code's time running out, give the grant back; the right code pairs.
  */
@@ -964,7 +966,7 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (dock): pairing code: ${name}`, run);
   let n = 0;
   /**
-   * A new agent's drop, Allowed: what the consent showed, the app's answer, and the pairing the hub got. With `mode`,
+   * A new agent's drop, Allowed: the code shown after Allow, the app's answer, and the pairing the hub got. With `mode`,
    * the stand-in hub answers in it only while the Allow runs: from 0.13 the drop itself calls the hub (`/apc/connect`),
    * and a mode meant for the Allow's `/apc/pair` must not stop the drop from reaching the consent.
    */
@@ -978,7 +980,7 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
     } finally {
       if (mode) d.hub.mode = "ack";
     }
-    return { agent, shown: drop.shown, answer, sent: d.hub.received.at(-1), pairing: d.hub.pairings.find((p) => p.agent === agent) };
+    return { agent, shown: answer.code, answer, sent: d.hub.received.at(-1), pairing: d.hub.pairings.find((p) => p.agent === agent) };
   };
   /** The HTTP status the app gives a grant's MCP URL: 404 once it holds no grant there. */
   const statusOf = async (mcpUrl: string) =>
@@ -995,27 +997,28 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
       expect(typeof claimed === "string" && compareStandard(claimed, "0.9.0") < 0, `apc.json claims standard ${String(claimed)}, which requires the pairing code to be checked: give dock in the adapter (ApcDockAdapter: hub, drop)`);
     }),
 
-    check("the consent shows a well-formed code, and the app sends that code, raw, to the hub", async () => {
+    check("after Allow the app shows a well-formed code, and sends that code, raw, to the hub", async () => {
       if (!dock) return;
       if (!(await claims09())) return NOT_09;
       const { shown, answer, sent } = await allowNew(dock);
       const code = normalizePairingCode(shown);
-      expect(code, `the consent shows ${JSON.stringify(shown)}, not a pairing code (6 characters of Crockford base32)`);
+      expect(code, `after Allow the app shows ${JSON.stringify(shown)}, not a pairing code (6 characters of Crockford base32)`);
       expect(answer.ok, `the Allow did not pair: ${answer.error}`);
       expect(isObject(sent), "the app sent the hub no /apc/pair");
-      expect(sent.pairing_code !== undefined, "the app sent /apc/pair without pairing_code: an app of 0.9 must send the code its consent showed");
+      expect(sent.pairing_code !== undefined, "the app sent /apc/pair without pairing_code: an app of 0.9 must send the code it shows after Allow");
       expect(normalizePairingCode(sent.pairing_code) === sent.pairing_code, `the app sent pairing_code ${JSON.stringify(sent.pairing_code)}: send it raw, 6 characters, no dash`);
-      expect(sent.pairing_code === code, "the app sent the hub another code than the one its consent showed");
+      expect(sent.pairing_code === code, "the app sent the hub another code than the one it showed after Allow");
     }),
 
-    check("every consent shows a new code", async () => {
+    check("every consent shows a new code after Allow", async () => {
       if (!dock) return;
       if (!(await claims09())) return NOT_09;
-      const a = `ag_two_${++n}`;
-      const b = `ag_two_${++n}`;
-      const first = normalizePairingCode((await dock.drop(a, dock.hub.ticket(a))).shown);
-      const second = normalizePairingCode((await dock.drop(b, dock.hub.ticket(b))).shown);
-      expect(first && second, "a consent shows no pairing code");
+      const a = await allowNew(dock);
+      const b = await allowNew(dock);
+      expect(a.answer.ok && b.answer.ok, "an Allow did not pair");
+      const first = normalizePairingCode(a.shown);
+      const second = normalizePairingCode(b.shown);
+      expect(first && second, "after Allow the app shows no pairing code");
       expect(first !== second, `two consents showed the same code, ${first}`);
     }),
 
@@ -1040,7 +1043,8 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
       if (!(await claims09())) return NOT_09;
       const wrong = await allowNew(dock);
       expect(wrong.answer.ok && wrong.pairing, `the Allow did not pair: ${wrong.answer.error}`);
-      const code = normalizePairingCode(wrong.shown)!;
+      const code = normalizePairingCode(wrong.shown);
+      expect(code, "after Allow the app shows no pairing code");
       const other = code.startsWith("A") ? "BBBBBB" : "AAAAAA";
       for (let i = 1; i <= PAIRING_CODE_MAX_ATTEMPTS; i++) await dock.hub.decide(wrong.pairing.id, "approve", other);
       expect(!dock.hub.pairings.includes(wrong.pairing), "the stand-in hub kept a pairing after the last wrong code");
@@ -1059,8 +1063,9 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
       if (!(await claims09())) return NOT_09;
       const { shown, answer, pairing } = await allowNew(dock);
       expect(answer.ok && pairing, `the Allow did not pair: ${answer.error}`);
+      expect(normalizePairingCode(shown), "after Allow the app shows no pairing code");
       const decided = await dock.hub.decide(pairing.id, "approve", shown);
-      expect(decided.ok, `the code the consent showed did not approve the pairing: ${decided.error}`);
+      expect(decided.ok, `the code the app showed after Allow did not approve the pairing: ${decided.error}`);
       const conn = { mcpUrl: pairing.mcp_url, grantId: "" };
       const listed = await send(app, conn, "tools/list", {});
       expect(listed.status === 200, `the paired grant answers tools/list with HTTP ${listed.status}`);

@@ -39,6 +39,10 @@ import {
 import { standInHub, type ApcAppAdapter, type ApcDockDropOutcome, type ApcDockLifecycleAdapter, type StandInHub } from "../src/index.ts";
 
 export type FixtureBreak =
+  // Only the owner's Allow response is broken; the consent and stored code remain correct.
+  | "allow_code_missing"
+  | "allow_code_wrong"
+  | "allow_code_reused"
   // The adapter.
   | "owner_origin_slash"
   | "apc_json_unreadable"
@@ -583,7 +587,8 @@ class Fixture {
       g.ackedAt = this.now();
       g.codeExpiresAt = g.ackedAt + PAIRING_CODE_TTL_MS;
       g.pin = target;
-      return { ok: true, status: "pending", grant_id: g.id, pairing: { code: g.code, expires_at: new Date(g.codeExpiresAt).toISOString() } };
+      const shown = this.has("allow_code_wrong") ? (g.code === "AAAAAA" ? "BBBBBB" : "AAAAAA") : this.has("allow_code_reused") ? "CCCCCC" : g.code;
+      return { ok: true, status: "pending", grant_id: g.id, pairing: { ...(this.has("allow_code_missing") ? {} : { code: shown }), expires_at: new Date(g.codeExpiresAt).toISOString() } };
     } finally {
       held.release();
     }
@@ -923,14 +928,13 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     if (r.error === "consent_required") {
       return {
         page: "consent",
-        code: String(r.pairing_code),
         async allow(over) {
           // An app whose hub is bound to the consent sends no hub with the Allow.
           const { hub: dropHub, ...rest } = baseDrop;
           const { agent: _agent, ...noAgent } = rest;
           const sent = options.hubBoundToConsent ? (config.allowNoAgent ? noAgent : rest) : { ...rest, [hubKey]: allowCarriesHub ? (over?.hub ?? dropHub) : dropHub };
           const a = await post("/api/drop", { ...sent, consent: r.consent });
-          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}) };
+          return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}), ...(a.ok === true && a.pairing ? { code: String((a.pairing as { code: string }).code) } : {}) };
         },
       };
     }
@@ -967,7 +971,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     if (shown.page !== "consent") throw new Error(`expected a consent, got ${shown.page}`);
     const allowed = await shown.allow();
     if (!allowed.ok) throw new Error(`the Allow did not pair: ${allowed.error}`);
-    return { agent, code: shown.code, grantId: allowed.grantId! };
+    return { agent, code: allowed.code!, grantId: allowed.grantId! };
   };
   // (cancelPrepaired: grants paired now, when the adapter is made, handed out one per Cancel body.)
   const prepaired = options.cancelPrepaired ? Promise.all(Array.from({ length: 40 }, () => handoffGrant())) : null;
@@ -1063,7 +1067,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
           shown = await connectDock(approved.url);
         }
         if (shown.page !== "consent") throw new Error(`expected a consent, got ${shown.page}`);
-        return { shown: shown.code, allow: () => shown.allow() };
+        return { allow: () => shown.allow() };
       },
       lifecycle,
     },

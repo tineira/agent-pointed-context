@@ -104,7 +104,7 @@ M9 drives a trailing-slash hub through the first drop and, on 0.13, the `#apc_co
 
 <!-- include orders-conformance.ts#connect -->
 
-The pairing code (Dock, 0.9): what the consent shows, and the person's Allow on it. The suite pairs with `hub`, checks what the app sent it, and plays the dock owner typing codes.
+The pairing code (Dock): `drop(agent, ticket)` returns `{ allow() }`; `allow()` returns `{ ok, error?, grantId?, code? }`. On success, `code` is the code the app answers and shows on the owner's page **after Allow**, formatted or raw. Read it from that response or the resulting page, never from the app's storage or the hub's copy. No `shown` field on the drop and no `consentCode()` seam are needed. The suite first Allows, then checks the code's form, its match with `/apc/pair`, and a fresh code for every consent; it also plays the dock owner typing the code.
 
 <!-- include orders-conformance.ts#dock -->
 
@@ -126,8 +126,8 @@ An app that claims 0.10.0 or later on the Dock profile also gives `dock.lifecycl
 
 | Member | |
 |---|---|
-| `dropAgent({ agent, ticket, hub, target })` | the person drops an agent, with the drag's `hub` string as the page read it, on `target` (one of `targets` when left out): what the page shows (`consent` with its code and the Allow, `waiting` with the code, `connecting`, `pinned`, or `refused` with the error). The Allow returns the grant's id, and `allow({ hub })` sends it with another hub, as a tampered page would |
-| `connectDock(url, target)` (optional) | for APC 0.13 apps whose first drop sends `/apc/connect`: opens the `dock_connect` URL (with `#apc_connect=...`) returned by `hub.approveConnect` and returns the consent outcome to Allow `/apc/pair` |
+| `dropAgent({ agent, ticket, hub, target })` | the person drops an agent, with the drag's `hub` string as the page read it, on `target` (one of `targets` when left out): what the page shows (`consent` with `allow()` and no code, `waiting` with the code, `connecting`, `pinned`, or `refused` with the error). A successful Allow returns `{ ok: true, grantId, code }`, with the code from the app's answer and waiting card; code checks run afterwards. `allow({ hub })` sends it with another hub, as a tampered page would |
+| `connectDock(url, target)` (optional) | for APC 0.13 apps whose first drop sends `/apc/connect`: opens the `dock_connect` URL (with `#apc_connect=...`) returned by `hub.approveConnect` and returns the same consent outcome: `allow()` supplies the code after `/apc/pair` succeeds |
 | `allowCarriesHub` | whether the page's Allow carries the hub (true), or the server binds it to the consent (false) |
 | `cancel(grantId)` | Cancel on the waiting card |
 | `heartbeat()` | the page's heartbeat, a wake action |
@@ -178,6 +178,8 @@ The stand-in hub plays the hub's side: it can hold `/apc/pair` (the grant is in 
 - **Redirects**: the hub never follows a 3xx redirect on `apc.json`, MCP `initialize`, or `/apc/revoke` (whether using `redirect: "manual"` or `"error"`).
 
 Rules that need the dock UI (`CODE-2`'s "never shows" in dock state or page sockets, `DROP-1` no secret in the drag, and `TM-1` trust-model UI warnings and unverified markings), pairing-cap accounting in `H3`/`H5`, and agent-tool relays (`H4`, `H5` agent `relay()` errors, `H6`, plus post-approval agent gating/404 if an adapter omits `exerciseAgent`) are **reference behaviour, not conformance-tested in 1.0** (proven by `apps/dock/test`).
+
+`ApcHubAdapter` still supplies hub actions, not an app-code reader. Its code normalization, never-echoed and codeless checks submit codes with `/apc/pair` before testing approval or confirmation. The `requiresPairingCode` policy is unchanged: true requires codeless pairing to fail; otherwise acceptance records the declared policy note.
 
 ## What passing means
 

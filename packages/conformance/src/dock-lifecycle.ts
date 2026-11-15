@@ -469,7 +469,6 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
   const consent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent = newAgent(), hub = d.hub.origin, rawHub?: string) => {
     const shown = await finishConnect(life, d, agent, await drop(life, d, agent, hub), rawHub);
     expect(shown.page === "consent", `a drop of an agent the app holds no grant for shows the consent, got ${JSON.stringify(shown).slice(0, 200)}`);
-    expect(normalizePairingCode(shown.code), `the consent shows ${JSON.stringify(shown.code)}, not a pairing code`);
     return { agent, ...shown };
   };
   /** A grant in handoff: dropped, Allowed, acknowledged by the hub, with no initialize yet. */
@@ -477,16 +476,18 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     const c = await consent(life, d, newAgent(), hub, rawHub);
     const answer = await c.allow();
     expect(answer.ok, `the Allow did not pair: ${answer.error}`);
+    const code = normalizePairingCode(answer.code);
+    expect(code, `after Allow the app shows ${JSON.stringify(answer.code)}, not a pairing code`);
     expect(typeof answer.grantId === "string" && answer.grantId.length > 0, "the Allow gives the grant's id (ApcDockAllowAnswer.grantId)");
     const pairing = d.hub.pairings.filter((p) => p.agent === c.agent).at(-1);
     expect(pairing, "the stand-in hub holds no pairing for the agent after the Allow");
-    return { agent: c.agent, code: normalizePairingCode(c.code)!, grantId: answer.grantId, mcpUrl: pairing.mcp_url, pairing };
+    return { agent: c.agent, code, grantId: answer.grantId, mcpUrl: pairing.mcp_url, pairing };
   };
   /** A grant committed by the hub's initialize, with no served call yet. */
   const committed = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter) => {
     const g = await handoff(life, d);
     const decided = await d.hub.decide(g.pairing.id, "approve", g.code, { introduce: false });
-    expect(decided.ok, `the code the consent showed did not approve the pairing: ${decided.error}`);
+    expect(decided.ok, `the code the app showed after Allow did not approve the pairing: ${decided.error}`);
     const init = await send(g.mcpUrl, "initialize", INIT);
     expect(served(init), `the hub's initialize on a paired grant is served: ${brief(init)}`);
     return g;
@@ -1361,8 +1362,10 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       d.hub.forget(g.pairing.id);
       const again = await finishConnect(life, d, g.agent, await drop(life, d, g.agent));
       expect(again.page === "consent", `a drop the hub answers not_paired starts a fresh consent, got ${JSON.stringify(again).slice(0, 200)}`);
-      expect(normalizePairingCode(again.code) !== g.code, "the fresh consent shows the old code: every consent makes a new one");
       await expectState(g.mcpUrl, "not_found", "the old grant, after not_paired");
+      const allowed = await again.allow();
+      expect(allowed.ok && normalizePairingCode(allowed.code), "the fresh Allow must pair and show a code");
+      expect(normalizePairingCode(allowed.code) !== g.code, "after Allow the fresh consent shows the old code: every consent makes a new one");
     }),
 
     check("one pending pairing: once the app's stored expiry has passed, a drop shows no code, ends the grant and starts a fresh consent", async (life, d) => {
@@ -1371,8 +1374,10 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       await life.advance(PAIRING_CODE_TTL_MS + 1000);
       const again = await finishConnect(life, d, g.agent, await drop(life, d, g.agent));
       expect(again.page === "consent", `a drop past the stored expiry starts a fresh consent (no old code), got ${JSON.stringify(again).slice(0, 200)}`);
-      expect(normalizePairingCode(again.code) !== g.code, "past the stored expiry the page still shows the old code");
       await expectState(g.mcpUrl, "not_found", "the old grant, past its stored expiry");
+      const allowed = await again.allow();
+      expect(allowed.ok && normalizePairingCode(allowed.code), "the fresh Allow must pair and show a code");
+      expect(normalizePairingCode(allowed.code) !== g.code, "past the stored expiry the page still shows the old code after Allow");
     }),
 
     check("one pending pairing: paired before the app saw initialize stays in handoff, and only initialize makes it live", async (life, d) => {
@@ -1390,13 +1395,13 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     check("one pending pairing: before the acknowledgement a new drop replaces the consent, and the stale Allow gets consent_expired", async (life, d) => {
       const old = await consent(life, d);
       const fresh = await consent(life, d, old.agent);
-      expect(normalizePairingCode(fresh.code) !== normalizePairingCode(old.code), "the new consent shows the old code: every consent makes a new one");
       const before = pairCount(d, old.agent);
       const stale = await old.allow();
       expect(!stale.ok && stale.error === "consent_expired", `the Allow on the replaced consent answers consent_expired: got ${JSON.stringify(stale)}`);
       expect(pairCount(d, old.agent) === before, "the stale Allow sent the hub /apc/pair");
       const answer = await fresh.allow();
       expect(answer.ok, `the Allow on the new consent did not pair: ${answer.error}`);
+      expect(normalizePairingCode(answer.code), "after the fresh Allow the app shows a pairing code");
     }),
 
     // The binding (APC 0.12, TIN-910): on an app that claims 0.12.0 or later.

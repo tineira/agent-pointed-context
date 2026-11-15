@@ -181,11 +181,16 @@ export async function pairWithHub(hub: string | URL, body: DockPairRequest, opti
   return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding };
 }
 
-/** First pairing (APC 0.13). Only an HTTP 404 whose JSON object body has `error: "not_found"` permits an app's temporary 0.12 fallback. */
-export async function requestConnect(hub: string | URL, body: DockConnectRequest, options: HubCallOptions = {}): Promise<DockConnectAnswer> {
+/** Local client result: only `legacyAbsent` permits the temporary 0.12 fallback; an error string never does. */
+export type RequestConnectResult = DockConnectAnswer | { ok: false; error: "not_found"; legacyAbsent: true };
+
+/** First pairing (APC 0.13). Only a non-redirected HTTP 404 with exactly `{"error":"not_found"}` as its JSON object permits fallback. */
+export async function requestConnect(hub: string | URL, body: DockConnectRequest, options: HubCallOptions = {}): Promise<RequestConnectResult> {
   const a = await post(hub, "/apc/connect", body, options, true);
   if ("error" in a) return { ok: false, error: a.error };
-  if (a.status === 404) return a.body?.error === "not_found" ? { ok: false, error: "not_found" } : { ok: false, error: "hub_refused" };
+  if (a.status === 404) return a.body?.error === "not_found" && Object.keys(a.body).length === 1
+    ? { ok: false, error: "not_found", legacyAbsent: true }
+    : { ok: false, error: "hub_refused" };
   const refused = refusal(a);
   if (refused) return { ok: false, error: refused };
   if (a.status !== 200 || a.body?.ok !== true || a.body.status !== "connect_requested") return { ok: false, error: "hub_refused" };
