@@ -71,11 +71,23 @@ test("the agent's name is a text node between isolates, never markup (TIN-786)",
   assert.match(body("function sentLine("), /document\.createTextNode\(SENT_TO\), document\.createTextNode\(name \? isolate\(name\) : AGENT_FALLBACK\)/);
 });
 
-test("the 75 s line keeps the drop's entry, so a later outcome is still drawn at its point (TIN-786, fix check on #155)", () => {
+test("the 135 s line keeps the drop's entry, so a later outcome is still drawn at its point (TIN-786, fix check on #155)", () => {
   const waiting = body("function waitingCard(");
   assert.doesNotMatch(waiting, /pending\.delete|dropDone/);
   assert.match(waiting, /dropLost\?\.\(id\);/);
+  assert.match(waiting, /waitingText\(check\)/);
+  assert.match(body("function sent("), /waitingCard\(id, target\.hub, point, r\.check\)/);
+  assert.match(source, /interface Reply \{\s*status: DropStatus;\s*check\?: string;/);
   assert.match(source, /dropLost = \(id\) => \{\s*const target = pending\.get\(id\);\s*if \(target\) target\.anchor = null;\s*\};/);
   // The consent card is never hidden while it can be answered (no visibility, inert or blur on it).
   assert.doesNotMatch(body("function placeQuestion("), /visibility|inert|blur/);
+});
+
+test("the worker requests /apc/connect for reader pairing, passes check without leaking claim, and keeps the stored-token path", () => {
+  const worker = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
+  assert.match(worker, /askReaderConnect\(hub, \{ ticket, agent, label \}\)/);
+  assert.match(worker, /pollReaderStatus\(hub, claim,/);
+  assert.match(worker, /\.\.\.\(asked\.check \? \{ check: asked\.check \} : \{\}\)/);
+  assert.doesNotMatch(worker, /claim: asked\.claim/, "worker keeps claim and never sends it to the page");
+  assert.match(worker, /if \(token\) \{\s*const sent = await send\(hub, token, reading\);/);
 });

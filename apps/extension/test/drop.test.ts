@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, WHATS_SENT, mayWriteTimeout, agentName, AGENT_FALLBACK, CARD_LABELS, SITE_LABELS, CONSENT_QUESTION, consentReason, includeLabel, isolate, NOTE_TEXT, SENT_TO, WAIT_LOST_TEXT, WAITING_TEXT, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
+import { browserLabel, connectLabel, decide, heldForInclude, HELD_MAX, HELD_MS, holdReading, readingId, type Held, directOnlyAnswer, directOnlyGate, grantedAlone, grantedByPerson, hubAllowed, includeSensitive, isDockPage, LOOKUP_KEEP_MS, LOOKUP_KEEP_UNKNOWN_MS, lookUpDirectOnly, NOTICE_ALL, ownPatterns, NOTICE_SITES, pinState, hubPatterns, reask, WHATS_SENT, mayWriteTimeout, agentName, AGENT_FALLBACK, ASK_MS, CARD_LABELS, SITE_LABELS, CONSENT_QUESTION, consentReason, includeLabel, isolate, NOTE_TEXT, SENT_TO, WAIT_LOST_MS, WAIT_LOST_TEXT, WAITING_TEXT, waitingText, isSensitive, readerKey, sensitiveMode, sensitiveNote, sentWithout, sitePattern, STATUS_TEXT, type DirectOnly, type DirectOnlyLookup } from "../src/drop.ts";
 
 test("the extension talks only to known docks; a dev build also to a local one (TIN-421)", () => {
   assert.equal(hubAllowed("https://apc.tineira.com", false), true);
@@ -40,7 +40,7 @@ test("a site to grant is an http(s) page's origin as a match pattern", () => {
 
 test("one reader token per dock and agent, and a note for every outcome", () => {
   assert.equal(readerKey("https://apc.tineira.com", "ag_1234"), "https://apc.tineira.com ag_1234");
-  for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "unknown_dock", "error", "consent", "consent_sensitive", "consent_update", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
+  for (const s of ["sent", "asking", "denied", "timeout", "no_ticket", "ticket_not_for_pairing", "ticket_origin_mismatch", "too_many_requests", "reader_not_allowed", "dock_expired", "unknown_agent", "invalid", "refused", "unknown_dock", "error", "consent", "consent_sensitive", "consent_update", "blocked", "not_here"] as const) assert.ok(STATUS_TEXT[s].length > 0);
 });
 
 test("sensitive by domain only: government labels and the .bank and .insurance TLDs, never a guess from the name (TIN-478)", () => {
@@ -315,7 +315,23 @@ test("one vocabulary: the card's buttons beside the popup's words, and the notes
   assert.equal(CARD_LABELS.neverOn("shop.example"), "Never on shop.example");
   assert.deepEqual([SITE_LABELS.ask, SITE_LABELS.always, SITE_LABELS.never], ["Ask first", "Always send", "Never send"]);
   // Every failure starts "Not sent" and gives its reason, without an instruction.
-  const failures = { denied: "Your dock said no.", timeout: "Your dock didn't answer.", error: "Couldn't reach your dock.", no_ticket: "Drag your agent again.", unknown_dock: "This extension doesn't know that dock.", outline_changed: "The page changed. Drop again.", opaque_frame: "Your agent can't read this part." } as const;
+  const failures = {
+    denied: "Your dock said no.",
+    timeout: "Your dock didn't answer.",
+    error: "Couldn't reach your dock.",
+    no_ticket: "Drag your agent again.",
+    ticket_not_for_pairing: "That ticket isn't for pairing. Drag your agent again.",
+    ticket_origin_mismatch: "That ticket is for another site. Drag your agent again.",
+    too_many_requests: "Too many requests waiting in your dock.",
+    reader_not_allowed: "Your dock doesn't allow this extension.",
+    dock_expired: "Your dock expired.",
+    unknown_agent: "Your dock doesn't know this agent.",
+    invalid: "Your dock couldn't read that request.",
+    refused: "Your dock refused that request.",
+    unknown_dock: "This extension doesn't know that dock.",
+    outline_changed: "The page changed. Drop again.",
+    opaque_frame: "Your agent can't read this part.",
+  } as const;
   for (const [status, text] of Object.entries(failures) as Array<[keyof typeof failures, string]>) {
     assert.deepEqual(NOTE_TEXT[status], { lead: "Not sent", text, failed: true }, status);
     assert.equal(STATUS_TEXT[status], `Not sent. ${text}`, status);
@@ -327,6 +343,10 @@ test("one vocabulary: the card's buttons beside the popup's words, and the notes
   for (const s of ["sent", "asking", "consent", "consent_sensitive", "consent_update"] as const) assert.equal(NOTE_TEXT[s], null, `${s} draws its own card or word`);
   assert.equal(STATUS_TEXT.sent, "Sent to your agent");
   assert.equal(WAITING_TEXT, "Allow this browser in your dock");
+  assert.equal(waitingText(), WAITING_TEXT);
+  assert.equal(waitingText("4821"), "Confirm in your dock: 4821");
+  assert.equal(ASK_MS, 135_000);
+  assert.equal(WAIT_LOST_MS, 135_000);
   assert.equal(STATUS_TEXT.asking, WAITING_TEXT);
   assert.equal(WAIT_LOST_TEXT, "Your dock's answer didn't arrive.");
   assert.doesNotMatch(WAIT_LOST_TEXT, /sent/i, "it claims neither that the reading went nor that it did not");
@@ -337,7 +357,7 @@ test("a lost wait says the dock did not answer only while it still asked the doc
   // Still asking the dock, and the last drop is this wait's own asking note: the popup may say it did not answer.
   assert.equal(mayWriteTimeout("polling", "polling", asked, own), true);
   assert.equal(mayWriteTimeout("polling", undefined, asked, own), true, "a service worker that restarted knows only what was stored");
-  // The last status poll came back "paired" while the page's 75 s ran out: the phase turned to sending first, nothing is written.
+  // The last status poll came back "paired" while the page's 135 s ran out: the phase turned to sending first, nothing is written.
   assert.equal(mayWriteTimeout("polling", "sending", asked, own), false);
   assert.equal(mayWriteTimeout("sending", undefined, asked, own), false);
   assert.equal(mayWriteTimeout(undefined, undefined, asked, own), false, "a wait that ended has no entry");

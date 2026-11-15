@@ -2,7 +2,7 @@
  * The extension's pure parts (TIN-421, DESIGN.md 13): which docks it talks to, what it calls this
  * browser, and how it keeps one reader token per dock and agent. No chrome.* APIs here, so the tests run it.
  */
-import { APC_JSON_MAX_BYTES, APC_JSON_PATH, parseApcManifest, parseFocusAttrs } from "@tineira/apc-protocol";
+import { APC_JSON_MAX_BYTES, APC_JSON_PATH, CONNECT_REQUEST_TTL_MS, parseApcManifest, parseFocusAttrs } from "@tineira/apc-protocol";
 
 /** An APC app that connects agents only directly (APC 0.5): what the extension tells a person who drops a dock agent on it. */
 export interface DirectOnly {
@@ -459,7 +459,29 @@ export function pinState(takenAt: string, latest: string | null | undefined, rea
 }
 
 /** What the content script tells the person after a drop. */
-export type DropStatus = "sent" | "asking" | "denied" | "timeout" | "no_ticket" | "unknown_dock" | "error" | "consent" | "consent_sensitive" | "consent_update" | "blocked" | "not_here" | "outline_changed" | "opaque_frame";
+export type DropStatus =
+  | "sent"
+  | "asking"
+  | "denied"
+  | "timeout"
+  | "no_ticket"
+  | "ticket_not_for_pairing"
+  | "ticket_origin_mismatch"
+  | "too_many_requests"
+  | "reader_not_allowed"
+  | "dock_expired"
+  | "unknown_agent"
+  | "invalid"
+  | "refused"
+  | "unknown_dock"
+  | "error"
+  | "consent"
+  | "consent_sensitive"
+  | "consent_update"
+  | "blocked"
+  | "not_here"
+  | "outline_changed"
+  | "opaque_frame";
 
 /** The link on the card for a Direct-only app: the host is already the card's first line. */
 export const connectLabel = (_host: string) => "Connect an agent";
@@ -601,17 +623,144 @@ export const NOTE_TEXT: Record<DropStatus, NoteText | null> = {
   timeout: notSent("Your dock didn't answer."),
   error: notSent("Couldn't reach your dock."),
   no_ticket: notSent("Drag your agent again."),
+  ticket_not_for_pairing: notSent("That ticket isn't for pairing. Drag your agent again."),
+  ticket_origin_mismatch: notSent("That ticket is for another site. Drag your agent again."),
+  too_many_requests: notSent("Too many requests waiting in your dock."),
+  reader_not_allowed: notSent("Your dock doesn't allow this extension."),
+  dock_expired: notSent("Your dock expired."),
+  unknown_agent: notSent("Your dock doesn't know this agent."),
+  invalid: notSent("Your dock couldn't read that request."),
+  refused: notSent("Your dock refused that request."),
   unknown_dock: notSent("This extension doesn't know that dock."),
   outline_changed: notSent("The page changed. Drop again."),
   opaque_frame: notSent("Your agent can't read this part."),
   blocked: { lead: null, text: "This site is set to Never send", failed: true },
 };
 
+/** How long the extension waits for the person's answer in the dock (CONNECT_REQUEST_TTL_MS + margin). */
+export const ASK_MS = CONNECT_REQUEST_TTL_MS + 15_000;
+export const POLL_MS = 2_000;
+
 /** The waiting card's line while the dock is asked, and the line when its answer never reached the page. */
 export const WAITING_TEXT = "Allow this browser in your dock";
+export const waitingText = (check?: string): string => (check ? `Confirm in your dock: ${check}` : WAITING_TEXT);
 export const WAIT_LOST_TEXT = "Your dock's answer didn't arrive.";
-/** How long the waiting card waits for the service worker's word before it says so (ASK_MS is 60 s, plus the last poll). */
-export const WAIT_LOST_MS = 75_000;
+/** How long the waiting card waits for the service worker's word before it says so (ASK_MS is 135 s). */
+export const WAIT_LOST_MS = ASK_MS;
+
+const CONNECT_ERRORS: Readonly<Record<string, DropStatus>> = {
+  ticket_expired: "no_ticket",
+  ticket_not_for_pairing: "ticket_not_for_pairing",
+  ticket_origin_mismatch: "ticket_origin_mismatch",
+  too_many_requests: "too_many_requests",
+  reader_not_allowed: "reader_not_allowed",
+  dock_expired: "dock_expired",
+  unknown_agent: "unknown_agent",
+  invalid: "invalid",
+};
+
+/** Map a hub 400 refusal on Connect or reader pairing to its user-facing status (never "error"). */
+export function connectErrorStatus(error: unknown): DropStatus {
+  return typeof error === "string" && error in CONNECT_ERRORS ? CONNECT_ERRORS[error]! : "refused";
+}
+
+export interface HubResponse {
+  status: number;
+  body: Record<string, unknown> | null;
+}
+
+/** POST JSON to a hub endpoint, refusing redirects and returning null on network errors. */
+export async function postHub(url: string, body: unknown, fetcher: typeof fetch = fetch): Promise<HubResponse | null> {
+  try {
+    const r = await fetcher(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      redirect: "manual",
+    });
+    if (r.redirected || (r.type as string) === "opaqueredirect" || (r.status >= 300 && r.status < 400)) return null;
+    const data = (await r.json().catch(() => null)) as unknown;
+    return { status: r.status, body: data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : null };
+  } catch {
+    return null;
+  }
+}
+
+export type ReaderAskResult =
+  | { ok: true; claim: string; check?: string }
+  | { ok: false; status: DropStatus };
+
+/**
+ * Request reader pairing on a first drop with no reader token (APC 0.13): POST /apc/connect with
+ * `{ ticket, agent, reader: true, label }`. Falls back to /apc/reader only when an older hub
+ * answers HTTP 404 on /apc/connect.
+ */
+export async function askReaderConnect(
+  hub: string,
+  params: { ticket: string; agent: string; label: string },
+  fetcher: typeof fetch = fetch,
+): Promise<ReaderAskResult> {
+  const connect = await postHub(`${hub}/apc/connect`, { ticket: params.ticket, agent: params.agent, reader: true, label: params.label }, fetcher);
+  if (!connect) return { ok: false, status: "error" };
+  if (connect.status !== 404) {
+    if (connect.status === 200 && connect.body?.ok === true && typeof connect.body.claim === "string" && typeof connect.body.check === "string" && /^\d{4}$/.test(connect.body.check)) {
+      return { ok: true, claim: connect.body.claim, check: connect.body.check };
+    }
+    if ((connect.status >= 400 && connect.status < 500) || connect.body?.ok === false) {
+      return { ok: false, status: connectErrorStatus(connect.body?.error) };
+    }
+    return { ok: false, status: "error" };
+  }
+  const legacy = await postHub(`${hub}/apc/reader`, { ticket: params.ticket, agent: params.agent, label: params.label }, fetcher);
+  if (!legacy) return { ok: false, status: "error" };
+  if (legacy.status === 200 && legacy.body?.ok === true && typeof legacy.body.claim === "string") {
+    return { ok: true, claim: legacy.body.claim };
+  }
+  if ((legacy.status >= 400 && legacy.status < 500) || legacy.body?.ok === false) {
+    return { ok: false, status: connectErrorStatus(legacy.body?.error) };
+  }
+  return { ok: false, status: "error" };
+}
+
+export type ReaderPollResult =
+  | { status: "paired"; token: string }
+  | { status: DropStatus };
+
+export interface PollOptions {
+  fetcher?: typeof fetch;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  tick?: () => Promise<void>;
+  askMs?: number;
+  pollMs?: number;
+}
+
+/** Poll /apc/reader/status with the worker's claim until paired, refused, or ASK_MS passes. */
+export async function pollReaderStatus(hub: string, claim: string, options: PollOptions = {}): Promise<ReaderPollResult> {
+  const fetcher = options.fetcher ?? fetch;
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const askMs = options.askMs ?? ASK_MS;
+  const pollMs = options.pollMs ?? POLL_MS;
+  const until = now() + askMs;
+  while (now() < until) {
+    await sleep(pollMs);
+    if (options.tick) await options.tick();
+    const res = await postHub(`${hub}/apc/reader/status`, { claim }, fetcher);
+    if (!res || res.status >= 500) return { status: "error" };
+    if (res.status >= 400 && res.status < 500) return { status: connectErrorStatus(res.body?.error) };
+    if (res.status !== 200 || !res.body) return { status: "error" };
+    if (res.body.status === "pending") continue;
+    if (res.body.status === "paired" && typeof res.body.token === "string") {
+      return { status: "paired", token: res.body.token };
+    }
+    if (res.body.ok === false && typeof res.body.error === "string") {
+      return { status: connectErrorStatus(res.body.error) };
+    }
+    return { status: "denied" };
+  }
+  return { status: "timeout" };
+}
 
 /** Where a first drop's wait for the dock's Allow is: still asking the dock, or past it, its reading perhaps on its way. */
 export type WaitPhase = "polling" | "sending";
@@ -659,6 +808,14 @@ export const STATUS_TEXT: Record<DropStatus, string> = {
   denied: flat(NOTE_TEXT.denied!),
   timeout: flat(NOTE_TEXT.timeout!),
   no_ticket: flat(NOTE_TEXT.no_ticket!),
+  ticket_not_for_pairing: flat(NOTE_TEXT.ticket_not_for_pairing!),
+  ticket_origin_mismatch: flat(NOTE_TEXT.ticket_origin_mismatch!),
+  too_many_requests: flat(NOTE_TEXT.too_many_requests!),
+  reader_not_allowed: flat(NOTE_TEXT.reader_not_allowed!),
+  dock_expired: flat(NOTE_TEXT.dock_expired!),
+  unknown_agent: flat(NOTE_TEXT.unknown_agent!),
+  invalid: flat(NOTE_TEXT.invalid!),
+  refused: flat(NOTE_TEXT.refused!),
   unknown_dock: flat(NOTE_TEXT.unknown_dock!),
   error: flat(NOTE_TEXT.error!),
   consent: CONSENT_QUESTION,

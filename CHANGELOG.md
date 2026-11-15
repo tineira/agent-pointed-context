@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **The browser extension pairs through `/apc/connect` with a 4-digit check and a 135 s wait.** A first drop with no reader token posts `{ticket, agent, reader: true, label}` to `/apc/connect`, shows `Confirm in your dock: <check>` in the page card while polling `/apc/reader/status`, falls back to `/apc/reader` only on HTTP 404, and maps HTTP 400 refusals (`ticket_not_for_pairing`, `too_many_requests`, `reader_not_allowed`, and the rest) to their own failure notes. (`apps/extension/src/worker.ts`, `apps/extension/src/content.ts`, `apps/extension/src/drop.ts`, `apps/extension/src/popup-state.ts`, `apps/extension/test/connect.test.ts`, `apps/extension/test/drop.test.ts`, `apps/extension/test/cards.test.ts`, `apps/extension/test/popup-state.test.ts`)
+
 - **First pairing starts with an owner-approved, origin-bound Connect.** The hub separates drop and connect tickets, bounds connection requests, and uses claim/check approval for readers; shared packages expose the APC 0.13 manifest, fragment and guarded client interfaces. (`packages/protocol`, `packages/server`, `packages/web`, `apps/dock/src/worker`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/docs/pages/spec.md`, `apps/dock-desktop/src/main.rs`, `apps/extension/src/worker.ts`, `scripts/hub-connect-workerd.mjs`)
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
