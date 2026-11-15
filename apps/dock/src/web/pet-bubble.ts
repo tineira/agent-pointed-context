@@ -19,3 +19,26 @@ export function petBubbleReducer(
   if (width === state.size?.width && height === state.size?.height) return state;
   return { shown: true, size: { width, height } };
 }
+
+/**
+ * What a bubble says once nothing waits in it. A request the person answered here, accepted by the hub,
+ * ends in a short confirmation and the bubble closes itself. A request that left on its own (it expired,
+ * or was answered in the dock) keeps the bubble, with why, until Done: nothing shrinks under the cursor
+ * the person did not move. With nothing that left (a refusal they dismissed), it closes at once.
+ */
+export type PetBubbleEnd = { type: "answered"; text: string } | { type: "gone" } | { type: "close" };
+
+export function petBubbleEnd(answered: ReadonlyMap<string, string>, left: readonly string[]): PetBubbleEnd {
+  if (left.length === 0) return { type: "close" };
+  if (!left.every((id) => answered.has(id))) return { type: "gone" };
+  return { type: "answered", text: answered.get(left[left.length - 1]!)! };
+}
+
+/** The confirmation for an answer given in the bubble. */
+export function petAnswerText(action: "approve" | "approve_unverified" | "deny", name: string, connect: boolean): string {
+  if (action === "deny") return `${name} denied.`;
+  return connect ? `✓ Approved: continue in ${name}.` : `✓ ${name} is connected.`;
+}
+
+/** How long a confirmation stays, once the pointer is off the bubble. */
+export const PET_CONFIRM_MS = 1500;

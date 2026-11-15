@@ -26,3 +26,17 @@ test("a pet bubble ignores a frame measured before layout (0 x 0)", () => {
   const sized = petBubbleReducer(PET_BUBBLE_START, { type: "measure", width: 240, height: 200 });
   assert.equal(petBubbleReducer(sized, { type: "measure", width: 240, height: 0 }), sized);
 });
+
+test("a bubble confirms the person's own answers and explains a request that left on its own", async () => {
+  const { petBubbleEnd, petAnswerText } = await import("../src/web/pet-bubble.ts");
+  const answered = new Map([["p1", petAnswerText("approve", "Pulse", false)]]);
+  // Answered here and gone: a confirmation, and the bubble closes itself.
+  assert.deepEqual(petBubbleEnd(answered, ["p1"]), { type: "answered", text: "✓ Pulse is connected." });
+  // Something left that was not answered here (expired, or answered in the dock): the bubble says so, until Done.
+  assert.deepEqual(petBubbleEnd(answered, ["p1", "p2"]), { type: "gone" });
+  assert.deepEqual(petBubbleEnd(new Map(), ["p2"]), { type: "gone" });
+  // Nothing left (a dismissed refusal): it closes at once.
+  assert.deepEqual(petBubbleEnd(answered, []), { type: "close" });
+  assert.equal(petAnswerText("deny", "Pulse", false), "Pulse denied.");
+  assert.equal(petAnswerText("approve_unverified", "Mail", true), "✓ Approved: continue in Mail.");
+});

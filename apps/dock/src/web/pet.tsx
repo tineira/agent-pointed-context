@@ -15,10 +15,10 @@ import { AgentPet } from "./apc-pet.tsx";
 import { canDrag, dragTitle } from "./agent-drag.ts";
 import { READER_NOTICE } from "../worker/reading.ts";
 import type { UnverifiedAction } from "./unverified.tsx";
-import type { InFlight } from "./request-state.ts";
+import type { CodeError, InFlight } from "./request-state.ts";
 import { PairingRequest } from "./pairing-request.tsx";
 import { ConnectRequest, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
-import { PET_BUBBLE_START, petBubbleReducer } from "./pet-bubble.ts";
+import { PET_BUBBLE_START, PET_CONFIRM_MS, petAnswerText, petBubbleEnd, petBubbleReducer } from "./pet-bubble.ts";
 
 const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
 /** This page is a pet: ?view=pet&agent=<id>, or with no agent the empty dock's hint. */
@@ -87,6 +87,8 @@ export interface PetRequest {
   approving?: boolean;
   /** The app sent a pairing code (APC 0.9): the bubble has Deny and sends the person to the dock to type it. */
   code?: boolean;
+  /** A wrong, malformed or missing code the hub refused (APC 0.9): said on the card, which stays to try again. */
+  error?: CodeError | null;
 }
 
 /** One agent's pet, and the bubble of its pairing and connect requests while any waits. */
@@ -118,11 +120,29 @@ export function PetView(props: {
     };
   }, []);
   const connects = props.connects ?? [];
+  // What the person answered here (id to its confirmation), and what left the bubble since it opened: once
+  // nothing waits, the bubble confirms and closes, or says the request left on its own (pet-bubble.ts).
+  const answered = useRef(new Map<string, string>());
+  const waitingIds = useRef<string[]>([]);
+  const [left, setLeft] = useState<string[]>([]);
+  const [hover, setHover] = useState(false);
   const asking = [...connects.map((c) => `${c.connect.id}:${c.blockedUrl ? "open" : "ask"}`), ...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
   const shown = !!asking || review.shown;
   useLayoutEffect(() => {
     if (asking) updateReview({ type: "show" });
+    const now = [...connects.map((c) => c.connect.id), ...props.requests.map((r) => r.id)];
+    const gone = waitingIds.current.filter((id) => !now.includes(id));
+    waitingIds.current = now;
+    if (gone.length) setLeft((l) => [...l, ...gone]);
   }, [asking]);
+  // A refusal is about the last answer: it says what happened, so nothing before it is confirmed or explained.
+  useLayoutEffect(() => {
+    if (!props.refusal) return;
+    answered.current.clear();
+    setLeft([]);
+  }, [props.refusal]);
+  // A code refused on its card: that answer did not go through.
+  for (const r of props.requests) if (r.error) answered.current.delete(r.id);
   // Content can grow without a new request id (a warning, a refusal or a blocked browser). Measure
   // those changes too, and retain the largest size through expiry and answers on another surface.
   useLayoutEffect(() => {
@@ -149,15 +169,35 @@ export function PetView(props: {
     };
   }, [review.size]);
   const done = () => {
-    // No timer, state broadcast or request disappearance sends the native shrink command.
+    // Only Done, a dismissed refusal or the person's own accepted answer (below) sends the native shrink
+    // command: never a request that left on its own, nor a timer while the pointer is on the bubble.
+    answered.current.clear();
+    setLeft([]);
     updateReview({ type: "done" });
     setSide(null);
     void petApp.bubble(null);
   };
+  const end = shown && !asking ? petBubbleEnd(answered.current, left) : null;
+  const endKey = end ? (end.type === "answered" ? `answered:${end.text}` : end.type) : "";
+  useEffect(() => {
+    if (endKey === "close") return done();
+    if (!endKey.startsWith("answered:") || hover) return;
+    const t = setTimeout(done, PET_CONFIRM_MS);
+    return () => clearTimeout(t);
+  }, [endKey, hover]);
   const a = props.agent;
   const where = side ? `${side.left ? "pet-left" : "pet-right"} ${side.up ? "pet-up" : "pet-down"}` : "pet-measuring";
   const requests = shown ? (
-    <div ref={bubble} className="pet-bubble" style={{ minHeight: review.size?.height }} role="status" aria-live="polite">
+    <div
+      ref={bubble}
+      className="pet-bubble"
+      style={{ minHeight: review.size?.height }}
+      role="status"
+      aria-live="polite"
+      onPointerEnter={() => setHover(true)}
+      onPointerMove={() => !hover && setHover(true)}
+      onPointerLeave={() => setHover(false)}
+    >
       {props.refusal}
       {connects.map((c) => (
         <div key={c.connect.id} className={`pet-request${!c.connect.verified ? " unverified" : ""}`}>
@@ -166,7 +206,10 @@ export function PetView(props: {
             agentName={c.agentName}
             inFlight={c.inFlight}
             blockedUrl={c.blockedUrl}
-            decide={(action) => props.decideConnect?.(c.connect, action)}
+            decide={(action) => {
+              answered.current.set(c.connect.id, petAnswerText(action, c.connect.name, true));
+              props.decideConnect?.(c.connect, action);
+            }}
             onOpenLink={() => setTimeout(() => props.dismissBlockedConnect?.(c.connect.id), 0)}
             onDismiss={() => props.dismissBlockedConnect?.(c.connect.id)}
             compact
@@ -207,15 +250,25 @@ export function PetView(props: {
             code={!!r.code}
             inFlight={r.inFlight}
             approving={!!r.approving}
-            decide={(action, code) => props.decide(r.id, action, code)}
+            error={r.error ?? null}
+            decide={(action, code) => {
+              answered.current.set(r.id, petAnswerText(action, r.app, false));
+              props.decide(r.id, action, code);
+            }}
             openDock={petApp.openDock}
             compact
           />
         </div>
       ))}
-      {!asking && (
+      {end?.type === "answered" && (
+        <div className="pet-request pet-confirm">
+          <p>{end.text}</p>
+          <button type="button" onClick={done}>Done</button>
+        </div>
+      )}
+      {end?.type === "gone" && (
         <div className="pet-request">
-          <p>No requests waiting.</p>
+          <p>This request is no longer waiting: it expired, or was answered in your dock.</p>
           <button type="button" onClick={done}>Done</button>
         </div>
       )}

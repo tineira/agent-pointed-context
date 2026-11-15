@@ -4,6 +4,7 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **The pet bubble closes itself after an answer given in it, and says why when a request left on its own.** An Allow or Deny the hub accepted shows a short confirmation and closes once the pointer is off the bubble; a request that expired or was answered in the dock keeps the bubble with that reason until Done, instead of "No requests waiting". A wrong code typed in the bubble is now said on its card. (`apps/dock/src/web/pet.tsx`, `apps/dock/src/web/pet-bubble.ts`, `apps/dock/test/pet-bubble.test.ts`)
 - **Allow in the Windows pet bubble sends the code typed there.** The pet passed only the action, so the hub refused an approval that had no code and nothing happened; the code now goes from the bubble through the dock page to the hub. (`apps/dock/src/web/pet.tsx`, `apps/dock/src/web/hub.tsx`)
 
 - **Dock for Windows can start with Windows.** A "Start with Windows" check in the tray writes or removes the dock's value in the current user's Run key (no admin); a start from there opens to the tray and the pets, without the dock window. Off by default. (`apps/dock-desktop/src/autostart.rs`, `apps/dock-desktop/src/main.rs`, `apps/dock-desktop/Cargo.toml`)
