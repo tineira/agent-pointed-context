@@ -94,7 +94,8 @@ export function PetView(props: {
   agent: DockAgent;
   requests: PetRequest[];
   connects?: ConnectCardItem[];
-  decide: (id: string, action: UnverifiedAction) => void;
+  /** The code typed in the bubble goes with an approval (TIN-922): without it the hub refuses the Allow. */
+  decide: (id: string, action: UnverifiedAction, code?: string) => void;
   decideConnect?: (connect: DockConnect, action: ConnectAction) => void;
   dismissBlockedConnect?: (id: string) => void;
   /** Whether the drag went ahead (an agent not connected yet does not drag, TIN-908). */
@@ -206,7 +207,7 @@ export function PetView(props: {
             code={!!r.code}
             inFlight={r.inFlight}
             approving={!!r.approving}
-            decide={(action) => props.decide(r.id, action)}
+            decide={(action, code) => props.decide(r.id, action, code)}
             openDock={petApp.openDock}
             compact
           />

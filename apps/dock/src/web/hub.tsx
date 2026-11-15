@@ -581,7 +581,7 @@ export function HubDock() {
         agent={agent}
         requests={floatRequests.filter((r) => r.agentId === agent.id)}
         connects={connectItems.filter((c) => c.connect.agent === agent.id)}
-        decide={(id, action) => decide(id, action)}
+        decide={(id, action, code) => decide(id, action, code)}
         decideConnect={(c, action) => decideConnect(c, action)}
         dismissBlockedConnect={dismissBlockedConnect}
         startDrag={(e) => startDrag(e, agent.id)}
