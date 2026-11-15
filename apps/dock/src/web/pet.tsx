@@ -50,7 +50,19 @@ export const petApp = {
   /** The bubble's size, or null when it goes: the app sizes the window and says which way it opens. */
   bubble: (size: { width: number; height: number } | null) => (bubbleCommand = bubbleCommand.then(() => invoke<Side>("pet_bubble", { bubble: size && [size.width, size.height] }))),
   openDock: () => void invoke("pet_open_dock"),
+  /**
+   * What this app's pet windows can do (TIN-922). An app before it answers null: its pets keep code
+   * entry in the dock, since the installed app loads these pages from production.
+   */
+  caps: () => invoke<string[]>("pet_caps"),
+  /** A press on the bubble's code field: the app activates this pet's window, so typing reaches it. */
+  focus: () => void invoke("pet_focus"),
 };
+
+/** The code is typed in the pet only on an app that can activate the pet for it (TIN-922). */
+export function petCodeEntry(caps: string[] | null): "field" | "dock" {
+  return caps?.includes("code_field") ? "field" : "dock";
+}
 
 /**
  * Float per agent in the app (TIN-698, float.rs), for the dock's own window: whether Float is on and
@@ -96,6 +108,14 @@ export function PetView(props: {
   // null while the app sizes the window for a bubble: it is laid out hidden, to be measured.
   const [side, setSide] = useState<Side | null>(null);
   const [review, updateReview] = useReducer(petBubbleReducer, PET_BUBBLE_START);
+  const [codeEntry, setCodeEntry] = useState<"field" | "dock">("dock");
+  useEffect(() => {
+    let live = true;
+    void petApp.caps().then((caps) => live && setCodeEntry(petCodeEntry(caps)));
+    return () => {
+      live = false;
+    };
+  }, []);
   const connects = props.connects ?? [];
   const asking = [...connects.map((c) => `${c.connect.id}:${c.blockedUrl ? "open" : "ask"}`), ...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
   const shown = !!asking || review.shown;
@@ -155,11 +175,18 @@ export function PetView(props: {
       {props.requests.map((r) => (
         // An app outside APP_ORIGINS (TIN-581): the same warning as in the dock, Deny focused. A request with a pairing
         // code (APC 0.9): Deny, and the code is typed in the dock, which the bubble opens; its content is fixed per request.
-        <div key={r.id} className={`pet-request${r.unverified ? " unverified" : ""}`}>
+        <div
+          key={r.id}
+          className={`pet-request${r.unverified ? " unverified" : ""}`}
+          // The pet is shown without activation (SW_SHOWNOACTIVATE): a press on the code field asks the
+          // app to activate it, so the keyboard reaches the field (TIN-922).
+          onPointerDownCapture={(e) => {
+            if (codeEntry === "field" && (e.target as HTMLElement).closest("input")) petApp.focus();
+          }}
+        >
           <PairingRequest
-            // Keep code entry in the dock until native keyboard input after SW_SHOWNOACTIVATE
-            // has been verified. A web field alone cannot establish that Windows activates it.
-            entry="dock"
+            // Typed here on an app that can activate the pet (pet_caps); otherwise in the dock.
+            entry={codeEntry}
             kind={r.kind}
             app={r.app}
             host={r.host}
