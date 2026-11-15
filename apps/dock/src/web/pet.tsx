@@ -128,16 +128,23 @@ export function PetView(props: {
   const seen = useRef(new Set<string>());
   const [hover, setHover] = useState(false);
   const waitingIds = [...connects.map((c) => c.connect.id), ...props.requests.map((r) => r.id)];
+  // Each answer's attempt: only the newest one for a request, given since the last Done, settles it (an Allow
+  // that resolves after a later Deny says nothing).
+  const attempts = useRef(new Map<string, number>());
+  const attemptSeq = useRef(0);
   const answer = (id: string, text: string, sent: Promise<boolean> | void) => {
+    const attempt = ++attemptSeq.current;
+    attempts.current.set(id, attempt);
     setAnswers((m) => new Map(m).set(id, null));
-    void Promise.resolve(sent).then((ok) =>
+    void Promise.resolve(sent).then((ok) => {
+      if (attempts.current.get(id) !== attempt) return;
       setAnswers((m) => {
         const next = new Map(m);
         if (ok) next.set(id, text);
         else next.delete(id);
         return next;
-      }),
-    );
+      });
+    });
   };
   const asking = [...connects.map((c) => `${c.connect.id}:${c.blockedUrl ? "open" : "ask"}`), ...props.requests.map((r) => r.id), ...(props.refusal ? ["refusal"] : [])].join(",");
   const shown = !!asking || review.shown;
@@ -178,6 +185,7 @@ export function PetView(props: {
     // Only Done, a dismissed refusal or the person's own accepted answer (below) sends the native shrink
     // command: never a request that left on its own, nor a timer while the pointer is on the bubble.
     seen.current = new Set();
+    attempts.current = new Map();
     setAnswers(new Map());
     updateReview({ type: "done" });
     setSide(null);
@@ -264,6 +272,12 @@ export function PetView(props: {
       {end?.type === "answered" && (
         <div className="pet-request pet-confirm">
           <p>{end.text}</p>
+          <button type="button" onClick={done}>Done</button>
+        </div>
+      )}
+      {end?.type === "waiting" && (
+        <div className="pet-request">
+          <p>Sending your answer…</p>
           <button type="button" onClick={done}>Done</button>
         </div>
       )}
