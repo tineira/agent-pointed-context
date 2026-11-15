@@ -71,7 +71,7 @@ test("the agent's name is a text node between isolates, never markup (TIN-786)",
   assert.match(body("function sentLine("), /document\.createTextNode\(SENT_TO\), document\.createTextNode\(name \? isolate\(name\) : AGENT_FALLBACK\)/);
 });
 
-test("the 135 s line keeps the drop's entry, so a later outcome is still drawn at its point (TIN-786, fix check on #155)", () => {
+test("the 150 s line keeps the drop's entry, so a later outcome is still drawn at its point (TIN-786, fix check on #155)", () => {
   const waiting = body("function waitingCard(");
   assert.doesNotMatch(waiting, /pending\.delete|dropDone/);
   assert.match(waiting, /dropLost\?\.\(id\);/);

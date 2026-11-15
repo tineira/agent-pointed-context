@@ -215,7 +215,7 @@ export const STATUS_KIND: Record<DropStatus, "sent" | "waiting" | "failed" | "no
   consent_update: "none",
 };
 
-/** A wait for the dock ends within 135 s; after this long a `last` still saying "asking" is a wait nobody is on. */
+/** A wait for the dock ends within 135 s (150 s with slack); after this long a `last` still saying "asking" is a wait nobody is on. */
 export const WAIT_STALE_MS = WAIT_LOST_MS;
 
 export type LastView =

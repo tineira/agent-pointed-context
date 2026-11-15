@@ -182,8 +182,8 @@ test("Last drop reads every status and both shapes of `last` (TIN-786)", () => {
   assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent", agent: "Grok" }, now, known) as { lead: string }).lead, "✓ Sent to \u2068Grok\u2069", "last.agent wins");
   assert.equal((lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "sent" }, now, { readers: { ...known.readers, "https://apc.tineira.com ag_2": "t" }, names: known.names }) as { lead: string }).lead, "✓ Sent to your agent");
   assert.equal((lastView({ at, hub: "https://other", site: "a.com", status: "sent" }, now, known) as { lead: string }).lead, "✓ Sent to your agent");
-  // Waiting, and a wait nobody is on any more (covers CONNECT_REQUEST_TTL_MS + margin).
-  assert.equal(WAIT_STALE_MS, 135_000);
+  // Waiting, and a wait nobody is on any more (covers ASK_MS + 15 s slack).
+  assert.equal(WAIT_STALE_MS, 150_000);
   assert.deepEqual(lastView({ at, hub: "https://apc.tineira.com", site: "a.com", status: "asking" }, now), { kind: "waiting", text: "Allow this browser in your dock", hub: "https://apc.tineira.com" });
   assert.equal(lastView({ at: "2026-11-10T11:58:00Z", hub: "https://apc.tineira.com", site: "a.com", status: "asking" }, now)?.kind, "waiting");
   assert.equal(lastView({ at: "2026-11-10T11:55:00Z", site: "a.com", status: "asking" }, now)?.kind, "failed");

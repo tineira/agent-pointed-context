@@ -102,7 +102,7 @@ const request = async (what, url, init) => {
  * These calls carry no token and no extension origin: the dock refuses them, which is all a warm-up needs.
  */
 async function warmUp() {
-  for (const path of ["/apc/reader", "/apc/reader/status", "/apc/reading", "/apc/reading/log", "/apc/reading/log/clear"]) {
+  for (const path of ["/apc/connect", "/apc/reader/status", "/apc/reading", "/apc/reading/log", "/apc/reading/log/clear"]) {
     await until(`the dock answers ${path}`, async () => {
       const r = await fetch(DOCK + path, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => null);
       const text = (await r?.text().catch(() => "")) ?? "";
@@ -556,7 +556,8 @@ try {
     // Send once, Always and Never on this site, and × (Not now) (TIN-786).
     assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "dismiss", "never", "once"]);
     await a.click("once");
-    const pending = await until("a reader request in the dock", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
+    const pending = await until("a reader request in the dock", async () => (await api(`${base}/state`)).connects.find((c) => c.kind === "reader" && c.agent === agent.id));
+    assert.match(pending.check, /^\d{4}$/, "the dock holds a 4-digit check code");
     // The waiting card stays at the drop until the dock answers, and the service worker kept that drop's wait first (TIN-786).
     await until("the waiting card", async () => (await attrsIn(a.sid, "data-apc-note")).includes("asking"), 10_000);
     const swC1 = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
@@ -570,7 +571,7 @@ try {
     await a.drop("#d");
     assert.deepEqual([...(await a.buttons()).keys()].sort(), ["always", "dismiss", "never", "once"], "the second drop waits on its own card");
     assert.ok((await attrsIn(a.sid, "data-apc-note")).includes("asking"), "and the first drop's waiting card stays");
-    await api(`${base}/pairings/${pending.id}`, { action: "approve" });
+    await api(`${base}/connects/${pending.id}/approve`, {});
     assert.match((await reads(/Refund to card/, "a.localhost")).page_text, /Refund to card \[sensitive number left out\] by Friday\./);
     /** The "Include them this time" card's buttons, through its closed shadow root. */
     const includeAt = async (value) => {
@@ -611,9 +612,9 @@ try {
     await reads(/EU-West rose/, "a.localhost");
     console.log("C3. on an Always site, drops are sent without a card");
 
-    // C3b. The first drop of an agent whose reading is still on its way at 75 s (fix check on #155): the waiting card says
+    // C3b. The first drop of an agent whose reading is still on its way at 150 s (fix check on #155): the waiting card says
     // its answer did not arrive, and when the reading then goes, "Sent to …" and the pin are drawn at that drop after all.
-    // The service worker is held by the debugger on the line it reaches once the dock said yes, past the page's 75 s.
+    // The service worker is held by the debugger on the line it reaches once the dock said yes, past the page's 150 s.
     const swC3 = (await cdp("Target.getTargets")).targetInfos.find((t) => t.type === "service_worker" && t.url.startsWith(`chrome-extension://${extensionId}/`));
     const { sessionId: swC3Session } = await cdp("Target.attachToTarget", { targetId: swC3.targetId, flatten: true });
     await cdp("Runtime.evaluate", { expression: "chrome.storage.local.remove('readers')", awaitPromise: true }, swC3Session);
@@ -637,9 +638,9 @@ try {
     // #a again, so the latest reading stays the one the steps below expect.
     await a.drop("#a");
     await until("the waiting card on a.localhost", async () => (await attrsIn(a.sid, "data-apc-note")).includes("asking"), 10_000);
-    const late = await until("a new reader request in the dock", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
-    await api(`${base}/pairings/${late.id}`, { action: "approve" });
-    await until("the 75 s line", async () => (await attrsIn(a.sid, "data-apc-note")).includes("wait_lost"), 90_000);
+    const late = await until("a new reader request in the dock", async () => (await api(`${base}/state`)).connects.find((c) => c.kind === "reader" && c.agent === agent.id));
+    await api(`${base}/connects/${late.id}/approve`, {});
+    await until("the 150 s line", async () => (await attrsIn(a.sid, "data-apc-note")).includes("wait_lost"), 165_000);
     await cdp("Debugger.removeBreakpoint", { breakpointId }, swC3Session);
     await cdp("Debugger.resume", {}, swC3Session);
     await cdp("Debugger.disable", {}, swC3Session);
@@ -649,7 +650,7 @@ try {
     }, 15_000);
     assert.ok((await pinIds()).some((id) => !pinsBefore.includes(id)), "and a new pin");
     await reads(/EU-West rose/, "a.localhost");
-    console.log("C3b. a reading that goes after the 75 s line is still drawn at its drop: the Sent word and the pin");
+    console.log("C3b. a reading that goes after the 150 s line is still drawn at its drop: the Sent word and the pin");
 
     // C4. Not here: nothing now, nothing later.
     const other = await open("other.localhost");
@@ -810,9 +811,10 @@ try {
   } else {
     // 1. First drop: the extension asks the dock; the person allows it; the reading arrives.
     await drag("#a", await payload());
-    const pending = await until("a reader request in the dock", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
-    console.log("dock asks:", pending.app.name);
-    await api(`${base}/pairings/${pending.id}`, { action: "approve" });
+    const pending = await until("a reader request in the dock", async () => (await api(`${base}/state`)).connects.find((c) => c.kind === "reader" && c.agent === agent.id));
+    assert.match(pending.check, /^\d{4}$/, "the dock holds a 4-digit check code");
+    console.log("dock asks:", pending.name);
+    await api(`${base}/connects/${pending.id}/approve`, {});
     const view = await until("the reading as the agent's focus", async () => {
       const r = await tool("get_current_view");
       return r.structuredContent?.focus?.kind === "page_reading" ? r.structuredContent : null;
@@ -1164,7 +1166,7 @@ try {
     console.log("4. a drag naming an unknown dock sends nothing");
 
     // 5. Only an extension's origin can ask for a reader or send a reading.
-    const forged = await request("forged reader", `${DOCK}/apc/reader`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ ticket: await ticket(), agent: agent.id, label: "evil" }) });
+    const forged = await request("forged reader", `${DOCK}/apc/connect`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ ticket: await ticket(), agent: agent.id, reader: true, label: "evil" }) });
     assert.equal(forged.body.error, "reader_not_allowed");
     console.log("5. a page's origin cannot ask for a reader");
 
@@ -1782,7 +1784,7 @@ try {
     const reader = (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader");
     await api(`${base}/pairings/${reader.id}`, { action: "unpair" });
     await drag("#a", await payload());
-    await until("a new reader request after unpairing", async () => (await api(`${base}/state`)).agents[0].pairings.find((p) => p.kind === "reader" && p.status === "pending"));
+    await until("a new reader request after unpairing", async () => (await api(`${base}/state`)).connects.find((c) => c.kind === "reader" && c.agent === agent.id));
     console.log("6. after Unpair, the next drop asks the dock again");
     console.log("all passed");
   }

@@ -645,8 +645,8 @@ export const POLL_MS = 2_000;
 export const WAITING_TEXT = "Allow this browser in your dock";
 export const waitingText = (check?: string): string => (check ? `Confirm in your dock: ${check}` : WAITING_TEXT);
 export const WAIT_LOST_TEXT = "Your dock's answer didn't arrive.";
-/** How long the waiting card waits for the service worker's word before it says so (ASK_MS is 135 s). */
-export const WAIT_LOST_MS = ASK_MS;
+/** How long the waiting card waits for the service worker's word before it says so (ASK_MS is 135 s, plus 15 s slack for the last poll). */
+export const WAIT_LOST_MS = ASK_MS + 15_000;
 
 const CONNECT_ERRORS: Readonly<Record<string, DropStatus>> = {
   ticket_expired: "no_ticket",
@@ -735,6 +735,11 @@ export interface PollOptions {
   pollMs?: number;
 }
 
+/** Clock/RTT slack around CONNECT_REQUEST_TTL_MS when a 0.13 hub reports "denied" for an expired claim. */
+const EXPIRE_SLACK_MS = 5_000;
+/** Cap poll backoff below the 30 s MV3 service worker idle limit so tick() keeps running. */
+const MAX_POLL_BACKOFF_MS = 16_000;
+
 /** Poll /apc/reader/status with the worker's claim until paired, refused, or ASK_MS passes. */
 export async function pollReaderStatus(hub: string, claim: string, options: PollOptions = {}): Promise<ReaderPollResult> {
   const fetcher = options.fetcher ?? fetch;
@@ -742,24 +747,39 @@ export async function pollReaderStatus(hub: string, claim: string, options: Poll
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const askMs = options.askMs ?? ASK_MS;
   const pollMs = options.pollMs ?? POLL_MS;
-  const until = now() + askMs;
+  const startedAt = now();
+  const until = startedAt + askMs;
+  let delay = pollMs;
+  let lastError = false;
   while (now() < until) {
-    await sleep(pollMs);
+    const wait = Math.min(delay, Math.max(pollMs, until - now()));
+    await sleep(wait);
     if (options.tick) await options.tick();
     const res = await postHub(`${hub}/apc/reader/status`, { claim }, fetcher);
-    if (!res || res.status >= 500) return { status: "error" };
-    if (res.status >= 400 && res.status < 500) return { status: connectErrorStatus(res.body?.error) };
-    if (res.status !== 200 || !res.body) return { status: "error" };
+    if (!res || res.status >= 500 || res.status !== 200 || !res.body) {
+      if (res && res.status >= 400 && res.status < 500) return { status: connectErrorStatus(res.body?.error) };
+      lastError = true;
+      delay = Math.min(delay * 2, Math.max(pollMs, MAX_POLL_BACKOFF_MS));
+      continue;
+    }
+    lastError = false;
+    delay = pollMs;
     if (res.body.status === "pending") continue;
     if (res.body.status === "paired" && typeof res.body.token === "string") {
       return { status: "paired", token: res.body.token };
     }
+    if (res.body.status === "expired" || res.body.status === "timeout") {
+      return { status: "timeout" };
+    }
     if (res.body.ok === false && typeof res.body.error === "string") {
       return { status: connectErrorStatus(res.body.error) };
     }
+    if (now() - startedAt >= CONNECT_REQUEST_TTL_MS - EXPIRE_SLACK_MS) {
+      return { status: "timeout" };
+    }
     return { status: "denied" };
   }
-  return { status: "timeout" };
+  return { status: lastError ? "error" : "timeout" };
 }
 
 /** Where a first drop's wait for the dock's Allow is: still asking the dock, or past it, its reading perhaps on its way. */

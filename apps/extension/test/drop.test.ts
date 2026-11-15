@@ -346,7 +346,7 @@ test("one vocabulary: the card's buttons beside the popup's words, and the notes
   assert.equal(waitingText(), WAITING_TEXT);
   assert.equal(waitingText("4821"), "Confirm in your dock: 4821");
   assert.equal(ASK_MS, 135_000);
-  assert.equal(WAIT_LOST_MS, 135_000);
+  assert.equal(WAIT_LOST_MS, 150_000);
   assert.equal(STATUS_TEXT.asking, WAITING_TEXT);
   assert.equal(WAIT_LOST_TEXT, "Your dock's answer didn't arrive.");
   assert.doesNotMatch(WAIT_LOST_TEXT, /sent/i, "it claims neither that the reading went nor that it did not");
@@ -357,7 +357,7 @@ test("a lost wait says the dock did not answer only while it still asked the doc
   // Still asking the dock, and the last drop is this wait's own asking note: the popup may say it did not answer.
   assert.equal(mayWriteTimeout("polling", "polling", asked, own), true);
   assert.equal(mayWriteTimeout("polling", undefined, asked, own), true, "a service worker that restarted knows only what was stored");
-  // The last status poll came back "paired" while the page's 135 s ran out: the phase turned to sending first, nothing is written.
+  // The last status poll came back "paired" while the page's 150 s ran out: the phase turned to sending first, nothing is written.
   assert.equal(mayWriteTimeout("polling", "sending", asked, own), false);
   assert.equal(mayWriteTimeout("sending", undefined, asked, own), false);
   assert.equal(mayWriteTimeout(undefined, undefined, asked, own), false, "a wait that ended has no entry");

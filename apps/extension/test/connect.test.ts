@@ -146,12 +146,13 @@ test("400 error codes from /apc/connect and /apc/reader/status show accurate mes
   }
 });
 
-test("timing and timeout: ASK_MS and WAIT_LOST_MS are 135 s (CONNECT_REQUEST_TTL_MS + margin), and pollReaderStatus times out after ASK_MS", async () => {
+test("timing and timeout: ASK_MS is 135 s, WAIT_LOST_MS and WAIT_STALE_MS add 15 s slack (150 s), and pollReaderStatus times out after ASK_MS", async () => {
   assert.equal(CONNECT_REQUEST_TTL_MS, 120_000);
   assert.equal(ASK_MS, 135_000);
-  assert.equal(WAIT_LOST_MS, 135_000);
-  assert.equal(WAIT_STALE_MS, 135_000);
+  assert.equal(WAIT_LOST_MS, 150_000);
+  assert.equal(WAIT_STALE_MS, 150_000);
   assert.ok(ASK_MS > CONNECT_REQUEST_TTL_MS);
+  assert.equal(WAIT_LOST_MS, ASK_MS + 15_000);
 
   let clock = 1_000_000;
   let polls = 0;
@@ -166,4 +167,83 @@ test("timing and timeout: ASK_MS and WAIT_LOST_MS are 135 s (CONNECT_REQUEST_TTL
   assert.deepEqual(result, { status: "timeout" });
   assert.equal(polls, Math.ceil(ASK_MS / POLL_MS));
   assert.ok(clock - 1_000_000 >= ASK_MS, "kept polling past 120 s up to 135 s");
+});
+
+test("expired request: denied after CONNECT_REQUEST_TTL_MS and explicit expired status both report timeout; early denied stays denied", async () => {
+  // Explicit hub status wins even before TTL.
+  const explicitExpired = await pollReaderStatus(HUB, "claim.expired", {
+    sleep: async () => {},
+    fetcher: (async () => Response.json({ ok: true, status: "expired" })) as typeof fetch,
+  });
+  assert.deepEqual(explicitExpired, { status: "timeout" });
+
+  // Early denied (within TTL) stays denied ("Your dock said no.").
+  let earlyClock = 1_000_000;
+  const earlyDenied = await pollReaderStatus(HUB, "claim.denied", {
+    now: () => earlyClock,
+    sleep: async (ms) => { earlyClock += ms; },
+    fetcher: (async () => Response.json({ ok: true, status: "denied" })) as typeof fetch,
+  });
+  assert.deepEqual(earlyDenied, { status: "denied" });
+
+  // Denied arriving at/near CONNECT_REQUEST_TTL_MS (e.g. unanswered request deleted by hub) reports timeout.
+  for (const expireAt of [CONNECT_REQUEST_TTL_MS - 1_000, CONNECT_REQUEST_TTL_MS]) {
+    const t0 = 5_000_000;
+    let clock = t0;
+    const expiredDenied = await pollReaderStatus(HUB, "claim.ttl", {
+      now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+      fetcher: (async () => {
+        if (clock - t0 >= expireAt) return Response.json({ ok: true, status: "denied" });
+        return Response.json({ ok: true, status: "pending" });
+      }) as typeof fetch,
+    });
+    assert.deepEqual(expiredDenied, { status: "timeout" }, `expireAt=${expireAt}`);
+  }
+});
+
+test("transient poll failures (network error or 5xx) retry with backoff until recovery or deadline; 4xx still aborts immediately", async () => {
+  // Recovers after network errors and 5xx, backing off (2s -> 4s -> 8s -> 16s) and resetting to 2s after a 200 pending.
+  let clock = 1_000_000;
+  const sleeps: number[] = [];
+  let attempt = 0;
+  const recovered = await pollReaderStatus(HUB, "claim.flaky", {
+    now: () => clock,
+    sleep: async (ms) => { sleeps.push(ms); clock += ms; },
+    fetcher: (async () => {
+      attempt++;
+      if (attempt === 1) throw new TypeError("offline");
+      if (attempt === 2) return new Response("bad gateway", { status: 502 });
+      if (attempt === 3) return new Response("unavailable", { status: 503 });
+      if (attempt === 4) return Response.json({ ok: true, status: "pending" });
+      if (attempt === 5) return new Response("error", { status: 500 });
+      return Response.json({ ok: true, status: "paired", token: "tok.recovered" });
+    }) as typeof fetch,
+  });
+  assert.deepEqual(recovered, { status: "paired", token: "tok.recovered" });
+  assert.deepEqual(sleeps, [2_000, 4_000, 8_000, 16_000, 2_000, 4_000]);
+
+  // Persistent 5xx/network errors retry with capped backoff until the deadline and then return error.
+  clock = 2_000_000;
+  const failSleeps: number[] = [];
+  const aborted = await pollReaderStatus(HUB, "claim.down", {
+    now: () => clock,
+    sleep: async (ms) => { failSleeps.push(ms); clock += ms; },
+    fetcher: (async () => new Response("bad gateway", { status: 502 })) as typeof fetch,
+  });
+  assert.deepEqual(aborted, { status: "error" });
+  assert.ok(clock - 2_000_000 >= ASK_MS, "retried until deadline");
+  assert.deepEqual(failSleeps.slice(0, 5), [2_000, 4_000, 8_000, 16_000, 16_000]);
+
+  // 4xx refusal still aborts on the first poll without retrying.
+  let fourXxCalls = 0;
+  const refused = await pollReaderStatus(HUB, "claim.bad", {
+    sleep: async () => {},
+    fetcher: (async () => {
+      fourXxCalls++;
+      return Response.json({ ok: false, error: "invalid" }, { status: 400 });
+    }) as typeof fetch,
+  });
+  assert.deepEqual(refused, { status: "invalid" });
+  assert.equal(fourXxCalls, 1);
 });
