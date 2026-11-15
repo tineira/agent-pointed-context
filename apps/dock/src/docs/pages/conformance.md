@@ -92,7 +92,7 @@ A dock's hub for the Dock profile: `standInHub` from the suite, a hub in your ow
 
 <!-- include orders-conformance.ts#hub -->
 
-`connect` makes a new agent with full access, the way each profile makes one: on Direct the person makes an agent on the page; on Dock the person drops one from the dock, is asked, and allows it. An app whose agents use a bearer token returns it in the connection's `headers` (`{ grantId, mcpUrl, headers: { authorization: "Bearer …" } }`), and `mcpUrl` may then be the URL every grant shares: see [the complete Direct app](/docs/integrate#a-complete-direct-app-with-a-bearer-token).
+`connect` makes a new agent with full access, the way each profile makes one: on Direct the person makes an agent on the page; on Dock the person drops one from the dock, is asked, and allows it (from 0.13 a first drop asks the hub to connect: `hub.approveConnect` plays the dock owner, and the person is asked on the app's `dock_connect` page with the connect ticket from its `#apc_connect` fragment). An app whose agents use a bearer token returns it in the connection's `headers` (`{ grantId, mcpUrl, headers: { authorization: "Bearer …" } }`), and `mcpUrl` may then be the URL every grant shares: see [the complete Direct app](/docs/integrate#a-complete-direct-app-with-a-bearer-token).
 
 <!-- include orders-conformance.ts#connect -->
 

@@ -734,6 +734,13 @@ export class Sandbox extends DurableObject<Env> {
       // An Allow for this agent is still waiting on the hub (APC 0.10): one pairing at a time, also after a restart
       // lost the in-memory lock. Past T_ack the sweep above ended it, and the drop asks again.
       if (before?.state === "in_flight") return { ok: false, error: "pairing_in_progress" };
+      // Past the stored expiry the code is dead whatever the hub says (APC 0.10): the grant ends before the hub is
+      // asked, so /apc/confirm does not spend the drag's ticket and the fresh consent (from 0.13, the hub's Connect) can use it.
+      const stored = before?.state === "handoff" ? this.pairingOf(linked.grant_id) : null;
+      if (stored && Date.parse(stored.expires_at) <= this.dockNow()) {
+        this.endDockGrant(linked.grant_id, "code_expired");
+        return requestFirst();
+      }
       // Already handed to the dock: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
       const grant = this.grants().find((g) => g.id === linked.grant_id);
       const answer = grant ? await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }, hubCallOptions(this.env)) : ({ ok: false, error: "not_paired" } as const);

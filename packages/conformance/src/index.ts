@@ -55,7 +55,7 @@ import {
   type PresenceWaitEvent,
 } from "@tineira/apc-protocol";
 import { ConformanceError, ISO, REVOKED_PROBES, attentionOf, checkCoreToolList, checkDockConnectUrl, checkNothingButGrants, checkFocusShape, checkMcpEndpoints, checkRevokedBody, checkView, data, expect, hasNoReferrerPolicy, isObject, resultKey, rpcBody, standardSupport, text, type ToolCallResult } from "./shared.ts";
-import type { StandInHub } from "./hub.ts";
+import type { StandInHub, StandInHubMode } from "./hub.ts";
 import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 
 export { ConformanceError } from "./shared.ts";
@@ -961,11 +961,21 @@ async function claimedStandard(app: ApcAppAdapter, conn: AgentConnection): Promi
 function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): ConformanceCheck[] {
   const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (dock): pairing code: ${name}`, run);
   let n = 0;
-  /** A new agent's drop, Allowed: what the consent showed, the app's answer, and the pairing the hub got. */
-  const allowNew = async (d: ApcDockAdapter) => {
+  /**
+   * A new agent's drop, Allowed: what the consent showed, the app's answer, and the pairing the hub got. With `mode`,
+   * the stand-in hub answers in it only while the Allow runs: from 0.13 the drop itself calls the hub (`/apc/connect`),
+   * and a mode meant for the Allow's `/apc/pair` must not stop the drop from reaching the consent.
+   */
+  const allowNew = async (d: ApcDockAdapter, mode?: StandInHubMode) => {
     const agent = `ag_code_${++n}_${Date.now().toString(36)}`;
     const drop = await d.drop(agent, d.hub.ticket(agent));
-    const answer = await drop.allow();
+    if (mode) d.hub.mode = mode;
+    let answer: Awaited<ReturnType<typeof drop.allow>>;
+    try {
+      answer = await drop.allow();
+    } finally {
+      if (mode) d.hub.mode = "ack";
+    }
     return { agent, shown: drop.shown, answer, sent: d.hub.received.at(-1), pairing: d.hub.pairings.find((p) => p.agent === agent) };
   };
   /** The HTTP status the app gives a grant's MCP URL: 404 once it holds no grant there. */
@@ -1012,8 +1022,7 @@ function dockChecks(app: ApcAppAdapter, dock: ApcDockAdapter | undefined): Confo
       if (!(await claims09())) return NOT_09;
       try {
         for (const mode of ["no_ack", "redirect", "error_500"] as const) {
-          dock.hub.mode = mode;
-          const { answer, sent } = await allowNew(dock);
+          const { answer, sent } = await allowNew(dock, mode);
           expect(!answer.ok, `with a hub that answers ${mode}, the Allow says it paired: the app must refuse it`);
           expect(isObject(sent) && typeof sent.mcp_url === "string", `with a hub that answers ${mode}, the app sent no MCP URL to check`);
           const status = await statusOf(sent.mcp_url);

@@ -690,6 +690,13 @@ export class OrdersApp {
     if (held && !connect) {
       // Its Allow still waits on the hub (in another request, or in a process that died): T_ack ends it within 30 s.
       if (held.state === "in_flight") return { ok: false, error: "pairing_in_progress" };
+      // Its code ran out (the stored expiry): the grant ends before the hub is asked, so /apc/confirm does not spend
+      // the drag's ticket and the person is asked again with it (from 0.13, through the hub's Connect).
+      if (held.state === "handoff" && held.pairing && Date.parse(held.pairing.expires_at) <= this.now()) {
+        this.forget(held);
+        this.publish({ type: "agents" });
+        return requestFirst();
+      }
       // A grant already: the hub must still say it pairs them, on every drop.
       const check = await confirmWithHub(hub, { ticket, agent, mcp_url: this.mcpUrl(held.secret) }, { fetch: this.send });
       // Cancel, Revoke, a give-back or a time limit may have taken the grant while the hub answered.

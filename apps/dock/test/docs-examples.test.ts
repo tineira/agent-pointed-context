@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MCP_BODY_MAX_BYTES, OrdersApp } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
-import type { PresenceMessage, PresenceWaitEvent } from "@tineira/apc-protocol";
+import { decodeApcConnect, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
 import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
 for (const profile of ["direct", "dock"] as const) {
@@ -88,11 +88,15 @@ test("the pairing-code checks fail an app that keeps a grant the hub did not ack
 test("Orders: a drop that pairs but cannot pin its target answers ok with the waiting code and pin_error, which its page shows", async () => {
   const { app, adapter } = ordersUnderTest("dock");
   const hub = adapter.dock!.hub;
-  const call = async (body: unknown) =>
-    (await app.fetch(new Request("https://orders.test/api/drop", { method: "POST", headers: { ...adapter.dock!.lifecycle!.owner.session, "content-type": "application/json" }, body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
-  const drop = { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target: { kind: "order", id: "ord_9999" } };
-  const asked = await call(drop);
-  const paired = await call({ ...drop, consent: asked.consent });
+  const call = async (path: string, body: unknown) =>
+    (await app.fetch(new Request(`https://orders.test${path}`, { method: "POST", headers: { ...adapter.dock!.lifecycle!.owner.session, "content-type": "application/json" }, body: JSON.stringify(body) }))).json() as Promise<Record<string, unknown>>;
+  // A first drop asks the hub to connect (APC 0.13); the dock opens dock_connect, whose page asks with the connect ticket.
+  const target = { kind: "order", id: "ord_9999" };
+  assert.deepEqual(await call("/api/drop", { hub: hub.origin, agent: "ag_pin", ticket: hub.ticket("ag_pin"), target }), { ok: true, status: "connect_requested" });
+  const opened = decodeApcConnect(new URL((await hub.approveConnect("ag_pin")).url!).hash)!;
+  const drop = { hub: opened.hub, agent: opened.agent, ticket: opened.ticket, target };
+  const asked = await call("/api/connect/dock", drop);
+  const paired = await call("/api/connect/dock", { ...drop, consent: asked.consent });
   assert.equal(paired.ok, true);
   assert.equal(paired.status, "pending");
   assert.equal((paired.pairing as { code: string }).code, asked.pairing_code);
@@ -152,8 +156,11 @@ test("Orders: agent traffic stamps nothing: ping and tools/list in handoff, and 
   const grants = (app as unknown as { store: { grants: Map<string, Record<string, unknown>> } }).store.grants;
   const snapshot = (url: string) => JSON.stringify(grants.get(url.split("/").pop()!));
 
-  // Handoff: dropped and allowed, the dock has not connected.
-  const shown = await life.dropAgent({ agent: "ag_quiet", ticket: hub.ticket("ag_quiet"), hub: hub.origin });
+  // Handoff: dropped and allowed, the dock has not connected. A first drop asks the hub to connect (APC 0.13), and the
+  // person is asked on the dock_connect page the dock opens.
+  const dropped = await life.dropAgent({ agent: "ag_quiet", ticket: hub.ticket("ag_quiet"), hub: hub.origin });
+  assert.equal(dropped.page, "connecting");
+  const shown = await life.connectDock!((await hub.approveConnect("ag_quiet")).url!);
   assert.equal(shown.page, "consent");
   assert.equal((await (shown as Extract<typeof shown, { page: "consent" }>).allow()).ok, true);
   const waiting = hub.pairings.filter((p) => p.agent === "ag_quiet").at(-1)!.mcp_url;
