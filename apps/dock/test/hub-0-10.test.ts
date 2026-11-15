@@ -50,7 +50,7 @@ async function shopWorld(t: TestContext, env: Json = {}) {
   /** The app asks to pair, as after its owner's Allow. */
   const ask = async (app: FakeApp = shop, over: Json = {}, agentIndex = 0) => {
     const who = await w.agent(agentIndex);
-    const { ticket } = await w.hub.ticket(who.id);
+    const { ticket } = await w.connectTicket(who.id, app.origin);
     const body = { ticket, agent: who.id, app: { name: app.name, origin: app.origin }, mcp_url: grantUrl(app), pairing_code: CODE, ...over };
     return { ticket, body, answer: (await w.hub.pair(body)) as { ok: boolean; error?: string; pairing_id?: string } };
   };
@@ -207,8 +207,8 @@ test("H2: /apc/confirm expires an overdue request before it answers: not_paired,
   assert.deepEqual(await w.hub.confirm({ ticket, agent: who.id, mcp_url: body.mcp_url }), { ok: false, error: "not_paired" }, "the ticket was not spent: the app can pair with it");
   await w.hub.idle();
   assert.deepEqual(w.shop.calls, ["/apc/revoke"], "its grant was given back, after the answer");
-  // And the ticket pairs.
-  assert.equal((await w.hub.pair({ ...body, ticket })).ok, true);
+  // A new owner-approved connect ticket pairs; the drop ticket only requests Connect.
+  assert.equal((await w.hub.pair({ ...body, ticket: (await w.connectTicket(who.id, SHOP)).ticket })).ok, true);
 });
 
 // ---- H3 ----

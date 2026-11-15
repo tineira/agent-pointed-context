@@ -93,7 +93,7 @@ test("a request still running on an old URL is cut when the computer is removed,
   const shop = fakeApp(SHOP, "Shop");
   w.apps.set(SHOP, shop);
   const who = await w.agent();
-  const asked = (await w.hub.pair({ ticket: (await w.hub.ticket(who.id)).ticket, agent: who.id, app: { name: shop.name, origin: shop.origin }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}`, pairing_code: "K7M4P2" })) as { ok: boolean; pairing_id: string };
+  const asked = (await w.hub.pair({ ticket: (await w.connectTicket(who.id, SHOP)).ticket, agent: who.id, app: { name: shop.name, origin: shop.origin }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}`, pairing_code: "K7M4P2" })) as { ok: boolean; pairing_id: string };
   assert.deepEqual(await w.hub.decide(asked.pairing_id, "approve", "K7M4P2"), { ok: true });
   const pin = { app: { id: "shop", name: "Shop" }, target: { kind: "order", id: "o1" }, label: "Order 1", pinned_at: new Date().toISOString(), next: "get_current_view" };
   shop.respond = (method: string, params: Json) =>

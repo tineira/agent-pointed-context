@@ -13,8 +13,8 @@
  * URL, the URL is the credential, as in 0.9: no app can detect a breach of H1, and hub conformance and the
  * operator's allowlist are the controls. Since 0.12 the binding (H8, M10 to M12; `bindingVerdict` in core.ts)
  * ties the hub's `initialize` to the app's own `/apc/pair` call for that agent, so a URL the app did not hand to
- * that pairing never goes live. It does not stop a drop's ticket being relayed through a real account on the
- * app; closing that is planned before 1.0.
+ * that pairing never goes live. Since 0.13 the origin-bound Connect step (H9, H10, M13) also closes a drop
+ * ticket's relay through a real app account: only owner approval issues a connect ticket for first pairing.
  *
  * ## The grant's states, in order of precedence
  *
@@ -274,8 +274,12 @@ export type DockDropError = "hub_not_allowed" | "consent_expired" | "pairing_in_
  *   and `/apc/pair` answers with `binding: "pairing_id"`. A `pairing_id` matches `PAIRING_ID_RE`, holds at least
  *   128 random bits, is unique across the hub, never changes while its pairing exists, and authorizes nothing at
  *   the hub.
+ * - **H9** (0.13). Only an owner-issued connect ticket bound to the app origin and agent may pair. A drop
+ *   ticket is ticket_not_for_pairing; a wrong origin or agent is ticket_origin_mismatch. Neither is spent.
+ * - **H10** (0.13). Only owner-authenticated approve of a connect request mints a connect ticket and returns
+ *   it, inside the dock_connect URL. No unauthenticated route or state broadcast exposes one.
  */
-export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" | "H8";
+export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" | "H8" | "H9" | "H10";
 
 /**
  * The app MUSTs around the hub call (APC 0.10):
@@ -313,8 +317,11 @@ export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" 
  *   `initialize` in a request counts, in a batch or without an `id`.
  * - **M12** (0.12). On a grant that is not a Dock grant, a request carrying an `initialize` with either binding
  *   key (`hasBindingKey`) gets HTTP 404 before any other answer, revoked included; the grant is unchanged.
+ * - **M13** (0.13). A first drop calls /apc/connect. The app declares a fragment-free same-origin
+ *   dock_connect: GET 200, no redirects, no-referrer, no third-party script. A synchronous head script
+ *   clears #apc_connect before any other script or redirect and keeps it only in sessionStorage across login.
  */
-export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12";
+export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12" | "M13";
 
 /** The error a 404 of M11 or M12 SHOULD carry (APC 0.12). A hub reads it only as this exact token. */
 export const PAIRING_MISMATCH_ERROR = "pairing_mismatch";

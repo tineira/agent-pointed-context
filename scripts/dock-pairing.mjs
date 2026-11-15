@@ -2,7 +2,7 @@
 /**
  * One real Dock pairing between the dock and Pulse (TIN-900), the way a person and an agent make one:
  *
- *   the dock opens → its agent connects → the person drops it on a customer in Pulse → Allow → Pulse calls the
+ *   the dock opens → its agent connects → the owner requests Connect → opens Pulse with the connect ticket → Allow → Pulse calls the
  *   hub's /apc/pair (pairWithHub) → the dock owner approves with the pairing code → the hub's `initialize` to
  *   Pulse → the agent reads Pulse through its dock → a second drop (confirmWithHub, /apc/confirm) → the dock
  *   removes the agent and gives the grant back (/apc/revoke) → Pulse ends the grant.
@@ -31,10 +31,8 @@
  * Exit code 0 only when the pairing passed; the last line is the summary. On a failure in GitHub Actions the first
  * failing step is also an `::error::` annotation.
  */
-import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+
+import { startWorkerd } from "./lib/dock-workerd.mjs";
 
 const PRODUCTION = process.argv.includes("--production");
 const DOCK = "https://apc.tineira.com";
@@ -51,62 +49,6 @@ const CLIENT = { name: PRODUCTION ? "apc-deploy-smoke" : "apc-workerd-pairing", 
 const USER_AGENT = `${CLIENT.name}/1.0 (+https://github.com/tineira/agent-pointed-context, TIN-900)`;
 const where = PRODUCTION ? "production" : "workerd";
 const CI = !!process.env.GITHUB_ACTIONS;
-
-/** The two Workers in workerd, and the fetch that reaches them. */
-async function startWorkerd() {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  // wrangler is the dock's devDependency, and Miniflare is wrangler's: the versions `vite dev` and `wrangler deploy` use.
-  const wranglerPath = createRequire(join(root, "apps/dock/package.json")).resolve("wrangler");
-  const fileUrl = (p) => new URL(`file:///${p.replaceAll("\\", "/")}`).href;
-  const { unstable_getMiniflareWorkerOptions } = await import(fileUrl(wranglerPath));
-  const { Miniflare, convertV4MiniflareOptions } = await import(fileUrl(createRequire(wranglerPath).resolve("miniflare")));
-  if (typeof unstable_getMiniflareWorkerOptions !== "function" || typeof convertV4MiniflareOptions !== "function" || typeof Miniflare !== "function") {
-    throw new Error("wrangler no longer exports unstable_getMiniflareWorkerOptions, or Miniflare convertV4MiniflareOptions: update scripts/dock-pairing.mjs for the new wrangler");
-  }
-
-  /** A built Worker as Miniflare runs it: its options from its wrangler.json, its bundle beside it. */
-  const builtWorker = (name, configPath) => {
-    const path = join(root, configPath);
-    if (!existsSync(path)) throw new Error(`${configPath} is missing: run pnpm build first`);
-    // The rules wrangler gives are the default ones (ESModule for .js and .mjs); Miniflare 5 takes the modules listed instead.
-    const { workerOptions: { modulesRules: _rules, ...workerOptions }, main } = unstable_getMiniflareWorkerOptions(path);
-    const dir = dirname(path);
-    // Every module of the bundle, entry first, as wrangler deploy uploads them (no_bundle, the ESModule rule): the
-    // entry imports its chunks (assets/*.js), some dynamically, which Miniflare would not find by itself.
-    const entry = resolve(dir, main ?? "index.js");
-    const chunks = readdirSync(dir, { recursive: true })
-      .map((f) => resolve(dir, String(f)))
-      .filter((f) => /\.m?js$/.test(f) && f !== entry);
-    return { ...workerOptions, name, modules: [entry, ...chunks].map((p) => ({ type: "ESModule", path: p })), modulesRoot: dir, outboundService: "internet" };
-  };
-  const internet = {
-    name: "internet",
-    modules: true,
-    compatibilityDate: "2026-10-01",
-    script: `export default {
-      fetch(request, env) {
-        const host = new URL(request.url).hostname;
-        if (host === "apc.tineira.com") return env.DOCK.fetch(request);
-        if (host === "pulse.apc.tineira.com") return env.PULSE.fetch(request);
-        return new Response("no network in this test: " + host, { status: 502 });
-      },
-    };`,
-    serviceBindings: { DOCK: "apc-dock", PULSE: "apc-pulse" },
-  };
-  const mf = new Miniflare(
-    convertV4MiniflareOptions({
-      workers: [internet, builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json")],
-    }),
-  );
-  const runtime = { send: (url, init) => mf.dispatchFetch(url, init), stop: () => mf.dispose() };
-  try {
-    await mf.ready;
-  } catch (error) {
-    await runtime.stop().catch(() => {});
-    throw error;
-  }
-  return runtime;
-}
 
 /** What a failure prints of an answer: its status and its error word, never its body (codes, nonces, URLs). */
 const brief = (r) => (r && typeof r === "object" && "status" in r ? `HTTP ${r.status}${r.json?.error ? ` ${r.json.error}` : ""}` : String(r ?? ""));
@@ -238,8 +180,19 @@ async function pair(t) {
 
   // The drop, and Allow: Pulse asks the hub (pairWithHub) and shows the pairing code.
   const ticket = async () => (await call(`${t.made.dock}/agents/${agent.id}/ticket`, { method: "POST" })).json?.ticket;
-  const drop = { hub: DOCK, agent: agent.id, ticket: await ticket(), target };
-  must(typeof drop.ticket === "string", "the dock gives the agent's drag a ticket");
+  const connectTicket = async () => {
+    const checked = await call(`${t.made.dock}/connects`, { method: "POST", body: { agent: agent.id, host: PULSE } });
+    must(checked.status === 200 && typeof checked.json?.request?.id === "string", "the owner checks Pulse for Connect", checked);
+    const opened = await call(`${t.made.dock}/connects/${checked.json.request.id}/approve`, { method: "POST", body: {} });
+    must(opened.status === 200 && typeof opened.json?.url === "string", "the owner approves Connect and gets its app URL", opened);
+    const url = new URL(opened.json.url);
+    must(url.origin === PULSE && url.hash.startsWith("#apc_connect="), "the connect ticket is in Pulse's declared page fragment");
+    const fragment = JSON.parse(Buffer.from(url.hash.slice("#apc_connect=".length), "base64url").toString("utf8"));
+    return fragment.ticket;
+  };
+  // The app-page branch supplies /connect/dock; its existing consent endpoint takes this same handoff here.
+  const drop = { hub: DOCK, agent: agent.id, ticket: await connectTicket(), target };
+  must(typeof drop.ticket === "string", "the dock gives the owner-approved app handoff a connect ticket");
   const asked = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: drop });
   must(asked.json?.error === "consent_required" && typeof asked.json?.consent === "string", "the drop asks the person to Allow", asked);
   const allowed = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: { ...drop, consent: asked.json.consent } });
@@ -279,7 +232,7 @@ async function pair(t) {
   if (!PRODUCTION) {
     const direct = await call(`${t.made.pulse}/grants/agent`, { method: "POST" });
     must(direct.status === 200 && typeof direct.json?.secret === "string", "Pulse makes a Direct agent", direct);
-    const posted = await call(`${DOCK}/apc/pair`, { method: "POST", body: { ticket: await ticket(), agent: agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${pulse.json.sid}/${direct.json.secret}`, pairing_code: "K7M4P2" } });
+    const posted = await call(`${DOCK}/apc/pair`, { method: "POST", body: { ticket: await connectTicket(), agent: agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${pulse.json.sid}/${direct.json.secret}`, pairing_code: "K7M4P2" } });
     must(posted.status === 200 && posted.json?.binding === "pairing_id" && /^pr_[0-9a-f]{32}$/.test(posted.json?.pairing_id ?? ""), "the hub takes a Direct URL it cannot tell apart, and declares the binding", posted);
     const forced = await call(`${t.made.dock}/pairings/${posted.json.pairing_id}`, { method: "POST", body: { action: "approve", code: "K7M4P2" } });
     check(forced.status === 400 && forced.json?.error === "pairing_ended", "the Direct grant never goes live: Pulse refuses the hub's introduction (pairing_ended)", forced);
@@ -317,7 +270,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 async function main() {
-  if (!PRODUCTION) runtime = await startWorkerd();
+  if (!PRODUCTION) runtime = await startWorkerd({ connectManifestFixture: true });
   // The docs first, once: they make nothing, and a failure here never starts a pairing (no dock or sandbox is made).
   const docs = newTry(0, "");
   tries.push(docs);

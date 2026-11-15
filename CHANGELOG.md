@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **The hub's half of APC 0.13: first pairing goes through an owner-approved, origin-bound Connect.** The hub adds `/apc/connect`, the owner connect routes, separate single-use connect tickets bound to an origin and agent, request and per-ticket attempt limits, claim/check reader approval, and refuses a drop ticket on `/apc/pair`; the shared packages carry the 0.13 manifest, fragment and client types. The dock's Connect UI, the apps and the extension move to it in their own branches of the same 0.13 release, which must land with this one. (`packages/protocol`, `packages/server`, `packages/web`, `apps/dock/src/worker`, `apps/dock/src/docs/pages/spec.md`, `apps/dock-desktop/src/main.rs`, `scripts/hub-connect-workerd.mjs`)
+
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 
 ### Minimal in-process hub conformance suite (2026-11-14, TIN-919)

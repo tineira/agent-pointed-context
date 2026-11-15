@@ -24,7 +24,7 @@ async function shopWorld(t: TestContext, env: Json = {}) {
   /** The app asks to pair with what it would send after its owner's Allow. */
   const ask = async (over: Json = {}, app: FakeApp = shop, agentIndex = 0) => {
     const who = await w.agent(agentIndex);
-    const { ticket } = await w.hub.ticket(who.id);
+    const { ticket } = await w.connectTicket(who.id, SHOP);
     const body = { ticket, agent: who.id, app: { name: app.name, origin: app.origin }, mcp_url: `${app.origin}/mcp/${"c".repeat(32)}`, pairing_code: CODE, ...over };
     return { ticket, body, answer: (await w.hub.pair(body)) as { ok: boolean; error?: string; pairing_id?: string; pairing_code?: string } };
   };
@@ -129,7 +129,7 @@ test("an unverified app's warning Approve with a wrong code approves nothing, no
   const shop = fakeApp(SHOP, "Shop");
   w.apps.set(SHOP, shop);
   const who = await w.agent();
-  const { ticket } = await w.hub.ticket(who.id);
+  const { ticket } = await w.connectTicket(who.id, SHOP);
   const answer = await w.hub.pair({ ticket, agent: who.id, app: { name: "Shop", origin: SHOP }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}`, pairing_code: CODE });
   assert.equal(answer.ok, true, answer.error);
   assert.equal((await w.pairingOf(SHOP)).warning, true);
@@ -240,7 +240,7 @@ test("an unverified app's request from before the deploy (no code): its warning'
   const shop = fakeApp(SHOP, "Shop");
   w.apps.set(SHOP, shop);
   const who = await w.agent();
-  const { ticket } = await w.hub.ticket(who.id);
+  const { ticket } = await w.connectTicket(who.id, SHOP);
   const answer = await w.hub.pair({ ticket, agent: who.id, app: { name: "Shop", origin: SHOP }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}` });
   assert.equal(answer.ok, true, answer.error);
   assert.equal((await w.pairingOf(SHOP)).warning, true);

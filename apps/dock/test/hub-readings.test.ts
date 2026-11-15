@@ -71,9 +71,9 @@ async function dock() {
   /** A browser the person allowed for this agent: the extension's token. */
   const allow = async (origin: string): Promise<string> => {
     const { ticket } = await hub.ticket(first.id);
-    const { claim } = await hub.reader({ ticket, agent: first.id, label: "Chrome" }, origin);
-    const asked = (await hub.state("https://dock.test")).agents[0].pairings.find((p: { status: string }) => p.status === "pending");
-    await hub.decide(asked.id, "approve");
+    const { claim } = await hub.requestConnect({ ticket, agent: first.id, reader: true, label: "Chrome" }, origin);
+    const asked = (await hub.state("https://dock.test")).connects[0];
+    await hub.approveConnect(asked.id, undefined, "https://dock.test");
     return (await hub.readerStatus({ claim }, origin)).token;
   };
 

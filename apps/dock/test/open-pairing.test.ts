@@ -291,7 +291,7 @@ test("a Deny or an Unpair on a pairing the warning's Approve just made clears th
   await w.hub.addAgent();
   const kept = await w.agent(1);
   assert.equal((await w.hub.removeAgent((await w.agent()).id)).ok, true);
-  const again = await w.hub.ticket(kept.id);
+  const again = await w.connectTicket(kept.id, SHOP);
   assert.equal((await w.hub.pair({ ticket: again.ticket, agent: kept.id, app: { name: "Shop", origin: SHOP }, mcp_url: `${SHOP}/mcp/${"c".repeat(32)}` })).ok, true);
   assert.equal((await w.agent()).pairings[0].warning, true);
 });

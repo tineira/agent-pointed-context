@@ -284,6 +284,8 @@ async function injectOpenTabs(origins?: string[]): Promise<void> {
  */
 interface DropReply {
   status: DropStatus;
+  claim?: string;
+  check?: string;
   pin?: PinMark;
   sensitive?: Sensitive;
   /** The drop this answers, so the page offers "Include them this time" for that drop and no other. */
