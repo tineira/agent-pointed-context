@@ -5,6 +5,7 @@ This is the changelog of the software. The APC standard (the contract an app and
 ## Unreleased
 
 - **First pairing starts with an owner-approved, origin-bound Connect.** The hub separates drop and connect tickets, bounds connection requests, and uses claim/check approval for readers; shared packages expose the APC 0.13 manifest, fragment and guarded client interfaces. (`packages/protocol`, `packages/server`, `packages/web`, `apps/dock/src/worker`, `apps/dock/src/web/agent-page.tsx`, `apps/dock/src/docs/pages/spec.md`, `apps/dock-desktop/src/main.rs`, `apps/extension/src/worker.ts`, `scripts/hub-connect-workerd.mjs`)
+- **Pulse, Signals and Orders connect through `/connect/dock` instead of pairing on drop.** An unlinked drop calls `requestConnect`, shows "Confirm in your dock" (falling back to drop-time consent only on HTTP 404), and `/connect/dock` serves a referrer-free 200 page that clears `#apc_connect` into `sessionStorage` before any fetch, runs consent and `<apc-handoff>`, and publishes `dock_connect` in `apc.json`. (`apps/demo/src/`, `apps/signals/src/`, `apps/dock/src/docs/examples/`, `apps/dock/src/web/build.tsx`, `scripts/hub-connect-workerd.mjs`)
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.
 

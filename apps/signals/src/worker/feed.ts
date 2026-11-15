@@ -446,7 +446,7 @@ export class Feed extends DurableObject<Env> {
         // new consent, no new code, and the drop's target replaces the pin. Past it, the grant ends and the person is asked again.
         if (!now.pairing_code || !now.pairing_expires_at || Date.parse(now.pairing_expires_at) <= this.dockNow()) {
           this.endDockGrant(now.id);
-          return { ok: false, error: "pairing_ended" };
+          return requestFirst();
         }
         const pairing: DockPairing = { code: now.pairing_code, expires_at: now.pairing_expires_at };
         return { ok: true, grant_id: now.id, status: "pending", pairing, ...pinNote(await this.pin(now.id, target)) };

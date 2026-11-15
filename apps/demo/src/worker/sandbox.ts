@@ -762,7 +762,7 @@ export class Sandbox extends DurableObject<Env> {
         const pairing = this.pairingOf(linked.grant_id);
         if (!pairing || Date.parse(pairing.expires_at) <= this.dockNow()) {
           this.endDockGrant(linked.grant_id, "code_expired");
-          return { ok: false, error: "pairing_ended" };
+          return requestFirst();
         }
         const pinned = await this.pin(linked.grant_id, target);
         return { ok: true, grant_id: linked.grant_id, status: "pending", pairing, ...(pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" }) };

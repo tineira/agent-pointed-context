@@ -66,12 +66,11 @@ async function world(t: TestContext, env: Json = {}) {
   const agent = (await hub.state(DOCK)).agents[0];
   /** The person drops the agent on Pulse and allows it there: Pulse makes a grant and asks the hub to pair it. */
   const dropOnPulse = async () => {
-    const { ticket } = await hub.ticket(agent.id);
+    const { ticket } = await connectTicket(agent.id, PULSE);
     const drop = { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } };
     // Pulse asks the person first (consent in the app, TIN-606); their Allow sends the nonce back.
-    const asked = await pulse.pairHub(SID, PULSE, drop);
-    drop.ticket = (await connectTicket(agent.id, PULSE)).ticket;
-    return (await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent })) as { ok: boolean; error?: string };
+    const asked = await pulse.pairHub(SID, PULSE, drop, true);
+    return (await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent }, true)) as { ok: boolean; error?: string };
   };
   /** An app outside APP_ORIGINS asks to pair (as unverified: the person approves the warning in the dock before it pairs, TIN-581). */
   const shopPairs = async (mcpUrl = `${SHOP}/mcp/${"c".repeat(32)}`) => {
@@ -88,7 +87,7 @@ test("Pulse and Signals serve a valid apc.json; the dock serves one that says it
   const pulse = await (await pulseWorker.fetch(new Request(`${PULSE}${APC_JSON_PATH}`), PULSE_ENV)).json();
   const parsed = parseApcManifest(pulse, PULSE);
   assert.equal(parsed.ok, true, JSON.stringify(parsed));
-  assert.deepEqual(pulse, { name: "Pulse", standard: APC_STANDARD_VERSION, origin: PULSE, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${PULSE}/agents` } });
+  assert.deepEqual(pulse, { name: "Pulse", standard: APC_STANDARD_VERSION, origin: PULSE, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${PULSE}/agents` }, dock_connect: `${PULSE}/connect/dock` });
 
   const directOnly = await (await pulseWorker.fetch(new Request(`${PULSE}${APC_JSON_PATH}`), { APC_V2: "1", APC_PROFILES: "direct" })).json();
   assert.deepEqual(directOnly.profiles, ["direct"], "a Pulse that offers only Direct says so");
@@ -96,7 +95,7 @@ test("Pulse and Signals serve a valid apc.json; the dock serves one that says it
   const SIGNALS = "https://signals.test";
   const signals = await (await signalsWorker.fetch(new Request(`${SIGNALS}${APC_JSON_PATH}`), { APC_PROFILES: "direct,dock", HUB_ORIGINS: DOCK, PUBLIC_ORIGIN: SIGNALS })).json();
   assert.equal(parseApcManifest(signals, SIGNALS).ok, true);
-  assert.deepEqual(signals, { name: "Signals", standard: APC_STANDARD_VERSION, origin: SIGNALS, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${SIGNALS}/?connect` } });
+  assert.deepEqual(signals, { name: "Signals", standard: APC_STANDARD_VERSION, origin: SIGNALS, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${SIGNALS}/?connect` }, dock_connect: `${SIGNALS}/connect/dock` });
 
   const response = await dockWorker.fetch(new Request(`${DOCK}${APC_JSON_PATH}`), {});
   assert.equal(response.headers.get("access-control-allow-origin"), "*");

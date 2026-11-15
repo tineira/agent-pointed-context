@@ -53,6 +53,8 @@ type Pending = { drag: AgentDrag & { hub: string; ticket: string }; target: Focu
 
 const PAIR_ERRORS: Record<string, string> = {
   ticket_not_for_pairing: "drop the agent again, then confirm in your dock",
+  ticket_origin_mismatch: "that link is for another app; drag the agent from the dock again",
+  too_many_requests: "your dock already has too many pending requests; answer one, then drag the agent again",
   ticket_expired: "the drag is too old; drag the agent from the dock again",
   consent_required: "the drag is too old; drag the agent from the dock again",
   consent_expired: "the question is too old; drag the agent from the dock again",
@@ -252,7 +254,7 @@ function Feed({ sid }: { sid: string }) {
         // consent_required with a nonce, and the person is asked, never on this page's last-loaded state.
         onUnknownAgent: async (drag, target) => {
           const r = await call<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pin_error?: string }>(`${base}/hub/pair`, { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
-          if (r.ok && r.status === "connect_requested") { say("Confirm in your dock"); return; }
+          if (r.ok && r.status === "connect_requested") { refresh(); say("Confirm in your dock"); return; }
           if (r.error === "consent_required" && r.consent && r.pairing_code) setPending({ drag, target, consent: r.consent, pairing_code: r.pairing_code });
           // Still waiting on the dock (APC 0.10): the waiting card, drawn from Signals' state, shows the same code again, or that the dock is connecting.
           else if (r.ok && (r.status === "pending" || r.status === "connecting")) {

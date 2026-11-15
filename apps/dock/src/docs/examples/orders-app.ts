@@ -276,7 +276,7 @@ export class OrdersApp {
   // #region routes
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (path === "/connect/dock" && request.method === "GET") return dockConnectPage("Orders", { session: false, account: this.signedIn(request) ? this.account : "No account signed in. Open Orders to sign in, then return to this link.", script: this.connectScript });
+    if (path === "/connect/dock" && request.method === "GET") return dockConnectPage("Orders", { session: false, signedIn: this.signedIn(request), account: this.signedIn(request) ? this.account : "No account signed in. Open Orders to sign in, then return to this link.", script: this.connectScript });
     // What Orders is, for hubs, the browser extension and any tool (apc.json). Its one MCP endpoint (APC 0.11) is
     // exact: a grant's secret under /mcp/, on both profiles; /mcp/ stays for readers before 0.11.
     if (path === "/.well-known/apc.json") {
@@ -657,7 +657,7 @@ export class OrdersApp {
       if (!check.ok || (held.state === "handoff" && check.status === "pending" && expired)) {
         this.forget(held);
         this.publish({ type: "agents" });
-        return !check.ok ? requestFirst() : { ok: false, error: "pairing_ended" };
+        return requestFirst();
       }
       const pinned = this.pin(held.id, target);
       const pinError = pinned.ok ? {} : { pin_error: pinned.error };

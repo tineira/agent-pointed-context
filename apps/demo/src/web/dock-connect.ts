@@ -14,8 +14,9 @@ export async function mountDockConnect(): Promise<void> {
   let grant: string | undefined;
   let poll: ReturnType<typeof setTimeout> | undefined;
   const end = (text: string) => { message.textContent = text; card.replaceChildren(); clearApcConnect(); };
-  const post = async (path: string, body: unknown): Promise<Answer & { sid?: string }> => {
+  const post = async (path: string, body: unknown): Promise<Answer & { sid?: string; unauthorized?: boolean }> => {
     const response = await fetch(path, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body), referrerPolicy: "no-referrer" });
+    if (response.status === 401) return { unauthorized: true };
     if (![200, 400].includes(response.status)) throw new Error(`The app did not answer (${response.status}). Open the app and try connecting again.`);
     return response.json() as Promise<Answer & { sid?: string }>;
   };
@@ -32,9 +33,17 @@ export async function mountDockConnect(): Promise<void> {
       if (!session.sid) throw new Error("Open the app to start a sandbox, then connect again.");
       base = `/api/s/${session.sid}`;
       account.textContent = `${main.dataset.app} sandbox: ${session.sid}`;
+    } else if (main.dataset.signedIn === "false") {
+      account.textContent = main.dataset.account || "No account signed in.";
+      message.textContent = "Sign in first, then return here to finish connecting.";
+      return;
     } else account.textContent = `Signed in: ${main.dataset.account}`;
     const endpoint = base ? `${base}/connect/dock` : "/api/connect/dock";
     const asked = await post(endpoint, connect);
+    if (asked.unauthorized) {
+      message.textContent = "Sign in first, then return here to finish connecting.";
+      return;
+    }
     if (asked.error !== "consent_required" || !asked.consent) return end(refused(asked.error));
     message.textContent = `Let your agent from the dock at ${host} read ${main.dataset.app}? After Allow, your dock will ask for a code.`;
     const allow = Object.assign(document.createElement("button"), { type: "button", textContent: "Allow" });
@@ -51,6 +60,11 @@ export async function mountDockConnect(): Promise<void> {
       allow.disabled = deny.disabled = true;
       void (async () => {
         const paired = await post(endpoint, { ...connect, consent: asked.consent, region: region.value || null });
+        if (paired.unauthorized) {
+          card.replaceChildren();
+          message.textContent = "Sign in first, then return here to finish connecting.";
+          return;
+        }
         clearApcConnect();
         if (!paired.ok || !paired.grant_id || !paired.pairing) return end(refused(paired.error));
         grant = paired.grant_id;
@@ -61,12 +75,22 @@ export async function mountDockConnect(): Promise<void> {
         handoff.host = host;
         handoff.pairing = paired.pairing;
         handoff.autoFocus = true;
-        handoff.addEventListener("apc-cancel", () => void post(base ? `${base}/hub/cancel` : "/api/cancel", { grant_id: grant }).then(() => { clearTimeout(poll); handoff.hidden = true; end("Connection cancelled."); }).catch((e: unknown) => end(String(e))));
+        handoff.addEventListener("apc-cancel", () => {
+          void fetch(base ? `${base}/hub/cancel` : "/api/cancel", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant_id: grant }), referrerPolicy: "no-referrer" })
+            .then(async (response) => {
+              const r = await response.json().catch(() => ({})) as Answer;
+              clearTimeout(poll);
+              if (response.ok && r.ok !== false) { handoff.hidden = true; end("Connection cancelled."); return; }
+              if (r.error === "not_cancellable") { handoff.hidden = true; end("The dock has connected already. To take its access back, revoke the agent."); return; }
+              message.textContent = refused(r.error);
+            })
+            .catch((e: unknown) => { message.textContent = String(e); });
+        });
         // Follow the app's state, so a code taken by the dock disappears without a second drop.
         const follow = async () => {
           const response = await fetch(base ? `${base}/state` : "/api/agents/list", { credentials: "same-origin", referrerPolicy: "no-referrer" });
           if (!response.ok) return;
-          const state = await response.json() as { hub_links?: Array<{ grant_id: string; state: string; pairing?: Answer["pairing"] }>; grants?: Array<{ id: string; state?: string; pairing_code?: string; pairing_expires_at?: string }> } | Array<{ id: string; waiting: string | null; pairing: Answer["pairing"] }>;
+          const state = await response.json() as { hub_links?: Array<{ grant_id: string; state: string; pairing?: Answer["pairing"] }>; grants?: Array<{ id: string; state?: string; pairing?: Answer["pairing"]; pairing_code?: string; pairing_expires_at?: string }> } | Array<{ id: string; waiting: string | null; pairing: Answer["pairing"] }>;
           let waiting = false;
           if (Array.isArray(state)) {
             const row = state.find((r) => r.id === grant);
@@ -79,7 +103,7 @@ export async function mountDockConnect(): Promise<void> {
           } else {
             const row = state.grants?.find((r) => r.id === grant);
             waiting = row?.state === "handoff";
-            handoff.pairing = row?.pairing_code && row.pairing_expires_at ? { code: row.pairing_code, expires_at: row.pairing_expires_at } : null;
+            handoff.pairing = row?.pairing ?? (row?.pairing_code && row.pairing_expires_at ? { code: row.pairing_code, expires_at: row.pairing_expires_at } : null);
           }
           if (!waiting) { handoff.hidden = true; message.textContent = "The connection finished. Open the app to check your agent."; return; }
           poll = setTimeout(() => void follow().catch(() => {}), 1500);

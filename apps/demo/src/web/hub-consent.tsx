@@ -28,6 +28,8 @@ export interface PendingDrop {
 
 const ERRORS: Record<string, string> = {
   ticket_not_for_pairing: "Drop the agent again, then confirm in your dock.",
+  ticket_origin_mismatch: "This link is for another app. Drop the agent again.",
+  too_many_requests: "Your dock already has too many pending requests. Answer one, then drop the agent again.",
   ticket_expired: "The drag is too old. Drag the agent from the dock again.",
   consent_required: "This question is too old. Drag the agent from the dock again.",
   consent_expired: "This question is too old. Drag the agent from the dock again.",
