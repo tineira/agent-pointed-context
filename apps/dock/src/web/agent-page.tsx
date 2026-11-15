@@ -11,6 +11,7 @@ import { ConnectAgent, CopyRow, ReconnectAgent } from "./setup.tsx";
 import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } from "../worker/reading.ts";
 import { NotVerified } from "./unverified.tsx";
 import { PairingRequest } from "./pairing-request.tsx";
+import { ConnectApp, ConnectRequest, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
 import type { CodeError, InFlight } from "./request-state.ts";
 
 export interface AppRef {
@@ -77,7 +78,7 @@ export interface DockState {
   expires_at: string;
   agents: DockAgent[];
   /** APC 0.13: first-pairing requests, never claims or connect tickets. */
-  connects: Array<{ id: string; kind: "app" | "reader"; agent: string; origin: string; host: string; name: string; verified: boolean; check?: string; expires_at: number }>;
+  connects: DockConnect[];
   /** Verified origins and operator-pinned names; an unpinned name is the host. */
   apps: Array<{ origin: string; name: string }>;
   /** TIN-838; absent from a hub older than this page for a moment after a deploy. */
@@ -210,6 +211,10 @@ function Readings(props: { agent: DockAgent; clear: () => void }) {
 export function AgentPage(props: {
   agent: DockAgent;
   base: string;
+  apps: DockState["apps"];
+  connects: ConnectCardItem[];
+  decideConnect: (connect: DockConnect, action: ConnectAction) => void;
+  dismissBlockedConnect: (id: string) => void;
   /** inFlight: what is on its way (an Approve turns Approve off, a Deny both); approving: the hub is introducing itself to the app (Approve off, Deny on). */
   requests: Array<{ id: string; kind: "app" | "reader"; app: AppRef; warning?: boolean; inFlight?: InFlight; approving?: boolean; code?: boolean; error?: CodeError | null }>;
   /** An approval of a request with a pairing code carries the code (APC 0.9). */
@@ -330,6 +335,19 @@ export function AgentPage(props: {
       <section className="agent-section">
         <h2>Its apps</h2>
         {props.refusal}
+        {props.connects.map((c) => (
+          <div key={c.connect.id} className={`request${!c.connect.verified ? " unverified" : ""}`}>
+            <ConnectRequest
+              connect={c.connect}
+              agentName={c.agentName}
+              inFlight={c.inFlight}
+              blockedUrl={c.blockedUrl}
+              decide={(action) => props.decideConnect(c.connect, action)}
+              onOpenLink={() => setTimeout(() => props.dismissBlockedConnect(c.connect.id), 0)}
+              onDismiss={() => props.dismissBlockedConnect(c.connect.id)}
+            />
+          </div>
+        ))}
         {props.requests.map((r) => (
           // The code is typed here too (APC 0.9); an unverified app shows its warning (TIN-581).
           <div key={r.id} className={`request${r.app.unverified ? " unverified" : ""}`}>
@@ -359,8 +377,8 @@ export function AgentPage(props: {
             />
           </div>
         ))}
-        {paired.length === 0 && revoked.length === 0 && ended.length === 0 && blocked.length === 0 && props.requests.length === 0 ? (
-          <p className="muted">None yet. Drag {a.name} onto an app to pair it.</p>
+        {paired.length === 0 && revoked.length === 0 && ended.length === 0 && blocked.length === 0 && props.requests.length === 0 && props.connects.length === 0 ? (
+          <p className="muted">None yet. Drag {a.name} onto an app to pair it, or connect one below.</p>
         ) : (
           <ul className="apps">
             {paired.map((p) => (
@@ -435,6 +453,10 @@ export function AgentPage(props: {
             ))}
           </ul>
         )}
+        <div className="connect-app-section">
+          <h3>Connect an app</h3>
+          <ConnectApp apps={props.apps} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={props.refresh} />
+        </div>
       </section>
 
       <details className="agent-section tile-details">

@@ -93,9 +93,76 @@ export function decisionNotice(error: unknown): string {
     // Only a request without a code lands here (a coded one says it on its card): an app from before 0.9 (TIN-885).
     case "pairing_code_required":
       return "This app uses an older APC version that has no pairing code, so it was not paired. Ask its maker to update it, and Deny this request.";
+    // APC 0.13 Connect errors.
+    case "not_found":
+      return "That request is no longer waiting: it was answered elsewhere, removed, or it expired. Drop your agent again, or use Connect an app.";
+    case "app_not_allowed":
+      return "The dock cannot connect to this app right now.";
+    case "https_required":
+      return "This app needs HTTPS to connect.";
+    case "reader_not_allowed":
+      return "This browser extension is not allowed to send readings to this dock.";
+    case "unknown_agent":
+      return "That agent is no longer in your dock.";
     default:
       return `That did not go through (${typeof error === "string" ? error.slice(0, 40) : "error"}). Try again.`;
   }
+}
+
+/** What the "Check" step of Connect an app tells the person when the hub refuses a host (APC 0.13). */
+export function connectCheckErrorText(error: unknown): string {
+  switch (error) {
+    case "app_not_allowed":
+      return "The dock cannot connect to this host (use an HTTPS domain like app.example).";
+    case "https_required":
+      return "This app must use HTTPS.";
+    case "app_blocked":
+      return "The dock does not pair with this app right now.";
+    case "too_many_requests":
+      return "Too many pending connect requests. Answer or deny one first.";
+    case "unknown_agent":
+      return "That agent is no longer in your dock.";
+    case "apc_json_missing":
+      return "No APC manifest (/.well-known/apc.json) was found on that host.";
+    case "apc_json_redirected":
+      return "That host's APC manifest redirected, which the dock does not follow.";
+    case "apc_json_unreachable":
+      return "Could not reach that host's APC manifest. Try again.";
+    case "apc_json_invalid":
+      return "That app's APC manifest is invalid or does not support APC 0.13 Dock connect.";
+    case "dock_not_offered":
+      return "That app does not offer the Dock profile.";
+    case "unreachable":
+      return "Could not reach your dock. Try again.";
+    default:
+      return `Could not check that app (${typeof error === "string" ? error.slice(0, 40) : "error"}).`;
+  }
+}
+
+export type ApproveConnectResult =
+  | { status: "opened"; url: string }
+  | { status: "blocked"; url: string }
+  | { status: "paired" }
+  | { status: "error"; error: unknown };
+
+/**
+ * APC 0.13 Connect approval: calls the hub's approve route (never making an outbound fetch there),
+ * then opens the returned `dock_connect` URL in a new tab with `noopener` when one is returned (app
+ * requests). Reader requests return no URL and pair at once. When `window.open` returns `null` outside
+ * the desktop shell, the caller keeps the card with a one-click link.
+ */
+export async function approveAndOpen(o: {
+  approve: () => Promise<{ ok?: boolean; url?: unknown; error?: unknown }>;
+  opener?: { open(url: string, target?: string, features?: string): unknown };
+  desktop?: boolean;
+}): Promise<ApproveConnectResult> {
+  const r = await o.approve();
+  if (r?.ok === false) return { status: "error", error: r.error };
+  if (typeof r?.url === "string" && r.url) {
+    const win = (o.opener ?? window).open(r.url, "_blank", "noopener");
+    return win || o.desktop ? { status: "opened", url: r.url } : { status: "blocked", url: r.url };
+  }
+  return { status: "paired" };
 }
 
 /** Two views of what is on its way (the page's, and a card's own click before the page re-renders) as one. */

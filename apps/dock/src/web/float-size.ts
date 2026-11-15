@@ -48,10 +48,12 @@ export type FloatSizeEvent =
   | { type: "grow"; outer: Size }
   /** The notice was clicked; `ok` is false when resizeTo threw, and the notice then stays. */
   | { type: "open"; id: string; outer: Size; ok: boolean }
-  /** Allow / Deny was clicked; `last` when no other request waits (the click shrinks the window). */
+  /** Allow / Deny / Connect was clicked: never shrinks Float by itself, so a wrong code or fallback stays visible. */
   | { type: "decide"; last: boolean }
-  /** No request is left (decided here, elsewhere, or withdrawn). */
+  /** No request is left (decided here, elsewhere, or withdrawn): never shrinks Float by itself. */
   | { type: "idle" }
+  /** Done or dismiss was clicked: shrink back to the earlier size. */
+  | { type: "shrink" }
   /** The window was resized. */
   | { type: "resize"; outer: Size }
   /** The window closed. */
@@ -64,10 +66,12 @@ export function floatSizeReducer(s: FloatSizeState, e: FloatSizeEvent): FloatSiz
     case "grow":
       return { ...s, before: s.before ?? e.outer, wantShrink: false };
     case "open":
-      return { before: s.before ?? e.outer, opened: e.ok ? e.id : null, wantShrink: false };
+      return { before: e.ok ? (s.before ?? e.outer) : s.before, opened: e.ok ? e.id : null, wantShrink: false };
     case "decide":
-      return { ...s, opened: null, wantShrink: e.last && s.before !== null };
+      return { ...s, wantShrink: false };
     case "idle":
+      return { ...s, opened: null, wantShrink: false };
+    case "shrink":
       return { ...s, opened: null, wantShrink: s.before !== null };
     case "resize":
       return s.wantShrink && s.before && near(e.outer, s.before) ? FLOAT_START : s;
