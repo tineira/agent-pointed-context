@@ -23,7 +23,7 @@ interface DockObject {
   init(): Promise<{ owner: string }>;
   state(): Promise<Json>;
   fetch(request: Request): Promise<Response>;
-  pairHub(sid: string, origin: string, raw: unknown): Promise<Json & { ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pairing?: { code: string; expires_at: string } }>;
+  pairHub(sid: string, origin: string, raw: unknown, connect?: boolean): Promise<Json & { ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pairing?: { code: string; expires_at: string } }>;
   cancelDockGrant(grantId: string): Promise<{ ok: boolean; error?: string }>;
   revokeGrant(grantId: string): Promise<{ ok: boolean; error?: string }>;
 }
@@ -64,6 +64,7 @@ function fakeHub(t: TestContext) {
   const hub = {
     pair: async (_body: Json): Promise<Response> => Response.json(ACK),
     confirm: async (_body: Json): Promise<Response> => Response.json({ ok: true, status: "pending", agent: { name: "Agent via dock", icon: null } }),
+    connect: undefined as undefined | ((_body: Json) => Promise<Response>),
     calls: [] as string[],
     sent: [] as Json[],
   };
@@ -71,9 +72,12 @@ function fakeHub(t: TestContext) {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== HUB) throw new TypeError(`no network in this test: ${url}`);
+    // Legacy lifecycle checks model a 0.12 hub unless hub.connect is configured.
+    if (url.pathname === "/apc/connect" && !hub.connect) return new Response(null, { status: 404 });
     hub.calls.push(url.pathname);
     const body = (await request.json()) as Json;
     hub.sent.push(body);
+    if (url.pathname === "/apc/connect" && hub.connect) return hub.connect(body);
     if (url.pathname === "/apc/pair") return hub.pair(body);
     if (url.pathname === "/apc/confirm") return hub.confirm(body);
     return Response.json({ ok: false, error: "not_found" }, { status: 404 });
@@ -561,8 +565,9 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
 
   // ---- M6: the owner's endpoints ----
 
-  test(name("M6: an owner request with a foreign Origin, a cross-site or same-site Sec-Fetch-Site, or no JSON media type is refused; one with neither header is taken on its session"), async () => {
+  test(name("M6: an owner request with a foreign Origin, a cross-site or same-site Sec-Fetch-Site, or no JSON media type is refused; one with neither header is taken on its session"), async (t) => {
     const i = await start();
+    t.mock.method(globalThis, "fetch", async () => Response.json({ ok: true, status: "connect_requested" }));
     const opened = await i.worker("/api/session", { method: "POST", headers: { "content-type": "application/json", origin: app.origin, "sec-fetch-site": "same-origin" }, body: "{}" });
     assert.equal(opened.status, 200);
     const sid = ((await opened.json()) as { sid: string }).sid;
@@ -572,7 +577,7 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     const post = (path: string, headers: Record<string, string>, body = "{}") => i.worker(path, { method: "POST", headers: { cookie, ...headers }, body });
     const json = { "content-type": "application/json" };
     // The drop and the Allow, Cancel, Revoke and a pin: every state change answers the same way.
-    for (const [path, body] of [[`/api/s/${sid}/hub/pair`, drop], [`/api/s/${sid}/hub/cancel`, JSON.stringify({ grant_id: "g_none" })], [`/api/s/${sid}/grants/g_none/revoke`, "{}"], [`/api/s/${sid}/unpin`, JSON.stringify({ grant_id: "g_none" })], ["/api/session", "{}"]] as const) {
+    for (const [path, body] of [[`/api/s/${sid}/hub/pair`, drop], [`/api/s/${sid}/connect/dock`, drop], [`/api/s/${sid}/hub/cancel`, JSON.stringify({ grant_id: "g_none" })], [`/api/s/${sid}/grants/g_none/revoke`, "{}"], [`/api/s/${sid}/unpin`, JSON.stringify({ grant_id: "g_none" })], ["/api/session", "{}"]] as const) {
       const refused = async (headers: Record<string, string>, error: string, status: number) => {
         const r = await post(path, headers, body);
         assert.equal(r.status, status, `${path} ${JSON.stringify(headers)}`);
@@ -596,8 +601,9 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
         assert.ok(!["origin_not_allowed", "cross_site_request", "json_required"].includes(answer.error ?? ""), `${path} ${JSON.stringify(headers)}: ${answer.error}`);
       }
     }
-    // The drop got through to the app, which asks the person first.
-    assert.equal(((await (await post(`/api/s/${sid}/hub/pair`, json, drop)).json()) as { error: string }).error, "consent_required");
+    // The drop and /connect/dock get through to the app: drop requests Connect, /connect/dock asks the person first.
+    assert.equal(((await (await post(`/api/s/${sid}/hub/pair`, json, drop)).json()) as { status: string }).status, "connect_requested");
+    assert.equal(((await (await post(`/api/s/${sid}/connect/dock`, json, drop)).json()) as { error: string }).error, "consent_required");
     // The configured origin is the rule, never the request's own: on another host name the app's page is refused.
     const elsewhere = await app.worker.fetch(new Request(`https://elsewhere.test/api/session`, { method: "POST", headers: { ...json, origin: "https://elsewhere.test" }, body: "{}" }), i.workerEnv);
     assert.equal(elsewhere.status, 403);
@@ -857,5 +863,65 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
       assert.deepEqual(g.answer, { ok: false, error: "hub_refused" }, agent);
       assert.equal((await i.initialize(g.mcpUrl)).status, 404, `${agent}: no grant`);
     }
+  });
+
+  // ---- APC 0.13: Connect first, 404 fallback, dock_connect page & manifest ----
+
+  test(name("0.13: drop with no link calls requestConnect (never /apc/pair or consent), and drop on a linked agent still confirms"), async (t) => {
+    const hub = fakeHub(t);
+    hub.connect = async () => Response.json({ ok: true, status: "connect_requested" });
+    const i = await start();
+    const drop = { hub: HUB, agent: "ag_013", ticket: ticket(), target: app.targets[0] };
+    const requested = await i.object.pairHub(SID, app.origin, drop);
+    assert.deepEqual(requested, { ok: true, status: "connect_requested" });
+    assert.deepEqual(hub.calls, ["/apc/connect"], "never calls /apc/pair");
+    assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0, "creates no consent or grant before dock approval");
+
+    // Through /connect/dock (connect = true): consent -> Allow -> /apc/pair, then a drop confirms.
+    const handoff = { ...drop, ticket: ticket() };
+    const asked = await i.object.pairHub(SID, app.origin, handoff, true);
+    assert.equal(asked.error, "consent_required");
+    const paired = await i.object.pairHub(SID, app.origin, { ...handoff, consent: asked.consent }, true);
+    assert.equal(paired.ok, true);
+    const confirmed = await i.object.pairHub(SID, app.origin, { hub: HUB, agent: "ag_013", ticket: ticket(), target: app.targets[1] });
+    assert.equal(confirmed.ok, true);
+    assert.equal(hub.calls.at(-1), "/apc/confirm");
+  });
+
+  test(name("0.13: only 404 not_found falls back to 0.12 consent and /apc/pair, where ticket_not_for_pairing asks to drop again; non-404 refuses directly"), async (t) => {
+    const hub = fakeHub(t);
+    hub.connect = async () => Response.json({ ok: false, error: "too_many_requests" }, { status: 400 });
+    const i = await start();
+    const drop = { hub: HUB, agent: "ag_fb", ticket: ticket(), target: app.targets[0] };
+    assert.deepEqual(await i.object.pairHub(SID, app.origin, drop), { ok: false, error: "too_many_requests" });
+    assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0);
+
+    // 404 not_found triggers the 0.12 fallback path, then Allow calls /apc/pair with the drop ticket.
+    hub.connect = async () => Response.json({ ok: false, error: "not_found" }, { status: 404 });
+    const asked = await i.object.pairHub(SID, app.origin, drop);
+    assert.equal(asked.error, "consent_required");
+    assert.equal(typeof asked.consent, "string");
+    hub.pair = async () => Response.json({ ok: false, error: "ticket_not_for_pairing" }, { status: 400 });
+    const refused = await i.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent });
+    assert.deepEqual(refused, { ok: false, error: "ticket_not_for_pairing" });
+    assert.equal(hub.sent.at(-1)?.ticket, drop.ticket, "fallback Allow sends the drop ticket to /apc/pair");
+    assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0, "in-flight grant is removed on refusal");
+  });
+
+  test(name("0.13: apc.json declares dock_connect and GET /connect/dock serves 200 with no-referrer and no third-party scripts"), async () => {
+    const i = await start();
+    const manifest = await (await i.worker("/.well-known/apc.json")).json() as { dock_connect?: string };
+    assert.equal(manifest.dock_connect, `${app.origin}/connect/dock`);
+
+    const page = await i.worker("/connect/dock", { redirect: "manual" });
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(page.headers.get("cache-control"), "no-store");
+    const html = await page.text();
+    assert.match(html, /history\.replaceState/);
+    assert.equal(/<script[^>]+src=["'](?:https?:)?\/\//i.test(html), false, "no third-party script");
+    const headIdx = html.indexOf("history.replaceState");
+    const moduleIdx = html.indexOf('type="module"');
+    assert.ok(headIdx > 0 && moduleIdx > headIdx, "inline fragment-clearing script precedes module script");
   });
 }

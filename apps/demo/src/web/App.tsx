@@ -236,6 +236,7 @@ function Sandbox({ sid }: { sid: string }) {
         onUnknownAgent: hubMode
           ? async (drag, target) => {
               const r = await api.hubPair({ hub: drag.hub, agent: drag.agent, ticket: drag.ticket, region: null, target });
+              if (r.ok && r.status === "connect_requested") { void refresh(); setNotice("Confirm in your dock"); return; }
               if (r.error === "consent_required" && r.consent && r.pairing_code) {
                 void refresh();
                 return setPendingDrop({ drag, target, at: Date.now(), consent: r.consent, pairing_code: r.pairing_code });

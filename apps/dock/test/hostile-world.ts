@@ -150,11 +150,11 @@ export async function world(t: TestContext, env: Json = {}) {
   /** The person drops an agent on Pulse and allows it there: Pulse asks first (consent in the app, TIN-606), the Allow sends the nonce back. */
   const dropOnPulse = async (drag: { agent: string; ticket: string }) => {
     const drop = { hub: DOCK, ...drag, target: { kind: "customer", id: customers[0]!.id } };
-    const asked = await pulse.pairHub(SID, PULSE, drop);
-    assert.equal(asked.error, "consent_required");
     drop.ticket = (await connectTicket(drag.agent, PULSE)).ticket;
+    const asked = await pulse.pairHub(SID, PULSE, drop, true);
+    assert.equal(asked.error, "consent_required");
     // The code Pulse's consent showed (APC 0.9), for the person to type in the dock.
-    return { ...(await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent })), code: asked.pairing_code as string };
+    return { ...(await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent }, true)), code: asked.pairing_code as string };
   };
   /** The person drops the agent on Pulse, allows it there and in the dock. */
   const pairPulse = async () => {

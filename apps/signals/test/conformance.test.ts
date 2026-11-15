@@ -27,6 +27,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   const url = new URL(String(input instanceof Request ? input.url : input));
   const h = hubs.get(url.origin);
   if (!h) throw new Error(`no network in this test: ${url}`);
+  // This suite still models a 0.12 hub; do not count its 404 Connect probe as pairing traffic.
+  if (url.pathname === "/apc/connect") return new Response(null, { status: 404 });
   h.calls.push(url.href);
   return h.hub.fetch(input, init);
 }) as typeof fetch;
@@ -311,6 +313,7 @@ test("a double-clicked Allow in Signals pairs once: the second request changes n
   const asked = new Promise<void>((resolve) => (pairAsked = resolve));
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
+    if (url.endsWith("/apc/connect")) return new Response(null, { status: 404 });
     calls.push(url);
     if (url === `${HUB}/apc/pair`) {
       pairAsked();

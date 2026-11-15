@@ -319,3 +319,70 @@ test("the wait-event probe runs once per run, and each check makes one agent (AP
   assert.equal(probes, 1);
   assert.equal(agents, 2);
 });
+
+test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to /apc/pair), and /connect/dock pairs signed-in account", async () => {
+  const HUB = "https://dock.test";
+  const ORIGIN = "https://orders.test";
+  let connectAnswer = () => Response.json({ ok: true, status: "connect_requested" });
+  let pairAnswer = () => Response.json({ ok: false, error: "ticket_not_for_pairing" }, { status: 400 });
+  const called: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let cookie = "orders_session=1";
+
+  const app = new OrdersApp({
+    origin: ORIGIN,
+    profiles: ["direct", "dock"],
+    hubs: [HUB],
+    account: "demo@orders.test",
+    connectScript: "/connect-dock.js",
+    signedIn: (r) => r.headers.get("cookie") === cookie,
+    fetch: async (input, init) => {
+      const req = input instanceof Request ? input : new Request(input, init);
+      const body = (await req.clone().json()) as Record<string, unknown>;
+      called.push({ url: req.url, body });
+      if (req.url === `${HUB}/apc/connect`) return connectAnswer();
+      if (req.url === `${HUB}/apc/pair`) return pairAnswer();
+      if (req.url === `${HUB}/apc/confirm`) return Response.json({ ok: true, status: "paired", agent: { name: "Agent", icon: null } });
+      return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+    },
+  });
+
+  // 1. apc.json declares dock_connect; GET /connect/dock answers 200 (even signed out) with no-referrer and no third-party script.
+  const manifest = await (await app.fetch(new Request(`${ORIGIN}/.well-known/apc.json`))).json() as { dock_connect?: string };
+  assert.equal(manifest.dock_connect, `${ORIGIN}/connect/dock`);
+  const page = await app.fetch(new Request(`${ORIGIN}/connect/dock`, { redirect: "manual" }));
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  const html = await page.text();
+  assert.match(html, /data-session="false" data-signed-in="false"/);
+  assert.match(html, /history\.replaceState/);
+  assert.equal(/<script[^>]+src=["'](?:https?:)?\/\//i.test(html), false);
+
+  const post = (path: string, body: unknown) =>
+    app.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) }));
+
+  // 2. Unlinked drop calls requestConnect and does not ask for consent or call /apc/pair.
+  const dropTicket = `${"a".repeat(32)}.${"b".repeat(32)}`;
+  const drop = { hub: HUB, agent: "ag_o1", ticket: dropTicket, target: { kind: "order", id: "ord_1001" } };
+  assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: true, status: "connect_requested" });
+  assert.deepEqual(called.map((c) => new URL(c.url).pathname), ["/apc/connect"]);
+
+  // 3. Only 404 falls back to 0.12 path; Allow calls /apc/pair with drop ticket and returns ticket_not_for_pairing.
+  connectAnswer = () => Response.json({ ok: false, error: "not_found" }, { status: 404 });
+  const askedFallback = await (await post("/api/drop", drop)).json() as { error: string; consent: string };
+  assert.equal(askedFallback.error, "consent_required");
+  const pairFallback = await (await post("/api/drop", { ...drop, consent: askedFallback.consent })).json();
+  assert.deepEqual(pairFallback, { ok: false, error: "ticket_not_for_pairing" });
+  assert.equal(called.at(-1)?.body.ticket, dropTicket);
+
+  // 4. Full /api/connect/dock consent -> Allow -> pending + pairing code, then drop on linked agent confirms.
+  pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "a".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });
+  const connectTicket = `${"c".repeat(32)}.${"d".repeat(32)}`;
+  const connectAsked = await (await post("/api/connect/dock", { hub: HUB, agent: "ag_o1", ticket: connectTicket })).json() as { error: string; consent: string };
+  assert.equal(connectAsked.error, "consent_required");
+  const paired = await (await post("/api/connect/dock", { hub: HUB, agent: "ag_o1", ticket: connectTicket, consent: connectAsked.consent })).json() as { ok: boolean; status: string };
+  assert.equal(paired.ok, true);
+  assert.equal(paired.status, "pending");
+  const confirmed = await (await post("/api/drop", drop)).json() as { ok: boolean; status: string };
+  assert.equal(confirmed.ok, true);
+  assert.equal(new URL(called.at(-1)!.url).pathname, "/apc/confirm");
+});

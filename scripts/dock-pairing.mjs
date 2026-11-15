@@ -193,9 +193,9 @@ async function pair(t) {
   // The app-page branch supplies /connect/dock; its existing consent endpoint takes this same handoff here.
   const drop = { hub: DOCK, agent: agent.id, ticket: await connectTicket(), target };
   must(typeof drop.ticket === "string", "the dock gives the owner-approved app handoff a connect ticket");
-  const asked = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: drop });
+  const asked = await call(`${t.made.pulse}/connect/dock`, { method: "POST", body: drop });
   must(asked.json?.error === "consent_required" && typeof asked.json?.consent === "string", "the drop asks the person to Allow", asked);
-  const allowed = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: { ...drop, consent: asked.json.consent } });
+  const allowed = await call(`${t.made.pulse}/connect/dock`, { method: "POST", body: { ...drop, consent: asked.json.consent } });
   must(allowed.status === 200 && allowed.json?.ok === true && allowed.json?.status === "pending", `Allow: Pulse's call to the hub's /apc/pair (pairWithHub, in ${where}) was answered`, allowed);
   const grantId = allowed.json.grant_id;
   const code = allowed.json.pairing?.code ?? asked.json.pairing_code;
@@ -270,7 +270,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 async function main() {
-  if (!PRODUCTION) runtime = await startWorkerd({ connectManifestFixture: true });
+  if (!PRODUCTION) runtime = await startWorkerd();
   // The docs first, once: they make nothing, and a failure here never starts a pairing (no dock or sandbox is made).
   const docs = newTry(0, "");
   tries.push(docs);

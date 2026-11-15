@@ -69,8 +69,8 @@ async function world(t: TestContext) {
   const dropAndAllow = async () => {
     const { ticket } = await connectTicket(agent.id);
     const drop = { hub: DOCK, agent: agent.id, ticket, target: { kind: "customer", id: customers[0]!.id } };
-    const asked = await pulse.pairHub(SID, PULSE, drop);
-    const paired = await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent });
+    const asked = await pulse.pairHub(SID, PULSE, drop, true);
+    const paired = await pulse.pairHub(SID, PULSE, { ...drop, consent: asked.consent }, true);
     assert.equal(paired.ok, true, `pairing: ${paired.error}`);
     const pending = (await hub.state(DOCK)).agents[0].pairings.find((p: { status: string }) => p.status === "pending");
     assert.equal((await hub.decide(pending.id, "approve", asked.pairing_code)).ok, true);

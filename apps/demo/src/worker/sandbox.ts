@@ -7,7 +7,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type FocusTarget, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
@@ -591,7 +591,7 @@ export class Sandbox extends DurableObject<Env> {
    * for gets `consent_required` and a nonce; the page shows its consent with it, and only a request that
    * brings it back (once, for the same dock and agent, within two minutes) makes a grant.
    */
-  async pairHub(sid: string, origin: string, raw: unknown): Promise<PairHubAnswer> {
+  async pairHub(sid: string, origin: string, raw: unknown, connect = false): Promise<PairHubAnswer> {
     if (this.env.APC_V2 !== "1" || !this.offers("dock")) return { ok: false, error: "not_available" };
     // The hub allowlist (M1, APC 0.10), on the drop and again on the Allow: both are this request. The hub is parsed,
     // must be a bare https origin on HUB_ORIGINS, and the hub calls below go to that parsed origin (M9).
@@ -606,7 +606,7 @@ export class Sandbox extends DurableObject<Env> {
     if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
     this.pairing.add(key);
     try {
-      return await this.pairHubOnce(sid, origin, hub, agent, ticket, b.region, b.target, b.consent);
+      return await this.pairHubOnce(sid, origin, hub, agent, ticket, b.region, b.target, b.consent, connect);
     } finally {
       this.pairing.delete(key);
     }
@@ -700,10 +700,26 @@ export class Sandbox extends DurableObject<Env> {
     this.log("revoked", id, { via: link ? "dock" : "direct", ...note });
   }
 
-  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown): Promise<PairHubAnswer> {
+  private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, rawRegion: unknown, target: unknown, consent: unknown, connect: boolean): Promise<PairHubAnswer> {
+    // Consent belongs to this ticket and this entry point. Only a real 404 can ask on the drop path.
+    const scope = `${agent} ${ticket} ${connect ? "connect" : "fallback"}`;
+    const kv = sqlKv(this.sql);
+    const targetKey = `connect-target:${hub} ${agent}`;
+    if (connect && target === undefined) {
+      try {
+        const saved = JSON.parse(kv.get(targetKey) ?? "null") as { target: unknown; at: number } | null;
+        if (saved && Date.now() - saved.at < 360_000) target = saved.target;
+      } catch { /* no remembered target; Connect an app does not need one */ }
+    }
+    const requestFirst = async (): Promise<PairHubAnswer> => {
+      const answer = await requestConnect(hub, { ticket, agent, app: { origin } }, hubCallOptions(this.env));
+      if (!answer.ok) return answer.error === "not_found" ? askFirst() : answer;
+      kv.put(targetKey, JSON.stringify({ target, at: Date.now() }));
+      return { ok: true, status: "connect_requested" };
+    };
     /** The person has not said yes here for this agent: the page asks, with this nonce and the pairing code (APC 0.9). */
     const askFirst = (): PairHubAnswer => {
-      const asked = this.consent.ask(hub, agent);
+      const asked = this.consent.ask(hub, scope);
       // This consent replaces any older one for the same dock and agent: only its nonce pairs from now on.
       this.sql.exec("insert into dock_consents (hub, agent, nonce) values (?, ?, ?) on conflict(hub, agent) do update set nonce = excluded.nonce", hub, agent, asked.nonce);
       return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
@@ -711,7 +727,7 @@ export class Sandbox extends DurableObject<Env> {
     this.sweepDock();
     const linkOf = () => this.sql.exec<{ grant_id: string }>("select grant_id from hub_links where hub = ? and agent = ?", hub, agent).toArray()[0];
     const linked = linkOf();
-    if (linked) {
+    if (linked && !connect) {
       const before = this.dockRow(linked.grant_id);
       // An Allow for this agent is still waiting on the hub (APC 0.10): one pairing at a time, also after a restart
       // lost the in-memory lock. Past T_ack the sweep above ended it, and the drop asks again.
@@ -727,7 +743,7 @@ export class Sandbox extends DurableObject<Env> {
         if (answer.error !== "not_paired") return { ok: false, error: answer.error };
         // The dock no longer pairs them: the grant ends, and the ticket is still good, so the person can say yes here and pair at once.
         if (now) this.endDockGrant(linked.grant_id, "not_paired");
-        return askFirst();
+        return requestFirst();
       }
       // Gone while the hub answered. The ticket is spent: the person drags the agent again.
       if (!now) return { ok: false, error: "pairing_ended" };
@@ -746,7 +762,7 @@ export class Sandbox extends DurableObject<Env> {
         const pairing = this.pairingOf(linked.grant_id);
         if (!pairing || Date.parse(pairing.expires_at) <= this.dockNow()) {
           this.endDockGrant(linked.grant_id, "code_expired");
-          return askFirst();
+          return requestFirst();
         }
         const pinned = await this.pin(linked.grant_id, target);
         return { ok: true, grant_id: linked.grant_id, status: "pending", pairing, ...(pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" }) };
@@ -759,17 +775,18 @@ export class Sandbox extends DurableObject<Env> {
     const { id, secret, created_at } = newDirectGrant();
     // Before anything is written: the secret's hash, which the link keeps for a give-back and for Cancel.
     const hash = await secretHash(secret);
-    if (linkOf()) return { ok: false, error: "pairing_in_progress" };
+    if (!connect && linkOf()) return { ok: false, error: "pairing_in_progress" };
     // A drop (no nonce) is asked, and its consent replaces the one before. An Allow on a consent a newer drop
     // replaced is refused before the nonce is looked at: one pending consent per dock and agent.
-    if (consent === undefined || consent === null) return askFirst();
+    if (consent === undefined || consent === null) return connect ? askFirst() : requestFirst();
     // Used or not, a nonce that was sent goes: it works once.
-    if (this.latestConsent(hub, agent) !== consent) return (this.consent.takeConsent(consent, hub, agent), { ok: false, error: "consent_expired" });
-    const taken = this.consent.takeConsent(consent, hub, agent);
+    if (this.latestConsent(hub, agent) !== consent) return (this.consent.takeConsent(consent, hub, scope), { ok: false, error: "consent_expired" });
+    const taken = this.consent.takeConsent(consent, hub, scope);
     this.sql.exec("delete from dock_consents where hub = ? and agent = ?", hub, agent);
     // A drop (no nonce) is asked. An Allow whose nonce does not take (used, timed out, another agent's) fails closed
     // (APC 0.10, `consent_expired`): the person drags the agent again, and that drop is asked anew.
     if (!taken.ok) return { ok: false, error: "consent_expired" };
+    if (connect && linked) this.endDockGrant(linked.grant_id, "reconnect");
     // In flight (APC 0.10): the grant and its link exist before the hub hears of them, and answer 404 to everything
     // until the hub's acknowledgement. One synchronous step with the consent taken above.
     // Two statements, safe if the second fails: the grant carries `dock = 1` from its own insert, so without its link
@@ -818,7 +835,8 @@ export class Sandbox extends DurableObject<Env> {
     this.log("hub_paired", id, { hub, agent });
     this.broadcast({ type: "grants" });
     // Handed to the hub and waiting for the code in the dock, whatever the pin does: a pin that failed is said apart.
-    const pinned = await this.pin(id, target);
+    kv.delete(targetKey);
+    const pinned = target === undefined ? { ok: true } : await this.pin(id, target);
     return { ok: true, grant_id: id, status: "pending", pairing, ...(pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" }) };
   }
 
