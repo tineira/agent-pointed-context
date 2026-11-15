@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { apcConformance, ConformanceError, type ApcDockDropOutcome, type ConformanceCheck } from "../src/index.ts";
+import { apcConformance, ConformanceError, type ConformanceCheck } from "../src/index.ts";
 import { dockFixture, type FixtureBreak } from "./dock-fixture.ts";
 
 const named = (checks: ConformanceCheck[], part: string) => {
@@ -9,14 +9,14 @@ const named = (checks: ConformanceCheck[], part: string) => {
   return found[0]!;
 };
 
-// A trap on the old fields proves that neither drop nor connectDock is asked for a code before Allow.
-test("Dock code checks consume only Allow results, including a formatted code", async () => {
-  const { adapter } = dockFixture();
+// An app may withhold its code until Allow; optional consent codes stay absent.
+test("an app withholding the code until Allow passes all Dock checks, including a formatted code", async () => {
+  const { adapter } = dockFixture({ withholdCode: true });
   const dock = adapter.dock!;
   const drop = dock.drop.bind(dock);
   dock.drop = async (agent, ticket) => {
     const consent = await drop(agent, ticket);
-    Object.defineProperty(consent, "shown", { get() { throw new Error("code read before Allow"); } });
+    assert.equal(Object.hasOwn(consent, "code"), false);
     const allow = consent.allow;
     consent.allow = async () => {
       const answer = await allow();
@@ -26,8 +26,8 @@ test("Dock code checks consume only Allow results, including a formatted code", 
     return consent;
   };
   const life = dock.lifecycle!;
-  const trap = (outcome: ApcDockDropOutcome) => {
-    if (outcome.page === "consent") Object.defineProperty(outcome, "code", { get() { throw new Error("code read before Allow"); } });
+  const trap = (outcome: Awaited<ReturnType<typeof life.dropAgent>>) => {
+    if (outcome.page === "consent") assert.equal(Object.hasOwn(outcome, "code"), false);
     return outcome;
   };
   const dropAgent = life.dropAgent.bind(life);
@@ -35,16 +35,13 @@ test("Dock code checks consume only Allow results, including a formatted code", 
   life.dropAgent = async (d) => trap(await dropAgent(d));
   life.connectDock = async (url, target) => trap(await connectDock(url, target));
   const checks = apcConformance(adapter);
-  for (const check of checks.filter((c) => c.name.includes("(dock): pairing code:"))) await check.run();
-  for (const part of ["the pairing code goes only", "a second drop on a pending pairing", "not_paired from", "stored expiry has passed", "the stale Allow gets consent_expired"]) {
-    await named(checks, part).run();
-  }
+  for (const check of checks.filter((c) => /\(dock\): (?:pairing code:|consent:|0\.10:|0\.12:|0\.13:)/.test(c.name))) await check.run();
 });
 
 const broken: Array<[FixtureBreak, string, RegExp]> = [
-  ["allow_code_missing", "after Allow the app shows a well-formed code", /not a pairing code/],
-  ["allow_code_wrong", "after Allow the app shows a well-formed code", /another code/],
-  ["allow_code_reused", "every consent shows a new code", /same code/],
+  ["allow_code_missing", "well-formed code", /not a pairing code/],
+  ["allow_code_wrong", "well-formed code", /another code/],
+  ["allow_code_reused", "every consent", /another code/],
   ["allow_code_missing", "the pairing code goes only", /not a pairing code/],
 ];
 for (const [brk, part, message] of broken) {

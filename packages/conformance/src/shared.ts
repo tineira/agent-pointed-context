@@ -2,12 +2,27 @@
  * What the in-process suite (`index.ts`) and the HTTP checks (`http.ts`) share: the error a check
  * throws, how a JSON-RPC reply is read off Streamable HTTP, and the shapes of the core's view and focus.
  */
-import { compareStandard, endpointRule, isRevokedAnswer, parseParams, parseTarget, type ApcEndpointProfile, type ApcManifest, type FocusTarget } from "@tineira/apc-protocol";
+import { compareStandard, endpointRule, isRevokedAnswer, normalizePairingCode, parseParams, parseTarget, type ApcEndpointProfile, type ApcManifest, type FocusTarget } from "@tineira/apc-protocol";
 
 export class ConformanceError extends Error {}
 
 export function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new ConformanceError(message);
+}
+
+/** Tie the owner's code observations to the raw code received in this Allow's /apc/pair. */
+export function checkAllowedPairingCode(answerCode: unknown, consentCode: unknown, sent: Record<string, unknown> | undefined): string {
+  const code = normalizePairingCode(answerCode);
+  expect(code, `the Allow answers ${JSON.stringify(answerCode)}, not a pairing code (6 characters of Crockford base32)`);
+  expect(sent, "the app sent the hub no /apc/pair");
+  expect(normalizePairingCode(sent.pairing_code) === sent.pairing_code && typeof sent.pairing_code === "string", `the app sent pairing_code ${JSON.stringify(sent.pairing_code)}: send it raw, 6 characters, no dash`);
+  expect(sent.pairing_code === code, "the app sent the hub another code than the Allow answered");
+  if (consentCode !== undefined) {
+    const shown = normalizePairingCode(consentCode);
+    expect(shown, `the consent shows ${JSON.stringify(consentCode)}, not a pairing code`);
+    expect(shown === code && shown === sent.pairing_code, "the consent shows another code than the Allow answered and /apc/pair sent");
+  }
+  return code;
 }
 
 /**

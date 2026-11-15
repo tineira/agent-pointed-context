@@ -100,6 +100,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     if (r.error === "consent_required") {
       return {
         page: "consent",
+        code: formatPairingCode(r.pairing_code as string),
         allow: async (over) => {
           const a = await call(route, { ...drop, ...(over?.hub !== undefined ? { hub: over.hub } : {}), consent: r.consent });
           return { ok: a.ok === true, ...(typeof a.error === "string" ? { error: a.error } : {}), ...(typeof a.grant_id === "string" ? { grantId: a.grant_id } : {}), ...(a.ok === true && a.pairing ? { code: formatPairingCode((a.pairing as { code: string }).code) } : {}) };
@@ -124,12 +125,12 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     return shownFor(await call("/api/connect/dock", drop), "/api/connect/dock", drop);
   }
 
-  /** The pairing code: what the app answers and shows after the person Allows the consent. */
+  /** The pairing code: Orders displays it at consent time and also returns it from Allow. */
   async function dropOnPage(agent: string, ticket: string) {
     const { asked, route, drop } = await ask({ hub: HUB, agent, ticket, target: { kind: "order", id: "ord_1001" } });
     const shown = shownFor(asked, route, drop);
     if (shown.page !== "consent") throw new Error(`expected the consent, got ${JSON.stringify(shown)}`);
-    return { allow: () => shown.allow() };
+    return { code: shown.code, allow: () => shown.allow() };
   }
   // #endregion
 
