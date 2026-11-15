@@ -153,19 +153,19 @@ The stand-in hub plays the hub's side: it can hold `/apc/pair` (the grant is in 
 
 ## Hub conformance
 
-`hubConformance(adapter)` and `runHubConformance(adapter)` check a hub's app-visible MUSTs in process (no CLI) using `standInApp()` against an `ApcHubAdapter` (`fetch`, `ticket(agent)`, `pairingTicket(agent, origin)`, `approve(id, code?)`, `deny(id)`, and `advance(ms)`). It checks:
+`hubConformance(adapter)` and `runHubConformance(adapter)` check a hub's app-visible MUSTs in process (no CLI) using `standInApp()` against an `ApcHubAdapter` (`fetch`, `ticket(agent)`, `pairingTicket(agent, origin)`, `approve(id, code?)`, `deny(id)`, `advance(ms)`, plus optional `exerciseAgent(agent)`, `requiresPairingCode`, `idle()`, and `reset()`). It checks:
 
-- **`apc.json` validation and H7**: missing, redirected, invalid, over-sized, cross-origin, dockless, or uncovered `mcp_url` manifests are refused; after 60 s an unreachable or 5xx `apc.json` never falls back to a stale cached copy.
+- **`apc.json` validation and H7**: missing, redirected, invalid, over-sized, cross-origin, dockless, or uncovered `mcp_url` manifests (via `mcp.path` and `mcp.endpoints`) are refused with HTTP 400; after 60 s an unreachable or 5xx `apc.json` re-fetches and never falls back to a stale cached copy (`apc_json_unreachable`).
 - **Malformed bodies and ticket preservation**: malformed `/apc/pair` bodies are refused before spending the ticket or fetching `apc.json`; an invalid ticket fetches no `apc.json`; a valid ticket works once.
-- **Pairing code (`PAIR-2`, `CODE-2` never echoed)**: a code is required and normalized, acknowledged with `pairing_code: "required"`, and never echoed in `/apc/pair`, `/apc/confirm`, or app requests; missing or malformed `approve` codes do not spend attempts.
+- **Pairing code (`PAIR-2`, `CODE-2` never echoed)**: normalizes submitted and owner codes (hyphens, spaces, case, and Crockford `O`/`I`/`L` aliases), acknowledges with `pairing_code: "required"`, refuses codeless `/apc/pair` when `requiresPairingCode` is set (recording a declared policy note otherwise; the reference hub requires codes), leaves attempt counts untouched on missing/malformed `approve` codes, and never echoes the code in `/apc/pair`, pending or paired `/apc/confirm`, `approve`, or app requests.
 - **Give-back (`PAIR-2`)**: a 5th wrong code, pending expiry, or deny sends `/apc/revoke` for the grant URL.
-- **H1**: no MCP calls (`initialize`, `tools/list`, `tools/call`) before owner approval with the code; `initialize` is first after approval.
+- **H1**: no MCP calls (`initialize`, `tools/list`, `tools/call`) before owner approval with the code or during the in-flight `approving` window (including agent calls when `exerciseAgent` is provided, and extra wrong codes while approving); `initialize` is first after approval.
 - **H2**: `/apc/confirm` expires overdue pending requests before answering `not_paired`, leaves the ticket unspent, and gives the grant back.
-- **H3**: `/apc/pair` replaces an unapproved pending request for `(agent, origin)`, resets its wrong-code count to 0, gives back only a different URL asynchronously, and never replaces a paired pairing.
-- **H5**: HTTP 404 on `initialize` ends the pairing without `/apc/revoke`, answers `not_paired` on `/apc/confirm`, and allows re-pairing.
-- **Redirects**: the hub never follows a 3xx redirect on `apc.json`, MCP `initialize`, or `/apc/revoke`.
+- **H3**: `/apc/pair` replaces an unapproved pending request for `(agent, origin)`, resets its wrong-code count to 0, gives back only a different URL asynchronously, and never replaces an approving or paired pairing.
+- **H5**: HTTP 404 on `initialize` (and post-approval agent calls when `exerciseAgent` is provided) ends the pairing with a `pairing_ended` tombstone, answers `not_paired` on `/apc/confirm`, and allows re-pairing.
+- **Redirects**: the hub never follows a 3xx redirect on `apc.json`, MCP `initialize`, or `/apc/revoke` (whether using `redirect: "manual"` or `"error"`).
 
-Rules that need the dock UI (`CODE-2`'s "never shows" in dock state or page sockets, `DROP-1` no secret in the drag, and `TM-1` trust-model UI warnings and unverified markings) and agent-tool relays (`H4`, `H6`) are **reference behaviour, not conformance-tested in 1.0** (proven by `apps/dock/test`).
+Rules that need the dock UI (`CODE-2`'s "never shows" in dock state or page sockets, `DROP-1` no secret in the drag, and `TM-1` trust-model UI warnings and unverified markings), pairing-cap accounting in `H3`/`H5`, and agent-tool relays (`H4`, `H5` agent `relay()` errors, `H6`, plus post-approval agent gating/404 if an adapter omits `exerciseAgent`) are **reference behaviour, not conformance-tested in 1.0** (proven by `apps/dock/test`).
 
 ## What passing means
 

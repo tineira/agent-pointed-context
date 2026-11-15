@@ -1,5 +1,5 @@
 import { APC_JSON_MAX_BYTES, APC_JSON_PATH, APC_STANDARD_VERSION } from "@tineira/apc-protocol";
-import { isObject } from "./shared.ts";
+import { ConformanceError, isObject } from "./shared.ts";
 
 export type StandInApcJsonMode =
   | "ok"
@@ -16,7 +16,7 @@ export type StandInApcJsonMode =
   | "error_503"
   | "network_error";
 
-export type StandInMcpMode = "ok" | "redirect" | "not_found" | "error_500";
+export type StandInMcpMode = "ok" | "redirect" | "not_found" | "error_500" | "hold_initialize";
 export type StandInRevokeMode = "ok" | "redirect" | "slow";
 
 export interface StandInAppOptions {
@@ -56,6 +56,8 @@ export interface StandInApp {
   readonly redirectHits: string[];
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   mintGrantUrl(secret?: string): string;
+  waitForInitialize(timeoutMs?: number): Promise<void>;
+  releaseInitialize(): void;
   releaseRevoke(): void;
   reset(): void;
 }
@@ -116,6 +118,8 @@ export function standInApp(options: StandInAppOptions = {}): StandInApp {
 
   let grantSeq = 0;
   let pendingRevokes: Array<() => void> = [];
+  let pendingInitializes: Array<() => void> = [];
+  let initializeWaiters: Array<() => void> = [];
 
   const app: StandInApp = {
     origin,
@@ -134,8 +138,34 @@ export function standInApp(options: StandInAppOptions = {}): StandInApp {
 
     mintGrantUrl(secret?: string): string {
       grantSeq += 1;
-      const suffix = secret ?? `g${grantSeq}`;
+      const suffix = secret ?? `g${String(grantSeq).padStart(15, "0")}`;
       return `${origin}${mcpPath}${suffix}`;
+    },
+
+    waitForInitialize(timeoutMs = 1000): Promise<void> {
+      if (pendingInitializes.length > 0) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => {
+        let done = false;
+        const onArrive = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          initializeWaiters = initializeWaiters.filter((w) => w !== onArrive);
+          reject(new ConformanceError(`timed out after ${timeoutMs} ms waiting for held MCP initialize`));
+        }, timeoutMs);
+        initializeWaiters.push(onArrive);
+      });
+    },
+
+    releaseInitialize(): void {
+      const waiting = pendingInitializes;
+      pendingInitializes = [];
+      for (const resolve of waiting) resolve();
     },
 
     releaseRevoke(): void {
@@ -155,6 +185,8 @@ export function standInApp(options: StandInAppOptions = {}): StandInApp {
       app.mcpMode = options.mcpMode ?? "ok";
       app.revokeMode = options.revokeMode ?? "ok";
       grantSeq = 0;
+      initializeWaiters = [];
+      app.releaseInitialize();
       app.releaseRevoke();
     },
 
@@ -194,7 +226,12 @@ export function standInApp(options: StandInAppOptions = {}): StandInApp {
       }
 
       if (parsed.pathname.startsWith(mcpPath) && method === "POST") {
-        return await handleMcp(app, url, init, input, redirectMode, { serverName, serverVersion });
+        return await handleMcp(app, url, init, input, redirectMode, {
+          serverName,
+          serverVersion,
+          pendingInitializes,
+          initializeWaiters,
+        });
       }
 
       return jsonResponse({ error: "not_found", path: parsed.pathname }, 404);
@@ -229,6 +266,9 @@ function handleApcJson(
       throw new TypeError("Simulated network failure reading apc.json");
     case "redirect": {
       const target = `${app.redirectOrigin}${parsed.pathname}`;
+      if (redirectMode === "error") {
+        throw new TypeError(`Refused redirect fetching ${parsed.toString()}`);
+      }
       if (redirectMode !== "manual") {
         app.redirectHits.push(target);
         return jsonResponse(validManifest);
@@ -237,6 +277,9 @@ function handleApcJson(
     }
     case "opaque_redirect": {
       const target = `${app.redirectOrigin}${parsed.pathname}`;
+      if (redirectMode === "error") {
+        throw new TypeError(`Refused redirect fetching ${parsed.toString()}`);
+      }
       if (redirectMode !== "manual") {
         app.redirectHits.push(target);
         return jsonResponse(validManifest);
@@ -286,7 +329,10 @@ function handleApcJson(
     case "endpoints_no_dock":
       return jsonResponse({
         ...validManifest,
-        mcp: { endpoints: [{ path: `${meta.mcpPath}{secret}`, profiles: ["direct"] }] },
+        mcp: {
+          path: meta.mcpPath,
+          endpoints: [{ path: `${meta.mcpPath}{secret}`, profiles: ["direct"] }],
+        },
       });
   }
 }
@@ -312,6 +358,9 @@ async function handleRevoke(
 
   if (app.revokeMode === "redirect") {
     const target = `${app.redirectOrigin}/apc/revoke`;
+    if (redirectMode === "error") {
+      throw new TypeError(`Refused redirect posting ${url}`);
+    }
     if (redirectMode !== "manual") {
       app.redirectHits.push(target);
       if (typeof parsedBody.mcp_url === "string") {
@@ -342,7 +391,12 @@ async function handleMcp(
   init: RequestInit | undefined,
   input: RequestInfo | URL,
   redirectMode: RequestRedirect,
-  serverInfo: { serverName: string; serverVersion: string },
+  opts: {
+    serverName: string;
+    serverVersion: string;
+    pendingInitializes: Array<() => void>;
+    initializeWaiters: Array<() => void>;
+  },
 ): Promise<Response> {
   const text = await resolveRequestText(input, init);
   app.bodies.push({ url, text });
@@ -365,12 +419,15 @@ async function handleMcp(
   }
   if (app.mcpMode === "redirect") {
     const target = `${app.redirectOrigin}/mcp/redirected`;
+    if (redirectMode === "error") {
+      throw new TypeError(`Refused redirect posting ${url}`);
+    }
     if (redirectMode !== "manual") {
       app.redirectHits.push(target);
       return jsonResponse({
         jsonrpc: "2.0",
         id: parsedBody.id ?? 1,
-        result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: serverInfo.serverName, version: serverInfo.serverVersion } },
+        result: { protocolVersion: "2025-11-25", capabilities: {}, serverInfo: { name: opts.serverName, version: opts.serverVersion } },
       });
     }
     return new Response(null, { status: 302, headers: { location: target } });
@@ -378,6 +435,13 @@ async function handleMcp(
 
   const id = parsedBody.id ?? 1;
   if (rpcMethod === "initialize") {
+    if (app.mcpMode === "hold_initialize") {
+      await new Promise<void>((resolve) => {
+        opts.pendingInitializes.push(resolve);
+        const waiters = opts.initializeWaiters.splice(0);
+        for (const notify of waiters) notify();
+      });
+    }
     return jsonResponse(
       {
         jsonrpc: "2.0",
@@ -385,7 +449,7 @@ async function handleMcp(
         result: {
           protocolVersion: "2025-11-25",
           capabilities: { tools: {} },
-          serverInfo: { name: serverInfo.serverName, version: serverInfo.serverVersion },
+          serverInfo: { name: opts.serverName, version: opts.serverVersion },
         },
       },
       200,

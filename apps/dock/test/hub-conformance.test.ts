@@ -19,6 +19,7 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
   const envBase = { APP_ORIGINS: "https://app.example" };
   let hub!: InstanceType<typeof Hub>;
   let agentId = "";
+  let agentMcpUrl = "";
 
   async function initHub(): Promise<void> {
     const room = durableObjectRoom();
@@ -26,6 +27,7 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
     await hub.init(DID);
     const state = await hub.state(HUB_ORIGIN);
     agentId = state.agents[0]!.id;
+    agentMcpUrl = state.agents[0]!.mcp_url;
   }
 
   await initHub();
@@ -38,9 +40,22 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
     },
   };
 
+  async function rpcAgent(url: string, method: string, params: Record<string, unknown> = {}): Promise<void> {
+    const res = await dockWorker.fetch(
+      new Request(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      }),
+      workerEnv as never,
+    );
+    await res.text();
+  }
+
   return {
     name: "apps/dock reference hub",
     origin: HUB_ORIGIN,
+    requiresPairingCode: true,
     get agent() {
       return agentId;
     },
@@ -73,6 +88,19 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
     async deny(id: string) {
       return await hub.decide(id, "deny");
     },
+    async exerciseAgent(agent: string) {
+      const state = await hub.state(HUB_ORIGIN);
+      const agents = state.agents as Array<{ id: string; mcp_url: string }>;
+      const url = agents.find((a) => a.id === agent)?.mcp_url ?? agentMcpUrl;
+      await rpcAgent(url, "initialize", {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "conformance-agent", version: "0.1.0" },
+      });
+      await rpcAgent(url, "tools/list");
+      await rpcAgent(url, "tools/call", { name: "get_current_view", arguments: {} });
+      await rpcAgent(url, "tools/call", { name: "list_app_tools", arguments: {} });
+    },
   };
 }
 
@@ -96,5 +124,6 @@ for (const descriptor of descriptors) {
     const check = checks.find((c) => c.id === descriptor.id);
     assert.ok(check, `missing check ${descriptor.id}`);
     await check.run();
+    assert.equal(check.note, undefined, `unexpected policy or skip note on ${descriptor.id}: ${check.note}`);
   });
 }
