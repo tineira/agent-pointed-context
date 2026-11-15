@@ -120,6 +120,16 @@ Then run it, under `node --test` (`for (const c of apcConformance(adapter)) test
 
 <!-- include orders-conformance.ts#run -->
 
+### Automating drops in Chromium
+
+`enablePinning` defaults `trusted` to `(event) => event.isTrusted === true` (and `<apc-agents>`, `<apc-pets>` and `<apc-pin>` check `event.isTrusted` on their buttons), so a script running on the page cannot dispatch a synthetic `click()` or `PointerEvent` to arm or point an agent at data. In browser tests, synthetic `dispatchEvent` calls have `isTrusted: false` and are ignored:
+
+- **In-page mark drags** (`<apc-agents>`, `<apc-pets>`, `<apc-pin>`): marks use pointer events (not HTML5 `draggable`), so drive real pointer input from the mark's centre to the target's centre (`page.mouse` in Playwright, or `Input.dispatchMouseEvent` over CDP; `Input.dispatchTouchEvent` for touch taps on mobile).
+- **Dock drops**: send real HTML5 drag events over CDP (`Input.dispatchDragEvent`: `dragEnter`, `dragOver`, `drop`) with `APC_AGENT_TYPE` (`"application/x-apc-agent"`) and `agentDragPayload(agent, { hub, ticket })`.
+- **Unit or DOM tests without real browser input**: pass `trusted: () => true` in `enablePinning` (test-only; never in production), or use `createTapPin` directly as `orders-conformance.ts` does in `page.mobile`.
+
+<!-- include orders-conformance.ts#browser-drop -->
+
 ### The Dock profile as built (0.10)
 
 An app that claims 0.10.0 or later on the Dock profile also gives `dock.lifecycle` (`ApcDockLifecycleAdapter`), so the suite can put a grant into each state and reach the owner's endpoints. Without it, every 0.10 check fails and says so.

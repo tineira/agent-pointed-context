@@ -4,11 +4,14 @@
  * The samples type-check through apps/dock/tsconfig.docs.json (`pnpm typecheck`).
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import { MCP_BODY_MAX_BYTES, OrdersApp, type OrdersStore } from "../src/docs/examples/orders-app.ts";
 import { apcConformance } from "@tineira/apc-conformance";
-import { decodeApcConnect, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
+import { APC_AGENT_TYPE, decodeApcConnect, parseAgentDrag, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
+import { exampleRegion } from "../src/docs/markdown.ts";
+import { cdpDropFromDock, cdpPinMark, ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
 for (const profile of ["direct", "dock"] as const) {
   for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, check.run);
@@ -480,4 +483,58 @@ test("Orders 0.13: without the dock profile, apc.json has no dock_connect and GE
   const manifest = await (await app.fetch(new Request("https://orders.test/.well-known/apc.json"))).json() as Record<string, unknown>;
   assert.equal("dock_connect" in manifest, false);
   assert.equal((await app.fetch(new Request("https://orders.test/connect/dock"))).status, 404);
+});
+
+test("browser-drop helpers emit trusted CDP mouse and dock drag events", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const cdp = async (method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params });
+    return {};
+  };
+
+  await cdpPinMark(cdp, { x: 100, y: 200 }, { x: 260, y: 210 });
+  assert.deepEqual(
+    calls.map((c) => [c.method, c.params.type]),
+    [
+      ["Input.dispatchMouseEvent", "mouseMoved"],
+      ["Input.dispatchMouseEvent", "mousePressed"],
+      ["Input.dispatchMouseEvent", "mouseMoved"],
+      ["Input.dispatchMouseEvent", "mouseReleased"],
+    ],
+  );
+  assert.equal(calls[2]!.params.buttons, 1);
+
+  calls.length = 0;
+  await cdpDropFromDock(
+    cdp,
+    { x: 260, y: 210 },
+    { agent: "Helper", hub: "https://hub.example", ticket: "ticket_1234567890" },
+  );
+  assert.deepEqual(
+    calls.map((c) => [c.method, c.params.type]),
+    [
+      ["Input.dispatchDragEvent", "dragEnter"],
+      ["Input.dispatchDragEvent", "dragOver"],
+      ["Input.dispatchDragEvent", "drop"],
+    ],
+  );
+  const dropData = calls[2]!.params.data as { items: Array<{ mimeType: string; data: string }> };
+  assert.equal(dropData.items[0]!.mimeType, APC_AGENT_TYPE);
+  assert.deepEqual(parseAgentDrag(dropData.items[0]!.data), {
+    v: 1,
+    agent: "Helper",
+    hub: "https://hub.example",
+    ticket: "ticket_1234567890",
+  });
+});
+
+test("integrate.md Orders excerpts cover the full orders-app.ts file in page order", () => {
+  const integrateMd = readFileSync(resolve(import.meta.dirname, "../src/docs/pages/integrate.md"), "utf8");
+  const ordersAppSrc = readFileSync(resolve(import.meta.dirname, "../src/docs/examples/orders-app.ts"), "utf8");
+  const regions = [...integrateMd.matchAll(/<!-- include orders-app\.ts#(\w+) -->/g)].map((m) => m[1]!);
+  const assembled = regions.map((name) => exampleRegion(ordersAppSrc, name)).join("\n");
+
+  for (const symbol of ["live(", "byId(", "mcpUrl(", "publish(", "unlink(", "dockConnectPage("]) {
+    assert.ok(assembled.includes(symbol), `missing ${symbol} from assembled integrate.md excerpts`);
+  }
 });

@@ -383,6 +383,7 @@ export class OrdersApp {
   }
   // #endregion
 
+  // #region helpers
   /** A grant's MCP URL: the origin, apc.json's endpoint "/mcp/{secret}", with the secret. */
   mcpUrl(secret: string): string {
     return `${this.origin}/mcp/${secret}`;
@@ -404,6 +405,7 @@ export class OrdersApp {
       }
     }
   }
+  // #endregion
 
   // #region direct
   /** Direct: the person makes an agent on the page. It gets its own grant, and the URL to paste into the agent. */
@@ -641,12 +643,14 @@ export class OrdersApp {
   }
   // #endregion
 
+  // #region unlink
   /** Unlink: a linked agent shows as two again. Both grants stay. */
   unlink(grantId: string): { ok: boolean } {
     const ok = this.links.unlink(grantId) !== null;
     this.publish({ type: "agents" });
     return { ok };
   }
+  // #endregion
 
   // #region dock
   /**

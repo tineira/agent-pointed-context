@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **The integration and conformance docs now assemble a complete Orders app, match the 0.13 Dock connect flow, and explain how to drive trusted drops in Chromium.** Missing server helpers (`live`, `byId`, `mcpUrl`, `publish`, `unlink`) and the `orders-connect.ts` client are included inline, "The minimum for the Dock profile" reflects `dock_connect` consent, and both pages document the `isTrusted` guard alongside CDP drag/pin helpers. (`apps/dock/src/docs/pages/integrate.md`, `apps/dock/src/docs/pages/conformance.md`, `apps/dock/src/docs/examples/orders-app.ts`, `apps/dock/src/docs/examples/orders-conformance.ts`, `apps/dock/test/docs-examples.test.ts`)
+
 - **The pet bubble closes itself after an answer given in it, and says why when a request left on its own.** An Allow or Deny the hub accepted shows a short confirmation and closes once the pointer is off the bubble; a request that expired or was answered in the dock keeps the bubble with that reason until Done, instead of "No requests waiting". A wrong code typed in the bubble is now said on its card. (`apps/dock/src/web/pet.tsx`, `apps/dock/src/web/pet-bubble.ts`, `apps/dock/test/pet-bubble.test.ts`)
 - **Allow in the Windows pet bubble sends the code typed there.** The pet passed only the action, so the hub refused an approval that had no code and nothing happened; the code now goes from the bubble through the dock page to the hub. (`apps/dock/src/web/pet.tsx`, `apps/dock/src/web/hub.tsx`)
 
