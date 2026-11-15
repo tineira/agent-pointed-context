@@ -253,7 +253,7 @@ fn main() {
         // which the dock page (remote, with no capability in the dock's window) cannot use, so the
         // links did nothing. Without it a click is a new window request, and on_new_window opens the
         // link (tauri_plugin_opener's open_url needs no plugin).
-        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_bubble, pets::pet_grip, pets::pet_move, pets::pet_open_dock, float::float_state, float::float_set])
+        .invoke_handler(tauri::generate_handler![pets::pet_agents, pets::pet_bubble, pets::pet_grip, pets::pet_move, pets::pet_open_dock, pets::pet_caps, pets::pet_focus, float::float_state, float::float_set])
         .setup(|app| {
             let app = app.handle();
             float::start(app)?;

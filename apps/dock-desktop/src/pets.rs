@@ -612,6 +612,24 @@ pub fn pet_bubble(app: AppHandle, window: WebviewWindow, bubble: Option<(f64, f6
     place(&app, &window)
 }
 
+/// What pet windows can do, for pages that the app loads from production (TIN-922): `code_field`
+/// says a press on the bubble's code field activates the pet (`pet_focus`), so the code is typed there.
+pub const PET_CAPS: &[&str] = &["code_field"];
+
+#[tauri::command]
+pub fn pet_caps() -> Vec<String> {
+    PET_CAPS.iter().map(|c| c.to_string()).collect()
+}
+
+/// A press on the bubble's code field: the pet was shown without activation (SW_SHOWNOACTIVATE), so
+/// it is activated now, by the person's own click, and the keyboard reaches the field. Only a pet.
+#[tauri::command]
+pub fn pet_focus(window: WebviewWindow) {
+    if key(&window).is_some() {
+        let _ = window.set_focus();
+    }
+}
+
 /// The hint pet's click: the dock, where agents are added.
 #[tauri::command]
 pub fn pet_open_dock(app: AppHandle) {

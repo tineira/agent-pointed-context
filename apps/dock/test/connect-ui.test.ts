@@ -247,6 +247,7 @@ let AgentPage: unknown;
 let PetView: unknown;
 let PairingRequest: unknown;
 let petApp: { bubble(size: { width: number; height: number } | null): Promise<unknown> };
+let petCodeEntry: (caps: string[] | null) => "field" | "dock";
 let petInvoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> = async () => null;
 
 let restoredGlobals: (() => void) | null = null;
@@ -287,6 +288,7 @@ before(async () => {
   AgentPage = agentMod.AgentPage;
   PetView = petMod.PetView;
   petApp = petMod.petApp as typeof petApp;
+  petCodeEntry = petMod.petCodeEntry as typeof petCodeEntry;
   PairingRequest = pairingMod.PairingRequest;
   ssr = (comp, props) => renderToStaticMarkup(createElement(comp as never, props as never));
 });
@@ -512,4 +514,11 @@ test("PairingRequest with entry=field and compact (Float/strip) includes code in
   assert.match(agentPageHtml, /<h3>Connect an app<\/h3>/);
   assert.match(agentPageHtml, />Pulse<\/button>/);
   assert.match(agentPageHtml, />Check<\/button>/);
+});
+
+test("the pet takes the code only on an app that can activate the pet (TIN-922)", () => {
+  // An installed app before TIN-922 has no pet_caps (null): the code stays in the dock.
+  assert.equal(petCodeEntry(null), "dock");
+  assert.equal(petCodeEntry([]), "dock");
+  assert.equal(petCodeEntry(["code_field"]), "field");
 });
