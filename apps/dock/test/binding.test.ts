@@ -52,7 +52,7 @@ test("F10: a verified app is named by the operator's pin, else its own apc.json,
   w.apps.set(SHOP, shop);
   const agentId = (await w.agent()).id as string;
   const ask = async (origin: string, body: string, url: string) => {
-    const { ticket } = await w.hub.ticket(agentId);
+    const { ticket } = await w.connectTicket(agentId, origin);
     return w.hub.pair({ ticket, agent: agentId, app: { name: body, origin }, mcp_url: url, pairing_code: "K7M4P2" });
   };
   // Pinned: the request says "Your bank"; the dock says Pulse, and the prefix is the pin.
@@ -80,7 +80,7 @@ test("F10: an unpinned app never takes another origin's pinned prefix, nor one t
   const w = await world(t, { APP_ORIGINS: `${PULSE}/#id=pulse&name=Pulse,${SHOP}` });
   w.apps.set(SHOP, fakeApp(SHOP, "Pulse"));
   const agentId = (await w.agent()).id as string;
-  const { ticket } = await w.hub.ticket(agentId);
+  const { ticket } = await w.connectTicket(agentId, SHOP);
   assert.equal((await w.hub.pair({ ticket, agent: agentId, app: { name: "Pulse", origin: SHOP }, mcp_url: `${SHOP}/mcp/${"e".repeat(32)}`, pairing_code: "K7M4P2" })).ok, true);
   const line = await w.pairingOf(SHOP);
   assert.equal(line.app.name, "Pulse", "the name it gives itself");
@@ -128,7 +128,7 @@ test("a malformed pin is dropped, never fatal, listed as ignored, and logged whe
   const warned: string[] = [];
   t.mock.method(console, "warn", (message: string) => void warned.push(message));
   const agentId = (await w.agent()).id as string;
-  const { ticket } = await w.hub.ticket(agentId);
+  const { ticket } = await w.connectTicket(agentId, PULSE);
   assert.equal((await w.hub.pair({ ticket, agent: agentId, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${SID}/${"d".repeat(32)}`, pairing_code: "K7M4P2" })).ok, true);
   assert.deepEqual([(await w.pairingOf(PULSE)).app.name, (await w.pairingOf(PULSE)).app.id], ["Pulse", "pulse"], "verified still, named by the valid half of its pin");
   assert.equal(warned.length, 1);
@@ -141,7 +141,7 @@ test("F10: a pinned prefix that drifted (shop2, beside another live pairing of i
   w.apps.set(SHOP, fakeApp(SHOP, "Shop"));
   const agentId = (await w.agent()).id as string;
   const ask = async (n: string, approve: boolean) => {
-    const { ticket } = await w.hub.ticket(agentId);
+    const { ticket } = await w.connectTicket(agentId, SHOP);
     const a = await w.hub.pair({ ticket, agent: agentId, app: { name: "Shop", origin: SHOP }, mcp_url: `${SHOP}/mcp/${n.repeat(32)}`, pairing_code: "K7M4P2" });
     assert.equal(a.ok, true, a.error);
     if (approve) assert.equal((await w.hub.decide(a.pairing_id!, "approve", "K7M4P2")).ok, true);
@@ -163,7 +163,7 @@ test("F10: an id an unpinned origin held before a pin existed is never reused on
   w.apps.set(SHOP, fakeApp(SHOP, "Pulse"));
   const agentId = (await w.agent()).id as string;
   const ask = async (origin: string, url: string) => {
-    const { ticket } = await w.hub.ticket(agentId);
+    const { ticket } = await w.connectTicket(agentId, origin);
     const a = await w.hub.pair({ ticket, agent: agentId, app: { name: "Pulse", origin }, mcp_url: url, pairing_code: "K7M4P2" });
     assert.equal(a.ok, true, a.error);
     return a.pairing_id!;

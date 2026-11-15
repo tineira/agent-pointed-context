@@ -76,6 +76,10 @@ export interface DockState {
   onboarding: Onboarding;
   expires_at: string;
   agents: DockAgent[];
+  /** APC 0.13: first-pairing requests, never claims or connect tickets. */
+  connects: Array<{ id: string; kind: "app" | "reader"; agent: string; origin: string; host: string; name: string; verified: boolean; check?: string; expires_at: number }>;
+  /** Verified origins and operator-pinned names; an unpinned name is the host. */
+  apps: Array<{ origin: string; name: string }>;
   /** TIN-838; absent from a hub older than this page for a moment after a deploy. */
   devices?: DockDevice[];
   link?: { code: string; expires_at: number } | null;

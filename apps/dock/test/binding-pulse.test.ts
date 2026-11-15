@@ -16,7 +16,7 @@ test("Pulse's own pairing goes live through the binding; Pulse's Direct grant ha
   const direct = await w.pulse.addAgentGrant();
   const agentId = (await w.agent()).id as string;
   await w.hub.decide(line.id, "unpair");
-  const { ticket } = await w.hub.ticket(agentId);
+  const { ticket } = await w.connectTicket(agentId, PULSE);
   const answer = await w.hub.pair({ ticket, agent: agentId, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${SID}/${direct.secret}`, pairing_code: "K7M4P2" });
   assert.equal(answer.ok, true, "the hub cannot tell: it takes the request");
   assert.deepEqual(await w.hub.decide(answer.pairing_id!, "approve", "K7M4P2"), { ok: false, error: PAIRING_ENDED_ERROR }, "Pulse refuses the hub's introduction on a Direct grant");
