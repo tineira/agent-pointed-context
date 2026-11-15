@@ -56,9 +56,10 @@ fn page(query: Option<&str>) -> Url {
 /// Any other address (file:, mailto:, an app's own scheme) goes nowhere.
 fn stays(url: &Url) -> bool {
     match url.scheme() {
-        "about" | "blob" => true,
+        "about" if url.as_str() == "about:blank" => true,
         "http" | "https"
-            if url.origin() == origin().origin() && url.path().trim_end_matches('/') != "/extension" => true,
+            if url.origin() == origin().origin()
+                && (url.path().starts_with("/dock") || url.path().starts_with("/assets/")) => true,
         "http" | "https" => {
             let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
             false
