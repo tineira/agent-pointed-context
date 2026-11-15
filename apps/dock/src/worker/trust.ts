@@ -385,3 +385,12 @@ export function unverifiedWarning(domain: string, declared: string | null, agent
     ],
   };
 }
+
+/** The origins "Connect an app" lists: the verified apps, narrowed to `listed` when it is set (CONNECT_APPS). */
+export function connectList(verified: readonly string[], listed: readonly string[] | null): string[] {
+  const origin = (entry: string) => { try { return new URL(entry).origin; } catch { return null; } };
+  const all = [...new Set(verified.map(origin).filter((o): o is string => o !== null))];
+  if (listed === null) return all;
+  const keep = new Set(listed.map(origin).filter((o): o is string => o !== null));
+  return all.filter((o) => keep.has(o));
+}

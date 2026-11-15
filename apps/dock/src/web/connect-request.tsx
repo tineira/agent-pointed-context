@@ -170,6 +170,8 @@ export function ConnectRequest(props: ConnectRequestProps) {
  */
 export function ConnectApp(props: {
   apps: ReadonlyArray<{ origin: string; name: string }>;
+  /** The origins this agent is paired with now: their button says so and takes no click. */
+  connected?: ReadonlySet<string>;
   create: (host: string) => Promise<{ ok?: boolean; error?: unknown }>;
   refresh: () => void;
 }) {
@@ -202,11 +204,22 @@ export function ConnectApp(props: {
     <div className="connect-app">
       {props.apps.length > 0 && (
         <div className="row connect-app-list">
-          {props.apps.map((app) => (
-            <button key={app.origin} type="button" disabled={busy} title={app.origin} onClick={() => void check(app.origin, false)}>
-              {app.name}
-            </button>
-          ))}
+          {props.apps.map((app) => {
+            const on = props.connected?.has(app.origin) ?? false;
+            return (
+              <button
+                key={app.origin}
+                type="button"
+                className={on ? "connected" : undefined}
+                disabled={busy || on}
+                title={on ? `${app.name} is connected to this agent` : app.origin}
+                aria-label={on ? `${app.name}, connected` : undefined}
+                onClick={() => void check(app.origin, false)}
+              >
+                {on ? <>✓ {app.name}</> : app.name}
+              </button>
+            );
+          })}
         </div>
       )}
       <form
