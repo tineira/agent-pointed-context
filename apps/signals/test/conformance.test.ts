@@ -22,15 +22,14 @@ const HUB = "https://dock.test";
 const SID = "7".repeat(32);
 
 /** The stand-in hubs, by origin: one per feed under test, reached by Signals' server through fetch; nothing else leaves the process. */
-const hubs = new Map<string, { hub: StandInHub; calls: string[]; connect: boolean }>();
+const hubs = new Map<string, { hub: StandInHub; calls: string[] }>();
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input instanceof Request ? input.url : input));
   const h = hubs.get(url.origin);
   if (!h) throw new Error(`no network in this test: ${url}`);
   if (url.pathname === "/apc/connect") {
-    // A 0.13 hub (the conformance runs) takes the Connect request; a hub before 0.13 answers 404, and the drop asks
-    // itself (the fallback). Neither counts as pairing traffic in `calls`.
-    return h.connect ? h.hub.fetch(input, init) : Response.json({ error: "not_found" }, { status: 404 });
+    // Connect is recorded by the hub; `calls` counts only pairing/confirmation traffic.
+    return h.hub.fetch(input, init);
   }
   h.calls.push(url.href);
   return h.hub.fetch(input, init);
@@ -40,7 +39,7 @@ let hubCount = 0;
 /** Signals' deploy (wrangler.jsonc): both profiles. */
 const DEPLOY = { HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
-async function signals(profile: "direct" | "dock" = "dock", options: { link?: boolean; env?: Record<string, string>; connect?: boolean } = {}) {
+async function signals(profile: "direct" | "dock" = "dock", options: { link?: boolean; env?: Record<string, string> } = {}) {
   const room = durableObjectRoom();
   // A hub of its own, on its own origin: Signals pairs with it, and it calls Signals back (a give-back, its introduction).
   const hubOrigin = `https://dock-${++hubCount}.test`;
@@ -64,7 +63,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
     },
   });
   const calls: string[] = [];
-  hubs.set(hubOrigin, { hub, calls, connect: options.connect ?? false });
+  hubs.set(hubOrigin, { hub, calls });
   const posts = demoMarket().posts;
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "post", id: posts[0]!.id, part: null, params: null },
@@ -76,9 +75,8 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
     return `${ORIGIN}/mcp/${SID}/${String(row!.secret)}`;
   };
   /**
-   * A dock agent dropped on Signals, and the person asked (TIN-606). With a 0.13 hub the drop asks the hub to open
-   * Signals' dock_connect page (APC 0.13), whose script asks there with the hub's connect ticket; with a hub before
-   * 0.13 the drop itself asks (the fallback). The Allow goes where the person was asked.
+   * A dock agent dropped on Signals, and the person asked (TIN-606). The drop requests Connect; the owner approves,
+   * and Signals' dock_connect page asks with the origin-bound connect ticket. The Allow goes to that page's route.
    */
   const ask = async (drop: { hub: string; agent: string; ticket: string; target: FocusTarget }) => {
     let on = drop;
@@ -93,7 +91,7 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       asked = await feed.pairHub(SID, ORIGIN, on, true);
     }
     assert.equal(asked.error, "consent_required");
-    return { asked, allow: () => feed.pairHub(SID, ORIGIN, { ...on, consent: asked.consent }, connect) };
+    return { asked, on, allow: () => feed.pairHub(SID, ORIGIN, { ...on, consent: asked.consent }, connect) };
   };
   const connectOn = async (path: "direct" | "dock") => {
     if (path === "direct") {
@@ -158,7 +156,6 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
               object: () => feed,
               restart: () => void (feed = new Feed(room.ctx, feedEnv)),
               directGrant: () => connectOn("direct"),
-              connect: options.connect ?? false,
             }),
           },
         }
@@ -211,12 +208,12 @@ async function signals(profile: "direct" | "dock" = "dock", options: { link?: bo
       },
     },
   };
-  return { app, feed, room, hub, calls, workerEnv };
+  return { app, feed, room, hub, calls, workerEnv, ask };
 }
 
 for (const profile of ["direct", "dock"] as const) {
   // Both profiles (TIN-578). The hub is a 0.13 one: a first drop takes the real Connect path (M13), as deployed.
-  const { app } = await signals(profile, { connect: true });
+  const { app } = await signals(profile);
   for (const check of apcConformance(app)) test(check.name, check.run);
 }
 // The apc_link checks once, on a feed of their own: a feed holds at most 20 Direct agents, and the core checks use most of one.
@@ -309,29 +306,29 @@ test("revoking an agent in Signals calls nobody; the URL answers revoked with Si
 });
 
 test("Signals makes a grant for a dock agent only with the nonce its consent was shown with, even when the page thinks it is linked (TIN-606)", async () => {
-  const { app, feed, hub, calls: hubCalls } = await signals();
+  const { app, feed, hub, calls: hubCalls, ask } = await signals();
   const { grantId } = await app.connect();
   assert.deepEqual(await feed.revokeGrant(grantId), { ok: true });
-  // The page missed the revoke and sends the drop as a pin: the server asks for consent; nothing reaches the dock.
+  // The page missed the revoke and sends the drop as a pin: Connect and owner approval precede app consent.
   const calls = hubCalls.length;
-  const drop = { hub: hub.origin, agent: "ag_1", ticket: hub.ticket("ag_1"), target: { kind: "post", id: demoMarket().posts[0]!.id } };
-  const asked = await feed.pairHub(SID, ORIGIN, drop);
+  const drop = { hub: hub.origin, agent: "ag_1", ticket: hub.ticket("ag_1"), target: { kind: "post", id: demoMarket().posts[0]!.id, part: null, params: null } };
+  const { asked, on } = await ask(drop);
   assert.equal(asked.error, "consent_required");
   assert.match(asked.consent, /^cn_[0-9a-f]{32}$/);
   assert.equal(formatPairingCode(asked.pairing_code).length, 7, "and the pairing code its consent shows (APC 0.9)");
   assert.equal(hubCalls.length, calls);
   // An Allow whose nonce does not take fails closed (APC 0.10): consent_expired, and no new question on its word.
-  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent: `cn_${"0".repeat(32)}` }), { ok: false, error: "consent_expired" });
-  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, agent: "ag_2", consent: asked.consent }), { ok: false, error: "consent_expired" }, "another agent's drop");
-  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }), { ok: false, error: "consent_expired" }, "and the nonce went with that try: used or not, it works once");
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...on, consent: `cn_${"0".repeat(32)}` }, true), { ok: false, error: "consent_expired" });
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...on, agent: "ag_2", consent: asked.consent }, true), { ok: false, error: "consent_expired" }, "another agent's drop");
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...on, consent: asked.consent }, true), { ok: false, error: "consent_expired" }, "and the nonce went with that try: used or not, it works once");
   assert.equal(hubCalls.length, calls);
-  const again = await feed.pairHub(SID, ORIGIN, drop);
-  assert.equal((await feed.pairHub(SID, ORIGIN, { ...drop, consent: again.consent })).ok, true);
+  const again = await feed.pairHub(SID, ORIGIN, on, true);
+  assert.equal((await feed.pairHub(SID, ORIGIN, { ...on, consent: again.consent }, true)).ok, true);
   assert.deepEqual(hubCalls.slice(calls), [`${hub.origin}/apc/pair`]);
   assert.equal(hub.received.at(-1)!.pairing_code, again.pairing_code, "the code the consent showed went to the hub");
 });
 
-test("a double-clicked Allow in Signals pairs once: the second request changes nothing, and the grant the first made stays (Grok on #123)", async (t) => {
+test("a double-clicked Allow on Signals' 0.13 Connect path pairs once: the second request changes nothing, and the grant the first made stays (Grok on #123)", async (t) => {
   const { feed } = await signals();
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -340,8 +337,8 @@ test("a double-clicked Allow in Signals pairs once: the second request changes n
   const asked = new Promise<void>((resolve) => (pairAsked = resolve));
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url.endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     calls.push(url);
+    if (url === `${HUB}/apc/connect`) return Response.json({ ok: true, status: "connect_requested" });
     if (url === `${HUB}/apc/pair`) {
       pairAsked();
       // The hub takes its time (it reads the app's apc.json first).
@@ -353,17 +350,20 @@ test("a double-clicked Allow in Signals pairs once: the second request changes n
     throw new Error(`no network in this test: ${url}`);
   });
   const drop = { hub: HUB, agent: "ag_7", ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: demoMarket().posts[0]!.id } };
-  const { consent } = await feed.pairHub(SID, ORIGIN, drop);
-  const first = feed.pairHub(SID, ORIGIN, { ...drop, consent });
+  assert.equal((await feed.pairHub(SID, ORIGIN, drop)).status, "connect_requested");
+  const connectDrop = { ...drop, ticket: `${"d".repeat(32)}.${"c".repeat(32)}` };
+  const { consent } = await feed.pairHub(SID, ORIGIN, connectDrop, true);
+  assert.equal(typeof consent, "string");
+  const first = feed.pairHub(SID, ORIGIN, { ...connectDrop, consent }, true);
   await asked;
   // The grant exists while the hub answers, in flight (APC 0.10): this agent's, and answering nothing yet.
   const during = (await feed.state()).grants as Array<{ id: string; agent: string | null; state: string }>;
   assert.deepEqual(during.map((g) => [g.agent, g.state]), [["ag_7", "in_flight"]]);
-  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  assert.deepEqual(await feed.pairHub(SID, ORIGIN, { ...connectDrop, consent }, true), { ok: false, error: "pairing_in_progress" });
   release();
   const done = await first;
   assert.equal(done.ok, true, done.error);
-  assert.deepEqual(calls, [`${HUB}/apc/pair`], "no confirm, no second pairing");
+  assert.deepEqual(calls, [`${HUB}/apc/connect`, `${HUB}/apc/pair`], "one Connect request, no confirm, no second pairing");
   const grants = (await feed.state()).grants as Array<{ id: string; agent: string | null }>;
   assert.deepEqual(grants.map((g) => [g.id, g.agent]), [[done.grant_id, "ag_7"]], "the grant the hub got is still there, linked");
 });

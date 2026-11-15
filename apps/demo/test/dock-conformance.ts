@@ -93,8 +93,8 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
    * person there, through the Connect route, with the connect ticket the hub minted.
    */
   const connectDock = async (url: string, target?: unknown): Promise<ApcDockDropOutcome> => {
-    const decoded = decodeApcConnect(new URL(url).hash);
-    if (!decoded) return { page: "refused", error: "invalid_connect_fragment" };
+    // Forward the suite's payload verbatim: M9 probes server validation, even if a page would reject the fragment.
+    const decoded = JSON.parse(atob(new URL(url).hash.slice(13).replace(/-/g, "+").replace(/_/g, "/"))) as { hub: string; agent: string; ticket: string };
     const drop = { hub: decoded.hub, agent: decoded.agent, ticket: decoded.ticket, target: target ?? o.target };
     return outcome(await post("/connect/dock", drop), "/connect/dock", drop);
   };

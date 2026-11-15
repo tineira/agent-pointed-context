@@ -274,7 +274,6 @@ class Fixture {
   dead = false;
   /** One drop, Allow or confirm at a time per (hub, agent): the promise ends when the holder does. */
   private locks = new Map<string, { done: Promise<void>; release: () => void }>();
-  private rawHubs = new Map<string, string>();
   private chain: Promise<unknown> = Promise.resolve();
   private storage: Storage;
   private config: Config;
@@ -474,8 +473,7 @@ class Fixture {
       }
       else hub = this.parseHub(b.hub);
       if (!hub) return { ok: false, error: "hub_not_allowed" };
-      const consentRawHub = this.has("raw_hub_string") ? this.rawHubs.get(agent) : undefined;
-      const base = this.has("raw_hub_string") && !this.config.hubBoundToConsent ? (consentRawHub ?? String(b.hub)) : hub;
+      const base = this.has("raw_hub_string") && !this.config.hubBoundToConsent ? String(b.hub) : hub;
       return this.allow(nonce, agent, ticket, hub, base, target);
     }
     const hub = this.parseHub(b.hub);
@@ -531,7 +529,6 @@ class Fixture {
     // A new 0.13 first drop with no link and no connect ticket calls /apc/connect (not /apc/pair or consent).
     const is013 = compareStandard(this.config.standard, "0.13.0") >= 0;
     if (is013 && !b.connect_ticket && !this.has("drop_pairs_without_connect")) {
-      if (this.has("raw_hub_string") && typeof b.hub === "string") this.rawHubs.set(agent, b.hub);
       const answer = await this.hubCall(hub, "/apc/connect", { ticket, agent, app: { origin: ORIGIN } });
       if (this.dead) return { ok: false, error: "gone" };
       const a = answer.body as { ok?: unknown; status?: unknown; error?: unknown } | undefined;
@@ -912,7 +909,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   // The hub's clock runs from a fixed start inside the 0.12 window (it closes 2027-05-14), so the window's check runs
   // whatever day these tests run on.
   const started = Date.now();
-  const hub = standInHub({ origin: HUB, app: (request) => current.fetch(request), now: () => HUB_CLOCK_START + (Date.now() - started) });
+  // Only fixtures claiming the old standard need a pre-0.13 hub without Connect.
+  const hub = standInHub({ origin: HUB, app: (request) => current.fetch(request), now: () => HUB_CLOCK_START + (Date.now() - started), ...(compareStandard(config.standard, "0.13.0") < 0 ? { legacy: "0.12" as const } : {}) });
   current = new Fixture(storage, config, clock, hub);
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "order", id: "ord_1", part: null, params: null },
@@ -949,8 +947,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   };
 
   const connectDock = async (url: string, target?: FocusTarget): Promise<ApcDockDropOutcome> => {
-    const decoded = decodeApcConnect(new URL(url).hash);
-    if (!decoded) return { page: "refused", error: "invalid_connect_fragment" };
+    // Forward the suite's payload verbatim: M9 probes server validation, even if a page would reject the fragment.
+    const decoded = JSON.parse(atob(new URL(url).hash.slice(13).replace(/-/g, "+").replace(/_/g, "/"))) as { hub: string; agent: string; ticket: string };
     const drop = { hub: decoded.hub, agent: decoded.agent, ticket: decoded.ticket, target: target ?? targets[0] };
     const r = await post("/api/drop", { ...drop, connect_ticket: true });
     return dropOutcome(r, drop);

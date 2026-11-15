@@ -28,15 +28,14 @@ const SID = "5".repeat(32);
  * The stand-in hubs, by origin: one per Pulse under test, reached by Pulse's server through fetch, and nothing else
  * leaves the process. Each records what it was sent.
  */
-const hubs = new Map<string, { hub: StandInHub; calls: string[]; connect: boolean }>();
+const hubs = new Map<string, { hub: StandInHub; calls: string[] }>();
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input instanceof Request ? input.url : input));
   const h = hubs.get(url.origin);
   if (!h) throw new Error(`no network in this test: ${url}`);
   if (url.pathname === "/apc/connect") {
-    // A 0.13 hub (the conformance runs) takes the Connect request; a hub before 0.13 answers 404, and the drop asks
-    // itself (the fallback). Neither counts as pairing traffic in `calls`.
-    return h.connect ? h.hub.fetch(input, init) : Response.json({ error: "not_found" }, { status: 404 });
+    // Connect is recorded by the hub; `calls` counts only pairing/confirmation traffic.
+    return h.hub.fetch(input, init);
   }
   h.calls.push(url.href);
   return h.hub.fetch(input, init);
@@ -47,7 +46,7 @@ let hubCount = 0;
 const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
 /** Pulse as the suite sees it: its MCP endpoint, and the page through the sandbox's own methods. */
-async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response>; connect?: boolean } = {}) {
+async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; env?: Record<string, string>; link?: boolean; apcJson?: (request: Request) => Promise<Response> } = {}) {
   const room = durableObjectRoom();
   // A hub of its own, on its own origin: Pulse pairs with it, and it calls Pulse back (a give-back, its introduction).
   const hubOrigin = `https://dock-${++hubCount}.test`;
@@ -66,12 +65,14 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
     // A 0.13 hub reads apc.json (dock_connect) before it takes a Connect request.
     app: async (request) => {
       const path = new URL(request.url).pathname;
-      if (path === APC_JSON_PATH) return options.apcJson?.(request) ?? worker.fetch(request, env);
+      // Manifest mutants below target the suite's probe. Pair against the real Worker manifest first so a hub
+      // refusal does not mask the suite's comparison of the advertised profiles with an actual Dock grant.
+      if (path === APC_JSON_PATH) return worker.fetch(request, env);
       return path === "/apc/revoke" ? worker.fetch(request, workerEnv) : sandbox.fetch(request);
     },
   });
   const calls: string[] = [];
-  hubs.set(hubOrigin, { hub, calls, connect: options.connect ?? false });
+  hubs.set(hubOrigin, { hub, calls });
   const data = demoDataset();
   const targets: [FocusTarget, FocusTarget] = [
     { kind: "customer", id: data.customers[0]!.id, part: null, params: null },
@@ -80,9 +81,8 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
   let agents = 0;
   const secretOf = async (grantId: string): Promise<string> => ((await sandbox.state()).grants as Array<{ id: string; secret: string }>).find((g) => g.id === grantId)!.secret;
   /**
-   * A dock agent dropped on Pulse, and the person asked (TIN-606). With a 0.13 hub the drop asks the hub to open Pulse's
-   * dock_connect page (APC 0.13), whose script asks there with the hub's connect ticket; with a hub before 0.13 the
-   * drop itself asks (the fallback). The Allow goes where the person was asked.
+   * A dock agent dropped on Pulse, and the person asked (TIN-606). The drop requests Connect; the owner approves,
+   * and Pulse's dock_connect page asks with the origin-bound connect ticket. The Allow goes to that page's route.
    */
   const ask = async (drop: { hub: string; agent: string; ticket: string; target: FocusTarget }) => {
     let on = drop;
@@ -166,7 +166,6 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
               object: () => sandbox,
               restart: () => void (sandbox = new Sandbox(room.ctx, sandboxEnv)),
               directGrant: () => connectOn("direct"),
-              connect: options.connect ?? false,
             }),
           },
         }
@@ -221,11 +220,11 @@ async function pulse(profile: "direct" | "dock", options: { revoke?: boolean; en
       },
     },
   };
-  return { app, sandbox, room, hub, calls, workerEnv };
+  return { app, sandbox, room, hub, calls, workerEnv, ask };
 }
 
 test("native first drops create no Connect request across separate native/browser sessions; existing native pairings still confirm", async () => {
-  const native = await pulse("dock", { connect: true });
+  const native = await pulse("dock");
   const browserSid = "6".repeat(32);
   const browser = new Sandbox(durableObjectRoom().ctx, { ...DEPLOY, HUB_ORIGINS: native.hub.origin });
   const browserOwner = (await browser.init()).owner;
@@ -265,7 +264,7 @@ test("native first drops create no Connect request across separate native/browse
 for (const profile of ["direct", "dock"] as const) {
   // The apc_link checks once, with the Direct run: they make agents on both paths themselves. The hub is a 0.13 one: a
   // first drop takes the real Connect path (M13), as deployed.
-  const { app } = await pulse(profile, { link: profile === "direct", connect: true });
+  const { app } = await pulse(profile, { link: profile === "direct" });
   for (const check of apcConformance(app)) test(check.name, check.run);
 }
 // The direct-only setup (no dock, the agent of its own at start) still passes the core.
@@ -431,7 +430,7 @@ test("a running call is cut by its own grant, never by a grant id a later grant 
   assert.equal(gone.body.error, "unknown_grant");
 });
 
-test("a double-clicked Allow in Pulse pairs once: the second request changes nothing (Grok on #123)", async (t) => {
+test("a double-clicked Allow on Pulse's 0.13 Connect path pairs once: the second request changes nothing (Grok on #123)", async (t) => {
   const { sandbox } = await pulse("dock");
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -440,8 +439,8 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
   const calls: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url.endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     calls.push(url);
+    if (url === `${HUB}/apc/connect`) return Response.json({ ok: true, status: "connect_requested" });
     if (url === `${HUB}/apc/pair`) {
       pairAsked();
       await held;
@@ -450,28 +449,31 @@ test("a double-clicked Allow in Pulse pairs once: the second request changes not
     throw new Error(`no network in this test: ${url}`);
   });
   const drop = { hub: HUB, agent: "ag_8", ticket: `${"d".repeat(32)}.${"8".repeat(16)}`, target: { kind: "customer", id: demoDataset().customers[0]!.id } };
-  const { consent } = await sandbox.pairHub(SID, ORIGIN, drop);
-  const first = sandbox.pairHub(SID, ORIGIN, { ...drop, consent });
+  assert.equal((await sandbox.pairHub(SID, ORIGIN, drop)).status, "connect_requested");
+  const connectDrop = { ...drop, ticket: `${"d".repeat(32)}.${"c".repeat(32)}` };
+  const { consent } = await sandbox.pairHub(SID, ORIGIN, connectDrop, true);
+  assert.equal(typeof consent, "string");
+  const first = sandbox.pairHub(SID, ORIGIN, { ...connectDrop, consent }, true);
   await asked;
-  assert.deepEqual(await sandbox.pairHub(SID, ORIGIN, { ...drop, consent }), { ok: false, error: "pairing_in_progress" });
+  assert.deepEqual(await sandbox.pairHub(SID, ORIGIN, { ...connectDrop, consent }, true), { ok: false, error: "pairing_in_progress" });
   release();
   const done = await first;
   assert.equal(done.ok, true, done.error);
-  assert.deepEqual(calls, [`${HUB}/apc/pair`]);
+  assert.deepEqual(calls, [`${HUB}/apc/connect`, `${HUB}/apc/pair`]);
   const state = await sandbox.state();
   assert.deepEqual(state.grants.map((g: { id: string }) => g.id), [done.grant_id]);
   assert.deepEqual(state.hub_links.map((l: { grant_id: string }) => l.grant_id), [done.grant_id]);
 });
 
 test("Pulse makes a grant for a dock agent only with the nonce its consent was shown with (TIN-606)", async () => {
-  const { sandbox, hub, calls } = await pulse("dock");
-  const drop = { hub: hub.origin, agent: "ag_9", ticket: hub.ticket("ag_9"), target: { kind: "customer", id: demoDataset().customers[0]!.id } };
-  const asked = await sandbox.pairHub(SID, ORIGIN, drop);
+  const { sandbox, hub, calls, ask } = await pulse("dock");
+  const drop = { hub: hub.origin, agent: "ag_9", ticket: hub.ticket("ag_9"), target: { kind: "customer", id: demoDataset().customers[0]!.id, part: null, params: null } };
+  const { asked, allow } = await ask(drop);
   assert.deepEqual(Object.keys(asked).sort(), ["consent", "error", "ok", "pairing_code"]);
   assert.equal(asked.error, "consent_required");
-  assert.equal(calls.length, 0, "no grant and no call to the dock without the person's yes");
+  assert.equal(calls.length, 0, "no grant and no /apc/pair without the person's Allow in the app");
   assert.equal((await sandbox.state()).grants.length, 0);
-  assert.equal((await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent })).ok, true);
+  assert.equal((await allow()).ok, true);
   assert.deepEqual(calls, [`${hub.origin}/apc/pair`]);
   assert.equal((await sandbox.state()).grants.length, 1);
   // The code went to the hub as the consent showed it, raw.
@@ -479,12 +481,12 @@ test("Pulse makes a grant for a dock agent only with the nonce its consent was s
 });
 
 test("Pulse waits for the dock with the code: on a reload, on a new drop, until the hub connects; Cancel takes the grant back", async () => {
-  const { sandbox, hub } = await pulse("dock");
-  const target = { kind: "customer", id: demoDataset().customers[0]!.id };
+  const { sandbox, hub, ask } = await pulse("dock");
+  const target = { kind: "customer", id: demoDataset().customers[0]!.id, part: null, params: null };
   const drop = (agent: string) => ({ hub: hub.origin, agent, ticket: hub.ticket(agent), target });
   const first = drop("ag_w");
-  const asked = await sandbox.pairHub(SID, ORIGIN, first);
-  const paired = await sandbox.pairHub(SID, ORIGIN, { ...first, consent: asked.consent });
+  const { asked, allow } = await ask(first);
+  const paired = await allow();
   assert.equal(paired.ok, true);
   assert.equal(paired.status, "pending");
   assert.equal(paired.pairing?.code, asked.pairing_code);
@@ -507,17 +509,17 @@ test("Pulse waits for the dock with the code: on a reload, on a new drop, until 
 
   // Another agent: Cancel while waiting is the app's revoke.
   const second = drop("ag_c");
-  const asked2 = await sandbox.pairHub(SID, ORIGIN, second);
-  const waiting = await sandbox.pairHub(SID, ORIGIN, { ...second, consent: asked2.consent });
+  const { allow: allowSecond } = await ask(second);
+  const waiting = await allowSecond();
   assert.deepEqual(await sandbox.revokeGrant(waiting.grant_id!), { ok: true });
   assert.equal((await sandbox.state()).hub_links.some((l: { grant_id: string }) => l.grant_id === waiting.grant_id), false);
 });
 
 test("a drop that pairs but cannot pin its target says so: ok with the waiting code, and pin_error (APC 0.9)", async () => {
-  const { sandbox, hub } = await pulse("dock");
-  const drop = { hub: hub.origin, agent: "ag_p", ticket: hub.ticket("ag_p"), target: { kind: "customer", id: "c_nobody" } };
-  const asked = await sandbox.pairHub(SID, ORIGIN, drop);
-  const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+  const { sandbox, hub, ask } = await pulse("dock");
+  const drop = { hub: hub.origin, agent: "ag_p", ticket: hub.ticket("ag_p"), target: { kind: "customer", id: "c_nobody", part: null, params: null } };
+  const { asked, allow } = await ask(drop);
+  const paired = await allow();
   assert.equal(paired.ok, true, "the pairing went through");
   assert.equal(paired.status, "pending");
   assert.equal(paired.pairing?.code, asked.pairing_code);

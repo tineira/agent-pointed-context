@@ -25,6 +25,30 @@ const NOTE_FREE = /M5/;
 /** The fixture offers only the Dock profile: M12, which needs a Direct agent too, says so (the `bothProfiles` variant runs it). */
 const DOCK_ONLY_NOTE = /0\.12: M12:/;
 
+test("M9 sends the raw hub through the 0.13 Connect fragment and Allow, then checks all three canonical hub URLs", async () => {
+  const { adapter, hub } = dockFixture();
+  const life = adapter.dock!.lifecycle!;
+  const connectDock = life.connectDock!;
+  const opened: string[] = [];
+  life.connectDock = async (url, target) => {
+    const payload = JSON.parse(atob(new URL(url).hash.slice(13).replace(/-/g, "+").replace(/_/g, "/"))) as { hub: string };
+    opened.push(payload.hub);
+    return connectDock(url, target);
+  };
+  await named(apcConformance(adapter), "M9:").run();
+  assert.deepEqual(opened, [`${hub.origin}/`]);
+  for (const path of ["/apc/connect", "/apc/pair", "/apc/confirm"]) {
+    assert.ok(hub.requests.includes(`${hub.origin}${path}`));
+    assert.ok(!hub.requests.includes(`${hub.origin}/${path}`));
+  }
+});
+
+test("M9 still covers Pair and Confirm for explicit pre-0.13 fixtures", async () => {
+  const { adapter, hub } = dockFixture({ standard: "0.12.0" });
+  await named(apcConformance(adapter), "M9:").run();
+  for (const path of ["/apc/pair", "/apc/confirm"]) assert.ok(hub.requests.includes(`${hub.origin}${path}`));
+});
+
 {
   const { adapter, hub } = dockFixture();
   const checks = ours(apcConformance(adapter));

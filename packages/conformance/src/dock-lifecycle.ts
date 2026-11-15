@@ -37,6 +37,7 @@ import {
   T_CONNECT_MAX_MS,
   canonicalTarget,
   compareStandard,
+  decodeApcConnect,
   dockGrantAnswer,
   dockGrantCallOf,
   formatPairingCode,
@@ -434,25 +435,46 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
   };
   const drop =(life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, hub = d.hub.origin, target?: FocusTarget) => life.dropAgent({ agent, ticket: d.hub.ticket(agent), hub, ...(target ? { target } : {}) });
 
-  const finishConnect = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, outcome: ApcDockDropOutcome): Promise<ApcDockDropOutcome> => {
+  /** Even an attacker pairing a copied URL needs the owner's origin-bound connect ticket (H9). */
+  const pairingTicket = async (d: ApcDockAdapter, agent: string, origin: string) => {
+    const ticket = d.hub.ticket(agent);
+    const response = await d.hub.fetch(`${d.hub.origin}/apc/connect`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent, app: { origin } }) });
+    const answer = await response.json() as { ok?: boolean; status?: string; error?: string };
+    // Only the explicitly configured 0.12 stand-in takes this fallback.
+    if (response.status === 404 && answer.error === "not_found") return ticket;
+    expect(response.status === 200 && answer.ok && answer.status === "connect_requested", `stand-in hub /apc/connect failed: ${response.status} ${answer.error}`);
+    const approved = await d.hub.approveConnect(agent);
+    expect(approved.ok && approved.ticket, `stand-in hub approveConnect failed: ${approved.error ?? "missing ticket"}`);
+    return approved.ticket;
+  };
+
+  const finishConnect = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent: string, outcome: ApcDockDropOutcome, rawHub?: string): Promise<ApcDockDropOutcome> => {
     if (outcome.page === "connecting" && life.connectDock) {
       const approved = await d.hub.approveConnect(agent);
       expect(approved.ok && approved.url, `stand-in hub approveConnect failed: ${approved.error ?? "missing url"}`);
-      return await life.connectDock(approved.url);
+      const url = new URL(approved.url);
+      if (rawHub !== undefined) {
+        const fragment = decodeApcConnect(url.hash);
+        expect(fragment, "the approved URL has a valid Connect fragment");
+        // Deliberately noncanonical input: M9 probes the server, independently of a page's fragment validation.
+        const bytes = new TextEncoder().encode(JSON.stringify({ ...fragment, hub: rawHub }));
+        url.hash = "apc_connect=" + btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      }
+      return await life.connectDock(url.href);
     }
     return outcome;
   };
 
   /** The person drops a new agent from the stand-in hub (or `hub`): the consent, which must be one. */
-  const consent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent = newAgent(), hub = d.hub.origin) => {
-    const shown = await finishConnect(life, d, agent, await drop(life, d, agent, hub));
+  const consent = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, agent = newAgent(), hub = d.hub.origin, rawHub?: string) => {
+    const shown = await finishConnect(life, d, agent, await drop(life, d, agent, hub), rawHub);
     expect(shown.page === "consent", `a drop of an agent the app holds no grant for shows the consent, got ${JSON.stringify(shown).slice(0, 200)}`);
     expect(normalizePairingCode(shown.code), `the consent shows ${JSON.stringify(shown.code)}, not a pairing code`);
     return { agent, ...shown };
   };
   /** A grant in handoff: dropped, Allowed, acknowledged by the hub, with no initialize yet. */
-  const handoff = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, hub = d.hub.origin) => {
-    const c = await consent(life, d, newAgent(), hub);
+  const handoff = async (life: ApcDockLifecycleAdapter, d: ApcDockAdapter, hub = d.hub.origin, rawHub?: string) => {
+    const c = await consent(life, d, newAgent(), hub, rawHub);
     const answer = await c.allow();
     expect(answer.ok, `the Allow did not pair: ${answer.error}`);
     expect(typeof answer.grantId === "string" && answer.grantId.length > 0, "the Allow gives the grant's id (ApcDockAllowAnswer.grantId)");
@@ -1078,20 +1100,20 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       return { note: `${note}. Serialization across instances (an advisory lock and a partial unique index, say) cannot be seen from one process` };
     }),
 
-    check("M9: hub requests (/apc/pair and /apc/confirm) go to the parsed origin, never to the raw hub string", async (life, d) => {
+    check("M9: hub requests (/apc/connect, /apc/pair and /apc/confirm) go to the parsed origin, never to the raw hub string", async (life, d) => {
       const raw = `${d.hub.origin}/`;
       const before = d.hub.requests.length;
       const where = () => `called ${JSON.stringify(d.hub.requests.slice(before))}`;
       let g: Awaited<ReturnType<typeof handoff>>;
       try {
-        g = await handoff(life, d, raw);
+        g = await handoff(life, d, raw, raw);
       } catch (error) {
         throw new ConformanceError(`M9: with the drop's hub "${raw}", the Allow failed (${error instanceof Error ? error.message : String(error)}); the app ${where()}`);
       }
       const shown = await drop(life, d, g.agent, raw);
       expect(shown.page === "waiting", `M9: with the drop's hub "${raw}", a second drop shows the waiting card: got ${JSON.stringify(shown).slice(0, 200)}; the app ${where()}`);
       const called = d.hub.requests.slice(before);
-      for (const path of ["/apc/pair", "/apc/confirm"]) expect(called.includes(`${d.hub.origin}${path}`), `with the drop's hub "${raw}", the app never called ${d.hub.origin}${path}: it called ${JSON.stringify(called)}`);
+      for (const path of [...(compareStandard(await claimed(life), "0.13.0") >= 0 ? ["/apc/connect"] : []), "/apc/pair", "/apc/confirm"]) expect(called.includes(`${d.hub.origin}${path}`), `with the drop's hub "${raw}", the app never called ${d.hub.origin}${path}: it called ${JSON.stringify(called)}`);
       const wrong = called.filter((u) => !u.startsWith(`${d.hub.origin}/apc/`));
       expect(wrong.length === 0, `with the drop's hub "${raw}", the app called ${JSON.stringify(wrong)}`);
     }),
@@ -1384,9 +1406,11 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       const direct = await life.directGrant!();
       const agent = newAgent();
       // The suite plays the attacker: the Direct URL handed to the hub, with a code it chose.
-      const posted = await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket: d.hub.ticket(agent), agent, app: { name: app.name, origin: new URL(direct.mcpUrl).origin }, mcp_url: direct.mcpUrl, pairing_code: "K7M4P2" }) });
+      const origin = new URL(direct.mcpUrl).origin;
+      const ticket = await pairingTicket(d, agent, origin);
+      const posted = await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent, app: { name: app.name, origin }, mcp_url: direct.mcpUrl, pairing_code: "K7M4P2" }) });
       const pairing = d.hub.pairings.find((p) => p.agent === agent);
-      expect(posted.status === 200 && pairing, "the stand-in hub took the request (it checks no apc.json)");
+      expect(posted.status === 200 && pairing, "the stand-in hub took the request with its owner-approved ticket (it checks no mcp_url coverage)");
       const decided = await d.hub.decide(pairing.id, "approve", "K7M4P2");
       expect(decided.ok, `the stand-in hub did not approve: ${decided.error}`);
       expect(pairing.status === "refused", `the hub's introduction (initialize naming a pairing) on a Direct grant was served: the pairing is ${pairing.status}. A grant that is not a Dock grant refuses it (HTTP 404, or any refusal: 401 for a bearer grant)`);
@@ -1472,7 +1496,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     check12("M10: a later hub answer never rebinds a grant (a /apc/confirm naming another pairing, a second pairing of its URL), and an acknowledgement with a binding no app knows holds no grant", async (life, d) => {
       const a = await liveGrant(life, d);
       // A second pairing of the grant's URL at the hub, and another drop whose /apc/confirm answer names it: neither rebinds the grant.
-      const ticket = d.hub.ticket(a.agent);
+      const ticket = await pairingTicket(d, a.agent, life.owner.origin);
       await d.hub.fetch(`${d.hub.origin}/apc/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, agent: a.agent, app: { name: app.name, origin: life.owner.origin }, mcp_url: a.mcpUrl, pairing_code: "K7M4P2" }) });
       const later = d.hub.pairings.filter((p) => p.mcp_url === a.mcpUrl).at(-1)!;
       expect(later.id !== a.pairing.id, "the stand-in made a second pairing for the grant");
