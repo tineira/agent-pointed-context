@@ -45,7 +45,7 @@ const signals: DockAppUnderTest = {
 dockLifecycleTests(signals);
 
 test("Signals stores the pending code and its expiry: the waiting card survives a reload, and the grant is connected only once live", async (t) => {
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => String(input instanceof Request ? input.url : input).endsWith("/apc/connect") ? new Response(null, { status: 404 }) : Response.json({ ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" }));
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => String(input instanceof Request ? input.url : input).endsWith("/apc/connect") ? Response.json({ error: "not_found" }, { status: 404 }) : Response.json({ ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" }));
   const room = durableObjectRoom();
   const feed = new Feed(room.ctx, DEPLOY);
   await feed.init();
@@ -78,7 +78,7 @@ test("Signals stores the pending code and its expiry: the waiting card survives 
 test("Signals: a dock grant from before APC 0.10 whose hub never acknowledged it (no agent, no state) is ended at the upgrade, never read as live", async (t) => {
   let sent: { mcp_url?: string } = {};
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return new Response(null, { status: 404 });
+    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     sent = (await (input instanceof Request ? input : new Request(input, init)).json()) as { mcp_url?: string };
     return Response.json({ ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" });
   });

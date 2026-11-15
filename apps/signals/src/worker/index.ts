@@ -135,7 +135,7 @@ app.post("/api/s/:sid/connect/dock", async (c) => {
   const result = await stub(c).pairHub(c.var.sid, origin, body, true);
   return c.json(result, result.ok ? 200 : 400);
 });
-app.get("/connect/dock", () => dockConnectPage("Signals"));
+app.get("/connect/dock", (c) => profilesRefusal(c.env.APC_PROFILES, "Signals") ?? (servedProfiles(c.env).includes("dock") ? dockConnectPage("Signals") : c.json({ error: "not_found" }, 404)));
 
 /** Cancel on the waiting card (APC 0.10): revokes a dock grant the dock has not connected to yet, and only then. */
 app.post("/api/s/:sid/hub/cancel", async (c) => {
@@ -180,7 +180,7 @@ app.all("/mcp/:sid/:secret", async (c) => {
  * What Signals is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles
  * it offers (APC_PROFILES), where its MCP URLs live, and its Connect panel (?connect).
  */
-app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles: servedProfiles(c.env), connect: "/?connect", dockConnect: "/connect/dock" })));
+app.get("/.well-known/apc.json", (c) => { const profiles = servedProfiles(c.env); return apcJsonResponse(apcManifest({ name: "Signals", origin: new URL(c.req.url).origin, profiles, connect: "/?connect", ...(profiles.includes("dock") ? { dockConnect: "/connect/dock" } : {}) })); });
 
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
 app.all("/api/*", (c) => c.json({ error: "not_found" }, 404));

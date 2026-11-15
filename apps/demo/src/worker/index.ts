@@ -203,7 +203,12 @@ app.post("/api/s/:sid/connect/dock", async (c) => {
   const result = await rpc(c.env, c.var.sid, (s) => s.pairHub(c.var.sid, origin, body, true), 1);
   return c.json(result, result.ok ? 200 : 400);
 });
-app.get("/connect/dock", () => dockConnectPage("Pulse"));
+app.get("/connect/dock", (c) => {
+  const refusal = profilesRefusal(c.env.APC_PROFILES, "Pulse");
+  if (refusal) return refusal;
+  if (!offers(c.env, "dock")) return c.json({ error: "not_found" }, 404);
+  return dockConnectPage("Pulse");
+});
 
 /** Cancel on the waiting card (APC 0.10): revokes a dock grant the dock has not connected to yet, and only then. */
 app.post("/api/s/:sid/hub/cancel", async (c) => {
@@ -265,7 +270,10 @@ app.all("/mcp/:sid/:secret", async (c) => {
  * What Pulse is, for a dock and any tool (APC 0.5): its name, the standard, its origin, the profiles it
  * serves, where its MCP URLs live, and its Agents screen, where the person connects an agent directly.
  */
-app.get("/.well-known/apc.json", (c) => apcJsonResponse(apcManifest({ name: "Pulse", origin: new URL(c.req.url).origin, profiles: servedProfiles(c.env), connect: "/agents", dockConnect: "/connect/dock" })));
+app.get("/.well-known/apc.json", (c) => {
+  const profiles = servedProfiles(c.env);
+  return apcJsonResponse(apcManifest({ name: "Pulse", origin: new URL(c.req.url).origin, profiles, connect: "/agents", ...(profiles.includes("dock") ? { dockConnect: "/connect/dock" } : {}) }));
+});
 
 /** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));
