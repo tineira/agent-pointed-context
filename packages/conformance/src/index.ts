@@ -61,6 +61,23 @@ import { dockLifecycleChecks } from "./dock-lifecycle.ts";
 export { ConformanceError } from "./shared.ts";
 export { standInHub, type StandInHold, type StandInHub, type StandInHubMode, type StandInHubOptions, type StandInPairing } from "./hub.ts";
 export {
+  standInApp,
+  type StandInApcJsonMode,
+  type StandInApp,
+  type StandInAppCall,
+  type StandInAppOptions,
+  type StandInMcpMode,
+  type StandInRevokeMode,
+} from "./app.ts";
+export {
+  hubConformance,
+  runHubConformance,
+  type ApcHubAdapter,
+  type ApcHubApproveResult,
+  type HubConformanceCheck,
+  type HubConformanceReport,
+} from "./hub-conformance.ts";
+export {
   HttpConformanceUsageError,
   IN_PROCESS_ONLY,
   IN_PROCESS_REASON,

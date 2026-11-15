@@ -37,7 +37,7 @@ An adapter whose app authenticates agents with a bearer token (OAuth) gives the 
   - **One pending pairing**: a second drop on a pending pairing shows the same code, with no new consent or `/apc/pair`, and its target is the pin once the grant is live; `not_paired` ends the grant and starts a fresh consent; past the app's stored expiry (two minutes, through the time seam) a drop shows no code, ends the grant and starts a fresh consent; `paired` before `initialize` says it is connecting and stays in handoff until `initialize`; before the acknowledgement a new drop replaces the consent and the stale Allow gets `consent_expired`.
 - **`apc_link`** (an app with both profiles): the same client on the other path is offered a code once per session and the code links them; a code is refused on the connection that got it, on the same path, on another client, once used, and once expired; another client is offered nothing; Revoke on a linked agent cuts both grants; Unlink gives two agents again.
 
-It does not check how the page draws presence, the agent bar's two-click Revoke in a real browser, or the hub's own rules (H1 to H8: the reference hub is the only hub until after 1.0, and its own tests check them). On the Dock profile it does not check the page's heartbeat cadence (`T_idle / 2` while the page is open: the page sends it, and the suite only calls `heartbeat()`), long dormancy for an adapter that gives no `dormancyMs`, Cancel while the hub call is held (the grant's id is not known before the acknowledgement), or serialization across instances (M5). It sees the app's hub calls through `hub.fetch`, and while a check runs it wraps the global `fetch` too: an `/apc/pair` or `/apc/confirm` sent through it past the stand-in counts as a call off the hub's origin and is not sent. A call made with another HTTP client is not seen. After each check the suite gives back the grants it made, waiting 2 s at most for each. The docs' Orders example claims 0.10.0 and runs the 0.10 checks as pending until it meets them (TIN-892).
+It does not check how the page draws presence, the agent bar's two-click Revoke in a real browser, or rules that need the dock UI (`CODE-2`'s "never shows" on the dock page, `DROP-1` no secret in the drag, `TM-1` trust-model UI warnings and unverified markings — reference behaviour, not conformance-tested in 1.0; checked by the reference hub's own tests). For a hub's app-visible MUSTs, see [Hub conformance](#hub-conformance) below (`hubConformance`, in-process only). On the Dock profile it does not check the page's heartbeat cadence (`T_idle / 2` while the page is open: the page sends it, and the suite only calls `heartbeat()`), long dormancy for an adapter that gives no `dormancyMs`, Cancel while the hub call is held (the grant's id is not known before the acknowledgement), or serialization across instances (M5). It sees the app's hub calls through `hub.fetch`, and while a check runs it wraps the global `fetch` too: an `/apc/pair` or `/apc/confirm` sent through it past the stand-in counts as a call off the hub's origin and is not sent. A call made with another HTTP client is not seen. After each check the suite gives back the grants it made, waiting 2 s at most for each. The docs' Orders example claims 0.10.0 and runs the 0.10 checks as pending until it meets them (TIN-892).
 
 ## Run it from the command line
 
@@ -150,6 +150,22 @@ The stand-in hub plays the hub's side: it can hold `/apc/pair` (the grant is in 
 ### Apps on Cloudflare Durable Objects
 
 `@tineira/apc-conformance/workers` runs a Durable Object on Node's SQLite, with fake pages for the person's WebSockets (`installWorkersStandIn`, `durableObjectRoom`), so the suite runs against your object with no network and no `workerd`. The reference apps do exactly that: [Pulse](https://github.com/tineira/agent-pointed-context/blob/main/apps/demo/test/conformance.test.ts) and [Signals](https://github.com/tineira/agent-pointed-context/blob/main/apps/signals/test/conformance.test.ts).
+
+## Hub conformance
+
+`hubConformance(adapter)` and `runHubConformance(adapter)` check a hub's app-visible MUSTs in process (no CLI) using `standInApp()` against an `ApcHubAdapter` (`fetch`, `ticket(agent)`, `pairingTicket(agent, origin)`, `approve(id, code?)`, `deny(id)`, and `advance(ms)`). It checks:
+
+- **`apc.json` validation and H7**: missing, redirected, invalid, over-sized, cross-origin, dockless, or uncovered `mcp_url` manifests are refused; after 60 s an unreachable or 5xx `apc.json` never falls back to a stale cached copy.
+- **Malformed bodies and ticket preservation**: malformed `/apc/pair` bodies are refused before spending the ticket or fetching `apc.json`; an invalid ticket fetches no `apc.json`; a valid ticket works once.
+- **Pairing code (`PAIR-2`, `CODE-2` never echoed)**: a code is required and normalized, acknowledged with `pairing_code: "required"`, and never echoed in `/apc/pair`, `/apc/confirm`, or app requests; missing or malformed `approve` codes do not spend attempts.
+- **Give-back (`PAIR-2`)**: a 5th wrong code, pending expiry, or deny sends `/apc/revoke` for the grant URL.
+- **H1**: no MCP calls (`initialize`, `tools/list`, `tools/call`) before owner approval with the code; `initialize` is first after approval.
+- **H2**: `/apc/confirm` expires overdue pending requests before answering `not_paired`, leaves the ticket unspent, and gives the grant back.
+- **H3**: `/apc/pair` replaces an unapproved pending request for `(agent, origin)`, resets its wrong-code count to 0, gives back only a different URL asynchronously, and never replaces a paired pairing.
+- **H5**: HTTP 404 on `initialize` ends the pairing without `/apc/revoke`, answers `not_paired` on `/apc/confirm`, and allows re-pairing.
+- **Redirects**: the hub never follows a 3xx redirect on `apc.json`, MCP `initialize`, or `/apc/revoke`.
+
+Rules that need the dock UI (`CODE-2`'s "never shows" in dock state or page sockets, `DROP-1` no secret in the drag, and `TM-1` trust-model UI warnings and unverified markings) and agent-tool relays (`H4`, `H6`) are **reference behaviour, not conformance-tested in 1.0** (proven by `apps/dock/test`).
 
 ## What passing means
 
