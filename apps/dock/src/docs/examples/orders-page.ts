@@ -213,6 +213,8 @@ enablePinning({
  */
 async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget, consent?: string): Promise<void> {
   const answer = await post("/api/drop", { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target, consent });
+  if (answer.ok === true && answer.status === "connect_requested") { waiting.textContent = "Confirm in your dock"; return; }
+  if (answer.error === "ticket_not_for_pairing") { waiting.textContent = "Drop the agent again, then confirm in your dock."; return; }
   if (answer.error === "consent_required" && typeof answer.consent === "string" && typeof answer.pairing_code === "string") {
     const host = new URL(drag.hub).host;
     if (confirm(`Let your agent from the dock at ${host} read Orders? After OK, your dock asks for this code: ${formatPairingCode(answer.pairing_code)}. Type it only in your own dock; never give it to anyone.`)) await dropFromDock(drag, target, answer.consent);

@@ -71,6 +71,8 @@ function fakeHub(t: TestContext) {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== HUB) throw new TypeError(`no network in this test: ${url}`);
+    // Legacy lifecycle checks model a 0.12 hub (the real Connect flow has separate tests).
+    if (url.pathname === "/apc/connect") return new Response(null, { status: 404 });
     hub.calls.push(url.pathname);
     const body = (await request.json()) as Json;
     hub.sent.push(body);

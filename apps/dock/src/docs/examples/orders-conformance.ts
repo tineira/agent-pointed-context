@@ -32,7 +32,8 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
     origin: ORIGIN,
     profiles: ["direct", "dock"],
     hubs: [HUB],
-    fetch: hub.fetch,
+    // The existing suite models 0.12 pairing; the Connect integration tests use the real 0.13 hub.
+    fetch: (input, init) => String(input instanceof Request ? input.url : input).endsWith("/apc/connect") ? Promise.resolve(new Response(null, { status: 404 })) : hub.fetch(input, init),
     now: () => Date.now() + skew,
     signedIn: (request) => request.headers.get("cookie") === SESSION.cookie,
     // What Orders keeps outlives the process: a restart is a new OrdersApp on the same store.

@@ -1,3 +1,4 @@
+import { dockConnectPage } from "../../../../demo/src/worker/dock-connect-page.ts";
 /**
  * Orders: the smallest complete APC app, the one the guide at apc.tineira.com/docs/integrate builds step by
  * step. A shop's orders, pointable one by one, offered to agents on both profiles: Direct (the agent connects
@@ -38,6 +39,7 @@ import {
   dockGrantGate,
   handleDockGiveBack,
   pairWithHub,
+  requestConnect,
   parseDockDrop,
   InflightCalls,
   MemoryWaitSlots,
@@ -168,6 +170,10 @@ export interface OrdersAppOptions {
   hubs?: string[];
   /** Dock, local development only: loopback hubs allowed over http, e.g. ["http://localhost:5200"]. Leave it out in production. */
   localDevHubs?: string[];
+  /** The account shown on the consent card; set this from your own sign-in. */
+  account?: string;
+  /** Build orders-connect.ts as this same-origin asset, alongside orders-page.ts. */
+  connectScript?: string;
   /** Whether a request carries the person's session: your own sign-in. Orders has one person, so by default every request does. */
   signedIn?: (request: Request) => boolean;
   /** How the server calls a hub; the global fetch by default. */
@@ -224,6 +230,8 @@ export class OrdersApp {
   readonly origin: string;
   /** What `apc.json` and the page list: `dock` only while the app can pair, with a hub on its allowlist (M8). */
   readonly profiles: ApcProfile[];
+  private readonly account: string;
+  private readonly connectScript: string;
   private readonly host: string;
   private readonly hubs: DockDropOptions;
   private readonly signedIn: (request: Request) => boolean;
@@ -245,6 +253,8 @@ export class OrdersApp {
 
   constructor(options: OrdersAppOptions) {
     this.origin = options.origin;
+    this.account = options.account ?? "Orders example account";
+    this.connectScript = options.connectScript ?? "/assets/dock-connect.js";
     this.host = new URL(options.origin).host;
     this.hubs = { hubs: options.hubs ?? [], localDevHubs: options.localDevHubs ?? [] };
     // A mistyped allowlist fails here, at start, not on the first drop: parseDockDrop throws on an entry that is not a bare origin.
@@ -266,11 +276,12 @@ export class OrdersApp {
   // #region routes
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
+    if (path === "/connect/dock" && request.method === "GET") return dockConnectPage("Orders", { session: false, account: this.signedIn(request) ? this.account : "No account signed in. Open Orders to sign in, then return to this link.", script: this.connectScript });
     // What Orders is, for hubs, the browser extension and any tool (apc.json). Its one MCP endpoint (APC 0.11) is
     // exact: a grant's secret under /mcp/, on both profiles; /mcp/ stays for readers before 0.11.
     if (path === "/.well-known/apc.json") {
       const endpoints = [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] as const;
-      return apcJsonResponse(apcManifest({ name: "Orders", origin: this.origin, profiles: this.profiles, connect: "/agents", mcpPath: "/mcp/", endpoints }));
+      return apcJsonResponse(apcManifest({ name: "Orders", origin: this.origin, profiles: this.profiles, connect: "/agents", dockConnect: "/connect/dock", mcpPath: "/mcp/", endpoints }));
     }
     // Each grant's MCP URL: the agent itself (Direct) or a dock's hub (Dock) calls it.
     const mcp = path.match(/^\/mcp\/([0-9a-f]{32})$/);
@@ -290,6 +301,7 @@ export class OrdersApp {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (path === "/api/view") return Response.json(this.reportView(body));
     if (path === "/api/agents") return Response.json(await this.addAgent());
+    if (path === "/api/connect/dock") return Response.json(await this.drop(body, true));
     if (path === "/api/drop") return Response.json(await this.drop(body));
     if (path === "/api/cancel") return Response.json(this.cancel(body?.grant_id));
     if (path === "/api/heartbeat") return Response.json(this.heartbeat());
@@ -600,7 +612,7 @@ export class OrdersApp {
    * hub calls go (M9). An agent with no grant gets one only with the person's yes on this page, proven by the
    * nonce; the consent shows a pairing code, which the hub gets with the grant and the person types in their dock.
    */
-  async drop(raw: Record<string, unknown> | null): Promise<DropAnswer> {
+  async drop(raw: Record<string, unknown> | null, connect = false): Promise<DropAnswer> {
     if (!this.profiles.includes("dock")) return { ok: false, error: "dock_not_offered" };
     const parsed = parseDockDrop(raw, this.hubs);
     if (!parsed.ok) return { ok: false, error: parsed.error };
@@ -610,23 +622,28 @@ export class OrdersApp {
     if (this.pairing.has(key)) return { ok: false, error: "pairing_in_progress" };
     this.pairing.add(key);
     try {
-      return await this.dropOnce(hub, agent, ticket, raw?.target, raw?.consent);
+      return await this.dropOnce(hub, agent, ticket, raw?.target, raw?.consent, connect);
     } finally {
       this.pairing.delete(key);
     }
   }
 
-  private async dropOnce(hub: string, agent: string, ticket: string, target: unknown, consent: unknown): Promise<DropAnswer> {
+  private async dropOnce(hub: string, agent: string, ticket: string, target: unknown, consent: unknown, connect: boolean): Promise<DropAnswer> {
+    const scope = `${agent} ${ticket} ${connect ? "connect" : "fallback"}`;
+    const requestFirst = async (): Promise<DropAnswer> => {
+      const answer = await requestConnect(hub, { ticket, agent, app: { origin: this.origin } }, { fetch: this.send });
+      return !answer.ok && answer.error === "not_found" ? askFirst() : answer;
+    };
     // The newest consent asked for this agent: a new drop replaces the one before it.
     const newest = `asked:${hub} ${agent}`;
     const askFirst = (): DropAnswer => {
-      const asked = this.consent.ask(hub, agent);
+      const asked = this.consent.ask(hub, scope);
       this.store.kv.put(newest, asked.nonce);
       return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
     };
     this.sweep();
     const held = this.live().find((g) => g.hub === hub && g.agent === agent);
-    if (held) {
+    if (held && !connect) {
       // Its Allow still waits on the hub (in another request, or in a process that died): T_ack ends it within 30 s.
       if (held.state === "in_flight") return { ok: false, error: "pairing_in_progress" };
       // A grant already: the hub must still say it pairs them, on every drop.
@@ -640,7 +657,7 @@ export class OrdersApp {
       if (!check.ok || (held.state === "handoff" && check.status === "pending" && expired)) {
         this.forget(held);
         this.publish({ type: "agents" });
-        return askFirst();
+        return !check.ok ? requestFirst() : { ok: false, error: "pairing_ended" };
       }
       const pinned = this.pin(held.id, target);
       const pinError = pinned.ok ? {} : { pin_error: pinned.error };
@@ -657,14 +674,15 @@ export class OrdersApp {
       return { ...pinned, grant_id: held.id, status: check.status };
     }
     // No grant for this agent. A drop asks; an Allow must bring back the newest nonce.
-    if (consent === undefined || consent === null) return askFirst();
+    if (consent === undefined || consent === null) return connect ? askFirst() : requestFirst();
     const { id, secret } = newDirectGrant(); // any grant's id and secret
     const hash = await secretHash(secret);
     // From the nonce to the grant in flight, nothing is awaited.
     if (this.store.kv.get(newest) !== consent) return { ok: false, error: "consent_expired" };
-    const taken = this.consent.takeConsent(consent, hub, agent);
+    const taken = this.consent.takeConsent(consent, hub, scope);
     if (!taken.ok) return { ok: false, error: "consent_expired" };
     this.store.kv.delete(newest);
+    if (connect && held) this.forget(held);
     const now = this.now();
     // In flight: stored before the hub is called, so its URL answers 404 until the hub acknowledges it.
     const grant: Grant = { id, secret, hash, path: "dock", name: "Agent via dock", client: null, hub, agent, state: "in_flight", allowedAt: now, ackedAt: 0, lastWake: now, pairing: null, pairingId: null, declared: false };
@@ -689,7 +707,7 @@ export class OrdersApp {
     grant.pairing = { code: taken.pairing_code, expires_at: new Date(grant.ackedAt + PAIRING_CODE_TTL_MS).toISOString() };
     if (answer.agent.name) grant.name = answer.agent.name.replace(/[\p{C}]/gu, "").slice(0, 60);
     this.publish({ type: "agents" });
-    const pinned = this.pin(id, target);
+    const pinned = target === undefined ? { ok: true } : this.pin(id, target);
     return { ok: true, grant_id: id, status: "pending", pairing: grant.pairing, ...(pinned.ok ? {} : { pin_error: pinned.error }) };
   }
 
