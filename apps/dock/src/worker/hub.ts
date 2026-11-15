@@ -40,6 +40,8 @@ const WAIT_DEFAULT_S = 25;
 const CALLS_KEPT = 300;
 /** The readings kept in the log per agent (TIN-422). */
 const READINGS_KEPT = 50;
+/** APC 0.13: how many app /apc/connect attempts (apc.json reads, failed or in flight) one drop ticket allows. */
+const CONNECT_ATTEMPTS_PER_TICKET = 3;
 
 export interface Env {
   HUB: DurableObjectNamespace<Hub>;
@@ -346,7 +348,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"], ["pairings", "ended_reason text"], ["pairings", "app_standard text"], ["pairings", "unverified_acked integer"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"], ["pairings", "ended_reason text"], ["pairings", "app_standard text"], ["pairings", "unverified_acked integer"], ["tickets", "connect_attempts integer"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -1550,9 +1552,17 @@ export class Hub extends DurableObject<Env> {
     if (!b.ok) return b;
     const { reader, origin } = b;
     const ticketGood = () => this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray().some((t) => t.agent_id === b.agent && t.expires_at > Date.now()) && !!this.agent(b.agent);
-    if (this.sql.exec("select 1 from connect_tickets where ticket = ?", b.ticket).toArray().length) return { ok: false as const, error: "ticket_not_for_pairing" };
+    // A live connect ticket is the wrong kind; an expired one is just expired.
+    if (this.sql.exec("select 1 from connect_tickets where ticket = ? and expires_at > ?", b.ticket, Date.now()).toArray().length) return { ok: false as const, error: "ticket_not_for_pairing" };
     if (!ticketGood()) return { ok: false as const, error: "ticket_expired" };
     if (!this.connectRoom(b.agent, origin, reader)) return { ok: false as const, error: "too_many_requests" };
+    if (!reader) {
+      // A failure leaves the drop ticket good, so each ticket buys only a few apc.json reads, failed or in flight
+      // (counted before the fetch, synchronously with the checks above). Success spends the ticket.
+      const tried = this.sql.exec<{ n: number | null }>("select connect_attempts as n from tickets where ticket = ?", b.ticket).toArray()[0]?.n ?? 0;
+      if (tried >= CONNECT_ATTEMPTS_PER_TICKET) return { ok: false as const, error: "too_many_requests" };
+      this.sql.exec("update tickets set connect_attempts = ? where ticket = ?", tried + 1, b.ticket);
+    }
     const info = reader ? { ok: true as const, name: "APC extension", verified: true, dock_connect: null } : await this.connectInfo(origin);
     if (!info.ok) return info;
     // Every guard that can change during the fetch is checked again, before the first write.
@@ -1569,15 +1579,19 @@ export class Hub extends DurableObject<Env> {
   /** Owner's Check step: all outbound work happens here, never in approveConnect. */
   async createConnect(body: unknown, owner: string) {
     const b = body as { agent?: unknown; host?: unknown } | null;
-    if (typeof b?.agent !== "string" || typeof b.host !== "string" || b.host.length > 2048 || !this.agent(b.agent)) return { ok: false as const, error: "invalid" };
-    let origin: string;
+    if (typeof b?.agent !== "string" || typeof b.host !== "string" || b.host.length > 2048) return { ok: false as const, error: "invalid" };
+    if (!this.agent(b.agent)) return { ok: false as const, error: "unknown_agent" };
+    const typed = b.host.trim();
+    if (!typed) return { ok: false as const, error: "invalid" };
+    let url: URL;
     try {
-      const bare = !b.host.includes("://");
-      const loopback = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/.test(b.host);
-      const url = new URL(bare ? `${dev() && loopback ? "http" : "https"}://${b.host}` : b.host);
-      if (url.username || url.password || (!dev() && url.port)) return { ok: false as const, error: "app_not_allowed" };
-      origin = url.origin;
-    } catch { return { ok: false as const, error: "app_not_allowed" }; }
+      const bare = !typed.includes("://");
+      const loopback = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/.test(typed);
+      url = new URL(bare ? `${dev() && loopback ? "http" : "https"}://${typed}` : typed);
+    } catch { return { ok: false as const, error: "invalid" }; }
+    if (!url.hostname) return { ok: false as const, error: "invalid" };
+    if (url.username || url.password || (!dev() && url.port)) return { ok: false as const, error: "app_not_allowed" };
+    const origin = url.origin;
     if (!this.connectRoom(b.agent, origin, false)) return { ok: false as const, error: "too_many_requests" };
     const info = await this.connectInfo(origin);
     if (!info.ok) return info;
@@ -1591,17 +1605,24 @@ export class Hub extends DurableObject<Env> {
     return { ok: true as const, request: this.connectView(r) };
   }
 
-  /** Consume before any await: two approvals cannot mint two tickets. No outbound fetch here. */
+  /**
+   * Validate, then consume, with no await in between: two approvals cannot mint two tickets. A refusal the
+   * owner can answer (warning_required, an origin verdict, an extension origin) leaves the request pending;
+   * only a request that can never succeed (its agent gone) goes. No outbound fetch here.
+   */
   async approveConnect(id: string, action: unknown, hub: string) {
     this.expireConnects();
     const r = this.connectRows().find((row) => row.id === id);
     if (!r) return { ok: false as const, error: "not_found" };
     if (action !== undefined && action !== "approve_unverified") return { ok: false as const, error: "invalid_action" };
-    this.sql.exec("delete from connect_requests where id = ?", id);
-    this.broadcast();
-    if (!this.agent(r.agent_id)) return { ok: false as const, error: "unknown_agent" };
+    if (!this.agent(r.agent_id)) {
+      this.sql.exec("delete from connect_requests where id = ?", id);
+      this.broadcast();
+      return { ok: false as const, error: "unknown_agent" };
+    }
     if (r.kind === "reader") {
       if (!this.readerOriginOk(r.origin)) return { ok: false as const, error: "reader_not_allowed" };
+      this.sql.exec("delete from connect_requests where id = ?", id);
       for (const old of this.readers(r.agent_id).filter((x) => x.origin === r.origin)) {
         this.sql.exec("delete from pointer where pairing_id = ?", old.id);
         this.sql.exec("delete from readers where id = ?", old.id);
@@ -1616,6 +1637,8 @@ export class Hub extends DurableObject<Env> {
     if (!verdict.ok) return verdict;
     r.unverified_acked = !verdict.verified && action === "approve_unverified" ? 1 : 0;
     if (!verdict.verified && !r.unverified_acked) return { ok: false as const, error: "warning_required" };
+    this.sql.exec("delete from connect_requests where id = ?", id);
+    this.broadcast();
     const ticket = `${this.meta("did")}.${randomHex(16)}`;
     this.sql.exec("insert into connect_tickets (ticket, agent_id, origin, unverified_acked, expires_at) values (?, ?, ?, ?, ?)", ticket, r.agent_id, r.origin, r.unverified_acked, Date.now() + TICKET_TTL_MS);
     const url = new URL(r.dock_connect!);
@@ -1870,7 +1893,7 @@ export class Hub extends DurableObject<Env> {
     if (!(await this.alive())) return { ok: false, error: "not_paired" };
     const b = body as { ticket?: unknown; agent?: unknown; mcp_url?: unknown } | null;
     if (typeof b?.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return { ok: false, error: "invalid" };
-    if (this.sql.exec("select 1 from connect_tickets where ticket = ?", b.ticket).toArray().length) return { ok: false, error: "ticket_not_for_pairing" };
+    if (this.sql.exec("select 1 from connect_tickets where ticket = ? and expires_at > ?", b.ticket, Date.now()).toArray().length) return { ok: false, error: "ticket_not_for_pairing" };
     const t = this.sql.exec<{ agent_id: string; expires_at: number }>("select agent_id, expires_at from tickets where ticket = ?", b.ticket).toArray()[0];
     if (!t || t.expires_at < Date.now() || t.agent_id !== b.agent) return { ok: false, error: "ticket_expired" };
     // Overdue pending requests go before the answer (H2, APC 0.10): an expired request answers not_paired, never pending.

@@ -163,8 +163,13 @@ test("unverified Connect warns once; only code approval commits the domain appro
   const origin = "https://unverified.example";
   w.app(origin);
   assert.equal((await w.ask(origin)).ok, true);
-  assert.deepEqual(await w.approve((await w.request()).id), { ok: false, error: "warning_required" });
-  const ct = await w.connectTicket(origin, "approve_unverified");
+  const pending = (await w.request()).id;
+  assert.deepEqual(await w.approve(pending), { ok: false, error: "warning_required" });
+  assert.equal((await w.request())?.id, pending, "a refused approve leaves the request pending");
+  const approved = await w.approve(pending, "approve_unverified");
+  assert.ok(approved.ok && "url" in approved);
+  const ct = decodeApcConnect(new URL(approved.url).hash)!.ticket;
+  assert.deepEqual(await w.approve(pending, "approve_unverified"), { ok: false, error: "not_found" });
   assert.equal(w.hubRoom.db.prepare("select count(*) n from unverified_ok").get()!.n, 0);
   const pair = await w.pair(ct, origin);
   assert.ok(pair.ok);
@@ -179,8 +184,67 @@ test("unverified Connect warns once; only code approval commits the domain appro
   await w.ask(origin);
   const hits = w.hits.get(origin);
   w.hubEnv.UNVERIFIED_PAIRING = "closed";
-  assert.deepEqual(await w.approve((await w.request()).id), { ok: false, error: "app_not_allowed" });
+  const closed = (await w.request()).id;
+  assert.deepEqual(await w.approve(closed, "approve_unverified"), { ok: false, error: "app_not_allowed" });
   assert.equal(w.hits.get(origin), hits, "approve has no outbound fetch");
+  assert.equal((await w.request())?.id, closed, "a refused verdict leaves the request pending");
+  w.hubEnv.UNVERIFIED_PAIRING = "open";
+  assert.equal((await w.approve(closed, "approve_unverified")).ok, true);
+});
+
+test("an approve whose agent is gone drops the request: it can never succeed", async (t) => {
+  const w = await setup(t);
+  assert.equal((await w.ask()).ok, true);
+  const id = (await w.request()).id;
+  w.hubRoom.db.prepare("delete from agents where id = ?").run(w.agentId);
+  assert.deepEqual(await w.approve(id), { ok: false, error: "unknown_agent" });
+  assert.equal(w.hubRoom.db.prepare("select count(*) n from connect_requests").get()!.n, 0);
+});
+
+test("/apc/connect names malformed bodies invalid and plain http https_required, spending nothing", async (t) => {
+  const w = await setup(t);
+  const { ticket } = await w.hub.ticket(w.agentId);
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId }), { ok: false, error: "invalid" });
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: {} }), { ok: false, error: "invalid" });
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin: 7 } }), { ok: false, error: "invalid" });
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin: "not a url" } }), { ok: false, error: "invalid" });
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin: "http://shop.example" } }), { ok: false, error: "https_required" });
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin: "ftp://shop.example" } }), { ok: false, error: "app_not_allowed" });
+  assert.equal(w.hits.size, 0);
+  assert.ok(w.hubRoom.db.prepare("select 1 from tickets where ticket = ?").get(ticket));
+});
+
+test("an expired connect ticket is ticket_expired on /apc/connect and /apc/confirm, not ticket_not_for_pairing", async (t) => {
+  const w = await setup(t);
+  const ct = await w.connectTicket();
+  w.hubRoom.db.prepare("update connect_tickets set expires_at = 0").run();
+  assert.deepEqual(await w.hub.requestConnect({ ticket: ct, agent: w.agentId, app: { origin: SHOP } }), { ok: false, error: "ticket_expired" });
+  assert.deepEqual(await w.hub.confirm({ ticket: ct, agent: w.agentId, mcp_url: SHOP + "/mcp/x" }), { ok: false, error: "ticket_expired" });
+});
+
+test("one drop ticket buys at most three app attempts that read apc.json, then too_many_requests, still unspent", async (t) => {
+  const w = await setup(t);
+  const origins = ["https://a.example", "https://b.example", "https://c.example", "https://d.example"];
+  for (const origin of origins) w.app(origin).apcJson = () => new Response("no", { status: 404 });
+  const { ticket } = await w.hub.ticket(w.agentId);
+  for (const origin of origins.slice(0, 3)) assert.equal((await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin } })).ok, false);
+  const before = [...w.hits.values()].reduce((n, x) => n + Number(x), 0);
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin: origins[3] } }), { ok: false, error: "too_many_requests" });
+  assert.deepEqual(await w.hub.requestConnect({ ticket, agent: w.agentId, app: { origin: SHOP } }), { ok: false, error: "too_many_requests" });
+  assert.equal([...w.hits.values()].reduce((n, x) => n + Number(x), 0), before, "no fetch past the cap");
+  assert.ok(w.hubRoom.db.prepare("select 1 from tickets where ticket = ?").get(ticket));
+  assert.equal((await w.ask()).ok, true, "a fresh drop ticket starts again");
+});
+
+test("owner create answers unknown_agent for a missing agent and invalid for an empty or malformed host", async (t) => {
+  const w = await setup(t);
+  const create = (body: Json) => w.hub.asOwner(w.owner, "createConnect", [body, w.owner]);
+  assert.deepEqual(await create({ agent: "ag_missing", host: SHOP }), { ok: false, error: "unknown_agent" });
+  assert.deepEqual(await create({ agent: w.agentId, host: "" }), { ok: false, error: "invalid" });
+  assert.deepEqual(await create({ agent: w.agentId, host: "   " }), { ok: false, error: "invalid" });
+  assert.deepEqual(await create({ agent: w.agentId, host: "https://" }), { ok: false, error: "invalid" });
+  assert.deepEqual(await create({ agent: w.agentId }), { ok: false, error: "invalid" });
+  assert.equal((await create({ agent: w.agentId, host: "shop.example" })).ok, true);
 });
 
 test("owner-only routes reject missing or other cookies and cross-site approves, then double approval returns not_found", async (t) => {

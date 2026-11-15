@@ -159,7 +159,7 @@ Since 0.13, a first drop requests a connection, before app consent. The app send
 
 The hub checks, in order: body and origin; a live drop ticket bound to the agent and an existing agent, without spending it; limits; the origin verdict (blocklist, verified origins, kill switch); the app's `apc.json`, which must offer `dock` and a same-origin fragment-free `dock_connect`; then, in one synchronous step, rechecks the ticket, spends it and inserts the request. A failure before that step leaves the drop ticket usable. A connect ticket used here is `ticket_not_for_pairing` and is not spent.
 
-The reference hub holds a request for `CONNECT_REQUEST_TTL_MS` (120 seconds), replaces one for the same (agent, app origin), allows at most three origins per agent and twenty requests per dock (`too_many_requests`). The owner may also create one by `POST /api/d/:did/connects {agent,host}` (a bare host or HTTPS URL, normalized by `new URL`, ports only in development). It answers `{ok:true,request}`. Connect and Deny are owner-authenticated, same-origin POSTs to `/api/d/:did/connects/:cr/approve` and `/deny`. An approve consumes the request synchronously and checks the current verdict again, without an outbound fetch. A second approve is `not_found`.
+The reference hub holds a request for `CONNECT_REQUEST_TTL_MS` (120 seconds), replaces one for the same (agent, app origin), allows at most three origins per agent, twenty requests per dock, and three app attempts per drop ticket (each reads `apc.json`, failed or in flight; `too_many_requests`). The owner may also create one by `POST /api/d/:did/connects {agent,host}` (a bare host or HTTPS URL, normalized by `new URL`, ports only in development). It answers `{ok:true,request}`. Connect and Deny are owner-authenticated, same-origin POSTs to `/api/d/:did/connects/:cr/approve` and `/deny`. An approve checks the agent and the current verdict again, without an outbound fetch, and only then consumes the request, in the same synchronous step. A refusal the owner can answer (`warning_required`, a refused verdict) leaves the request pending; a second approve after a successful one is `not_found`.
 
 For an unverified origin, the owner acknowledges the warning at Connect with `{action:"approve_unverified"}`. The request's acknowledgement passes through the connect ticket to the pending pairing; the code step does not warn again. The domain's `unverified_ok` is committed only on the code's approval. Deny of a connect request changes no earlier domain approval.
 
@@ -560,12 +560,12 @@ An unknown or ended grant carries no `RevokedAnswer`: it is a 404 (a secret URL)
 
 | Code | Routes and meaning |
 |---|---|
-| `invalid` | `/apc/connect`: malformed body; owner create: malformed host or agent |
+| `invalid` | `/apc/connect`: malformed body (an app body without `app.origin` included); owner create: empty or malformed host or agent |
 | `dock_expired` | `/apc/connect`, `/apc/pair`: dock no longer exists |
-| `ticket_expired` | `/apc/connect`, `/apc/pair`: absent, expired, consumed ticket or removed agent; `/apc/connect` also refuses an agent mismatch |
-| `ticket_not_for_pairing` | drop ticket on `/apc/pair`; connect ticket on `/apc/connect` or `/apc/confirm`; every call to the obsolete `/apc/reader`; no ticket is spent on these refusals |
+| `ticket_expired` | `/apc/connect`, `/apc/pair`: absent, expired, consumed ticket or removed agent (an expired connect ticket included, on `/apc/connect` and `/apc/confirm` too); `/apc/connect` also refuses an agent mismatch |
+| `ticket_not_for_pairing` | drop ticket on `/apc/pair`; live connect ticket on `/apc/connect` or `/apc/confirm`; every call to the obsolete `/apc/reader`; no ticket is spent on these refusals |
 | `ticket_origin_mismatch` | `/apc/pair`: connect ticket bound to a different origin or agent, unspent |
-| `too_many_requests` | `/apc/connect`, owner create: request limits reached, drop ticket unspent |
+| `too_many_requests` | `/apc/connect`, owner create: request limits or the per-ticket attempt cap reached, drop ticket unspent |
 | `reader_not_allowed` | reader `/apc/connect`, `/apc/reader/status`, owner reader approve: extension origin not allowed |
 | `app_not_allowed`, `https_required`, `app_blocked` | app `/apc/connect`, owner create/approve: origin verdict refused |
 | `apc_json_missing`, `apc_json_redirected`, `apc_json_unreachable`, `apc_json_invalid`, `apc_json_wrong_origin`, `dock_not_offered` | app `/apc/connect`, owner create: manifest refusal; missing `dock_connect` is `apc_json_invalid` |
