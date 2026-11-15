@@ -23,7 +23,7 @@ With an adapter (the [code](#run-it-from-code) way), on the profile under test, 
 
 An adapter whose app authenticates agents with a bearer token (OAuth) gives the token in each connection's `headers` (`{ authorization: "Bearer …" }`); the grant's URL may then be `mcp.path` itself.
 - **Mobile** (0.6 and later): every agent is shown in the page, the bar cannot be collapsed, a finger pins and the agent reads the pin, and unpin works by touch.
-- **The pairing code** (Dock, 0.9 and later; the adapter gives `dock`): the consent shows a well-formed code and the app sends that code, raw, to the hub; every consent shows a new code; a hub that does not acknowledge the code, redirects, or says yes with HTTP 500 holds no grant (its MCP URL answers 404); five wrong codes, or the code's time running out, give the grant back; the right code pairs.
+- **The pairing code** (Dock, 0.9 and later; the adapter gives `dock`): the server's `consent_required` answer always carries `pairing_code`, and the app sends that code, raw, to the hub in `pairing_code` of `/apc/pair`; every consent makes a new code, shown only on the owner's page; when the page shows it — at consent (as Orders' drop fallback does), or only in the handoff card after Allow (as Pulse, Signals and `orders-connect.ts` do) — is the app's choice, not a rule (both conform); a hub that does not acknowledge the code, redirects, or says yes with HTTP 500 holds no grant (its MCP URL answers 404); five wrong codes, or the code's time running out, give the grant back; the right code pairs.
 - **The consent's nonce** (Dock; through `dock.lifecycle.owner`, a note without it): an Allow pairs only with its own consent's nonce, once. One with the nonce left out, a forged one or another agent's sends the hub no `/apc/pair`; the right one does, and the same Allow again does not. The members of `owner.allow.body()` that the drop's body lacks are where the nonce goes; another agent's nonce is checked only when the Allow names its agent.
 - **The Dock profile as built** (Dock, 0.10 and later; the adapter gives `dock.lifecycle`, see [below](#the-dock-profile-as-built-010)):
   - **The gate fails closed**: the suite reads the claimed standard from `apc.json` at the adapter's owner origin, which must be a bare origin and the same as the grants' origin. Only an app that provably claims a standard before 0.10.0 skips the checks, with a note, and only once a grant it makes lives at the owner origin (an owner origin pointed at an older deployment fails closed). An `apc.json` the suite cannot read or parse, a missing `dock.lifecycle` (or one of its required members, `restart` included) fails every 0.10 check. After each check the suite gives back (`/apc/revoke`) every grant the stand-in hub paired meanwhile.
@@ -84,7 +84,7 @@ It reads only that origin, over https, never follows a redirect, caps every answ
 
 ## Run it from code
 
-`apcConformance(adapter)` returns named checks for any test runner; `runConformance(adapter)` runs them all and reports. This is the adapter for the Orders app of the [integration guide](/docs/integrate). It runs everything in one process: the app's `fetch` is called directly, the person's page is the app's own event stream, and on the Dock profile the suite's stand-in hub answers pairing.
+`apcConformance(adapter)` returns named checks for any test runner; `runConformance(adapter)` runs them all and reports. The blocks below are excerpts from [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts), the adapter for the Orders app of the [integration guide](/docs/integrate). They leave out the file's surrounding harness (`ORIGIN`, `HUB`, `SESSION`, the `ordersUnderTest` wrapper with `skew`, `config`, `app`, `call` and its `return`, plus `ordersChecks`), and `dock.lifecycle` is shown in its own section below rather than inline inside `ordersUnderTest`. It runs everything in one process: the app's `fetch` is called directly, the person's page is the app's own event stream, and on the Dock profile the suite's stand-in hub answers pairing.
 
 <!-- include orders-conformance.ts#imports -->
 
@@ -104,7 +104,7 @@ M9 drives a trailing-slash hub through the first drop and, on 0.13, the `#apc_co
 
 <!-- include orders-conformance.ts#connect -->
 
-The pairing code (Dock, 0.9): what the consent shows, and the person's Allow on it. The suite pairs with `hub`, checks what the app sent it, and plays the dock owner typing codes.
+The pairing code (Dock, 0.9): the server's `consent_required` answer always carries `pairing_code`, and the person's Allow pairs with it. When the page displays the code — at consent (as Orders' drop fallback does), or only in `<apc-handoff>` after Allow (as Pulse, Signals and `orders-connect.ts` do) — is the app's choice, not a rule; either way, a new code must be made with every consent, shown only on the owner's page, and sent raw in `pairing_code` of `/apc/pair`. The suite pairs with `hub`, checks what the app sent it, and plays the dock owner typing codes.
 
 <!-- include orders-conformance.ts#dock -->
 
