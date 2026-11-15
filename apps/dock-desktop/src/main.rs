@@ -51,15 +51,24 @@ fn page(query: Option<&str>) -> Url {
     url
 }
 
+/// Whether an address on the dock's origin is one of the shell's own: "/" (Start over goes there and
+/// SHELL_SCRIPT takes it back to the dock), the dock page (`/dock`, `/dock/...`, never `/docker`) and
+/// the page's assets.
+fn in_shell(url: &Url, dock: &Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") || url.origin() != dock.origin() {
+        return false;
+    }
+    let path = url.path();
+    path == "/" || path == "/dock" || path.starts_with("/dock/") || path.starts_with("/assets/")
+}
+
 /// Whether a window may go to this address: the dock's own pages stay; a link out of the dock
 /// (Pulse, Signals, downloads, extension installation) opens in the person's browser instead.
 /// Any other address (file:, mailto:, an app's own scheme) goes nowhere.
 fn stays(url: &Url) -> bool {
     match url.scheme() {
         "about" if url.as_str() == "about:blank" => true,
-        "http" | "https"
-            if url.origin() == origin().origin()
-                && (url.path().starts_with("/dock") || url.path().starts_with("/assets/")) => true,
+        "http" | "https" if in_shell(url, &origin()) => true,
         "http" | "https" => {
             let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
             false
@@ -271,4 +280,35 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("the APC dock could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keeps(path: &str) -> bool {
+        let dock = Url::parse(DOCK_ORIGIN).unwrap();
+        in_shell(&dock.join(path).unwrap(), &dock)
+    }
+
+    #[test]
+    fn the_shell_keeps_the_dock_its_assets_and_the_root() {
+        assert!(keeps("/"));
+        assert!(keeps("/dock"));
+        assert!(keeps("/dock?view=pet&agent=a"));
+        assert!(keeps("/dock/anything"));
+        assert!(keeps("/assets/index-abc.js"));
+    }
+
+    #[test]
+    fn the_shell_lets_other_pages_and_origins_go() {
+        assert!(!keeps("/docker"));
+        assert!(!keeps("/dockXYZ"));
+        assert!(!keeps("/docs"));
+        assert!(!keeps("/extension"));
+        assert!(!keeps("/pulse"));
+        let dock = Url::parse(DOCK_ORIGIN).unwrap();
+        assert!(!in_shell(&Url::parse("https://pulse.apc.tineira.com/dock").unwrap(), &dock));
+        assert!(!in_shell(&Url::parse("http://apc.tineira.com/dock").unwrap(), &dock));
+    }
 }
