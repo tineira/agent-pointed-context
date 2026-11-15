@@ -10,6 +10,7 @@
 //! APC_DOCK_ORIGIN points it at another dock (a local `pnpm --dir apps/dock dev`, say).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod float;
 mod pets;
 mod update;
@@ -110,6 +111,8 @@ fn dock(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .title("APC Dock")
         .inner_size(400.0, 760.0)
         .min_inner_size(320.0, 420.0)
+        // Started by Windows at sign-in: the tray and the pets only, until the person opens the dock.
+        .visible(!autostart::started_by_windows())
         .build()
 }
 
@@ -163,11 +166,12 @@ fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let about = MenuItem::with_id(app, "build", &build, false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open dock", true, None::<&str>)?;
     let float = float_menu(app)?;
+    let startup = CheckMenuItem::with_id(app, "autostart", "Start with Windows", cfg!(windows), autostart::enabled(), None::<&str>)?;
     let updates = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit APC Dock", true, None::<&str>)?;
     Menu::with_items(
         app,
-        &[&about, &PredefinedMenuItem::separator(app)?, &open, &float, &PredefinedMenuItem::separator(app)?, &updates, &quit],
+        &[&about, &PredefinedMenuItem::separator(app)?, &open, &float, &PredefinedMenuItem::separator(app)?, &startup, &updates, &quit],
     )
 }
 
@@ -225,6 +229,11 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_dock(app),
             "update" => update::check_now(app),
+            // The check shows what the Run key holds after the change, whether or not it took.
+            "autostart" => {
+                autostart::set(!autostart::enabled());
+                refresh_tray(app);
+            }
             "quit" => app.exit(0),
             id if id == "float" || id.starts_with("float-") => float_event(app, id),
             _ => {}
