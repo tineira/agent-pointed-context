@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { decodeApcConnect } from "@tineira/apc-protocol";
 import { hubConformance, type ApcHubAdapter } from "@tineira/apc-conformance";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 
@@ -18,13 +19,17 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
   t.mock.timers.enable({ apis: ["Date"], now: 1_700_000_000_000 });
   const envBase = { APP_ORIGINS: "https://app.example" };
   let hub!: InstanceType<typeof Hub>;
+  let room!: ReturnType<typeof durableObjectRoom>;
+  let ownerSecret = "";
   let agentId = "";
   let agentMcpUrl = "";
 
   async function initHub(): Promise<void> {
-    const room = durableObjectRoom();
+    room = durableObjectRoom();
+    room.openPage();
     hub = new Hub(room.ctx, envBase);
-    await hub.init(DID);
+    const initialized = await hub.init(DID);
+    ownerSecret = initialized.owner;
     const state = await hub.state(HUB_ORIGIN);
     agentId = state.agents[0]!.id;
     agentMcpUrl = state.agents[0]!.mcp_url;
@@ -52,6 +57,30 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
     await res.text();
   }
 
+  const approveConnect = async (id: string) => {
+    const sendApprove = async (action?: string) => {
+      const res = await dockWorker.fetch(
+        new Request(`${HUB_ORIGIN}/api/d/${DID}/connects/${id}/approve`, {
+          method: "POST",
+          headers: {
+            cookie: `apc_dock=${DID}.${ownerSecret}`,
+            origin: HUB_ORIGIN,
+            "sec-fetch-site": "same-origin",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(action ? { action } : {}),
+        }),
+        workerEnv as never,
+      );
+      return (await res.json()) as { ok: boolean; url?: string; error?: string };
+    };
+    const first = await sendApprove();
+    if (!first.ok && first.error === "warning_required") {
+      return await sendApprove("approve_unverified");
+    }
+    return first;
+  };
+
   return {
     name: "apps/dock reference hub",
     origin: HUB_ORIGIN,
@@ -73,10 +102,36 @@ async function makeReferenceHubAdapter(t: import("node:test").TestContext): Prom
       const { ticket } = await hub.ticket(agent);
       return ticket;
     },
-    // Pre-0.13: /apc/pair takes a drop ticket; in 0.13+ this seam swaps to /apc/connect + approve -> connect ticket.
-    async pairingTicket(agent: string, _origin: string): Promise<string> {
+    approveConnect,
+    async pendingConnects() {
+      const state = (await hub.state(HUB_ORIGIN, ownerSecret)) as { connects: Array<{ id: string; agent?: string; origin: string }> };
+      return state.connects.map((c) => ({ id: c.id, ...(c.agent ? { agent: c.agent } : {}), origin: c.origin }));
+    },
+    connectApproveEndpoint(id: string) {
+      return { path: `/api/d/${DID}/connects/${id}/approve`, method: "POST", body: {} };
+    },
+    async observeState() {
+      return { state: await hub.state(HUB_ORIGIN, ownerSecret), broadcasts: room.takeMessages() };
+    },
+    async pairingTicket(agent: string, origin: string): Promise<string> {
       const { ticket } = await hub.ticket(agent);
-      return ticket;
+      const res = await dockWorker.fetch(
+        new Request(`${HUB_ORIGIN}/apc/connect`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ticket, agent, app: { origin } }),
+        }),
+        workerEnv as never,
+      );
+      const body = (await res.json()) as { ok: boolean; error?: string };
+      if (!res.ok || !body.ok) throw new Error(`pairingTicket /apc/connect failed: ${res.status} ${JSON.stringify(body)}`);
+      const pending = ((await hub.state(HUB_ORIGIN, ownerSecret)) as { connects: Array<{ id: string; agent?: string; origin: string }> }).connects.find((c) => c.agent === agent && c.origin === origin);
+      if (!pending) throw new Error(`pairingTicket found no pending connect request for (${agent}, ${origin})`);
+      const approved = await approveConnect(pending.id);
+      if (!approved.ok || !approved.url) throw new Error(`pairingTicket approveConnect failed: ${JSON.stringify(approved)}`);
+      const payload = decodeApcConnect(new URL(approved.url).hash);
+      if (!payload) throw new Error(`pairingTicket approveConnect URL lacked #apc= fragment: ${approved.url}`);
+      return payload.ticket;
     },
     async approve(id: string, code?: string) {
       const first = await hub.decide(id, "approve", code);

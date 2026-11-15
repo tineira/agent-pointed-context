@@ -207,6 +207,7 @@ export function standInApp(options: StandInAppOptions = {}): StandInApp {
             origin: redirectOrigin,
             profiles: ["dock"],
             mcp: { path: mcpPath },
+            dock_connect: `${redirectOrigin}/connect/dock`,
           });
         }
         return jsonResponse({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25", capabilities: {} } });
@@ -219,6 +220,13 @@ export function standInApp(options: StandInAppOptions = {}): StandInApp {
       if (parsed.pathname === APC_JSON_PATH && method === "GET") {
         app.apcJsonReads += 1;
         return handleApcJson(app, parsed, redirectMode, { apcVersion, name, mcpPath, revokeUrl });
+      }
+
+      if (parsed.pathname === "/connect/dock" && method === "GET") {
+        return new Response("<!doctype html><html><body>Connect</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+        });
       }
 
       if (parsed.pathname === revokePath && method === "POST") {
@@ -253,6 +261,7 @@ function handleApcJson(
     origin: app.origin,
     profiles: ["dock"],
     mcp: { path: meta.mcpPath },
+    dock_connect: `${app.origin}/connect/dock`,
   };
 
   switch (app.apcJsonMode) {

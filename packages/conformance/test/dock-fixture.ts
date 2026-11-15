@@ -14,6 +14,8 @@ import {
   APC_AGENT_META,
   APC_PAIRING_ID_META,
   APC_STANDARD_VERSION,
+  compareStandard,
+  decodeApcConnect,
   HUB_ANSWER_MAX_BYTES,
   PAIRING_BINDING,
   PAIRING_ID_RE,
@@ -146,10 +148,21 @@ export type FixtureBreak =
   | "nonce_unchecked"
   | "nonce_any_agent"
   | "nonce_reusable"
-  | "nonce_optional";
+  | "nonce_optional"
+  // Origin-bound first pairing (M13, APC 0.13).
+  | "dock_connect_missing"
+  | "dock_connect_cross_origin"
+  | "dock_connect_fragment"
+  | "dock_connect_http"
+  | "dock_connect_redirect"
+  | "dock_connect_404"
+  | "dock_connect_no_referrer_policy"
+  | "drop_pairs_without_connect";
 
 export interface FixtureOptions {
   break?: FixtureBreak;
+  /** Standard string served in apc.json (APC_STANDARD_VERSION by default). */
+  standard?: string;
   /** false: the app does not sleep (no dormant state). */
   idle?: boolean;
   /** The hub is bound to the consent on the server: the Allow carries none. */
@@ -221,6 +234,7 @@ interface Storage {
 }
 interface Config {
   brk: Set<FixtureBreak>;
+  standard: string;
   pairing: boolean;
   idle: boolean;
   hubBoundToConsent: boolean;
@@ -260,6 +274,7 @@ class Fixture {
   dead = false;
   /** One drop, Allow or confirm at a time per (hub, agent): the promise ends when the holder does. */
   private locks = new Map<string, { done: Promise<void>; release: () => void }>();
+  private rawHubs = new Map<string, string>();
   private chain: Promise<unknown> = Promise.resolve();
   private storage: Storage;
   private config: Config;
@@ -314,6 +329,15 @@ class Fixture {
     // A deployment that answers only its own host: a redirect to it, or a proxy's 502.
     if (this.config.unknownHost && url.origin !== ORIGIN) return this.config.unknownHost === "redirect" ? Response.redirect(`${ORIGIN}${url.pathname}`, 308) : json({ error: "bad_gateway" }, 502);
     if (url.pathname === "/.well-known/apc.json") return url.origin === ORIGIN || this.has("owner_origin_elsewhere") ? this.apcJson(url.origin) : json({ error: "not_found" }, 404);
+    if (url.pathname === "/connect/dock" && request.method === "GET") {
+      if (this.has("dock_connect_redirect")) return new Response(null, { status: 302, headers: { location: `${ORIGIN}/agents` } });
+      if (this.has("dock_connect_404")) return json({ error: "not_found" }, 404);
+      const headers: Record<string, string> = { "content-type": "text/html" };
+      if (!this.has("dock_connect_no_referrer_policy")) headers["referrer-policy"] = "no-referrer";
+      // Reference behaviour (not checked by HTTP conformance): real apps clear #apc_connect into sessionStorage
+      // via a synchronous same-origin <head> script before any other script runs.
+      return new Response("<!doctype html><title>Connect Dock</title>", { status: 200, headers });
+    }
     if (url.pathname === "/apc/revoke" && request.method === "POST") return this.giveBack(request);
     if (url.pathname.startsWith("/mcp/")) return this.mcp(request, url.pathname.slice("/mcp/".length));
     if (this.has("get_changes_state") && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie) {
@@ -327,7 +351,7 @@ class Fixture {
     }
     if ((this.has("get_drop_consent") || this.has("get_drop_consent_renamed")) && request.method === "GET" && request.headers.get("cookie") === SESSION.cookie && url.pathname === "/api/drop") {
       // A drop on a GET, parameters from the query: it makes a consent whose nonce an Allow can use (renamed: under other names).
-      const r = await this.drop(Object.fromEntries(url.searchParams));
+      const r = await this.drop({ ...Object.fromEntries(url.searchParams), connect_ticket: true });
       return json(this.has("get_drop_consent_renamed") && r.consent !== undefined ? { ok: false, error: "ask_first", nonce: r.consent, code: r.pairing_code } : r);
     }
     if (url.pathname === "/api/drop") return this.owner(request, (b) => this.drop(b));
@@ -340,7 +364,23 @@ class Fixture {
   private apcJson(at: string): Response {
     const dock = this.config.pairing || this.has("dock_always_listed");
     const origin = this.has("owner_origin_elsewhere") ? at : ORIGIN;
-    const body = { name: "Fixture", standard: APC_STANDARD_VERSION, origin, profiles: dock ? (this.config.bothProfiles ? ["direct", "dock"] : ["dock"]) : ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${origin}/agents` } };
+    const dockConnectUrl = this.has("dock_connect_cross_origin")
+      ? "https://other.fixture.test/connect/dock"
+      : this.has("dock_connect_fragment")
+        ? `${origin}/connect/dock#frag`
+        : this.has("dock_connect_http")
+          ? `http://${new URL(origin).host}/connect/dock`
+          : `${origin}/connect/dock`;
+    const includeDockConnect = dock && compareStandard(this.config.standard, "0.13.0") >= 0 && !this.has("dock_connect_missing");
+    const body = {
+      name: "Fixture",
+      standard: this.config.standard,
+      origin,
+      profiles: dock ? (this.config.bothProfiles ? ["direct", "dock"] : ["dock"]) : ["direct"],
+      mcp: { path: "/mcp/" },
+      direct: { connect: `${origin}/agents` },
+      ...(includeDockConnect ? { dock_connect: dockConnectUrl } : {}),
+    };
     return new Response(JSON.stringify(body), { headers: { "content-type": "application/json", "cache-control": `public, max-age=${this.has("max_age_300") ? 300 : 60}` } });
   }
 
@@ -434,7 +474,8 @@ class Fixture {
       }
       else hub = this.parseHub(b.hub);
       if (!hub) return { ok: false, error: "hub_not_allowed" };
-      const base = this.has("raw_hub_string") && !this.config.hubBoundToConsent ? String(b.hub) : hub;
+      const consentRawHub = this.has("raw_hub_string") ? this.rawHubs.get(agent) : undefined;
+      const base = this.has("raw_hub_string") && !this.config.hubBoundToConsent ? (consentRawHub ?? String(b.hub)) : hub;
       return this.allow(nonce, agent, ticket, hub, base, target);
     }
     const hub = this.parseHub(b.hub);
@@ -444,11 +485,15 @@ class Fixture {
     const lenient = this.has("second_consent_while_in_flight");
     if (this.locks.has(triple) && !lenient) return { ok: false, error: "pairing_in_progress" };
     const g = this.storage.grants.filter((x) => x.hub === hub && x.agent === agent && !["revoked", "ended"].includes(this.stateOf(x))).at(-1);
-    if (g && !(lenient && this.stateOf(g) === "in_flight")) {
+    if (g && !b.connect_ticket && !(lenient && this.stateOf(g) === "in_flight")) {
       const st = this.stateOf(g);
       if (st === "in_flight") return { ok: false, error: "pairing_in_progress" };
-      const held = this.lock(triple);
-      try {
+    const held = this.lock(triple);
+    try {
+      // Check stored handoff expiry before calling /apc/confirm so an expired grant ends cleanly without spending the drop ticket.
+      if (st === "handoff" && !this.has("ignores_stored_expiry") && this.now() >= g.codeExpiresAt) {
+        g.state = "ended";
+      } else {
         // (pin_before_confirm, wake_before_confirm: the drop acts before it has the hub's answer.)
         if (this.has("pin_before_confirm") && target) g.pin = target;
         if (this.has("wake_before_confirm") && (st === "live" || st === "dormant")) g.lastWake = this.now();
@@ -461,8 +506,7 @@ class Fixture {
         if (this.has("binding_rebound_on_confirm") && typeof a?.pairing_id === "string") g.pairingId = a.pairing_id;
         if (status === null) return { ok: false, error: "hub_unreachable" };
         if (st === "handoff") {
-          const ahead = this.now() < g.codeExpiresAt || this.has("ignores_stored_expiry");
-          if (status === "pending" && ahead && !this.has("new_code_on_pending")) {
+          if (status === "pending" && !this.has("new_code_on_pending")) {
             if (target && !this.has("keeps_first_pin")) g.pin = target;
             return { ok: true, status: "pending", grant_id: g.id, pairing: { code: g.code, expires_at: new Date(g.codeExpiresAt).toISOString() } };
           }
@@ -479,9 +523,22 @@ class Fixture {
           if (target) this.pinGrant(g, target, !this.has("drop_does_not_wake"));
           return { ok: true, status: "paired", grant_id: g.id, pinned: true };
         } else g.state = "ended";
-      } finally {
-        held.release();
       }
+    } finally {
+      held.release();
+    }
+    }
+    // A new 0.13 first drop with no link and no connect ticket calls /apc/connect (not /apc/pair or consent).
+    const is013 = compareStandard(this.config.standard, "0.13.0") >= 0;
+    if (is013 && !b.connect_ticket && !this.has("drop_pairs_without_connect")) {
+      if (this.has("raw_hub_string") && typeof b.hub === "string") this.rawHubs.set(agent, b.hub);
+      const answer = await this.hubCall(hub, "/apc/connect", { ticket, agent, app: { origin: ORIGIN } });
+      if (this.dead) return { ok: false, error: "gone" };
+      const a = answer.body as { ok?: unknown; status?: unknown; error?: unknown } | undefined;
+      if (answer.status !== 200 || a?.ok !== true) {
+        return { ok: false, error: typeof a?.error === "string" ? a.error : "hub_unreachable" };
+      }
+      return { ok: true, status: "connect_requested" };
     }
     // A new consent replaces the pending one, before the acknowledgement.
     if (!this.has("stale_allow_accepted")) for (const [nonce, c] of this.storage.consents) if (c.hub === hub && c.agent === agent) this.storage.consents.delete(nonce);
@@ -834,6 +891,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   const brk = new Set<FixtureBreak>(options.break ? [options.break] : []);
   const config: Config = {
     brk,
+    standard: options.standard ?? APC_STANDARD_VERSION,
     pairing: true,
     idle: options.idle ?? true,
     hubBoundToConsent: options.hubBoundToConsent ?? false,
@@ -863,16 +921,14 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   const post = async (path: string, body: unknown) =>
     (await (await current.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", headers: { ...SESSION, "content-type": "application/json", origin: ORIGIN }, body: JSON.stringify(body) }))).json()) as Record<string, unknown>;
 
-  const dropAgent = async (d: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome> => {
-    const drop = { hub: d.hub, agent: d.agent, ticket: d.ticket, target: d.target ?? targets[0] };
-    const r = await post("/api/drop", drop);
+  const dropOutcome = (r: Record<string, unknown>, baseDrop: { hub: string; agent: string; ticket: string; target: FocusTarget }): ApcDockDropOutcome => {
     if (r.error === "consent_required") {
       return {
         page: "consent",
         code: String(r.pairing_code),
         async allow(over) {
           // An app whose hub is bound to the consent sends no hub with the Allow.
-          const { hub: dropHub, ...rest } = drop;
+          const { hub: dropHub, ...rest } = baseDrop;
           const { agent: _agent, ...noAgent } = rest;
           const sent = options.hubBoundToConsent ? (config.allowNoAgent ? noAgent : rest) : { ...rest, [hubKey]: allowCarriesHub ? (over?.hub ?? dropHub) : dropHub };
           const a = await post("/api/drop", { ...sent, consent: r.consent });
@@ -880,15 +936,36 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
         },
       };
     }
+    if (r.ok === true && r.status === "connect_requested") return { page: "connecting" };
     if (r.ok === true && r.status === "pending") return { page: "waiting", code: String((r.pairing as { code: string }).code) };
     if (r.ok === true && r.status === "paired") return r.pinned ? { page: "pinned" } : { page: "connecting" };
     return { page: "refused", error: String(r.error) };
   };
+
+  const dropAgent = async (d: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome> => {
+    const drop = { hub: d.hub, agent: d.agent, ticket: d.ticket, target: d.target ?? targets[0] };
+    const r = await post("/api/drop", drop);
+    return dropOutcome(r, drop);
+  };
+
+  const connectDock = async (url: string, target?: FocusTarget): Promise<ApcDockDropOutcome> => {
+    const decoded = decodeApcConnect(new URL(url).hash);
+    if (!decoded) return { page: "refused", error: "invalid_connect_fragment" };
+    const drop = { hub: decoded.hub, agent: decoded.agent, ticket: decoded.ticket, target: target ?? targets[0] };
+    const r = await post("/api/drop", { ...drop, connect_ticket: true });
+    return dropOutcome(r, drop);
+  };
+
   let agents = 0;
   const newAgent = () => `ag_fixture_${++agents}`;
   const handoffGrant = async () => {
     const agent = newAgent();
-    const shown = await dropAgent({ agent, ticket: hub.ticket(agent), hub: HUB });
+    let shown = await dropAgent({ agent, ticket: hub.ticket(agent), hub: HUB });
+    if (shown.page === "connecting") {
+      const approved = await hub.approveConnect(agent);
+      if (!approved.ok || !approved.url) throw new Error(`approveConnect failed: ${approved.error}`);
+      shown = await connectDock(approved.url);
+    }
     if (shown.page !== "consent") throw new Error(`expected a consent, got ${shown.page}`);
     const allowed = await shown.allow();
     if (!allowed.ok) throw new Error(`the Allow did not pair: ${allowed.error}`);
@@ -899,6 +976,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
 
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
+    connectDock,
     allowCarriesHub,
     hubDeadlineMs: DEADLINE_MS,
     cancel: async (grantId) => (await post("/api/cancel", { grant_id: grantId })).ok === true,
@@ -929,9 +1007,16 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
         path: "/api/drop",
         body: async () => {
           const agent = newAgent();
-          const ticket = hub.ticket(agent);
-          const asked = await post("/api/drop", { hub: HUB, agent, ticket });
-          return config.allowNoAgent ? { ticket, consent: asked.consent } : { [hubKey]: HUB, agent, ticket, consent: asked.consent };
+          const dropTicket = hub.ticket(agent);
+          let asked = await post("/api/drop", { hub: HUB, agent, ticket: dropTicket });
+          let pairTicket = dropTicket;
+          if (asked.ok === true && asked.status === "connect_requested") {
+            const approved = await hub.approveConnect(agent);
+            if (!approved.ok || !approved.url) throw new Error(`approveConnect failed: ${approved.error}`);
+            pairTicket = decodeApcConnect(new URL(approved.url).hash)!.ticket;
+            asked = await post("/api/drop", { hub: HUB, agent, ticket: pairTicket, connect_ticket: true });
+          }
+          return config.allowNoAgent ? { ticket: pairTicket, consent: asked.consent } : { [hubKey]: HUB, agent, ticket: pairTicket, consent: asked.consent };
         },
       },
       heartbeat: options.wsHeartbeat ? { websocket: "/api/heartbeat/ws" } : { path: "/api/heartbeat", body: () => ({}) },
@@ -973,7 +1058,12 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     dock: {
       hub,
       async drop(agent, ticket) {
-        const shown = await dropAgent({ agent, ticket, hub: HUB });
+        let shown = await dropAgent({ agent, ticket, hub: HUB });
+        if (shown.page === "connecting") {
+          const approved = await hub.approveConnect(agent);
+          if (!approved.ok || !approved.url) throw new Error(`approveConnect failed: ${approved.error}`);
+          shown = await connectDock(approved.url);
+        }
         if (shown.page !== "consent") throw new Error(`expected a consent, got ${shown.page}`);
         return { shown: shown.code, allow: () => shown.allow() };
       },

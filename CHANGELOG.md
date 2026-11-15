@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **APC 0.13 conformance coverage for hubs and apps (`H9`, `H10`, `M13`) and Dock first-pairing 0.13 floor.** Updated `@tineira/apc-conformance` and the reference hub adapter for 0.13 origin-bound first pairing (`pairingTicket` via `/apc/connect` + owner approve, `H9` drop/mismatch ticket refusals, `H10` connect-ticket containment, `M13` `dock_connect` HTTP + first-drop `/apc/connect` checks with `<head>` fragment script labelled reference behaviour, `LAST_PRE_1_MINOR = 13`, and 0.10–0.12 pre-0.13 gating), plus `conformance.md` and standard changelog updates. (`packages/conformance`, `apps/dock/test/hub-conformance.test.ts`, `apps/dock/src/docs/pages/conformance.md`, `packages/protocol/CHANGELOG.md`)
+
 - **The hub's half of APC 0.13: first pairing goes through an owner-approved, origin-bound Connect.** The hub adds `/apc/connect`, the owner connect routes, separate single-use connect tickets bound to an origin and agent, request and per-ticket attempt limits, claim/check reader approval, and refuses a drop ticket on `/apc/pair`; the shared packages carry the 0.13 manifest, fragment and client types. The dock's Connect UI, the apps and the extension move to it in their own branches of the same 0.13 release, which must land with this one. (`packages/protocol`, `packages/server`, `packages/web`, `apps/dock/src/worker`, `apps/dock/src/docs/pages/spec.md`, `apps/dock-desktop/src/main.rs`, `scripts/hub-connect-workerd.mjs`)
 
 Everything that merged after `v0.2.0` (PRs #16 to #109) and has not been tagged yet. APC v2 (the dock, Signals, the extension and the desktop apps) was built in this stretch; v1 at apc.tineira.com keeps working as in 0.2.0.

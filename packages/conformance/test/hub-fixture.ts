@@ -2,7 +2,9 @@ import {
   APC_JSON_MAX_BYTES,
   APC_JSON_PAIRING_MAX_AGE_S,
   APC_JSON_PATH,
+  decodeApcConnect,
   declaresMcpUrl,
+  encodeApcConnect,
   normalizePairingCode,
   PAIRING_BINDING,
   PAIRING_CODE_ACK,
@@ -14,7 +16,12 @@ import {
   TICKET_TTL_MS,
   type ApcManifest,
 } from "@tineira/apc-protocol";
-import type { ApcHubAdapter, ApcHubApproveResult } from "../src/index.ts";
+import type {
+  ApcHubAdapter,
+  ApcHubApproveConnectResult,
+  ApcHubApproveResult,
+  ApcHubPendingConnect,
+} from "../src/index.ts";
 
 export type HubBreak =
   | "accepts-bad-apc-json"
@@ -38,7 +45,14 @@ export type HubBreak =
   | "replaces-approving"
   | "sync-revoke-on-replace"
   | "deletes-ended-tombstone"
-  | "follows-redirects";
+  | "follows-redirects"
+  | "accepts-drop-ticket-on-pair"
+  | "spends-drop-ticket-on-pair"
+  | "ignores-connect-ticket-origin"
+  | "spends-mismatched-connect-ticket"
+  | "unauth-approve-exposes-ticket"
+  | "state-exposes-connect-ticket"
+  | "double-approve-mints-ticket";
 
 interface StoredPairing {
   id: string;
@@ -79,6 +93,9 @@ export function hubFixture(
   let now = 1_700_000_000_000;
   let seq = 0;
   const tickets = new Map<string, { agent: string; expiresAt: number }>();
+  const connectRequests = new Map<string, { id: string; agent: string; origin: string; dockConnect: string; expiresAt: number }>();
+  const connectTickets = new Map<string, { agent: string; origin: string; expiresAt: number }>();
+  const exposedTickets: string[] = [];
   const pairings = new Map<string, StoredPairing>();
   const manifestCache = new Map<string, { manifest: ApcManifest; readAt: number }>();
   const inflight: Array<Promise<unknown>> = [];
@@ -159,6 +176,14 @@ export function hubFixture(
     return t;
   }
 
+  function issueConnectTicket(agent: string, appOrigin: string): string {
+    seq += 1;
+    const hex = seq.toString(16).padStart(32, "0");
+    const t = `${hex}.${hex}`;
+    connectTickets.set(t, { agent, origin: appOrigin, expiresAt: now + TICKET_TTL_MS });
+    return t;
+  }
+
   const adapter: ApcHubAdapter = {
     name: broken ? `FixtureHub(${broken})` : "FixtureHub",
     origin,
@@ -170,8 +195,75 @@ export function hubFixture(
       return issueTicket(agent);
     },
 
-    pairingTicket(agent: string, _origin: string): string {
-      return issueTicket(agent);
+    async pairingTicket(agent: string, appOrigin: string): Promise<string> {
+      const dropTicket = issueTicket(agent);
+      const res = await adapter.fetch(`${origin}/apc/connect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ticket: dropTicket,
+          agent,
+          app: { origin: appOrigin, name: "StandInApp" },
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`fixture /apc/connect failed: ${res.status} ${await res.text()}`);
+      }
+      const pending = await adapter.pendingConnects!();
+      const cr = [...pending].reverse().find((c) => c.agent === agent && c.origin === appOrigin);
+      if (!cr) {
+        throw new Error("fixture pendingConnects did not record connect request");
+      }
+      const approved = await adapter.approveConnect!(cr.id);
+      if (!approved.ok || !approved.url) {
+        throw new Error(`fixture approveConnect failed: ${approved.error ?? "missing url"}`);
+      }
+      const decoded = decodeApcConnect(new URL(approved.url).hash);
+      if (!decoded?.ticket) {
+        throw new Error("fixture approveConnect url missing #apc-connect ticket");
+      }
+      return decoded.ticket;
+    },
+
+    pendingConnects(): ApcHubPendingConnect[] {
+      return [...connectRequests.values()]
+        .filter((c) => c.expiresAt >= now)
+        .map((c) => ({ id: c.id, agent: c.agent, origin: c.origin }));
+    },
+
+    async approveConnect(id: string): Promise<ApcHubApproveConnectResult> {
+      const res = await adapter.fetch(`${origin}/owner/connects/${id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-hub-owner": "owner-secret" },
+        body: "{}",
+      });
+      const body = (await res.json()) as { ok?: boolean; url?: string; error?: string };
+      return {
+        ok: Boolean(body.ok),
+        ...(typeof body.url === "string" ? { url: body.url } : {}),
+        ...(typeof body.error === "string" ? { error: body.error } : {}),
+      };
+    },
+
+    connectApproveEndpoint(id: string): { path: string; method: string; body: unknown } {
+      return { path: `/owner/connects/${id}/approve`, method: "POST", body: {} };
+    },
+
+    observeState(): unknown {
+      return {
+        pairings: [...pairings.values()].map((p) => ({
+          id: p.id,
+          agent: p.agent,
+          origin: p.origin,
+          status: p.status,
+        })),
+        pendingConnects: [...connectRequests.values()].map((c) => ({
+          id: c.id,
+          agent: c.agent,
+          origin: c.origin,
+        })),
+        ...(exposedTickets.length > 0 ? { exposedTickets: [...exposedTickets] } : {}),
+      };
     },
 
     advance(ms: number): void {
@@ -181,6 +273,9 @@ export function hubFixture(
     reset(): void {
       seq = 0;
       tickets.clear();
+      connectRequests.clear();
+      connectTickets.clear();
+      exposedTickets.length = 0;
       pairings.clear();
       manifestCache.clear();
       inflight.length = 0;
@@ -233,6 +328,72 @@ export function hubFixture(
         body = null;
       }
 
+      if (url.pathname === "/apc/connect") {
+        if (!body) return jsonRes({ ok: false, error: "invalid" }, 400);
+        const ticketStr = body.ticket;
+        const agentStr = body.agent;
+        const appObj = body.app && typeof body.app === "object" ? (body.app as Record<string, unknown>) : null;
+        const appOrigin = typeof appObj?.origin === "string" ? appObj.origin : "";
+        if (typeof ticketStr !== "string" || typeof agentStr !== "string" || !appOrigin) {
+          return jsonRes({ ok: false, error: "invalid" }, 400);
+        }
+        const storedTicket = tickets.get(ticketStr);
+        tickets.delete(ticketStr);
+        if (!storedTicket || storedTicket.expiresAt < now || storedTicket.agent !== agentStr) {
+          return jsonRes({ ok: false, error: "ticket_expired" }, 400);
+        }
+        const read = await readManifest(appOrigin);
+        if (!read.ok) return jsonRes({ ok: false, error: read.error }, 400);
+        if (!read.manifest.profiles.includes("dock")) return jsonRes({ ok: false, error: "dock_not_offered" }, 400);
+        if (!read.manifest.dock_connect) return jsonRes({ ok: false, error: "dock_connect_missing" }, 400);
+        let dockConnectUrl: URL;
+        try {
+          dockConnectUrl = new URL(read.manifest.dock_connect);
+        } catch {
+          return jsonRes({ ok: false, error: "dock_connect_invalid" }, 400);
+        }
+        if (dockConnectUrl.origin !== appOrigin || dockConnectUrl.hash) {
+          return jsonRes({ ok: false, error: "dock_connect_invalid" }, 400);
+        }
+        const id = `conn_${++seq}`;
+        connectRequests.set(id, {
+          id,
+          agent: agentStr,
+          origin: appOrigin,
+          dockConnect: dockConnectUrl.toString(),
+          expiresAt: now + TICKET_TTL_MS,
+        });
+        return jsonRes({ ok: true, status: "connect_requested" }, 200);
+      }
+
+      const approveMatch = url.pathname.match(/^\/owner\/connects\/([^/]+)\/approve$/);
+      if (approveMatch) {
+        const hasOwnerHeader = new Headers(init?.headers).get("x-hub-owner") === "owner-secret";
+        if (!hasOwnerHeader && broken !== "unauth-approve-exposes-ticket") {
+          return jsonRes({ ok: false, error: "unauthorized" }, 401);
+        }
+        const id = decodeURIComponent(approveMatch[1]!);
+        const cr = connectRequests.get(id);
+        if (!cr || cr.expiresAt < now) {
+          connectRequests.delete(id);
+          return jsonRes({ ok: false, error: "connect_not_found" }, 404);
+        }
+        if (broken !== "double-approve-mints-ticket") {
+          connectRequests.delete(id);
+        }
+        const connectTicket = issueConnectTicket(cr.agent, cr.origin);
+        if (broken === "state-exposes-connect-ticket") {
+          exposedTickets.push(connectTicket);
+        }
+        const fragment = encodeApcConnect({
+          v: 1,
+          ticket: connectTicket,
+          hub: origin,
+          agent: cr.agent,
+        });
+        return jsonRes({ ok: true, url: `${cr.dockConnect}${fragment}` }, 200);
+      }
+
       if (url.pathname === "/apc/pair") {
         if (!body) return jsonRes({ ok: false, error: "invalid" }, 400);
         const ticketStr = body.ticket;
@@ -244,6 +405,7 @@ export function hubFixture(
 
         if (broken === "spends-ticket-on-malformed-body" && typeof ticketStr === "string") {
           tickets.delete(ticketStr);
+          connectTickets.delete(ticketStr);
         }
 
         if (typeof ticketStr !== "string" || typeof agentStr !== "string" || typeof mcpUrl !== "string" || !appName || !appOrigin) {
@@ -262,10 +424,31 @@ export function hubFixture(
           }
         }
 
-        const storedTicket = tickets.get(ticketStr);
-        tickets.delete(ticketStr);
-        if (!storedTicket || storedTicket.expiresAt < now || storedTicket.agent !== agentStr) {
-          return jsonRes({ ok: false, error: "ticket_expired" }, 400);
+        if (tickets.has(ticketStr)) {
+          const dropTicket = tickets.get(ticketStr)!;
+          if (broken !== "accepts-drop-ticket-on-pair") {
+            if (broken === "spends-drop-ticket-on-pair") {
+              tickets.delete(ticketStr);
+            }
+            return jsonRes({ ok: false, error: "ticket_not_for_pairing" }, 400);
+          }
+          tickets.delete(ticketStr);
+          if (dropTicket.expiresAt < now || dropTicket.agent !== agentStr) {
+            return jsonRes({ ok: false, error: "ticket_expired" }, 400);
+          }
+        } else {
+          const storedConnect = connectTickets.get(ticketStr);
+          if (!storedConnect || storedConnect.expiresAt < now) {
+            connectTickets.delete(ticketStr);
+            return jsonRes({ ok: false, error: "ticket_expired" }, 400);
+          }
+          if ((storedConnect.agent !== agentStr || storedConnect.origin !== appOrigin) && broken !== "ignores-connect-ticket-origin") {
+            if (broken === "spends-mismatched-connect-ticket") {
+              connectTickets.delete(ticketStr);
+            }
+            return jsonRes({ ok: false, error: "ticket_origin_mismatch" }, 400);
+          }
+          connectTickets.delete(ticketStr);
         }
 
         let manifest: ApcManifest | null = null;

@@ -50,6 +50,13 @@ const brokenChecks: Array<[HubBreak, string]> = [
   ["sync-revoke-on-replace", "hub.replace-pending"],
   ["deletes-ended-tombstone", "hub.ended-pairing"],
   ["follows-redirects", "hub.no-redirects"],
+  ["accepts-drop-ticket-on-pair", "hub.pair-ticket"],
+  ["spends-drop-ticket-on-pair", "hub.pair-ticket"],
+  ["ignores-connect-ticket-origin", "hub.pair-ticket"],
+  ["spends-mismatched-connect-ticket", "hub.pair-ticket"],
+  ["unauth-approve-exposes-ticket", "hub.connect-ticket-containment"],
+  ["state-exposes-connect-ticket", "hub.connect-ticket-containment"],
+  ["double-approve-mints-ticket", "hub.connect-ticket-containment"],
 ];
 
 for (const [broken, checkId] of brokenChecks) {

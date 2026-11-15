@@ -4,6 +4,7 @@ import {
   PAIRING_CODE_MAX_ATTEMPTS,
   PAIRING_CODE_TTL_MS,
   PAIRING_ENDED_ERROR,
+  decodeApcConnect,
 } from "@tineira/apc-protocol";
 import { standInApp, type StandInApp, type StandInApcJsonMode } from "./app.ts";
 import { ConformanceError, expect, isObject } from "./shared.ts";
@@ -15,6 +16,18 @@ export interface ApcHubApproveResult {
   remaining?: number;
 }
 
+export interface ApcHubApproveConnectResult {
+  ok: boolean;
+  url?: string;
+  error?: string;
+}
+
+export interface ApcHubPendingConnect {
+  id: string;
+  agent?: string;
+  origin: string;
+}
+
 export interface ApcHubAdapter {
   /** Human-readable hub name for reports. */
   name: string;
@@ -24,14 +37,27 @@ export interface ApcHubAdapter {
   agent: string;
   /** Dispatches HTTP requests to the hub (`/apc/pair`, `/apc/confirm`, ...). */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-  /** Issues a drop ticket for `agent` (used on `/apc/confirm`). */
+  /** Issues a drop ticket for `agent` (used on `/apc/connect` and `/apc/confirm`). */
   ticket(agent: string): Promise<string> | string;
   /**
-   * Issues the ticket passed to `/apc/pair` for `(agent, origin)`.
-   * Pre-0.13 this delegates to `ticket(agent)`; in 0.13+ it runs
-   * `/apc/connect`, approves it, and returns the connect ticket.
+   * Issues the connect ticket passed to `/apc/pair` for `(agent, origin)`
+   * via `/apc/connect` + owner approve (APC 0.13+).
    */
   pairingTicket(agent: string, origin: string): Promise<string> | string;
+  /** Lists pending connect requests visible to the dock owner (APC 0.13). */
+  pendingConnects?(): Promise<ApcHubPendingConnect[]> | ApcHubPendingConnect[];
+  /** Owner-authenticated approve of a pending connect request, returning `{ ok: true, url }` (APC 0.13). */
+  approveConnect?(id: string): Promise<ApcHubApproveConnectResult>;
+  /**
+   * Unauthenticated endpoint descriptor matching the owner connect-approve route, probed via `adapter.fetch`
+   * without owner credentials and with cross-site headers to verify H10 auth containment.
+   */
+  connectApproveEndpoint?(id: string): { path: string; method?: string; body?: unknown };
+  /**
+   * Snapshot of the hub's owner-visible state and any WebSocket broadcasts observed by the adapter,
+   * inspected by H10 to verify connect tickets are never exposed in state or broadcasts.
+   */
+  observeState?(): Promise<unknown> | unknown;
   /** Simulates the dock owner approving pairing request `id` with `code`. */
   approve(id: string, code?: string): Promise<ApcHubApproveResult>;
   /** Simulates the dock owner denying pairing request `id`. */
@@ -270,10 +296,13 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
         ];
         for (const mode of badModes) {
           await withApp(adapter, async (app) => {
+            const ticket = await adapter.pairingTicket(adapter.agent, app.origin);
+            await adapter.advance(APC_JSON_PAIRING_MAX_AGE_S * 1000 + 1000);
+            const readsBefore = app.apcJsonReads;
             app.apcJsonMode = mode;
             const url = app.mintGrantUrl();
-            const res = await pairApp(adapter, app, { mcpUrl: url });
-            expect(app.apcJsonReads > 0, `apc.json mode "${mode}" must actually fetch apc.json`);
+            const res = await pairApp(adapter, app, { ticket, mcpUrl: url });
+            expect(app.apcJsonReads > readsBefore, `apc.json mode "${mode}" must actually fetch apc.json`);
             expectRefusal(res, `apc.json mode "${mode}"`);
             expect(app.redirectHits.length === 0, `apc.json mode "${mode}" followed a redirect`);
             const c = await confirmApp(adapter, url);
@@ -294,12 +323,13 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
             const first = await pairApp(adapter, app, { mcpUrl: url1 });
             expectPairSuccess(first, `H7 warmup (${mode})`);
 
+            const ticket2 = await adapter.pairingTicket(adapter.agent, app.origin);
             await adapter.advance(APC_JSON_PAIRING_MAX_AGE_S * 1000 + 1000);
 
             app.apcJsonMode = mode;
             const readsBefore = app.apcJsonReads;
             const url2 = app.mintGrantUrl();
-            const res = await pairApp(adapter, app, { mcpUrl: url2 });
+            const res = await pairApp(adapter, app, { ticket: ticket2, mcpUrl: url2 });
             expect(app.apcJsonReads > readsBefore, `H7: apc.json mode "${mode}" after 60s served cache without re-fetching`);
             const expectedError = mode === "no_dock" ? undefined : "apc_json_unreachable";
             expectRefusal(res, `H7 mode "${mode}"`, expectedError);
@@ -774,11 +804,22 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
       rules: ["redirects"],
       run: async () => {
         await withApp(adapter, async (app) => {
+          const ticket1 = await adapter.pairingTicket(adapter.agent, app.origin);
+          await adapter.advance(APC_JSON_PAIRING_MAX_AGE_S * 1000 + 1000);
+          const readsBefore = app.apcJsonReads;
           app.apcJsonMode = "redirect";
-          const res1 = await pairApp(adapter, app, { mcpUrl: app.mintGrantUrl(), code: VALID_CODE_A });
-          expect(app.apcJsonReads > 0, "apc.json redirect check must fetch apc.json");
+          const res1 = await pairApp(adapter, app, { ticket: ticket1, mcpUrl: app.mintGrantUrl(), code: VALID_CODE_A });
+          expect(app.apcJsonReads > readsBefore, "apc.json redirect check must fetch apc.json");
           expectRefusal(res1, "redirected apc.json");
           expect(app.redirectHits.length === 0, `hub followed redirect on apc.json: ${app.redirectHits.join(", ")}`);
+
+          const connectRes = await postHub(adapter, "/apc/connect", {
+            ticket: await adapter.ticket(adapter.agent),
+            agent: adapter.agent,
+            app: { origin: app.origin },
+          });
+          expectRefusal(connectRes, "redirected apc.json on /apc/connect");
+          expect(app.redirectHits.length === 0, `hub followed redirect on apc.json during /apc/connect: ${app.redirectHits.join(", ")}`);
 
           app.apcJsonMode = "ok";
           app.mcpMode = "redirect";
@@ -799,6 +840,129 @@ export function hubConformance(adapter: ApcHubAdapter): HubConformanceCheck[] {
             "revoke redirect check must attempt /apc/revoke",
           );
           expect(app.redirectHits.length === 0, `hub followed redirect on /apc/revoke: ${app.redirectHits.join(", ")}`);
+        });
+      },
+    },
+
+    {
+      id: "hub.pair-ticket",
+      name: "/apc/pair rejects drop tickets (ticket_not_for_pairing) and origin/agent mismatches (ticket_origin_mismatch), leaving tickets unspent (H9)",
+      rules: ["H9"],
+      run: async () => {
+        await withApp(adapter, async (app) => {
+          const codeField = adapter.requiresPairingCode === false ? {} : { pairing_code: VALID_CODE_A };
+          const dropTicket = await adapter.ticket(adapter.agent);
+          const dropRes = await postHub(adapter, "/apc/pair", {
+            ticket: dropTicket,
+            agent: adapter.agent,
+            app: { name: app.name, origin: app.origin },
+            mcp_url: app.mintGrantUrl(),
+            ...codeField,
+          });
+          expect(dropRes.status === 400, `H9: drop ticket on /apc/pair returned HTTP ${dropRes.status}, expected 400`);
+          expect(dropRes.json?.ok === false && dropRes.json?.error === "ticket_not_for_pairing", `H9: drop ticket on /apc/pair returned ${JSON.stringify(dropRes.json)}, expected ticket_not_for_pairing`);
+
+          const stillGoodDrop = await postHub(adapter, "/apc/connect", {
+            ticket: dropTicket,
+            agent: adapter.agent,
+            app: { origin: app.origin },
+          });
+          expect(stillGoodDrop.status === 200 && stillGoodDrop.json?.ok === true && stillGoodDrop.json?.status === "connect_requested", `H9: refused drop ticket was spent by /apc/pair: /apc/connect returned ${stillGoodDrop.status} ${JSON.stringify(stillGoodDrop.json)}`);
+
+          const ct = await adapter.pairingTicket(adapter.agent, app.origin);
+          const wrongOrigin = await postHub(adapter, "/apc/pair", {
+            ticket: ct,
+            agent: adapter.agent,
+            app: { name: "Other App", origin: "https://other.example" },
+            mcp_url: "https://other.example/mcp/g000000000000001",
+            ...codeField,
+          });
+          expect(wrongOrigin.status === 400, `H9: wrong-origin connect ticket returned HTTP ${wrongOrigin.status}, expected 400`);
+          expect(wrongOrigin.json?.ok === false && wrongOrigin.json?.error === "ticket_origin_mismatch", `H9: wrong-origin connect ticket returned ${JSON.stringify(wrongOrigin.json)}, expected ticket_origin_mismatch`);
+
+          const wrongAgent = await postHub(adapter, "/apc/pair", {
+            ticket: ct,
+            agent: `${adapter.agent}_other`,
+            app: { name: app.name, origin: app.origin },
+            mcp_url: app.mintGrantUrl(),
+            ...codeField,
+          });
+          expect(wrongAgent.status === 400, `H9: wrong-agent connect ticket returned HTTP ${wrongAgent.status}, expected 400`);
+          expect(wrongAgent.json?.ok === false && wrongAgent.json?.error === "ticket_origin_mismatch", `H9: wrong-agent connect ticket returned ${JSON.stringify(wrongAgent.json)}, expected ticket_origin_mismatch`);
+
+          const matched = await pairApp(adapter, app, { ticket: ct, mcpUrl: app.mintGrantUrl(), code: VALID_CODE_A });
+          expectPairSuccess(matched, "H9: connect ticket remained unspent after mismatched /apc/pair attempts");
+        });
+      },
+    },
+
+    {
+      id: "hub.connect-ticket-containment",
+      name: "connect tickets are minted only by owner-authenticated approve inside dock_connect URL and never exposed unauthenticated or in state/broadcasts (H10)",
+      rules: ["H10"],
+      run: async () => {
+        await withApp(adapter, async (app) => {
+          expect(typeof adapter.pendingConnects === "function", "H10: ApcHubAdapter must implement pendingConnects()");
+          expect(typeof adapter.approveConnect === "function", "H10: ApcHubAdapter must implement approveConnect()");
+          expect(typeof adapter.observeState === "function", "H10: ApcHubAdapter must implement observeState()");
+
+          await adapter.observeState!();
+
+          const dropTicket = await adapter.ticket(adapter.agent);
+          const connectRes = await postHub(adapter, "/apc/connect", {
+            ticket: dropTicket,
+            agent: adapter.agent,
+            app: { origin: app.origin },
+          });
+          expect(connectRes.status === 200 && connectRes.json?.ok === true && connectRes.json?.status === "connect_requested", `H10: /apc/connect failed: ${connectRes.status} ${JSON.stringify(connectRes.json)}`);
+          expect(connectRes.json?.url === undefined && connectRes.json?.ticket === undefined && !connectRes.text.includes("#apc="), `H10: /apc/connect exposed connect ticket or url: ${connectRes.text}`);
+
+          const pending = await adapter.pendingConnects!();
+          const cr = pending.find((c) => c.origin === app.origin && (c.agent === undefined || c.agent === adapter.agent));
+          expect(cr, `H10: /apc/connect did not create a pending connect request for ${app.origin}: ${JSON.stringify(pending)}`);
+
+          const stateBefore = await adapter.observeState!();
+
+          if (adapter.connectApproveEndpoint) {
+            const ep = adapter.connectApproveEndpoint(cr.id);
+            for (const extraHeaders of [{}, { origin: "https://evil.example", "sec-fetch-site": "cross-site" }] as Array<Record<string, string>>) {
+              const res = await adapter.fetch(new Request(`${adapter.origin}${ep.path}`, {
+                method: ep.method ?? "POST",
+                headers: { "content-type": "application/json", ...extraHeaders },
+                body: JSON.stringify(ep.body ?? {}),
+              }));
+              const bodyText = await res.text().catch(() => "");
+              expect(!res.ok, `H10: unauthenticated request to ${ep.path} succeeded with HTTP ${res.status}: ${bodyText}`);
+              expect(!bodyText.includes("#apc=") && !/"url"\s*:/.test(bodyText), `H10: unauthenticated response exposed a connect URL/ticket: ${bodyText}`);
+            }
+            const stillPending = await adapter.pendingConnects!();
+            expect(stillPending.some((c) => c.id === cr.id), "H10: unauthenticated approve call consumed or deleted the pending connect request");
+          }
+
+          const approved = await adapter.approveConnect!(cr.id);
+          expect(approved.ok === true && typeof approved.url === "string", `H10: owner approveConnect failed: ${JSON.stringify(approved)}`);
+
+          let connectUrl: URL;
+          try {
+            connectUrl = new URL(approved.url);
+          } catch {
+            throw new ConformanceError(`H10: approveConnect returned invalid URL ${JSON.stringify(approved.url)}`);
+          }
+          expect(connectUrl.origin === app.origin && connectUrl.pathname === "/connect/dock", `H10: approveConnect URL ${approved.url} does not match app dock_connect ${app.origin}/connect/dock`);
+          const payload = decodeApcConnect(connectUrl.hash);
+          expect(payload && payload.v === 1 && payload.hub === adapter.origin && payload.agent === adapter.agent && payload.ticket.length > 0, `H10: approveConnect URL missing valid #apc= payload: ${approved.url}`);
+
+          const secondApprove = await adapter.approveConnect!(cr.id);
+          expect(!secondApprove.ok, `H10: second owner approveConnect on ${cr.id} must be refused, got ${JSON.stringify(secondApprove)}`);
+
+          const stateAfter = await adapter.observeState!();
+          expect(!JSON.stringify(stateBefore).includes(payload.ticket), "H10: owner state/broadcast before approve exposed connect ticket");
+          expect(!JSON.stringify(stateAfter).includes(payload.ticket), "H10: owner state/broadcast after approve exposed connect ticket");
+          const remaining = await adapter.pendingConnects!();
+          expect(!remaining.some((c) => c.id === cr.id), "H10: approved connect request remained in pendingConnects()");
+
+          const paired = await pairApp(adapter, app, { ticket: payload.ticket, mcpUrl: app.mintGrantUrl(), code: VALID_CODE_A });
+          expectPairSuccess(paired, "H10: minted connect ticket works for /apc/pair");
         });
       },
     },
