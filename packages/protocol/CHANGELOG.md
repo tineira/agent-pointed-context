@@ -6,7 +6,7 @@ The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protoco
 
 ## 0.13.0 (draft, 2026-11-14)
 
-**Origin-bound first pairing.** Drop tickets request Connect; only an owner-approved connect ticket bound to an app origin and agent can start `/apc/pair` (H9, H10). Apps declare fragment-free `dock_connect` and consume `#apc_connect` on their own session page (M13). `/apc/connect` adds bounded 120-second requests and the reader claim/check flow; `/apc/reader` is a hard-cut stub. New refusals are HTTP 400 `ticket_not_for_pairing`, `ticket_origin_mismatch`, `too_many_requests`. Existing pairings keep confirming and relaying; new first pairings need 0.13. 1.0 freezes 0.13.
+**Origin-bound first pairing.** Drop tickets request Connect; only an owner-approved connect ticket bound to an app origin and agent can start `/apc/pair` (H9, H10). Apps declare fragment-free `dock_connect` and consume `#apc_connect` on their own session page (M13). `/apc/connect` adds bounded 120-second requests and the reader claim/check flow; `/apc/reader` is a hard-cut stub. New refusals are HTTP 400 `ticket_not_for_pairing`, `ticket_origin_mismatch`, `too_many_requests`. Existing pairings keep confirming and relaying; new first pairings need 0.13. 1.0 freezes 0.13. The temporary 0.12 fallback in `requestConnect` (`packages/server/src/hub-client.ts`) applies only on an HTTP 404 whose JSON body is an object with `error: "not_found"` (such as the 0.12 hub's `{"error":"not_found"}`), returning `hub_refused` otherwise.
 
 ## 0.12.0 (draft, 2026-11-14)
 

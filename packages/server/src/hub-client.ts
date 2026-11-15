@@ -128,12 +128,8 @@ async function post(hub: string | URL, path: string, body: unknown, options: Hub
       discard();
       return { error: "hub_refused" };
     }
-    if (allowNotFound && response.status === 404) {
-      discard();
-      return { status: 404, body: null };
-    }
-    // Only a 200 or the hub's own 400 is ever believed: the body of anything else is not read.
-    if (response.status !== 200 && response.status !== 400) {
+    // Only a 200, the hub's own 400, or (when allowed) a 404 is ever believed: the body of anything else is not read.
+    if (response.status !== 200 && response.status !== 400 && !(allowNotFound && response.status === 404)) {
       discard();
       return { error: "hub_refused" };
     }
@@ -185,11 +181,11 @@ export async function pairWithHub(hub: string | URL, body: DockPairRequest, opti
   return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding };
 }
 
-/** First pairing (APC 0.13). Only an actual HTTP 404 permits an app's temporary 0.12 fallback. */
+/** First pairing (APC 0.13). Only an HTTP 404 whose JSON object body has `error: "not_found"` permits an app's temporary 0.12 fallback. */
 export async function requestConnect(hub: string | URL, body: DockConnectRequest, options: HubCallOptions = {}): Promise<DockConnectAnswer> {
   const a = await post(hub, "/apc/connect", body, options, true);
   if ("error" in a) return { ok: false, error: a.error };
-  if (a.status === 404) return { ok: false, error: "not_found" };
+  if (a.status === 404) return a.body?.error === "not_found" ? { ok: false, error: "not_found" } : { ok: false, error: "hub_refused" };
   const refused = refusal(a);
   if (refused) return { ok: false, error: refused };
   if (a.status !== 200 || a.body?.ok !== true || a.body.status !== "connect_requested") return { ok: false, error: "hub_refused" };

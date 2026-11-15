@@ -44,7 +44,7 @@ const pulse: DockAppUnderTest = {
 dockLifecycleTests(pulse);
 
 test("Pulse: the page's state never carries a dock grant's secret, and still carries a Direct agent's", async (t) => {
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => String(input instanceof Request ? input.url : input).endsWith("/apc/connect") ? new Response(null, { status: 404 }) : Response.json({ ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" }));
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => String(input instanceof Request ? input.url : input).endsWith("/apc/connect") ? Response.json({ error: "not_found" }, { status: 404 }) : Response.json({ ok: true, pairing_id: "pr_1", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: "required" }));
   const sandbox = new Sandbox(durableObjectRoom().ctx, DEPLOY);
   await sandbox.init();
   const direct = await sandbox.addAgentGrant();
@@ -102,7 +102,7 @@ const CALL = { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "lis
 test("Pulse: a link from before APC 0.10 that still waits for its code is in handoff after the upgrade, never live: no data before the hub's initialize", async (t) => {
   let sent: { mcp_url?: string } = {};
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return new Response(null, { status: 404 });
+    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     sent = (await (input instanceof Request ? input : new Request(input, init)).json()) as { mcp_url?: string };
     return Response.json(ACK);
   });
@@ -141,9 +141,9 @@ test("Pulse: an Allow whose second write fails leaves no grant, and a dock grant
   let hubCalls = 0;
   let sent: { mcp_url?: string } = {};
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return new Response(null, { status: 404 });
+    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     hubCalls++;
-    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return new Response(null, { status: 404 });
+    if (String(input instanceof Request ? input.url : input).endsWith("/apc/connect")) return Response.json({ error: "not_found" }, { status: 404 });
     sent = (await (input instanceof Request ? input : new Request(input, init)).json()) as { mcp_url?: string };
     return Response.json(ACK);
   });

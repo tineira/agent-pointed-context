@@ -1,4 +1,3 @@
-import { dockConnectPage } from "../../../../demo/src/worker/dock-connect-page.ts";
 /**
  * Orders: the smallest complete APC app, the one the guide at apc.tineira.com/docs/integrate builds step by
  * step. A shop's orders, pointable one by one, offered to agents on both profiles: Direct (the agent connects
@@ -11,6 +10,7 @@ import { dockConnectPage } from "../../../../demo/src/worker/dock-connect-page.t
  *
  * `apps/dock/test/docs-examples.test.ts` runs the conformance suite against this file, on both profiles.
  */
+
 // #region imports
 import {
   APC_SECRET_RE,
@@ -71,6 +71,46 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
+// #endregion
+
+// #region connect
+/**
+ * The page a dock opens at `dock_connect` (APC 0.13): 200 only, no redirect, no referrer, same-origin scripts only.
+ * Its head script runs first and moves the `#apc_connect` fragment into sessionStorage, then removes it from the
+ * URL; orders-connect.ts (built as `script`) validates it and asks the person on this page.
+ */
+const CONNECT_HEAD = `(function () {
+  if (!location.hash.startsWith("#apc_connect=")) return;
+  var hash = location.hash;
+  history.replaceState(history.state, "", location.pathname + location.search);
+  try {
+    sessionStorage.removeItem("apc_connect");
+    var raw = hash.slice(13).replace(/-/g, "+").replace(/_/g, "/");
+    while (raw.length % 4) raw += "=";
+    var bytes = Uint8Array.from(atob(raw), function (c) { return c.charCodeAt(0); });
+    sessionStorage.setItem("apc_connect", new TextDecoder("utf-8", {fatal:true}).decode(bytes));
+  } catch (_) { /* The client reports an invalid or missing link without sending it. */ }
+})();`;
+
+const escapeHtml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+
+function dockConnectPage(name: string, options: { session?: boolean; signedIn?: boolean; account?: string; script?: string } = {}): Response {
+  const script = options.script ?? "/assets/dock-connect.js";
+  if (!script.startsWith("/") || script.startsWith("//") || /[?#\\]/.test(script)) throw new Error("connect script must be a same-origin path");
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><script>${CONNECT_HEAD}</script>
+<meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect ${escapeHtml(name)}</title><style>
+body{font:16px system-ui,sans-serif;background:#f4f5f7;color:#20242b;margin:0;padding:24px}main{max-width:520px;margin:8vh auto;background:white;border:1px solid #d4d7dc;border-radius:16px;padding:28px}button,select{font:inherit;padding:10px 16px;margin:8px 8px 8px 0}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #3468d4}h1{font-size:24px}#account{overflow-wrap:anywhere}
+</style></head><body><main data-app="${escapeHtml(name)}" data-session="${options.session === false ? "false" : "true"}" data-signed-in="${options.signedIn === false ? "false" : "true"}" data-account="${escapeHtml(options.account ?? "")}">
+<h1>Connect ${escapeHtml(name)} to your dock</h1><p id="account"></p><p id="message" role="status">Preparing your connection…</p><div id="consent"></div><apc-handoff hidden></apc-handoff><p><a href="/">Open ${escapeHtml(name)}</a></p>
+</main><script type="module" src="${escapeHtml(script)}"></script></body></html>`, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer",
+      "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    },
+  });
+}
 // #endregion
 
 // #region data
@@ -198,6 +238,7 @@ export interface DropAnswer {
   error?: string;
   consent?: string;
   pairing_code?: string;
+  replaces?: boolean;
   grant_id?: string;
   status?: string;
   pairing?: { code: string; expires_at: string };
@@ -276,12 +317,15 @@ export class OrdersApp {
   // #region routes
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (path === "/connect/dock" && request.method === "GET") return dockConnectPage("Orders", { session: false, signedIn: this.signedIn(request), account: this.signedIn(request) ? this.account : "No account signed in. Open Orders to sign in, then return to this link.", script: this.connectScript });
+    if (path === "/connect/dock" && request.method === "GET") {
+      if (!this.profiles.includes("dock")) return Response.json({ error: "not_found" }, { status: 404 });
+      return dockConnectPage("Orders", { session: false, signedIn: this.signedIn(request), account: this.signedIn(request) ? this.account : "No account signed in. Open Orders to sign in, then return to this link.", script: this.connectScript });
+    }
     // What Orders is, for hubs, the browser extension and any tool (apc.json). Its one MCP endpoint (APC 0.11) is
     // exact: a grant's secret under /mcp/, on both profiles; /mcp/ stays for readers before 0.11.
     if (path === "/.well-known/apc.json") {
       const endpoints = [{ path: "/mcp/{secret}", profiles: ["direct", "dock"] }] as const;
-      return apcJsonResponse(apcManifest({ name: "Orders", origin: this.origin, profiles: this.profiles, connect: "/agents", dockConnect: "/connect/dock", mcpPath: "/mcp/", endpoints }));
+      return apcJsonResponse(apcManifest({ name: "Orders", origin: this.origin, profiles: this.profiles, connect: "/agents", ...(this.profiles.includes("dock") ? { dockConnect: "/connect/dock" } : {}), mcpPath: "/mcp/", endpoints }));
     }
     // Each grant's MCP URL: the agent itself (Direct) or a dock's hub (Dock) calls it.
     const mcp = path.match(/^\/mcp\/([0-9a-f]{32})$/);
@@ -639,7 +683,7 @@ export class OrdersApp {
     const askFirst = (): DropAnswer => {
       const asked = this.consent.ask(hub, scope);
       this.store.kv.put(newest, asked.nonce);
-      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code };
+      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code, ...(connect && held ? { replaces: true } : {}) };
     };
     this.sweep();
     const held = this.live().find((g) => g.hub === hub && g.agent === agent);
@@ -682,9 +726,9 @@ export class OrdersApp {
     const taken = this.consent.takeConsent(consent, hub, scope);
     if (!taken.ok) return { ok: false, error: "consent_expired" };
     this.store.kv.delete(newest);
-    if (connect && held) this.forget(held);
     const now = this.now();
     // In flight: stored before the hub is called, so its URL answers 404 until the hub acknowledges it.
+    // On re-Connect, the previous grant stays active until the hub acknowledges the new pairing.
     const grant: Grant = { id, secret, hash, path: "dock", name: "Agent via dock", client: null, hub, agent, state: "in_flight", allowedAt: now, ackedAt: 0, lastWake: now, pairing: null, pairingId: null, declared: false };
     this.store.grants.set(secret, grant);
     // pairWithHub refuses redirects, has one 10 s deadline and reads 8 KiB at most (M2 to M4). The hub must say
@@ -699,6 +743,7 @@ export class OrdersApp {
     // The acknowledgement moves the grant to handoff only if it is still in flight: a give-back, a Revoke or
     // T_ack that came first wins. In a database: UPDATE ... SET state = 'handoff' WHERE state = 'in_flight'.
     if (!still) return { ok: false, error: "pairing_ended" };
+    if (connect && held && this.store.grants.get(held.secret) === held) this.forget(held);
     grant.state = "handoff";
     // The binding, in the same step (APC 0.12, M10): in a database, the same UPDATE.
     grant.pairingId = answer.pairing_id;

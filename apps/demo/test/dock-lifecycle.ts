@@ -73,7 +73,7 @@ function fakeHub(t: TestContext) {
     const url = new URL(request.url);
     if (url.origin !== HUB) throw new TypeError(`no network in this test: ${url}`);
     // Legacy lifecycle checks model a 0.12 hub unless hub.connect is configured.
-    if (url.pathname === "/apc/connect" && !hub.connect) return new Response(null, { status: 404 });
+    if (url.pathname === "/apc/connect" && !hub.connect) return Response.json({ error: "not_found" }, { status: 404 });
     hub.calls.push(url.pathname);
     const body = (await request.json()) as Json;
     hub.sent.push(body);
@@ -906,6 +906,61 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.deepEqual(refused, { ok: false, error: "ticket_not_for_pairing" });
     assert.equal(hub.sent.at(-1)?.ticket, drop.ticket, "fallback Allow sends the drop ticket to /apc/pair");
     assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0, "in-flight grant is removed on refusal");
+  });
+
+  test(name("0.13: a refused re-Connect leaves the working grant serving; the consent says it replaces it, and only an acknowledged one does"), async (t) => {
+    const hub = fakeHub(t);
+    const i = await start();
+    const old = await allow(i, hub, "ag_re");
+    assert.equal(old.answer.ok, true);
+    assert.equal(old.asked.replaces, undefined, "a first pairing replaces nothing");
+    assert.equal((await i.initialize(old.mcpUrl)).status, 200);
+    assert.equal((await i.link(old.grantId))?.state, "live");
+    const serves = async (what: string) => {
+      const served = await i.call(old.mcpUrl, app.probe.tool, app.probe.args);
+      assert.equal(served.status, 200, what);
+      assert.equal((served.body?.result as { isError?: boolean }).isError ?? false, false, what);
+    };
+
+    // Connect an app again for the same dock and agent: the card says it replaces the current connection.
+    const again = { hub: HUB, agent: "ag_re", ticket: ticket(), target: app.targets[0] };
+    const asked = await i.object.pairHub(SID, app.origin, again, true);
+    assert.equal(asked.error, "consent_required");
+    assert.equal(asked.replaces, true);
+    for (const error of ["ticket_expired", "ticket_origin_mismatch"]) {
+      hub.pair = async () => Response.json({ ok: false, error }, { status: 400 });
+      const retry = error === "ticket_expired" ? asked : await i.object.pairHub(SID, app.origin, again, true);
+      assert.deepEqual(await i.object.pairHub(SID, app.origin, { ...again, consent: retry.consent }, true), { ok: false, error });
+      assert.deepEqual(app.grantIds(await i.object.state()), [old.grantId], `${error}: the old grant is the only one`);
+      assert.equal((await i.link(old.grantId))?.state, "live", error);
+      await serves(`${error}: the old grant still serves`);
+    }
+    // The hub unreachable: the same.
+    hub.pair = async () => {
+      throw new TypeError("network down");
+    };
+    const down = await i.object.pairHub(SID, app.origin, again, true);
+    assert.deepEqual(await i.object.pairHub(SID, app.origin, { ...again, consent: down.consent }, true), { ok: false, error: "hub_unreachable" });
+    await serves("hub unreachable: the old grant still serves");
+
+    // An acknowledged re-Connect replaces it: the old URL ends, the new grant waits for its code.
+    hub.pair = async () => Response.json(ACK);
+    const yes = await i.object.pairHub(SID, app.origin, again, true);
+    const replaced = await i.object.pairHub(SID, app.origin, { ...again, consent: yes.consent }, true);
+    assert.equal(replaced.ok, true);
+    assert.equal(replaced.status, "pending");
+    assert.notEqual(replaced.grant_id, old.grantId);
+    assert.deepEqual(app.grantIds(await i.object.state()), [replaced.grant_id]);
+    assert.equal((await i.link(replaced.grant_id!))?.state, "handoff");
+    assert.notEqual((await i.call(old.mcpUrl, app.probe.tool, app.probe.args)).status, 200, "the replaced grant no longer serves");
+  });
+
+  test(name("0.13: without the dock profile, apc.json has no dock_connect and GET /connect/dock is 404"), async () => {
+    const i = await start({ ...app.env, APC_PROFILES: "direct" });
+    const manifest = await (await i.worker("/.well-known/apc.json")).json() as { dock_connect?: string; profiles?: string[] };
+    assert.deepEqual(manifest.profiles, ["direct"]);
+    assert.equal("dock_connect" in manifest, false);
+    assert.equal((await i.worker("/connect/dock", { redirect: "manual" })).status, 404);
   });
 
   test(name("0.13: apc.json declares dock_connect and GET /connect/dock serves 200 with no-referrer and no third-party scripts"), async () => {

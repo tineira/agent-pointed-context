@@ -7,7 +7,7 @@ const HUB = "https://dock.test";
 const body = { ticket: "a".repeat(32) + "." + "b".repeat(32), agent: "ag_1", app: { origin: "https://app.test" } };
 const success = { ok: true, status: "connect_requested" };
 const responding = (answer: () => Response | Promise<Response>) => (async () => answer()) as typeof fetch;
-test("requestConnect distinguishes only a real 404, keeping M1 to M4 fail-closed guards", async () => {
+test("requestConnect falls back only on a 404 whose JSON object says not_found, keeping M1 to M4 fail-closed guards", async () => {
   let sent = 0;
   const sender = (async (url: string | URL | Request, init?: RequestInit) => {
     sent++;
@@ -20,8 +20,15 @@ test("requestConnect distinguishes only a real 404, keeping M1 to M4 fail-closed
   assert.deepEqual(await requestConnect(HUB, body, { fetch: sender }), success);
   assert.deepEqual(await requestConnect(HUB + "/unsafe", body, { fetch: sender }), { ok: false, error: "hub_not_allowed" });
   assert.equal(sent, 1);
-  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => new Response("not JSON", { status: 404 })) }), { ok: false, error: "not_found" });
+  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => Response.json({ error: "not_found" }, { status: 404 })) }), { ok: false, error: "not_found" });
+  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => Response.json({ ok: false, error: "not_found" }, { status: 404 })) }), { ok: false, error: "not_found" });
   for (const response of [
+    new Response("not JSON", { status: 404 }),
+    new Response(null, { status: 404 }),
+    Response.json({}, { status: 404 }),
+    Response.json([], { status: 404 }),
+    Response.json({ error: "other" }, { status: 404 }),
+    Response.json({ error: "not_found" }, { status: 404, headers: { "content-length": String(HUB_ANSWER_MAX_BYTES + 1) } }),
     new Response(null, { status: 307, headers: { location: "https://elsewhere.test" } }),
     Response.json(success, { status: 500 }),
     Response.json(success, { headers: { "content-length": String(HUB_ANSWER_MAX_BYTES + 1) } }),

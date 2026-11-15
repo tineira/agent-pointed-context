@@ -1,7 +1,7 @@
 import { clearApcConnect, defineHandoff, takeApcConnect, type ApcHandoffElement } from "@tineira/apc-web";
 
 const EXPIRED = "This link expired. Drop the agent again, or use Connect an app in your dock.";
-type Answer = { ok?: boolean; error?: string; consent?: string; grant_id?: string; pairing?: { code: string; expires_at: string }; pin_error?: string };
+type Answer = { ok?: boolean; error?: string; consent?: string; replaces?: boolean; grant_id?: string; pairing?: { code: string; expires_at: string }; pin_error?: string };
 
 /** A separate entry: no analytics, fonts or third-party scripts. The head has already removed the fragment. */
 export async function mountDockConnect(): Promise<void> {
@@ -45,7 +45,7 @@ export async function mountDockConnect(): Promise<void> {
       return;
     }
     if (asked.error !== "consent_required" || !asked.consent) return end(refused(asked.error));
-    message.textContent = `Let your agent from the dock at ${host} read ${main.dataset.app}? After Allow, your dock will ask for a code.`;
+    message.textContent = `Let your agent from the dock at ${host} read ${main.dataset.app}?${asked.replaces ? " This replaces the current connection." : ""} After Allow, your dock will ask for a code.`;
     const allow = Object.assign(document.createElement("button"), { type: "button", textContent: "Allow" });
     const deny = Object.assign(document.createElement("button"), { type: "button", textContent: "Not now" });
     // Keep Pulse's existing choice of access. Signals and Orders grant their existing full access.
