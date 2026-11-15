@@ -303,7 +303,7 @@ export const APC_MOBILE_VIEWPORT = { width: 375, height: 812 } as const;
  *   else (another status, a redirect, a missing acknowledgement, no answer) and the app deletes the grant
  *   before it answers its page: a hub that does not check codes never holds a grant (`hub_ignores_pairing_code`).
  *
- * The drag's ticket lives `TICKET_TTL_MS` (240 s since 0.9; 60 s before), longer than the app's consent, so
+ * Drop and connect tickets live `TICKET_TTL_MS` (240 s; APC 0.13). The connect ticket outlasts app consent, so
  * the person has the time to read the card.
  */
 export const PAIRING_CODE_LENGTH = 6;
@@ -315,7 +315,7 @@ export const PAIRING_CODE_TTL_MS = 120_000;
 export const PAIRING_CODE_MAX_ATTEMPTS = 5;
 /** What a hub that keeps the code answers in `pairing_code`. */
 export const PAIRING_CODE_ACK = "required";
-/** How long a drag's ticket works (APC 0.9: 240 s). */
+/** How long a drop or origin-bound connect ticket works (240 s). */
 export const TICKET_TTL_MS = 240_000;
 
 /** Why a hub refuses a pairing or an approval over its code. */
@@ -354,7 +354,7 @@ export function pairingCodesMatch(expected: string, given: string): boolean {
   return diff === 0;
 }
 
-/** `POST {hub}/apc/pair`: what an app sends after the person's Allow (Dock profile). `pairing_code` is raw, 6 characters. */
+/** `POST {hub}/apc/pair`: what an app sends with an origin-bound connect ticket after the person's Allow (Dock profile). `pairing_code` is raw, 6 characters. */
 export interface DockPairRequest {
   ticket: string;
   agent: string;

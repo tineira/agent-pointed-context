@@ -78,6 +78,8 @@ export interface ApcManifest {
   direct?: { connect: string; auth?: string; resource_metadata?: string };
   /** A hub's pairing endpoints, on its origin. */
   dock?: { pair: string; confirm: string };
+  /** APC 0.13: the app's same-origin first-pairing page, without a fragment. */
+  dock_connect?: string;
 }
 
 /** A profile an MCP endpoint serves (APC 0.11). */
@@ -176,6 +178,11 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
     manifestMcp.endpoints = endpoints;
   }
   const manifest: ApcManifest = { name, standard: raw.standard, origin, profiles, mcp: manifestMcp };
+  if (Object.hasOwn(raw, "dock_connect")) {
+    const connect = onOrigin(raw.dock_connect, origin);
+    if (!connect || (raw.dock_connect as string).includes("#")) return bad("dock_connect is not a fragment-free URL on its origin");
+    manifest.dock_connect = connect;
+  }
   if (profiles.includes("direct")) {
     const connect = isObject(raw.direct) ? onOrigin(raw.direct.connect, origin) : null;
     if (!connect) return bad("direct.connect is not a URL on its origin");

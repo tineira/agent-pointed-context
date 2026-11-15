@@ -6,3 +6,4 @@ export * from "./dock.ts";
 export * from "./drag.ts";
 export * from "./manifest.ts";
 export * from "./presence.ts";
+export * from "./connect.ts";

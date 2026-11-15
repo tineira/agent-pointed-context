@@ -24,7 +24,7 @@ export type ApcMcpDeclaration = { mcpPath?: string; endpoints?: undefined } | { 
  * offered right now play no part: an entry may list `dock` while the app is not pairing (M8), and `profiles` may
  * be empty.
  */
-export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; connect?: string } & ApcMcpDeclaration): ApcManifest {
+export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; connect?: string; dockConnect?: string } & ApcMcpDeclaration): ApcManifest {
   if (typeof o.mcpPath === "string") checkMcpPath(o.mcpPath);
   const mcp: ApcManifest["mcp"] = {};
   if (o.endpoints) {
@@ -36,6 +36,11 @@ export function apcManifest(o: { name: string; origin: string; profiles: readonl
   } else mcp.path = o.mcpPath ?? APC_DEFAULT_MCP_PATH;
   const manifest: ApcManifest = { name: o.name, standard: APC_STANDARD_VERSION, origin: o.origin, profiles: [...o.profiles], mcp };
   if (o.profiles.includes("direct")) manifest.direct = { connect: new URL(o.connect ?? "/", o.origin).href };
+  if (o.dockConnect !== undefined) {
+    const url = new URL(o.dockConnect, o.origin);
+    if (url.origin !== o.origin || url.username || url.password || url.href.includes("#") || !["http:", "https:"].includes(url.protocol)) throw new Error("apcManifest: dockConnect must be a fragment-free URL on the app origin");
+    manifest.dock_connect = url.href;
+  }
   return manifest;
 }
 
