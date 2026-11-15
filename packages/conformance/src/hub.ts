@@ -40,7 +40,20 @@
  *
  * It never shows a code: `received` keeps what the app sent, for the checks to compare with what the app showed.
  */
-import { APC_AGENT_META, APC_PAIRING_ID_META, HUB_ANSWER_MAX_BYTES, normalizePairingCode, PAIRING_BINDING, PAIRING_CODE_ACK, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, TICKET_TTL_MS } from "@tineira/apc-protocol";
+import {
+  APC_AGENT_META,
+  APC_JSON_PATH,
+  APC_PAIRING_ID_META,
+  encodeApcConnect,
+  HUB_ANSWER_MAX_BYTES,
+  normalizePairingCode,
+  PAIRING_BINDING,
+  PAIRING_CODE_ACK,
+  PAIRING_CODE_MAX_ATTEMPTS,
+  pairingCodesMatch,
+  parseApcManifest,
+  TICKET_TTL_MS,
+} from "@tineira/apc-protocol";
 
 export type StandInHubMode =
   | "ack"
@@ -86,6 +99,13 @@ export interface StandInPairing {
   calls: string[];
 }
 
+export interface StandInConnectRequest {
+  id: string;
+  agent: string;
+  origin: string;
+  dock_connect: string;
+}
+
 export interface StandInHubOptions {
   /** The hub's origin; "https://dock.test" by default. */
   origin?: string;
@@ -109,6 +129,12 @@ export interface StandInHub {
   readonly pairings: StandInPairing[];
   /** Every `/apc/pair` body the app sent, oldest first, whatever the hub answered. */
   readonly received: Array<Record<string, unknown>>;
+  /** Every `/apc/connect` body the app sent, oldest first, whatever the hub answered (APC 0.13). */
+  readonly connectReceived: Array<Record<string, unknown>>;
+  /** Pending connect requests created by `/apc/connect`, oldest first (APC 0.13). */
+  readonly connects: StandInConnectRequest[];
+  /** Approves a pending connect request (by id or agent; defaults to latest), minting a connect ticket and URL (APC 0.13). */
+  approveConnect(idOrAgent?: string): Promise<{ ok: boolean; url?: string; ticket?: string; error?: string }>;
   /** Every URL the app's server called through this hub's `fetch`, on any origin, oldest first. */
   readonly requests: string[];
   /** Every request the app sent through this hub's `fetch`: its URL and its raw body, oldest first (the code goes only in `/apc/pair`). */
@@ -146,6 +172,9 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
   const now = options.now ?? Date.now;
   const did = randomHex(16);
   const tickets = new Map<string, { agent: string; expires_at: number }>();
+  const connectTickets = new Map<string, { agent: string; origin: string; expires_at: number }>();
+  const connects: StandInConnectRequest[] = [];
+  const connectReceived: Array<Record<string, unknown>> = [];
   const pairings: StandInPairing[] = [];
   const received: Array<Record<string, unknown>> = [];
   const requests: string[] = [];
@@ -196,6 +225,32 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     return !!t && t.agent === agent && t.expires_at > now();
   };
 
+  const connect = async (b: Record<string, unknown>): Promise<Response> => {
+    if (typeof b.ticket !== "string" || typeof b.agent !== "string") return json({ ok: false, error: "invalid" }, 400);
+    const app = b.app as { origin?: unknown } | undefined;
+    if (typeof app?.origin !== "string" || !app.origin) return json({ ok: false, error: "app_not_allowed" }, 400);
+    if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
+    let dockConnect = `${app.origin}/connect/dock`;
+    if (options.app) {
+      const res = await options.app(new Request(`${app.origin}${APC_JSON_PATH}`)).catch(() => null);
+      if (!res || !res.ok) return json({ ok: false, error: "apc_json_unreachable" }, 400);
+      const raw: unknown = await res.json().catch(() => null);
+      const parsed = parseApcManifest(raw, app.origin);
+      if (!parsed.ok) return json({ ok: false, error: parsed.error }, 400);
+      if (!parsed.manifest.profiles.includes("dock")) return json({ ok: false, error: "dock_not_offered" }, 400);
+      if (!parsed.manifest.dock_connect) return json({ ok: false, error: "dock_connect_missing" }, 400);
+      dockConnect = parsed.manifest.dock_connect;
+    }
+    tickets.delete(b.ticket);
+    connects.push({
+      id: `cn_${randomHex(8)}`,
+      agent: b.agent,
+      origin: app.origin,
+      dock_connect: dockConnect,
+    });
+    return json({ ok: true, status: "connect_requested" });
+  };
+
   const pair = (b: Record<string, unknown>): Response => {
     if (typeof b.ticket !== "string" || typeof b.agent !== "string" || typeof b.mcp_url !== "string") return json({ ok: false, error: "invalid" }, 400);
     const app = b.app as { name?: unknown; origin?: unknown } | undefined;
@@ -203,8 +258,15 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     // The body first: a malformed code leaves the ticket good.
     const code = b.pairing_code === undefined ? null : normalizePairingCode(b.pairing_code);
     if (b.pairing_code !== undefined && !code) return json({ ok: false, error: "invalid_pairing_code" }, 400);
-    if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
-    tickets.delete(b.ticket);
+    const ct = connectTickets.get(b.ticket);
+    if (ct) {
+      if (ct.expires_at <= now() || ct.agent !== b.agent) return json({ ok: false, error: "ticket_expired" }, 400);
+      if (ct.origin !== app.origin) return json({ ok: false, error: "ticket_origin_mismatch" }, 400);
+      connectTickets.delete(b.ticket);
+    } else {
+      if (!live(b.ticket, b.agent)) return json({ ok: false, error: "ticket_expired" }, 400);
+      tickets.delete(b.ticket);
+    }
     // 128 random bits, unique (H8, APC 0.12); the binding is declared unless the mode is a hub before 0.12.
     const p: StandInPairing = { id: `pr_${randomHex(16)}`, agent: b.agent, mcp_url: b.mcp_url, app_origin: app.origin, status: "pending", pairing_code: code, attempts: 0, bound: true, calls: [] };
     pairings.push(p);
@@ -220,12 +282,14 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     return json({ ok: true, status: p.status, agent: { name: "Agent via dock", icon: null }, ...(hub.confirmPairingId ? { pairing_id: hub.confirmPairingId } : {}) });
   };
 
-  /** What `path` (`/apc/pair` or `/apc/confirm`) answers in `mode`. */
-  const answerIn = async (path: "/apc/pair" | "/apc/confirm", body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined, signal: AbortSignal): Promise<Response> => {
+  /** What `path` (`/apc/connect`, `/apc/pair`, or `/apc/confirm`) answers in `mode`. */
+  const answerIn = async (path: "/apc/connect" | "/apc/pair" | "/apc/confirm", body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined, signal: AbortSignal): Promise<Response> => {
     const yes =
-      path === "/apc/pair"
-        ? { ok: true, pairing_id: "pr_elsewhere", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: PAIRING_CODE_ACK }
-        : { ok: true, status: "pending", agent: { name: "Agent via dock", icon: null } };
+      path === "/apc/connect"
+        ? { ok: true, status: "connect_requested" }
+        : path === "/apc/pair"
+          ? { ok: true, pairing_id: "pr_elsewhere", status: "pending", agent: { name: "Agent via dock", icon: null }, pairing_code: PAIRING_CODE_ACK }
+          : { ok: true, status: "pending", agent: { name: "Agent via dock", icon: null } };
     if (mode === "redirect") {
       // A fetch that refuses redirects (as an app's must) fails ("error") or gets the 3xx back with a yes in it,
       // which it must refuse ("manual", the mode that works on every runtime); one that follows lands on another
@@ -244,11 +308,11 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
       return elsewhere;
     }
     if (mode === "error_500") return json(path === "/apc/pair" ? { ...yes, pairing_id: "pr_500" } : yes, 500);
-    const answer = path === "/apc/pair" ? pair(body) : confirm(body);
+    const answer = path === "/apc/connect" ? await connect(body) : path === "/apc/pair" ? pair(body) : confirm(body);
     if (mode === "ack") return answer;
     const text = await answer.text();
     if (mode === "ack_unbound" || mode === "ack_unknown_binding") {
-      if (!answer.ok) return new Response(text, { status: answer.status, headers: { "content-type": "application/json" } });
+      if (!answer.ok || path !== "/apc/pair") return new Response(text, { status: answer.status, headers: { "content-type": "application/json" } });
       const rest = JSON.parse(text) as Record<string, unknown>;
       const p = pairings.find((x) => x.id === rest.pairing_id);
       if (mode === "ack_unbound") {
@@ -359,7 +423,21 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
     bodies,
     pairings,
     received,
+    connectReceived,
+    connects,
     requests,
+    async approveConnect(idOrAgent?: string) {
+      const idx =
+        idOrAgent === undefined
+          ? connects.length - 1
+          : connects.findLastIndex((c) => c.id === idOrAgent || c.agent === idOrAgent);
+      if (idx < 0) return { ok: false, error: "connect_not_found" };
+      const cr = connects.splice(idx, 1)[0]!;
+      const ticket = `${did}.${randomHex(16)}`;
+      connectTickets.set(ticket, { agent: cr.agent, origin: cr.origin, expires_at: now() + TICKET_TTL_MS });
+      const fragment = encodeApcConnect({ v: 1, hub: origin, agent: cr.agent, ticket });
+      return { ok: true, ticket, url: `${cr.dock_connect}${fragment}` };
+    },
     ticket(agent) {
       const ticket = `${did}.${randomHex(16)}`;
       tickets.set(ticket, { agent, expires_at: now() + TICKET_TTL_MS });
@@ -380,6 +458,10 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
         // not JSON
       }
       const body = (parsed ?? {}) as Record<string, unknown>;
+      if (url.pathname === "/apc/connect") {
+        connectReceived.push(body);
+        return answerIn("/apc/connect", body, hub.mode, init?.redirect ?? request.redirect, init?.signal ?? request.signal);
+      }
       if (url.pathname === "/apc/pair") {
         received.push(body);
         let mode = hub.mode;

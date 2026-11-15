@@ -160,8 +160,36 @@ export function checkCoreToolList(listed: unknown, coreTools: readonly string[])
   expect(!((wait.inputSchema?.required as unknown[] | undefined) ?? []).includes("timeout_s"), "timeout_s is optional");
 }
 
-/** The last 0.x version of the standard: 1.0 is 0.12 frozen under that number. */
-const LAST_PRE_1_MINOR = 12;
+/**
+ * M13: validate `dock_connect` from `apc.json` (`https:`, or loopback `http:` when `allowHttp` is on,
+ * on `appOrigin`, with no `#` fragment and no userinfo). Returns the parsed URL or throws `ConformanceError`.
+ */
+export function checkDockConnectUrl(raw: unknown, appOrigin: string, allowHttp: boolean, standard: string): URL {
+  expect(typeof raw === "string" && raw.length > 0, `M13: apc.json lists dock and claims ${standard} (>= 0.13.0), so dock_connect is required`);
+  expect(!raw.includes("#"), `M13: dock_connect (${JSON.stringify(raw)}) must not contain a # fragment`);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new ConformanceError(`M13: dock_connect (${JSON.stringify(raw)}) is not a valid URL`);
+  }
+  expect(!url.username && !url.password, `M13: dock_connect (${raw}) must not carry userinfo`);
+  expect(url.origin === appOrigin, `M13: dock_connect (${raw}) must be on the app's own origin (${appOrigin})`);
+  const schemeOk = url.protocol === "https:" || (allowHttp && url.protocol === "http:");
+  expect(schemeOk, `M13: dock_connect (${raw}) must use https:`);
+  return url;
+}
+
+/** M13: verify `Referrer-Policy` header resolves to `no-referrer`. */
+export function hasNoReferrerPolicy(headers: Headers): boolean {
+  const raw = headers.get("referrer-policy");
+  if (!raw) return false;
+  const tokens = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return tokens.at(-1) === "no-referrer";
+}
+
+/** The last 0.x version of the standard: 1.0 is 0.13 frozen under that number. */
+const LAST_PRE_1_MINOR = 13;
 
 /**
  * Whether checks written for the standard `own` can judge an app that claims `claimed` in its apc.json.
@@ -171,7 +199,7 @@ const LAST_PRE_1_MINOR = 12;
  *   contract. A newer minor or major fails: the checks need updating.
  * - From 1.0 (the spec's "Versioning and compatibility"): any N.x up to `own`; a newer minor of the same major
  *   passes with a note, checked by `own`'s rules, since a minor only adds what readers ignore; another major fails
- *   and names the suite to use. A 1.x suite also checks claims from 0.10.0 to 0.12.x (the last 0.x), labelled
+ *   and names the suite to use. A 1.x suite also checks claims from 0.10.0 to 0.13.x (the last 0.x), labelled
  *   pre-1.0; a 2.x suite or later does not.
  */
 export function standardSupport(claimed: string, own: string): { ok: true; note?: string } | { ok: false; reason: string } {

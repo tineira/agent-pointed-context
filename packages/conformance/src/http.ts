@@ -17,13 +17,14 @@ import {
   CORE_TOOLS,
   REVOKED_HTTP_STATUS,
   REVOKED_HTTP_STATUS_BEARER,
+  compareStandard,
   describeMcpCoverage,
   mcpUrlCoverage,
   parseApcManifest,
   type ApcEndpointProfile,
   type ApcManifest,
 } from "@tineira/apc-protocol";
-import { ConformanceError, REVOKED_PROBES, attentionOf, checkCoreToolList, checkMcpEndpoints, checkFocusShape, checkNothingButGrants, checkRevokedBody, checkView, data, expect, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
+import { ConformanceError, REVOKED_PROBES, attentionOf, checkCoreToolList, checkDockConnectUrl, checkMcpEndpoints, checkFocusShape, checkNothingButGrants, checkRevokedBody, checkView, data, expect, hasNoReferrerPolicy, isObject, resultKey, rpcBody, standardSupport, type ToolCallResult } from "./shared.ts";
 
 export interface HttpConformanceOptions {
   /** The app's origin, e.g. `https://pulse.example` (a trailing slash is fine; no path). */
@@ -163,7 +164,7 @@ export const IN_PROCESS_ONLY: ReadonlyArray<{ name: string; why: string }> = [
   { name: "apc_link: the offer, the code and its refusals, revoke and unlink of a linked agent", why: "needs Dock connections through a hub and the agent bar (link adapter)" },
   { name: "dock: the pairing code (APC 0.9)", why: "needs the person's drop and Allow, and a stand-in hub (dock adapter)" },
   { name: "dock: consent: an Allow pairs only with its own consent's nonce, once", why: "needs the person's drop and Allow through the owner's endpoints, and a stand-in hub (dock.lifecycle)" },
-  { name: "dock: the Dock profile as built (APC 0.10): the grant's states, the transitions, M1 to M9 and one pending pairing", why: "needs the person's drop, Allow and Cancel, the app's clock, a restart and a stand-in hub (dock.lifecycle)" },
+  { name: "dock: the Dock profile as built (APC 0.10): the grant's states, the transitions, M1 to M13 and one pending pairing", why: "needs the person's drop, Allow and Cancel, the app's clock, a restart and a stand-in hub (dock.lifecycle)" },
 ];
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -280,6 +281,7 @@ export function redactSecrets(text: string, urls: ReadonlyArray<string | URL | u
 interface Fetched {
   status: number;
   contentType: string;
+  headers: Headers;
   text: string;
   wwwAuthenticate: string;
 }
@@ -321,7 +323,7 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
       await response.body?.cancel().catch(() => {});
       throw new ConformanceError(`${init.method ?? "GET"} ${shown(url)}: answered with a redirect (HTTP ${response.status}); APC never follows one`);
     }
-    return { status: response.status, contentType: response.headers.get("content-type") ?? "", wwwAuthenticate: response.headers.get("www-authenticate") ?? "", text: await readCapped(response, maxBytes, url) };
+    return { status: response.status, contentType: response.headers.get("content-type") ?? "", headers: response.headers, wwwAuthenticate: response.headers.get("www-authenticate") ?? "", text: await readCapped(response, maxBytes, url) };
   }
 
   async function readCapped(response: Response, maxBytes: number, url: string): Promise<string> {
@@ -459,6 +461,21 @@ function build(options: HttpConformanceOptions): { origin: string; checks: HttpC
         const checked = await checkNothingButGrants(origin, manifest, async (url, init) => (await get(url, init, MCP_MAX_BYTES)).status);
         if (checked === null) return "apc.json declares no {secret} entry in mcp.endpoints";
         return { note: checked };
+      },
+    },
+    {
+      id: "apc-json-dock-connect",
+      name: "dock_connect (APC 0.13): https on the same origin with no fragment, GET 200 (never 3xx) and Referrer-Policy: no-referrer",
+      async run() {
+        if (!manifest) return "apc.json did not parse";
+        if (!manifest.profiles.includes("dock")) return "apc.json offers no dock profile";
+        if (compareStandard(manifest.standard, "0.13.0") < 0) {
+          return { note: `standard ${manifest.standard} is pre-0.13 (Dock first-pairing check requires >= 0.13)` };
+        }
+        const url = checkDockConnectUrl(manifest.dock_connect, origin, !!options.allowHttp, manifest.standard);
+        const r = await get(url.toString(), { method: "GET" }, MCP_MAX_BYTES);
+        expect(r.status === 200, `GET ${url.pathname}: HTTP ${r.status}, expected 200`);
+        expect(hasNoReferrerPolicy(r.headers), `GET ${url.pathname}: missing Referrer-Policy: no-referrer (got ${JSON.stringify(r.headers.get("referrer-policy") ?? "")})`);
       },
     },
     {
