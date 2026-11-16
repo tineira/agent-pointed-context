@@ -300,7 +300,7 @@ test("a link code is never written to the sandbox's log or kept in clear", async
 
 test("the suite catches an apc.json that leaves out a profile the app serves, names another origin, or another MCP path", async () => {
   const served = (manifest: Record<string, unknown>) => async () => Response.json(manifest);
-  const base = { name: "Pulse", standard: "0.5.0", origin: ORIGIN, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/agents` }, dock_connect: `${ORIGIN}/connect/dock` };
+  const base = { name: "Pulse", standard: APC_STANDARD_VERSION, origin: ORIGIN, profiles: ["direct", "dock"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/agents` }, dock_connect: `${ORIGIN}/connect/dock` };
   const checkOf = (app: ApcAppAdapter) => apcConformance(app).find((c) => c.name.includes("apc.json"))!;
   await assert.rejects(checkOf((await pulse("dock", { apcJson: served({ ...base, profiles: ["direct"] }) })).app).run(), /leave out dock/);
   await assert.rejects(checkOf((await pulse("direct", { link: true, apcJson: served({ ...base, profiles: ["direct"] }) })).app).run(), /offers both/);
@@ -314,7 +314,9 @@ test("the suite catches an apc.json that leaves out a profile the app serves, na
   // From 0.13 a manifest that lists dock names its dock_connect page (M13).
   const { dock_connect: _left, ...noDockConnect } = base;
   await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...noDockConnect, standard: APC_STANDARD_VERSION }) })).app).run(), /dock_connect is required/);
-  await assert.rejects(checkOf((await pulse("direct", { apcJson: served({ ...base, standard: `${major}.${minor + 1}.0` }) })).app).run(), /newer than/);
+  const newerMinor = checkOf((await pulse("direct", { apcJson: served({ ...base, standard: `${major}.${minor + 1}.0` }) })).app);
+  await newerMinor.run();
+  assert.match(newerMinor.note ?? "", /newer minor .* checked by .* rules/, "1.x checks newer minors by its own rules");
   await assert.rejects(checkOf((await pulse("direct", { apcJson: async () => Response.json({ error: "not_found" }, { status: 404 }) })).app).run(), /HTTP 404/);
 });
 

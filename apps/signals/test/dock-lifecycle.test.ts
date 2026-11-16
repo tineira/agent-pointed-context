@@ -51,9 +51,9 @@ test("Signals stores the pending code and its expiry: the waiting card survives 
   await feed.init();
   const direct = await feed.addDirectGrant();
   const drop = { hub: HUB, agent: "ag_1", ticket: `${"d".repeat(32)}.${"1".repeat(16)}`, target: signals.targets[0] };
-  const asked = await feed.pairHub(SID, ORIGIN, drop);
+  const asked = await feed.pairHub(SID, ORIGIN, drop, true);
   const before = Date.now();
-  const paired = await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+  const paired = await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true);
   assert.equal(paired.ok, true, paired.error);
   assert.equal(paired.status, "pending");
   assert.equal(paired.pairing.code, asked.pairing_code);
@@ -86,8 +86,8 @@ test("Signals: a dock grant from before APC 0.10 whose hub never acknowledged it
   const before = new Feed(room.ctx, DEPLOY);
   await before.init();
   const drop = { hub: HUB, agent: "ag_old", ticket: `${"d".repeat(32)}.${"2".repeat(16)}`, target: signals.targets[0] };
-  const asked = await before.pairHub(SID, ORIGIN, drop);
-  const paired = await before.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+  const asked = await before.pairHub(SID, ORIGIN, drop, true);
+  const paired = await before.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true);
   assert.equal(paired.ok, true, paired.error);
   // As Signals 0.9 left an Allow its hub never answered: the hub set, the agent not yet, and none of the 0.10 columns.
   room.db.prepare("update grants set agent = null, state = null, secret_hash = null, allowed_at = null, acked_at = null, pairing_code = null, pairing_expires_at = null where id = ?").run(paired.grant_id);

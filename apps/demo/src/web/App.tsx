@@ -9,7 +9,7 @@ import { AgentBar, type PulseBarAgent } from "./agent-bar.tsx";
 import { usePulseStrings } from "./apc-strings.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
-import { DockWaiting, HubConsent, hubError, type PendingDrop, type PinError } from "./hub-consent.tsx";
+import { DockWaiting, hubError, type PinError } from "./hub-consent.tsx";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
@@ -111,14 +111,11 @@ function Sandbox({ sid }: { sid: string }) {
   // Pulse pairs with a dock's hub (TIN-382); the page has the dock's features on once the sandbox says so.
   const hubMode = !!state?.v2;
   const v2 = hubMode;
-  const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
   /** A dock grant that paired but could not pin where it was dropped (pin_error, APC 0.9): its waiting card says so. */
   const [pinErrors, setPinErrors] = useState<ReadonlyMap<string, string>>(new Map());
   const notePinError = (e: PinError | undefined) => {
     if (e) setPinErrors((m) => new Map(m).set(e.grantId, e.error));
   };
-  /** The grant the consent card is showing as the handoff (TIN-901): the banner leaves it out, so the code is not shown twice. */
-  const [cardGrant, setCardGrant] = useState<string | null>(null);
 
   const refresh = useCallback(() => api.state().then(setState), [api]);
   useEffect(() => {
@@ -231,16 +228,11 @@ function Sandbox({ sid }: { sid: string }) {
         // A grant id: the bridge dock (TIN-370). An agent from a hub dock is never resolved here; it goes below.
         resolveAgent: (handle) => (stateRef.current?.grants.some((g) => g.id === handle) ? handle : null),
         // An agent from a hub dock (TIN-389): every drop goes to the server, which decides (TIN-606). One paired
-        // here pins, once the dock says the pairing still stands; one not paired, or no longer, comes back
-        // consent_required with a nonce, and the person is asked (hub-consent.tsx), never on this page's word.
+        // here pins once the dock confirms; an unlinked agent requests Connect in the dock.
         onUnknownAgent: hubMode
           ? async (drag, target) => {
               const r = await api.hubPair({ hub: drag.hub, agent: drag.agent, ticket: drag.ticket, region: null, target });
               if (r.ok && r.status === "connect_requested") { void refresh(); setNotice("Confirm in your dock"); return; }
-              if (r.error === "consent_required" && r.consent && r.pairing_code) {
-                void refresh();
-                return setPendingDrop({ drag, target, at: Date.now(), consent: r.consent, pairing_code: r.pairing_code });
-              }
               // Still waiting for the code in the dock (APC 0.9): the waiting card shows it again.
               // Or the dock took the code and is connecting (APC 0.10): the card says so, from Pulse's state.
               if (r.ok && ((r.status === "pending" && r.pairing) || r.status === "connecting")) {
@@ -452,8 +444,7 @@ function Sandbox({ sid }: { sid: string }) {
       )}
       {(state.hub_links ?? []).flatMap((l) =>
         // Waiting on the dock (APC 0.10): in handoff, with the code still to be typed or the dock connecting.
-        // The consent card shows the one it just made (TIN-901); this banner is what survives a reload.
-        l.state === "handoff" && l.grant_id !== cardGrant
+        l.state === "handoff"
           ? [
               <DockWaiting
                 key={l.grant_id}
@@ -473,29 +464,6 @@ function Sandbox({ sid }: { sid: string }) {
         {route.screen === "agents" && <Agents api={api} sid={sid} state={state} initials={initials} activity={activity} onChanged={() => void refresh()} />}
       </main>
       <Tour api={api} state={state} names={names} screen={route.screen} onOverview={() => navigate({ screen: "overview" }, filters)} onChanged={() => void refresh()} />
-      {pendingDrop && (
-        <HubConsent
-          key={pendingDrop.consent}
-          api={api}
-          drop={pendingDrop}
-          links={state.hub_links ?? []}
-          pinError={cardGrant ? pinErrors.get(cardGrant) : undefined}
-          onPaired={(_grantId, pinError) => {
-            notePinError(pinError);
-            void refresh();
-          }}
-          onHandoff={setCardGrant}
-          onCancel={cancelHub}
-          onDone={(message) => {
-            setPendingDrop(null);
-            if (message) {
-              setNotice(message);
-              setTimeout(() => setNotice(null), 8000);
-            }
-            void refresh();
-          }}
-        />
-      )}
       <PinBadges grants={state.grants} motionOf={motionOf} onUnpin={(id) => void api.unpin(id)} onPlaced={setOnScreen} />
     </div>
   );

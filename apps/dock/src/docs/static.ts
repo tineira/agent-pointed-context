@@ -85,14 +85,14 @@ export function docTitle(source: string): string {
   return title?.t === "heading" ? plainText(title.c) : "APC docs";
 }
 
-/** The page as src/web/docs.tsx draws it, as HTML: the same header, navigation, draft note, text and footer. */
+/** The page as src/web/docs.tsx draws it, as HTML: the same header, navigation, standard note, text and footer. */
 export function docPageHtml(page: DocPage, source: string, examples: Record<string, string>): string {
   const nav = DOC_PAGES.map((p) => `<a href="${p.path}"${p === page ? ' aria-current="page"' : ""}>${escapeHtml(p.nav)}</a>`).join("");
   return [
     `<main class="docs">`,
     `<header class="docs-head"><a class="kicker" href="/">Agent Pointed Context</a><span class="row small"><a href="/dock">Your dock</a><a href="${REPO}">GitHub</a></span></header>`,
     `<nav class="docs-nav" aria-label="Docs">${nav}</nav>`,
-    `<aside class="docs-draft" role="note"><b>Draft.</b> The APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. Version 1.0 will freeze it, and from then on it changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.</aside>`,
+    `<aside class="docs-standard" role="note"><b>APC ${APC_STANDARD_VERSION}.</b> The standard is frozen and changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.</aside>`,
     `<article class="docs-body">${blocks(parseMarkdown(source), page.file, examples)}</article>`,
     `<footer class="docs-foot"><p>The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT. Source of this page: <a href="${REPO}/blob/main/${page.file}">${page.file}</a>. This page as Markdown: <a href="${docMarkdownPath(page)}">${docMarkdownPath(page)}</a>.</p><p><a href="/">Home</a> · <a href="/v1/">Version 1, as described in the paper</a></p></footer>`,
     `</main>`,
@@ -130,7 +130,7 @@ export function docPageMarkdown(page: DocPage, source: string, examples: Record<
     out.push(code ? line : line.split(CODE_SPAN).map((part, i) => (i % 2 ? part : rewrite(part))).join(""));
   }
   const text = out.join("\n").trimEnd();
-  return `${text}\n\n---\n\nThe APC standard is at ${APC_STANDARD_VERSION}, a 0.x draft: any release may still change the contract. This page as HTML: ${page.path}. Text CC BY 4.0, code MIT. Source: ${REPO}/blob/main/${page.file}\n`;
+  return `${text}\n\n---\n\nThe APC standard is at ${APC_STANDARD_VERSION}, frozen and changing only by the versioning and compatibility policy (/docs/spec#versioning-and-compatibility). This page as HTML: ${page.path}. Text CC BY 4.0, code MIT. Source: ${REPO}/blob/main/${page.file}\n`;
 }
 
 /** /llms.txt: what the docs are, and every page as Markdown (https://llmstxt.org). */
@@ -139,7 +139,7 @@ export function llmsTxt(sources: Record<string, string>): string {
   return [
     "# Agent Pointed Context (APC)",
     "",
-    `> APC is an open standard for pointing an AI agent at something on screen: the person drags their agent onto a row, a cell or a step of a figure in any app that speaks APC, and the agent receives that thing's identifiers through MCP. The standard is at ${APC_STANDARD_VERSION}, a 0.x draft.`,
+    `> APC is an open standard for pointing an AI agent at something on screen: the person drags their agent onto a row, a cell or a step of a figure in any app that speaks APC, and the agent receives that thing's identifiers through MCP. The standard is at ${APC_STANDARD_VERSION}, frozen and changing only by the versioning and compatibility policy (/docs/spec#versioning-and-compatibility).`,
     "",
     "Every docs page is plain HTML at its path (/docs, /docs/spec, …) and Markdown at the paths below.",
     "",

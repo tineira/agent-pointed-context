@@ -2,7 +2,13 @@
 
 This file records the contract that an app and an agent share in Agent Pointed Context: the view an app reports, the pin (focus) a person drops on a target, presence, the format of the focus, `wait_for_focus`, the tools an app and a hub expose, the drag payload and pairing. It does not record the software (Pulse, the dock, Signals, the extension, the desktop apps); that is [`CHANGELOG.md`](../../CHANGELOG.md) at the root.
 
-The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It stays 0.x while the standard is a draft and becomes 1.0.0 when it is published. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor (or, from 1.0, a major) version. A patch (0.7.0 to 0.7.1) never changes the contract; it fixes the packages or the wording, so an app that implements 0.7.0 implements every 0.7.x.
+The standard has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, separate from the software release. It is at 1.0.0 and frozen: from here a minor only adds, while a major may break inside the deprecation window. The version of the paper (V1, the apc.tineira.com demo) is not a 1.x of this standard. Every change to the contract adds an entry here and bumps the constant: a new minor for additions or a new major for breaking changes. A patch never changes the contract; it fixes the packages or the wording.
+
+## 1.0.0 (2026-11-15)
+
+**The pairing contract is frozen.** 1.0 is 0.13 frozen under the new number, plus **M14, one account across a handoff**, the single addition over 0.13. It freezes the core, Direct and Dock pairing (M1 to M14, H1 to H10), `apc_link`, `apc.json`, trust marking and unknown-field reading; the hub's agent tools and presentation remain outside the freeze. M14 needs no change in any existing app: current flows either have no accounts or connect tickets, or derive the grant from the consenting request's actor. An app on 0.13 that does not carry a connect ticket beyond the session that consented meets M14 by construction and claims 1.0 by changing only `standard`. Future changes follow the spec's versioning and compatibility policy; the Dock first-pairing conformance floor remains 0.13.
+
+**TIN-924's two fixes ship inside 1.0.0, without a 0.13.1.** `requestConnect` recognizes only the exact legacy JSON 404 (JSON media type, no BOM or duplicate keys), and conformance ties the owner's pairing code to the wire through transmitted-code freshness, re-consent, waiting-card and leak checks. The reference apps and Orders remove the one-release app-side rollback fallback and refuse a missing `/apc/connect`; the server package retains `legacyAbsent` for third-party apps talking to older hubs.
 
 ## 0.13.0 (draft, 2026-11-14)
 

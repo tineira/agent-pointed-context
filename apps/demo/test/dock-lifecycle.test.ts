@@ -49,8 +49,8 @@ test("Pulse: the page's state never carries a dock grant's secret, and still car
   await sandbox.init();
   const direct = await sandbox.addAgentGrant();
   const drop = { hub: HUB, agent: "ag_1", ticket: `${"d".repeat(32)}.${"1".repeat(16)}`, target: pulse.targets[0], region: "latam" };
-  const asked = await sandbox.pairHub(SID, ORIGIN, drop);
-  const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+  const asked = await sandbox.pairHub(SID, ORIGIN, drop, true);
+  const paired = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true);
   assert.equal(paired.ok, true, paired.error);
   const state = (await sandbox.state()) as State;
   assert.equal(state.grants.find((g) => g.id === paired.grant_id)!.secret, "");
@@ -110,8 +110,8 @@ test("Pulse: a link from before APC 0.10 that still waits for its code is in han
   const before = new Sandbox(room.ctx, DEPLOY);
   await before.init();
   const drop = { hub: HUB, agent: "ag_old", ticket: `${"d".repeat(32)}.${"2".repeat(16)}`, target: pulse.targets[0] };
-  const asked = await before.pairHub(SID, ORIGIN, drop);
-  const paired = await before.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent });
+  const asked = await before.pairHub(SID, ORIGIN, drop, true);
+  const paired = await before.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true);
   assert.equal(paired.ok, true, paired.error);
   // As Pulse 0.9 stored it: the code and its expiry, and none of the 0.10 columns.
   room.db.prepare("update hub_links set state = null, secret_hash = null, allowed_at = null, acked_at = null where grant_id = ?").run(paired.grant_id);
@@ -159,8 +159,8 @@ test("Pulse: an Allow whose second write fails leaves no grant, and a dock grant
     return exec(query, ...params);
   };
   const drop = { hub: HUB, agent: "ag_torn", ticket: `${"d".repeat(32)}.${"3".repeat(16)}`, target: pulse.targets[0] };
-  const asked = await sandbox.pairHub(SID, ORIGIN, drop);
-  await assert.rejects(sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }), /storage/);
+  const asked = await sandbox.pairHub(SID, ORIGIN, drop, true);
+  await assert.rejects(sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true), /storage/);
   assert.equal(hubCalls, 0, "the hub never heard of it");
   failing = false;
   // The grant's own row is there (the worst case), marked as a dock's, with no link.
@@ -183,12 +183,12 @@ test("Pulse: an Allow whose second write fails leaves no grant, and a dock grant
     return exec(query, ...params);
   };
   const second = { ...drop, agent: "ag_torn2", ticket: `${"d".repeat(32)}.${"4".repeat(16)}` };
-  const asked2 = await sandbox.pairHub(SID, ORIGIN, second);
-  await assert.rejects(sandbox.pairHub(SID, ORIGIN, { ...second, consent: asked2.consent }), /storage/);
+  const asked2 = await sandbox.pairHub(SID, ORIGIN, second, true);
+  await assert.rejects(sandbox.pairHub(SID, ORIGIN, { ...second, consent: asked2.consent }, true), /storage/);
   assert.equal(room.db.prepare("select count(*) as n from grants").get()!.n, 0);
   const third = { ...second, ticket: `${"d".repeat(32)}.${"5".repeat(16)}` };
-  const asked3 = await sandbox.pairHub(SID, ORIGIN, third);
-  const paired = await sandbox.pairHub(SID, ORIGIN, { ...third, consent: asked3.consent });
+  const asked3 = await sandbox.pairHub(SID, ORIGIN, third, true);
+  const paired = await sandbox.pairHub(SID, ORIGIN, { ...third, consent: asked3.consent }, true);
   assert.equal(paired.ok, true, paired.error);
   assert.equal(room.db.prepare("select dock from grants where id = ?").get(paired.grant_id)!.dock, 1);
   assert.match(String(sent.mcp_url), /^https:\/\/pulse\.test\/mcp\//);

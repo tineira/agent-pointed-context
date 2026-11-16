@@ -8,15 +8,15 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are 0.x pre-releases on npm, released together. Their minor version is the standard's: `@tineira/apc-server@0.N.x` ships APC 0.N (`APC_STANDARD_VERSION`), and a patch never changes the contract. Install all four at the same version; `npm i` without a tag records `^0.N.x`, which stays on that minor.
+The packages are released together at the standard's version, now 1.0.0 (`APC_STANDARD_VERSION`). A patch never changes the contract. Install all four at the same version; these commands select 1.0.0 explicitly, independently of npm dist-tags.
 
 ```sh
-npm i @tineira/apc-server @modelcontextprotocol/sdk zod   # the server (the SDK and zod are peers)
-npm i @tineira/apc-protocol @tineira/apc-web               # the page
-npm i -D @tineira/apc-conformance                          # the tests
+npm i @tineira/apc-server@1.0.0 @modelcontextprotocol/sdk zod       # the server (the SDK and zod are peers)
+npm i @tineira/apc-protocol@1.0.0 @tineira/apc-web@1.0.0  # the page
+npm i -D @tineira/apc-conformance@1.0.0                    # the tests
 ```
 
-The packages are on npm, so these lines work as written. The sources are also in the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
+Use these commands for the 1.0.0 release. The sources are also in the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
 
 They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-web` have no Node imports (`@tineira/apc-web` is browser code for any bundler); `@tineira/apc-server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@tineira/apc-conformance` needs Node 22.15+.
 
@@ -159,7 +159,7 @@ Add `"dock"` to the profiles and list the hubs you pair with. A dock's agent arr
 - **A grant already:** the server asks the hub whether the pairing still stands (`confirmWithHub`, `POST {hub}/apc/confirm`). Still pending: the page shows the same code, never a new one. Paired but not connected yet: it says so. Live: the drop pins it. `not_paired`, or the code's time is up: the grant ends and the person is asked again.
 - **The person unpairs in the dock** (or denies, types five wrong codes, or lets the request expire): the hub calls your `POST /apc/revoke` with the grant's MCP URL, and the grant ends. `handleDockGiveBack` answers the same 200 whatever it was sent.
 
-**Connect first (since 0.13).** A drop with no grant behind it never pairs by itself: the server sends it to the hub's `POST {hub}/apc/connect` (`requestConnect`), the person approves it in their dock, and the dock opens your `dock_connect` page with an `#apc_connect` fragment. Orders serves that page itself, and lists `dock_connect` in `apc.json` only while it offers Dock; [orders-connect.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-connect.ts) is its client, which asks the person and posts to `/api/connect/dock`. A Connect for an agent that already has a grant says it replaces the current connection, and the old grant ends only once the hub acknowledges the new pairing. Only an HTTP 404 with `{"error":"not_found"}` from a hub before 0.13 lets the drop fall back to asking on the page.
+**Connect first (since 0.13).** A drop with no grant behind it never pairs by itself: the server sends it to the hub's `POST {hub}/apc/connect` (`requestConnect`), the person approves it in their dock, and the dock opens your `dock_connect` page with an `#apc_connect` fragment. Orders serves that page itself, and lists `dock_connect` in `apc.json` only while it offers Dock; [orders-connect.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-connect.ts) is its client, which asks the person and posts to `/api/connect/dock`. A Connect for an agent that already has a grant says it replaces the current connection, and the old grant ends only once the hub acknowledges the new pairing. A missing `/apc/connect` is a refusal; the one-release rollback fallback ended at 1.0.0.
 
 <!-- include orders-app.ts#connect -->
 
@@ -229,7 +229,7 @@ The conformance test: `connect` gives each agent's token in `headers`, and `page
 Over HTTP, with the app running: make two agents, revoke one in the page, then run the command line once with the live one and the revoked one (see [Conformance](/docs/conformance#run-it-from-the-command-line)):
 
 ```sh
-APC_TOKEN=… APC_REVOKED_TOKEN=… npx @tineira/apc-conformance https://tickets.example --grant https://tickets.example/mcp --bearer-env APC_TOKEN --revoked https://tickets.example/mcp --revoked-bearer-env APC_REVOKED_TOKEN
+APC_TOKEN=… APC_REVOKED_TOKEN=… npx @tineira/apc-conformance@1.0.0 https://tickets.example --grant https://tickets.example/mcp --bearer-env APC_TOKEN --revoked https://tickets.example/mcp --revoked-bearer-env APC_REVOKED_TOKEN
 ```
 
 ## Localize the page

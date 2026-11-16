@@ -125,8 +125,3 @@ apc-agents.agent-bar { --apc-chip: var(--panel); --apc-line: var(--line); --apc-
 /* The post a link opened on (TIN-621), and the time that links to a post. */
 .post.selected { box-shadow: inset 4px 0 0 var(--link); background: var(--hover); }
 .post-time { color: inherit; }
-/* The handoff card (TIN-901, <apc-handoff> from @tineira/apc-web), in the consent dialog's place. */
-.modal apc-handoff { --apc-chip: var(--panel); --apc-line: var(--line); --apc-ink: var(--fg); --apc-muted: var(--muted); --apc-accent: var(--accent); }
-.modal apc-handoff .apc-handoff__title { color: var(--fg); font-size: 20px; font-weight: 800; }
-.modal apc-handoff .apc-handoff__code { font-size: 2.2rem; }
-.modal apc-handoff .apc-handoff__cancel { border-radius: 999px; padding: 8px 16px; }

@@ -386,7 +386,7 @@ main.docs { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; gap: 18px
 .docs-nav a { padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--fg); text-decoration: none; font-size: 14px; }
 .docs-nav a:hover { border-color: var(--muted); }
 .docs-nav a[aria-current="page"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.docs-draft { padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; background: var(--chip); color: var(--fg); font-size: 14px; line-height: 1.55; }
+.docs-standard { padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; background: var(--chip); color: var(--fg); font-size: 14px; line-height: 1.55; }
 .docs-body { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
 .docs-body > :first-child { margin-top: 0; }
 .docs-body h1 { font-size: clamp(26px, 5vw, 36px); line-height: 1.15; letter-spacing: -0.01em; margin: 8px 0 16px; }

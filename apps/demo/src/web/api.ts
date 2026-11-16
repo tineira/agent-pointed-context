@@ -74,9 +74,9 @@ export function createApi(sid: string) {
     addAgent: () => post<GrantState & { ok?: boolean; error?: string }>("/grants/agent", {}),
     reset: () => post<{ ok: boolean }>("/reset", {}),
     resolveConflict: (grantId: string, action: "split" | "adopt") => post<{ ok: boolean; grant?: GrantState }>(`/grants/${grantId}/conflict`, { action }),
-    /** A dock agent's drop (TIN-382). Without `consent` the server pairs only an agent it holds a grant for; otherwise it answers consent_required with the nonce the consent sends back (TIN-606). */
-    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget; consent?: string }) =>
-      post<{ ok: boolean; error?: string; grant_id?: string; status?: string; consent?: string; pairing_code?: string; pairing?: { code: string; expires_at: string }; pin_error?: string }>("/hub/pair", body),
+    /** A dock agent's drop: confirms an existing pairing or requests Connect in the dock. */
+    hubPair: (body: { hub: string; agent: string; ticket: string; region: Region | null; target: FocusTarget }) =>
+      post<{ ok: boolean; error?: string; grant_id?: string; status?: string; pairing?: { code: string; expires_at: string }; pin_error?: string }>("/hub/pair", body),
     /** Cancel on the waiting card (APC 0.10): takes the dock's access back while the dock has not connected; refused once it has. */
     hubCancel: (grantId: string) => post<{ ok: boolean; error?: string }>("/hub/cancel", { grant_id: grantId }),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),

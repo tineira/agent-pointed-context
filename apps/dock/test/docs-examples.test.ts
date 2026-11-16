@@ -381,7 +381,7 @@ test("the wait-event probe runs once per run, and each check makes one agent (AP
   assert.equal(agents, 2);
 });
 
-test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to /apc/pair), and /connect/dock pairs signed-in account", async () => {
+test("Orders 1.0: a missing Connect route refuses the drop, and /connect/dock pairs signed-in account", async () => {
   const HUB = "https://dock.test";
   const ORIGIN = "https://orders.test";
   let connectAnswer = () => Response.json({ ok: true, status: "connect_requested" });
@@ -427,7 +427,7 @@ test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to 
   assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: true, status: "connect_requested" });
   assert.deepEqual(called.map((c) => new URL(c.url).pathname), ["/apc/connect"]);
 
-  // 3. Only the exact legacy 404 falls back; a refusal saying not_found cannot ask for consent.
+  // 3. Every missing Connect route is a refusal; no drop-time consent remains.
   for (const [status, body, error] of [
     [404, { error: "not_found", detail: "missing route" }, "hub_refused"],
     [400, { ok: false, error: "not_found" }, "not_found"],
@@ -437,13 +437,12 @@ test("Orders 0.13: drop calls requestConnect (404 fallback sends drop ticket to 
     connectAnswer = () => Response.json(body, { status });
     assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: false, error });
   }
-  // Allow on the legacy path calls /apc/pair with the drop ticket.
   connectAnswer = () => Response.json({ error: "not_found" }, { status: 404 });
-  const askedFallback = await (await post("/api/drop", drop)).json() as { error: string; consent: string };
-  assert.equal(askedFallback.error, "consent_required");
-  const pairFallback = await (await post("/api/drop", { ...drop, consent: askedFallback.consent })).json();
-  assert.deepEqual(pairFallback, { ok: false, error: "ticket_not_for_pairing" });
-  assert.equal(called.at(-1)?.body.ticket, dropTicket);
+  assert.deepEqual(await (await post("/api/drop", drop)).json(), { ok: false, error: "not_found" });
+  assert.equal(called.some((c) => c.url.endsWith("/apc/pair")), false);
+  const connectOnly = await (await post("/api/connect/dock", drop)).json() as { consent: string };
+  assert.deepEqual(await (await post("/api/drop", { ...drop, consent: connectOnly.consent })).json(), { ok: false, error: "not_found" });
+  assert.equal(called.some((c) => c.url.endsWith("/apc/pair")), false, "Connect consent cannot authorize a drop-time Allow");
 
   // 4. Full /api/connect/dock consent -> Allow -> pending + pairing code, then drop on linked agent confirms.
   pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "a".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });

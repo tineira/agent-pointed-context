@@ -1013,7 +1013,7 @@ The 1.0 review asked what the contract is, what a change to it may do, and what 
 **What the contract is.** Everything one party relies on from another party it did not build:
 
 - the wire formats: the focus format and the drag payload; the core tools, their inputs and results, error codes included; `apc.json`, `mcp.endpoints` included; the presence channel and its events, wait events included;
-- the Dock profile's protocol: `/apc/pair`, `/apc/confirm` and `/apc/revoke`, the pairing code, the binding, the grant states and what each answers, the hub's duties (H1 to H8) and the app's (M1 to M12);
+- the Dock profile's protocol: `/apc/pair`, `/apc/confirm` and `/apc/revoke`, the pairing code, the binding, the grant states and what each answers, the hub's duties (H1 to H10) and the app's (M1 to M14);
 - the Direct profile: the grant requirements and the bearer and secret-URL answers; `apc_link`;
 - every MUST and SHOULD in the spec.
 
@@ -1031,7 +1031,7 @@ It is **not**: presentation (the pet, the cards, badges, wording and motion, whi
 
 **Coexistence.** The reference hub serves the current major and the previous one, the previous one for at least 12 months after a new major ships.
 
-**Apps on 0.x when 1.0 ships.** 1.0 is 0.12 frozen under the number 1.0: an app on 0.12 claims 1.0 by changing only `standard`. Apps that claim 0.10 or 0.11 keep working with a 1.x hub for at least 6 months after 1.0 (and, by the 0.12 binding's own window, at least until 2027-05-14). The hub may show them as made for an older version and refuses nothing on that claim; it counts the claims, to know when the window can close, and enforces nothing. Apps below 0.10 are not supported by a 1.0 hub; none of the known adopters is (Autio, Surplus, Pulse and Signals are on 0.11). 0.10 is the floor because it is the first version with the grant states and the hub's and app's duties that 1.0 keeps.
+**Apps on 0.x when 1.0 ships.** 1.0 is 0.13 frozen under the number 1.0, plus M14 (§ 29): an app on 0.13 that never carries a connect ticket beyond the session that consented meets M14 by construction and claims 1.0 by changing only `standard`. The origin-bound first-pairing cut (§ 28) moved that floor from 0.12: new Dock first pairing requires 0.13 regardless of the app's claim, while existing pairings claiming 0.10 to 0.12 keep confirming and relaying with a 1.x hub for at least 6 months after 1.0 (and, by the 0.12 binding's own window, at least until 2027-05-14). The hub counts claims to know when the window can close. Apps below 0.10 are not supported by a 1.0 hub; none of the known adopters is (Autio is on 0.11.1, Surplus on 0.13.0, and the reference apps Pulse and Signals move to 1.0.0). 0.10 is the existing-pairing floor because it is the first version with the grant states and the hub's and app's duties that 1.0 keeps.
 
 **Deprecation, normative from 1.0.** Marked deprecated in a minor release (in the changelog and the spec), then kept for at least one more minor **and** 3 months, whichever is longer, before a major removes it. A security fix may shorten the window; the changelog says why, and the conformance suite gets the check in the same release.
 
@@ -1053,3 +1053,12 @@ The unverified warning is acknowledged at Connect and carried to the code step, 
 Requests expire after 120 seconds: one per app origin and agent, at most three origins per agent and twenty requests per dock. Reader claims coexist up to three per agent and extension origin. All checks and ticket consumption that change authority happen synchronously, with the ticket and limits rechecked after manifest I/O. Removing agents, rotating secrets, resetting and alarms purge the transient tables. The hub re-runs the origin verdict at approval without fetching. Only owner-authenticated approval returns a connect ticket; state and broadcasts never expose one.
 
 This is a hard cut for first pairing; `/apc/reader` refuses old calls. Existing pairings retain confirm, MCP relay and revoke. App-side rollback fallback applies only to an actual 404 from `/apc/connect` and ends one release after the cut. Residual risks are social sharing of codes, bounded Connect-request spam, and same-origin script authority (including frozen V1).
+
+
+## 29. One account across a handoff (APC 1.0)
+
+The 1.0 gate found that nothing tied the app account whose authenticated session gave consent to the account that holds the grant. The consent nonce binds the dock and agent, M6 binds the owner-session endpoints, and making the grant inside the Allow kept the property true by construction. A native handoff is the first path that can split the consenting session from the session that makes the grant.
+
+Tomas decided on 2026-11-15 to add M14: the grant belongs to the account whose authenticated session consented. An app carrying a connect ticket to another surface of its own pairs only when that surface is signed in as the same account, and refuses otherwise. The suite cannot check that without two accounts in the app under test; the app's own tests prove it, and an unchecked MUST binds all the same.
+
+This is the single addition to 0.13 in the 1.0 freeze. Adding it now is free because 1.0.0 is a major bump; after the freeze a new MUST on an existing app would need 2.0 and the deprecation window. Every current adopter meets it vacuously: the dock is a hub, so the M series does not address it; Pulse and Signals have anonymous sandboxes and no native handoff yet; Autio is Direct-only, with no connect tickets at all; and Surplus derives its whole dock path from the authenticated request's actor. No reference-app enforcement is needed here; the native handoff implementation is where the rule binds.

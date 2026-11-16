@@ -229,7 +229,7 @@ export interface OrdersAppOptions {
 type PageMessage = { type: "presence"; event: PresenceMessage } | { type: "agents" };
 
 /**
- * What a drop from a dock answers the page: `consent_required` with the nonce and the pairing code to show; or
+ * A Connect visit answers `consent_required` with its nonce and code; a drop requests Connect or returns
  * the grant, with `status: "pending"` and the code to wait on (`pairing`) while the dock has not taken the code,
  * `"connecting"` once it has and until it connects, and `"paired"` for a live grant, pinned.
  */
@@ -651,7 +651,7 @@ export class OrdersApp {
   // #region dock
   /**
    * Dock: the person dropped an agent from a dock on the page. Every such drop comes here, whatever the
-   * page thinks it knows, and so does the Allow (the same request with the consent's nonce). `parseDockDrop`
+   * page thinks it knows. The Connect page's Allow enters with `connect = true` and its nonce. `parseDockDrop`
    * checks the drag's hub against the allowlist both times (M1) and gives back its origin, which is where the
    * hub calls go (M9). An agent with no grant gets one only with the person's yes on this page, proven by the
    * nonce; the consent shows a pairing code, which the hub gets with the grant and the person types in their dock.
@@ -673,7 +673,7 @@ export class OrdersApp {
   }
 
   private async dropOnce(hub: string, agent: string, ticket: string, target: unknown, consent: unknown, connect: boolean): Promise<DropAnswer> {
-    const scope = `${agent} ${ticket} ${connect ? "connect" : "fallback"}`;
+    const scope = `${agent} ${ticket} connect`;
     // This store belongs to one person. Keep their drop across the hub's fragment-only Connect handoff,
     // for at most six minutes (the request plus ticket lifetimes), including across a server restart.
     const targetKey = `connect-target:${hub} ${agent}`;
@@ -688,14 +688,14 @@ export class OrdersApp {
     const requestFirst = async (): Promise<DropAnswer> => {
       const answer = await requestConnect(hub, { ticket, agent, app: { origin: this.origin } }, { fetch: this.send });
       if (answer.ok) this.store.kv.put(targetKey, JSON.stringify({ target, expiresAt: this.now() + 360_000 }));
-      return "legacyAbsent" in answer && answer.legacyAbsent ? askFirst() : answer;
+      return answer.ok ? answer : { ok: false, error: answer.error };
     };
     // The newest consent asked for this agent: a new drop replaces the one before it.
     const newest = `asked:${hub} ${agent}`;
     const askFirst = (): DropAnswer => {
       const asked = this.consent.ask(hub, scope);
       this.store.kv.put(newest, asked.nonce);
-      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code, ...(connect && held ? { replaces: true } : {}) };
+      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code, ...(held ? { replaces: true } : {}) };
     };
     this.sweep();
     const held = this.live().find((g) => g.hub === hub && g.agent === agent);
@@ -736,8 +736,9 @@ export class OrdersApp {
       held.lastWake = this.now();
       return { ...pinned, grant_id: held.id, status: check.status };
     }
-    // No grant for this agent. A drop asks; an Allow must bring back the newest nonce.
-    if (consent === undefined || consent === null) return connect ? askFirst() : requestFirst();
+    // A drop only requests Connect; only its page can take consent and make the grant.
+    if (!connect) return requestFirst();
+    if (consent === undefined || consent === null) return askFirst();
     const { id, secret } = newDirectGrant(); // any grant's id and secret
     const hash = await secretHash(secret);
     // From the nonce to the grant in flight, nothing is awaited.

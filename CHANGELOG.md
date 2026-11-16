@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **Declare APC 1.0.0: 0.13 frozen plus M14, one account across a handoff.** M14 needs no change in any existing app; all four packages move to 1.0.0, docs state the freeze and compatibility policy, TIN-924's two fixes ship in 1.0.0, and Pulse, Signals and Orders refuse missing Connect routes instead of offering drop-time consent. (`packages/`, `apps/dock/src/docs/`, `apps/dock/src/web/`, `apps/demo/`, `apps/signals/`, `DESIGN.md`, `scripts/lib/packages.mjs`, `scripts/test/packages.test.mjs`, `README.md`)
+
 - **Connect fallback requires the exact legacy JSON 404, and conformance ties the owner's pairing code to the wire.** `requestConnect` requires JSON media type, no BOM or duplicate keys; Dock adapters return the code from `allow()` and optionally from consent, with transmitted-code freshness, re-consent, waiting-card and leak checks. (`packages/server/`, `packages/conformance/`, `apps/demo/`, `apps/signals/`, `apps/dock/src/docs/examples/`, `apps/dock/src/docs/pages/conformance.md`, `apps/dock/test/docs-examples.test.ts`)
 
 - **The pet bubble closes itself after an answer given in it, and says why when a request left on its own.** An Allow or Deny the hub accepted shows a short confirmation and closes once the pointer is off the bubble; a request that expired or was answered in the dock keeps the bubble with that reason until Done, instead of "No requests waiting". A wrong code typed in the bubble is now said on its card. (`apps/dock/src/web/pet.tsx`, `apps/dock/src/web/pet-bubble.ts`, `apps/dock/test/pet-bubble.test.ts`)

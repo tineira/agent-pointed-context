@@ -33,12 +33,6 @@ export interface DockLifecycleOptions {
   restart: () => void;
   /** A new Direct agent, made as the page makes one (APC 0.12, M12). */
   directGrant: () => Promise<AgentConnection>;
-  /**
-   * Whether the stand-in hub answers `/apc/connect` (a 0.13 hub; the default): a first drop then asks the hub to open
-   * the app's `dock_connect` page, where the person is asked. False models a hub before 0.13, whose 404 makes the drop
-   * itself ask (the fallback).
-   */
-  connect?: boolean;
 }
 
 /**
@@ -97,8 +91,8 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
     const drop = { hub: decoded.hub, agent: decoded.agent, ticket: decoded.ticket, target: target ?? o.target };
     return outcome(await post("/connect/dock", drop), "/connect/dock", drop);
   };
-  /** The route whose answer asks the person: the Connect page's with a 0.13 hub, the drop's own with a hub before 0.13. */
-  const consentRoute = (o.connect ?? true) ? "/connect/dock" : "/hub/pair";
+  /** Only the Connect page can ask for consent. */
+  const consentRoute = "/connect/dock";
   let agents = 0;
   const newAgent = () => `ag_owner_${++agents}`;
   /** A consent for a new agent: the drop (with a 0.13 hub, then the dock's Connect), and what its Allow sends. */
