@@ -73,46 +73,6 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 // #endregion
 
-// #region connect
-/**
- * The page a dock opens at `dock_connect` (APC 0.13): 200 only, no redirect, no referrer, same-origin scripts only.
- * Its head script runs first and moves the `#apc_connect` fragment into sessionStorage, then removes it from the
- * URL; orders-connect.ts (built as `script`) validates it and asks the person on this page.
- */
-const CONNECT_HEAD = `(function () {
-  if (!location.hash.startsWith("#apc_connect=")) return;
-  var hash = location.hash;
-  history.replaceState(history.state, "", location.pathname + location.search);
-  try {
-    sessionStorage.removeItem("apc_connect");
-    var raw = hash.slice(13).replace(/-/g, "+").replace(/_/g, "/");
-    while (raw.length % 4) raw += "=";
-    var bytes = Uint8Array.from(atob(raw), function (c) { return c.charCodeAt(0); });
-    sessionStorage.setItem("apc_connect", new TextDecoder("utf-8", {fatal:true}).decode(bytes));
-  } catch (_) { /* The client reports an invalid or missing link without sending it. */ }
-})();`;
-
-const escapeHtml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-
-function dockConnectPage(name: string, options: { session?: boolean; signedIn?: boolean; account?: string; script?: string } = {}): Response {
-  const script = options.script ?? "/assets/dock-connect.js";
-  if (!script.startsWith("/") || script.startsWith("//") || /[?#\\]/.test(script)) throw new Error("connect script must be a same-origin path");
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><script>${CONNECT_HEAD}</script>
-<meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connect ${escapeHtml(name)}</title><style>
-body{font:16px system-ui,sans-serif;background:#f4f5f7;color:#20242b;margin:0;padding:24px}main{max-width:520px;margin:8vh auto;background:white;border:1px solid #d4d7dc;border-radius:16px;padding:28px}button,select{font:inherit;padding:10px 16px;margin:8px 8px 8px 0}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #3468d4}h1{font-size:24px}#account{overflow-wrap:anywhere}
-</style></head><body><main data-app="${escapeHtml(name)}" data-session="${options.session === false ? "false" : "true"}" data-signed-in="${options.signedIn === false ? "false" : "true"}" data-account="${escapeHtml(options.account ?? "")}">
-<h1>Connect ${escapeHtml(name)} to your dock</h1><p id="account"></p><p id="message" role="status">Preparing your connection…</p><div id="consent"></div><apc-handoff hidden></apc-handoff><p><a href="/">Open ${escapeHtml(name)}</a></p>
-</main><script type="module" src="${escapeHtml(script)}"></script></body></html>`, {
-    status: 200,
-    headers: {
-      "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer",
-      "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-    },
-  });
-}
-// #endregion
-
 // #region data
 export interface Order {
   id: string;
@@ -383,6 +343,7 @@ export class OrdersApp {
   }
   // #endregion
 
+  // #region helpers
   /** A grant's MCP URL: the origin, apc.json's endpoint "/mcp/{secret}", with the secret. */
   mcpUrl(secret: string): string {
     return `${this.origin}/mcp/${secret}`;
@@ -404,6 +365,7 @@ export class OrdersApp {
       }
     }
   }
+  // #endregion
 
   // #region direct
   /** Direct: the person makes an agent on the page. It gets its own grant, and the URL to paste into the agent. */
@@ -615,6 +577,49 @@ export class OrdersApp {
   }
   // #endregion
 
+  // #region page
+  /** The agents as the person's page shows them: a linked agent once, with both paths. */
+  agents(): AgentRow[] {
+    const rows: AgentRow[] = [];
+    this.sweep();
+    for (const g of this.live()) {
+      if (g.state === "in_flight") continue; // the hub has not acknowledged it yet
+      const partner = this.links.partnerOf(g.id);
+      if (partner && g.path === "dock") continue; // shown with its Direct grant
+      const pin = this.store.pins.get(g.id);
+      rows.push({
+        id: g.id,
+        name: g.name,
+        paths: partner ? ["direct", "dock"] : [g.path],
+        grants: partner ? [g.id, partner] : [g.id],
+        url: g.path === "direct" ? this.mcpUrl(g.secret) : null,
+        client: g.client,
+        pin: pin ? { label: `order ${pin.id}`, seen: !isUnread(pin) } : null,
+        waiting: g.state === "handoff" ? (g.pairing ? "code" : "connecting") : null,
+        pairing: g.pairing,
+      });
+    }
+    return rows;
+  }
+
+  /** The person's page: a stream of messages (presence, and "agents changed"). An open stream is an open page. */
+  events(): Response {
+    const encoder = new TextEncoder();
+    let send: ((message: PageMessage) => void) | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        // Throws once the stream is closed; publish() then drops this page.
+        send = (message) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(message)}\n\n`));
+        this.pages.add(send);
+      },
+      cancel: () => {
+        if (send) this.pages.delete(send);
+      },
+    });
+    return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-store" } });
+  }
+  // #endregion
+
   // #region revoke
   /** Revoke from the app: at once, calling nobody, in any state. A linked agent is one agent: both its grants go. */
   revoke(grantId: string): { ok: boolean } {
@@ -641,12 +646,14 @@ export class OrdersApp {
   }
   // #endregion
 
+  // #region unlink
   /** Unlink: a linked agent shows as two again. Both grants stay. */
   unlink(grantId: string): { ok: boolean } {
     const ok = this.links.unlink(grantId) !== null;
     this.publish({ type: "agents" });
     return { ok };
   }
+  // #endregion
 
   // #region dock
   /**
@@ -838,48 +845,45 @@ export class OrdersApp {
     this.forget(grant);
     this.publish({ type: "agents" });
   }
-  // #endregion
-
-  // #region page
-  /** The agents as the person's page shows them: a linked agent once, with both paths. */
-  agents(): AgentRow[] {
-    const rows: AgentRow[] = [];
-    this.sweep();
-    for (const g of this.live()) {
-      if (g.state === "in_flight") continue; // the hub has not acknowledged it yet
-      const partner = this.links.partnerOf(g.id);
-      if (partner && g.path === "dock") continue; // shown with its Direct grant
-      const pin = this.store.pins.get(g.id);
-      rows.push({
-        id: g.id,
-        name: g.name,
-        paths: partner ? ["direct", "dock"] : [g.path],
-        grants: partner ? [g.id, partner] : [g.id],
-        url: g.path === "direct" ? this.mcpUrl(g.secret) : null,
-        client: g.client,
-        pin: pin ? { label: `order ${pin.id}`, seen: !isUnread(pin) } : null,
-        waiting: g.state === "handoff" ? (g.pairing ? "code" : "connecting") : null,
-        pairing: g.pairing,
-      });
-    }
-    return rows;
-  }
-
-  /** The person's page: a stream of messages (presence, and "agents changed"). An open stream is an open page. */
-  events(): Response {
-    const encoder = new TextEncoder();
-    let send: ((message: PageMessage) => void) | null = null;
-    const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        // Throws once the stream is closed; publish() then drops this page.
-        send = (message) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(message)}\n\n`));
-        this.pages.add(send);
-      },
-      cancel: () => {
-        if (send) this.pages.delete(send);
-      },
-    });
-    return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-store" } });
-  }
-  // #endregion
 }
+// #endregion
+
+// #region connect
+/**
+ * The page a dock opens at `dock_connect` (APC 0.13): 200 only, no redirect, no referrer, same-origin scripts only.
+ * Its head script runs first and moves the `#apc_connect` fragment into sessionStorage, then removes it from the
+ * URL; orders-connect.ts (built as `script`) validates it and asks the person on this page.
+ */
+export const CONNECT_HEAD = `(function () {
+  if (!location.hash.startsWith("#apc_connect=")) return;
+  var hash = location.hash;
+  history.replaceState(history.state, "", location.pathname + location.search);
+  try {
+    sessionStorage.removeItem("apc_connect");
+    var raw = hash.slice(13).replace(/-/g, "+").replace(/_/g, "/");
+    while (raw.length % 4) raw += "=";
+    var bytes = Uint8Array.from(atob(raw), function (c) { return c.charCodeAt(0); });
+    sessionStorage.setItem("apc_connect", new TextDecoder("utf-8", {fatal:true}).decode(bytes));
+  } catch (_) { /* The client reports an invalid or missing link without sending it. */ }
+})();`;
+
+const escapeHtml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+
+function dockConnectPage(name: string, options: { session?: boolean; signedIn?: boolean; account?: string; script?: string } = {}): Response {
+  const script = options.script ?? "/assets/dock-connect.js";
+  if (!script.startsWith("/") || script.startsWith("//") || /[?#\\]/.test(script)) throw new Error("connect script must be a same-origin path");
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><script>${CONNECT_HEAD}</script>
+<meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect ${escapeHtml(name)}</title><style>
+body{font:16px system-ui,sans-serif;background:#f4f5f7;color:#20242b;margin:0;padding:24px}main{max-width:520px;margin:8vh auto;background:white;border:1px solid #d4d7dc;border-radius:16px;padding:28px}button,select{font:inherit;padding:10px 16px;margin:8px 8px 8px 0}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #3468d4}h1{font-size:24px}#account{overflow-wrap:anywhere}
+</style></head><body><main data-app="${escapeHtml(name)}" data-session="${options.session === false ? "false" : "true"}" data-signed-in="${options.signedIn === false ? "false" : "true"}" data-account="${escapeHtml(options.account ?? "")}">
+<h1>Connect ${escapeHtml(name)} to your dock</h1><p id="account"></p><p id="message" role="status">Preparing your connection…</p><div id="consent"></div><apc-handoff hidden></apc-handoff><p><a href="/">Open ${escapeHtml(name)}</a></p>
+</main><script type="module" src="${escapeHtml(script)}"></script></body></html>`, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer",
+      "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    },
+  });
+}
+// #endregion

@@ -10,7 +10,7 @@ const SIGN_IN = "Sign in first, then return here to finish connecting.";
 type Pairing = { code: string; expires_at: string };
 type Answer = { ok?: boolean; error?: string; consent?: string; replaces?: boolean; grant_id?: string; pairing?: Pairing; pin_error?: string; unauthorized?: boolean };
 
-async function mountOrdersConnect(): Promise<void> {
+export async function mountOrdersConnect(): Promise<void> {
   const main = document.querySelector("main")!;
   const message = document.querySelector<HTMLElement>("#message")!;
   const account = document.querySelector<HTMLElement>("#account")!;
@@ -91,4 +91,4 @@ async function mountOrdersConnect(): Promise<void> {
   } catch (error) { end(String(error)); }
 }
 
-void mountOrdersConnect();
+if (typeof document !== "undefined") void mountOrdersConnect();

@@ -84,7 +84,7 @@ It reads only that origin, over https, never follows a redirect, caps every answ
 
 ## Run it from code
 
-`apcConformance(adapter)` returns named checks for any test runner; `runConformance(adapter)` runs them all and reports. This is the adapter for the Orders app of the [integration guide](/docs/integrate). It runs everything in one process: the app's `fetch` is called directly, the person's page is the app's own event stream, and on the Dock profile the suite's stand-in hub answers pairing.
+`apcConformance(adapter)` returns named checks for any test runner; `runConformance(adapter)` runs them all and reports. The blocks below are excerpts from [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts), the adapter for the Orders app of the [integration guide](/docs/integrate). They leave out the file's surrounding harness (`ORIGIN`, `HUB`, `SESSION`, the `ordersUnderTest` wrapper with `skew`, `config`, `app`, `call` and its `return`, plus `ordersChecks`), and `dock.lifecycle` is shown in its own section below rather than inline inside `ordersUnderTest`. It runs everything in one process: the app's `fetch` is called directly, the person's page is the app's own event stream, and on the Dock profile the suite's stand-in hub answers pairing.
 
 <!-- include orders-conformance.ts#imports -->
 
@@ -104,7 +104,7 @@ M9 drives a trailing-slash hub through the first drop and, on 0.13, the `#apc_co
 
 <!-- include orders-conformance.ts#connect -->
 
-The pairing code (Dock): `drop(agent, ticket)` returns `{ code?, allow() }`; `allow()` returns `{ ok, error?, grantId?, code? }`. On success, the Allow answer supplies the owner's pairing code, formatted or raw. If the consent displays a code, supply it as the optional consent `code` too; an app withholding it until Allow omits that field. Read these codes from the app's responses to the page or the page itself, never from storage or the hub's copy. The suite requires every supplied code to be well-formed and equal the raw `/apc/pair` code, checks freshness across consents, and plays the dock owner typing the code. Display before or after Allow is the app's choice; the reference apps show it afterwards. The suite has no DOM check: an adapter reading HTTP responses cannot prove what the app renders.
+The pairing code (Dock): `drop(agent, ticket)` returns `{ code?, allow() }`; `allow()` returns `{ ok, error?, grantId?, code? }`. On success, the Allow answer supplies the owner's pairing code, formatted or raw. If the consent displays a code, supply it as the optional consent `code` too; an app withholding it until Allow omits that field. Read these codes from the app's responses to the page or the page itself, never from storage or the hub's copy. The suite requires every supplied code to be well-formed and equal the raw `/apc/pair` code, checks freshness across consents, and plays the dock owner typing the code. Whether the page displays the code at consent (as Orders does) or only after Allow in `<apc-handoff>` (as Pulse and Signals do) is the app's choice, not a rule: both conform. The suite has no DOM check: an adapter reading HTTP responses cannot prove what the app renders.
 
 <!-- include orders-conformance.ts#dock -->
 
@@ -119,6 +119,16 @@ The adapter: the app's name and profile, its `fetch`, two targets a full-access 
 Then run it, under `node --test` (`for (const c of apcConformance(adapter)) test(c.name, c.run)`) or as a script:
 
 <!-- include orders-conformance.ts#run -->
+
+### Automating drops in Chromium
+
+`enablePinning` defaults `trusted` to `(event) => event.isTrusted === true` (and `<apc-agents>`, `<apc-pets>` and `<apc-pin>` check `event.isTrusted` on their buttons), so a script running on the page cannot dispatch a synthetic `click()` or `PointerEvent` to arm or point an agent at data. In browser tests, synthetic `dispatchEvent` calls have `isTrusted: false` and are ignored:
+
+- **In-page mark drags** (`<apc-agents>`, `<apc-pets>`, `<apc-pin>`): marks use pointer events (not HTML5 `draggable`), so drive real pointer input from the mark's centre to the target's centre (`page.mouse` in Playwright, or `Input.dispatchMouseEvent` over CDP; `Input.dispatchTouchEvent` for touch taps on mobile).
+- **Dock drops**: send real HTML5 drag events over CDP (`Input.dispatchDragEvent`: `dragEnter`, `dragOver`, `drop`) with `APC_AGENT_TYPE` (`"application/x-apc-agent"`) and `agentDragPayload(agent, { hub, ticket })`.
+- **Unit or DOM tests without real browser input**: pass `trusted: () => true` in `enablePinning` (test-only; never in production), or use `createTapPin` directly as `orders-conformance.ts` does in `page.mobile`.
+
+<!-- include orders-conformance.ts#browser-drop -->
 
 ### The Dock profile as built (0.10)
 

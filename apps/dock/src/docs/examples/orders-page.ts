@@ -65,54 +65,16 @@ onAgent("apc-revoke", (id) => post(`/api/agents/${id}/revoke`));
 onAgent("apc-unpin", (id) => post(`/api/agents/${id}/unpin`));
 onAgent("apc-unlink", (id) => post(`/api/agents/${id}/unlink`));
 
-/** The agents, from the server: into the bar and the Direct agent list. */
+/** The agents, from the server: into the bar, Direct agent list, and any optional panels (pets, Dock waiting). */
+const onRefresh: Array<(rows: AgentRow[]) => void> = [];
 async function refresh(): Promise<void> {
   const rows = (await (await fetch("/api/agents/list")).json()) as AgentRow[];
   marks.clear();
   for (const row of rows) marks.set(row.id, initials(row.name, new Set(marks.values())));
   bar.agents = rows.map((a) => ({ id: a.id, name: a.name, state: "idle", paths: a.paths, pin: a.pin ? { ...a.pin, here: true } : null }));
   direct.agents = rows.filter((a) => a.url).map((a) => ({ id: a.id, name: a.name, url: a.url!, connected: a.client !== null, client: a.client, linked: a.paths.length === 2 }));
-  showWaiting(rows);
-  showPets(rows);
+  for (const after of onRefresh) after(rows);
 }
-// #endregion
-
-// #region waiting
-/**
- * Dock: an agent the person allowed here waits until they type its pairing code in their dock. Its row shows
- * the code while it is good, and Cancel, which takes the access back (only before the dock connected; after
- * that it is Revoke in the bar): if their dock never asks for that code, the agent was someone else's. The row
- * believes the server's expiry: past it, it shows no code and says the dock did not finish in time. Once the
- * dock took the code, the row says it is connecting.
- */
-const waiting = document.querySelector<HTMLElement>("#waiting") ?? document.body.appendChild(document.createElement("div"));
-/** A drop that paired but could not pin its target (the server's `pin_error`), by grant: its row says so. */
-const pinErrors = new Map<string, string>();
-let waitingRows: AgentRow[] = [];
-function showWaiting(rows: AgentRow[] = waitingRows): void {
-  waitingRows = rows;
-  waiting.replaceChildren(
-    ...rows.flatMap((a) => {
-      if (!a.waiting) return [];
-      const line = document.createElement("p");
-      const pinError = pinErrors.get(a.id);
-      const left = a.pairing ? Math.max(0, Math.ceil((Date.parse(a.pairing.expires_at) - Date.now()) / 1000)) : 0;
-      const says =
-        a.waiting === "connecting"
-          ? "Your dock took the code and is connecting."
-          : left > 0
-            ? `Waiting for your dock — code ${formatPairingCode(a.pairing!.code)} (${left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel.`
-            : "Your dock didn't finish in time. Drop the agent here again for a new code.";
-      line.textContent = `${says} ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
-      const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Cancel" });
-      cancel.addEventListener("click", () => void post("/api/cancel", { grant_id: a.id }).then(refresh));
-      line.append(cancel);
-      return [line];
-    }),
-  );
-}
-// The countdown, and the code going away at its expiry.
-setInterval(() => waitingRows.some((a) => a.waiting === "code") && showWaiting(), 1000);
 // #endregion
 
 // #region direct
@@ -190,21 +152,63 @@ function showPets(rows: AgentRow[] = petRows): void {
     }),
   }));
 }
+onRefresh.push(showPets);
 // #endregion
 
 // #region pinning
 /**
  * Pinning: a mark dragged (or, on a phone, tapped then a row tapped) onto anything with data-focus pins that
- * agent there. Agents dropped from a dock come with a hub and a ticket, and always go to the server.
+ * agent there. Agents dropped from a dock come with a hub and a ticket, and always go to the server (wired
+ * in Step 12 for Dock; omitted in Direct-only apps).
  */
+let onDockDrop: ((drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget) => void) | undefined;
 enablePinning({
   onPin: (grantId, target) => void post(`/api/agents/${grantId}/pin`, { target }).then(refresh),
   acceptNativeDrops: true,
   resolveAgent: () => null, // every dock drop goes to the server, which decides
-  onUnknownAgent: (drag, target) => void dropFromDock(drag, target),
+  onUnknownAgent: (drag, target) => onDockDrop?.(drag, target),
   profiles: () => loadApcProfiles(),
   direct: { name: "Orders", connect: `${location.origin}/agents` },
 });
+// #endregion
+
+// #region waiting
+/**
+ * Dock: an agent the person allowed here waits until they type its pairing code in their dock. Its row shows
+ * the code while it is good, and Cancel, which takes the access back (only before the dock connected; after
+ * that it is Revoke in the bar): if their dock never asks for that code, the agent was someone else's. The row
+ * believes the server's expiry: past it, it shows no code and says the dock did not finish in time. Once the
+ * dock took the code, the row says it is connecting.
+ */
+const waiting = document.querySelector<HTMLElement>("#waiting") ?? document.body.appendChild(document.createElement("div"));
+/** A drop that paired but could not pin its target (the server's `pin_error`), by grant: its row says so. */
+const pinErrors = new Map<string, string>();
+let waitingRows: AgentRow[] = [];
+function showWaiting(rows: AgentRow[] = waitingRows): void {
+  waitingRows = rows;
+  waiting.replaceChildren(
+    ...rows.flatMap((a) => {
+      if (!a.waiting) return [];
+      const line = document.createElement("p");
+      const pinError = pinErrors.get(a.id);
+      const left = a.pairing ? Math.max(0, Math.ceil((Date.parse(a.pairing.expires_at) - Date.now()) / 1000)) : 0;
+      const says =
+        a.waiting === "connecting"
+          ? "Your dock took the code and is connecting."
+          : left > 0
+            ? `Waiting for your dock — code ${formatPairingCode(a.pairing!.code)} (${left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel.`
+            : "Your dock didn't finish in time. Drop the agent here again for a new code.";
+      line.textContent = `${says} ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
+      const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Cancel" });
+      cancel.addEventListener("click", () => void post("/api/cancel", { grant_id: a.id }).then(refresh));
+      line.append(cancel);
+      return [line];
+    }),
+  );
+}
+// The countdown, and the code going away at its expiry.
+setInterval(() => waitingRows.some((a) => a.waiting === "code") && showWaiting(), 1000);
+onRefresh.push(showWaiting);
 
 /**
  * The server requests Connect in the dock for an unlinked agent; consent runs only on /connect/dock.
@@ -218,6 +222,7 @@ async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, t
   if (answer.ok === true && typeof answer.grant_id === "string" && typeof answer.pin_error === "string") pinErrors.set(answer.grant_id, answer.pin_error);
   await refresh();
 }
+onDockDrop = (drag, target) => void dropFromDock(drag, target);
 // #endregion
 
 // #region localize
@@ -253,4 +258,6 @@ export const pinningStrings: Partial<PinningStrings> = {
 export const readAt = (when: Date): string => formatPageTime(when, { timeStyle: "short" });
 // #endregion
 
+// #region start
 void refresh();
+// #endregion

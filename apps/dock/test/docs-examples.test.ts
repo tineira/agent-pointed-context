@@ -4,11 +4,18 @@
  * The samples type-check through apps/dock/tsconfig.docs.json (`pnpm typecheck`).
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
+import vm from "node:vm";
 import { MCP_BODY_MAX_BYTES, OrdersApp, type OrdersStore } from "../src/docs/examples/orders-app.ts";
-import { apcConformance } from "@tineira/apc-conformance";
-import { decodeApcConnect, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
+import { apcConformance, standInHub } from "@tineira/apc-conformance";
+import { APC_AGENT_TYPE, decodeApcConnect, encodeApcConnect, parseAgentDrag, type PresenceMessage, type PresenceWaitEvent } from "@tineira/apc-protocol";
+import { exampleRegion } from "../src/docs/markdown.ts";
+import { cdpDropFromDock, cdpPinMark, ordersChecks, ordersUnderTest } from "../src/docs/examples/orders-conformance.ts";
 
 for (const profile of ["direct", "dock"] as const) {
   for (const check of ordersChecks(profile, { link: profile === "direct" })) test(check.name, check.run);
@@ -489,4 +496,270 @@ test("Orders 0.13: without the dock profile, apc.json has no dock_connect and GE
   const manifest = await (await app.fetch(new Request("https://orders.test/.well-known/apc.json"))).json() as Record<string, unknown>;
   assert.equal("dock_connect" in manifest, false);
   assert.equal((await app.fetch(new Request("https://orders.test/connect/dock"))).status, 404);
+});
+
+test("browser-drop helpers emit trusted CDP mouse and dock drag events", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const cdp = async (method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params });
+    return {};
+  };
+
+  await cdpPinMark(cdp, { x: 100, y: 200 }, { x: 260, y: 210 });
+  assert.deepEqual(
+    calls.map((c) => [c.method, c.params.type]),
+    [
+      ["Input.dispatchMouseEvent", "mouseMoved"],
+      ["Input.dispatchMouseEvent", "mousePressed"],
+      ["Input.dispatchMouseEvent", "mouseMoved"],
+      ["Input.dispatchMouseEvent", "mouseReleased"],
+    ],
+  );
+  assert.equal(calls[2]!.params.buttons, 1);
+
+  calls.length = 0;
+  await cdpDropFromDock(
+    cdp,
+    { x: 260, y: 210 },
+    { agent: "Helper", hub: "https://hub.example", ticket: "ticket_1234567890" },
+  );
+  assert.deepEqual(
+    calls.map((c) => [c.method, c.params.type]),
+    [
+      ["Input.dispatchDragEvent", "dragEnter"],
+      ["Input.dispatchDragEvent", "dragOver"],
+      ["Input.dispatchDragEvent", "drop"],
+    ],
+  );
+  const dropData = calls[2]!.params.data as { items: Array<{ mimeType: string; data: string }> };
+  assert.equal(dropData.items[0]!.mimeType, APC_AGENT_TYPE);
+  assert.deepEqual(parseAgentDrag(dropData.items[0]!.data), {
+    v: 1,
+    agent: "Helper",
+    hub: "https://hub.example",
+    ticket: "ticket_1234567890",
+  });
+});
+
+/** Parse TypeScript source with the repo's `tsc` (`--noCheck --noEmit`) and fail on any syntactic diagnostic. */
+function assertParsesWithTsc(source: string, filename: string): void {
+  const dir = mkdtempSync(join(tmpdir(), "apc-docs-asm-"));
+  const file = join(dir, filename);
+  const tsc = resolve(import.meta.dirname, "../../../node_modules/typescript/bin/tsc");
+  try {
+    writeFileSync(file, source);
+    execFileSync(process.execPath, [tsc, "--noEmit", "--noCheck", "--noResolve", "--target", "esnext", "--module", "nodenext", "--moduleResolution", "nodenext", file], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Run assembled `orders-page.ts` excerpts with stubbed browser/package globals to verify `void refresh()` has no TDZ or missing-symbol errors. */
+async function runAssembledOrdersPage(regions: string[], pageSrc: string): Promise<void> {
+  const parts = regions.map((name) => {
+    const code = exampleRegion(pageSrc, name);
+    assert.ok(code !== null, `missing orders-page.ts#${name}`);
+    return name === "imports" ? code.replace(/import[\s\S]*?from\s+["'][^"']+["'];/g, "") : code;
+  });
+  const assembled = parts.join("\n").replace(/\bexport /g, "");
+  assertParsesWithTsc(regions.map((name) => exampleRegion(pageSrc, name)!).join("\n"), "orders-page.ts");
+  const js = stripTypeScriptTypes(assembled);
+
+  const fakeEl = () => ({ setAttribute() {}, append() {}, replaceChildren() {}, addEventListener() {}, dataset: {} as Record<string, string>, textContent: "" });
+  const doc = { querySelector: () => fakeEl(), createElement: () => fakeEl(), body: fakeEl() };
+  const noop = () => {};
+  let listFetched = false;
+  const fetchMock = async (url: string) => {
+    if (url === "/api/agents/list") {
+      listFetched = true;
+      return { json: async () => [{ id: "g_1", name: "Helper", paths: ["direct"], grants: ["g_1"], url: "https://orders.test/mcp/1", client: null, pin: null, waiting: null, pairing: null }] };
+    }
+    return { json: async () => ({ ok: true }) };
+  };
+  const fn = new Function(
+    "document", "location", "fetch", "EventSource", "T_IDLE_RECOMMENDED_MS", "NO_OPEN_WAITS",
+    "focusAttrs", "formatPairingCode", "createViewReporter", "defineAgentBar", "defineDirectAgents",
+    "enablePinning", "flashTargets", "initials", "loadApcProfiles", "formatPageTime", "agentBadge",
+    "defineHeaderPets", "petState", "agentWaitOpen", "dropExpiredWaits", "foldWaitEvent", "nextWaitExpiry",
+    "setTimeout", "clearTimeout", "setInterval",
+    js,
+  );
+  fn(
+    doc, { origin: "https://orders.test" }, fetchMock,
+    function () { return { addEventListener: noop }; },
+    1800000, {}, () => ({}), String, () => noop, noop, noop,
+    noop, noop, () => "H", () => ["direct"], () => "", () => "",
+    noop, () => ({}), () => false, (x: unknown) => x, (x: unknown) => x, () => null,
+    noop, noop, noop,
+  );
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(listFetched, true, "void refresh() fetched /api/agents/list");
+}
+
+test("integrate.md Orders excerpts assemble into syntactically valid TypeScript modules and run safely (Full and Direct-only)", async () => {
+  const integrateMd = readFileSync(resolve(import.meta.dirname, "../src/docs/pages/integrate.md"), "utf8");
+  const ordersAppSrc = readFileSync(resolve(import.meta.dirname, "../src/docs/examples/orders-app.ts"), "utf8");
+  const appRegions = [...integrateMd.matchAll(/<!-- include orders-app\.ts#([\w-]+) -->/g)].map((m) => m[1]!);
+  const assembledApp = appRegions.map((name) => {
+    const code = exampleRegion(ordersAppSrc, name);
+    assert.ok(code !== null, `missing orders-app.ts#${name}`);
+    return code;
+  }).join("\n");
+
+  assertParsesWithTsc(assembledApp, "orders-app.ts");
+  for (const symbol of ["live(", "byId(", "mcpUrl(", "publish(", "unlink(", "dockConnectPage("]) {
+    assert.ok(assembledApp.includes(symbol), `missing ${symbol} from assembled integrate.md excerpts`);
+  }
+
+  const ordersPageSrc = readFileSync(resolve(import.meta.dirname, "../src/docs/examples/orders-page.ts"), "utf8");
+  const pageRegions = [...integrateMd.matchAll(/<!-- include orders-page\.ts#([\w-]+) -->/g)].map((m) => m[1]!);
+  assert.ok(pageRegions.indexOf("start") > pageRegions.indexOf("waiting"), "start region runs after waiting");
+  await runAssembledOrdersPage(pageRegions, ordersPageSrc);
+  await runAssembledOrdersPage(["imports", "markup", "direct", "view", "bar", "events", "pinning", "pets", "start"], ordersPageSrc);
+});
+
+test("orders-connect.ts mounts against a fake DOM and drives the 0.13 Dock Connect flow with OrdersApp", async () => {
+  const saved = {
+    fetch: globalThis.fetch,
+    document: globalThis.document,
+    HTMLElement: globalThis.HTMLElement,
+    customElements: globalThis.customElements,
+    localStorage: globalThis.localStorage,
+    sessionStorage: globalThis.sessionStorage,
+    location: globalThis.location,
+    history: globalThis.history,
+    window: (globalThis as { window?: unknown }).window,
+  };
+  try {
+    const { doc, El } = await import("../../../packages/web/test/fake-dom.ts");
+    let currentHash = "";
+    const sessionMap = new Map<string, string>();
+    const sessionStorageStub: Storage = {
+      get length() { return sessionMap.size; },
+      clear: () => sessionMap.clear(),
+      key: (i: number) => [...sessionMap.keys()][i] ?? null,
+      getItem: (k: string) => sessionMap.get(k) ?? null,
+      setItem: (k: string, v: string) => { sessionMap.set(k, v); },
+      removeItem: (k: string) => { sessionMap.delete(k); },
+    };
+    const locationStub = {
+      href: "https://orders.test/connect/dock",
+      origin: "https://orders.test",
+      pathname: "/connect/dock",
+      search: "",
+      get hash() { return currentHash; },
+      set hash(next: string) { currentHash = next; },
+    };
+    const historyStub = {
+      state: { idx: 0 },
+      replaceState: (_state: unknown, _title: string, url?: string | URL | null) => {
+        void url;
+        currentHash = "";
+      },
+    };
+    let signedIn = true;
+    const hub = standInHub({ origin: "https://dock.test", app: (req) => app.fetch(req) });
+    const app = new OrdersApp({
+      origin: "https://orders.test",
+      profiles: ["direct", "dock"],
+      hubs: ["https://dock.test"],
+      fetch: hub.fetch,
+      account: "alice@orders.test",
+      signedIn: () => signedIn,
+    });
+    const fetchCalls: string[] = [];
+    Object.assign(globalThis, {
+      sessionStorage: sessionStorageStub,
+      location: locationStub,
+      history: historyStub,
+      fetch: async (input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
+        fetchCalls.push(url);
+        const target = url.startsWith("http") ? url : `https://orders.test${url}`;
+        return app.fetch(new Request(target, { ...init, headers: { origin: "https://orders.test", ...(init?.headers as Record<string, string> | undefined) } }));
+      },
+    });
+    Object.assign((globalThis as unknown as { window: Record<string, unknown> }).window, {
+      location: locationStub,
+      history: historyStub,
+      sessionStorage: sessionStorageStub,
+    });
+    (doc as unknown as { querySelector(selector: string): InstanceType<typeof El> | null }).querySelector = (selector: string) => {
+      if (selector.startsWith("#")) {
+        const id = selector.slice(1);
+        return doc.documentElement.elements().find((e) => e.getAttribute("id") === id) ?? null;
+      }
+      const tag = selector.toUpperCase();
+      return doc.documentElement.elements().find((e) => e.tagName === tag) ?? null;
+    };
+
+    const resetDom = (isSignedIn: boolean) => {
+      signedIn = isSignedIn;
+      doc.body.replaceChildren();
+      const mainEl = doc.createElement("main");
+      mainEl.dataset = { app: "Orders", session: "false", signedIn: isSignedIn ? "true" : "false", account: isSignedIn ? "alice@orders.test" : "No account signed in." };
+      const accountEl = Object.assign(doc.createElement("p"), { id: "account" });
+      const messageEl = Object.assign(doc.createElement("p"), { id: "message" });
+      const consentEl = Object.assign(doc.createElement("div"), { id: "consent" });
+      const handoffEl = Object.assign(doc.createElement("apc-handoff"), { hidden: true, host: "", pairing: null as { code: string; expires_at: string } | null, autoFocus: false });
+      mainEl.append(accountEl, messageEl, consentEl, handoffEl);
+      doc.body.append(mainEl);
+      currentHash = "";
+      sessionMap.clear();
+      fetchCalls.length = 0;
+      return { accountEl, messageEl, consentEl, handoffEl };
+    };
+
+    // Extract the <head> script directly from GET /connect/dock.
+    const pageHtml = await (await app.fetch(new Request("https://orders.test/connect/dock"))).text();
+    const headScript = pageHtml.match(/<head>[\s\S]*?<script>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(headScript, "CONNECT_HEAD present in /connect/dock HTML");
+    const runHead = (hash: string) => {
+      currentHash = hash;
+      vm.runInNewContext(headScript, { location: locationStub, history: historyStub, sessionStorage: sessionStorageStub, atob, Uint8Array, TextDecoder });
+    };
+
+    // 1. Signed out: keeps apc_connect in sessionStorage and makes no API fetch.
+    let ui = resetDom(false);
+    runHead(encodeApcConnect({ v: 1, hub: "https://dock.test", agent: "ag_out", ticket: "1".repeat(32) + "." + "2".repeat(32) }));
+    const { mountOrdersConnect } = await import("../src/docs/examples/orders-connect.ts");
+    await mountOrdersConnect();
+    assert.equal(ui.accountEl.textContent, "No account signed in.");
+    assert.match(ui.messageEl.textContent, /Sign in first/);
+    assert.ok(sessionMap.get("apc_connect"), "keeps stored handoff across sign-in");
+    assert.equal(fetchCalls.length, 0);
+
+    // 2. Signed in: drop -> hub.approveConnect -> CONNECT_HEAD -> Allow -> <apc-handoff> -> Cancel.
+    ui = resetDom(true);
+    const dropRes = await (await app.fetch(new Request("https://orders.test/api/drop", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://orders.test" },
+      body: JSON.stringify({ hub: "https://dock.test", agent: "ag_conn", ticket: hub.ticket("ag_conn"), target: { kind: "order", id: "ord_1001" } }),
+    }))).json() as { ok: boolean; status: string };
+    assert.deepEqual(dropRes, { ok: true, status: "connect_requested" });
+    const approved = await hub.approveConnect("ag_conn");
+    assert.ok(approved.url);
+
+    runHead(new URL(approved.url).hash);
+    assert.equal(locationStub.hash, "");
+    await mountOrdersConnect();
+    assert.equal(ui.accountEl.textContent, "Signed in: alice@orders.test");
+    assert.match(ui.messageEl.textContent, /dock\.test/);
+
+    const allow = ui.consentEl.elements().find((b) => b.textContent === "Allow") as (InstanceType<typeof El> & { onclick?: () => void }) | undefined;
+    assert.ok(allow, "Allow button rendered");
+    allow.onclick?.();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(ui.handoffEl.hidden, false);
+    assert.equal(ui.handoffEl.host, "dock.test");
+    assert.ok(ui.handoffEl.pairing?.code);
+    assert.equal(sessionMap.get("apc_connect"), undefined);
+
+    ui.handoffEl.fire("apc-cancel");
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(ui.handoffEl.hidden, true);
+    assert.equal(ui.messageEl.textContent, "Connection cancelled.");
+  } finally {
+    Object.assign(globalThis, saved);
+  }
 });

@@ -1,6 +1,6 @@
 # Integrate your app in an afternoon
 
-This guide builds **Orders**, a small app with a list of a shop's orders, into a complete APC app: Direct first (an agent connects to the app's own MCP URL), then Dock (an agent dragged from a dock). Every Orders sample on this page is an **excerpt**: a region of one of three real files in the repo, [orders-app.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-app.ts) (the server), [orders-page.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-page.ts) (the page) and [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts) (the test). Each name an excerpt uses is imported from a package (the imports are shown first) or defined in another excerpt on this page; the server's excerpts from step 3 on are parts of one class, `OrdersApp`, so `this.` names a member shown in [the app object](#3-grants-and-apcjson). They type-check against the current packages on every build, and the conformance suite passes against them on both profiles.
+This guide builds **Orders**, a small app with a list of a shop's orders, into a complete APC app: Direct first (an agent connects to the app's own MCP URL), then Dock (an agent dragged from a dock). Every Orders sample on this page comes from one of three real files in the repo: [orders-app.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-app.ts) (the server, in excerpts), [orders-page.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-page.ts) (the page, in excerpts) and [orders-connect.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-connect.ts) (the `dock_connect` page's client, shown whole); the conformance test [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts) is excerpted on [Conformance](/docs/conformance). Each name an excerpt uses is imported from a package (the imports are shown first) or defined in another excerpt on this page; the server's excerpts from step 3 through step 12's `dock` region form one class, `OrdersApp` (closed at the end of `dock`), so `this.` names a member shown in [the app object](#3-grants-and-apcjson), and `dockConnectPage` in step 12 sits outside the class at module scope. They type-check against the current packages on every build, and the conformance suite passes against them on both profiles.
 
 Want one file to copy instead? [A complete Direct app](#a-complete-direct-app-with-a-bearer-token) is shown whole below: a server, its page and its conformance test, with nothing left out, whose agents use a bearer token. [The minimum for the Dock profile](#the-minimum-for-the-dock-profile) lists what a Dock app adds.
 
@@ -64,6 +64,10 @@ The person's routes need their session, and every change is a JSON `POST` checke
 
 <!-- include orders-app.ts#owner -->
 
+The small helpers on `OrdersApp` that the later routes use (`mcpUrl`, `live`, `byId` and `publish` to open page streams):
+
+<!-- include orders-app.ts#helpers -->
+
 ## 4. Direct: an agent per grant
 
 The person makes an agent on the page, and copies its URL into their agent as a remote MCP server (Streamable HTTP, no OAuth: the access is in the URL). An app whose agents authenticate with a bearer token on one shared URL instead is [the complete Direct app](#a-complete-direct-app-with-a-bearer-token) below.
@@ -124,6 +128,11 @@ The page's event stream is how the server knows a page is open, and how presence
 
 <!-- include orders-page.ts#pinning -->
 
+**The `isTrusted` guard and automating drops in tests.** `enablePinning` defaults `trusted` to `(event) => event.isTrusted === true` (and `<apc-agents>`, `<apc-pets>` and `<apc-pin>` check `event.isTrusted` on their unpin, unlink, revoke and open buttons), so a script running inside the page (`element.click()`, or a synthetic `PointerEvent` or `KeyboardEvent` from `dispatchEvent`) cannot arm, drag or point an agent at data without the person acting. Because of that guard, synthetic DOM events from `page.evaluate(...)` are ignored in browser tests:
+
+- **In Chromium / Playwright**, drive real browser input so Chromium sets `isTrusted: true`: in-page marks use pointer events (not HTML5 `draggable`), so move the real pointer from the mark's centre to the target's centre (`page.mouse.move` / `down` / `move` / `up`, or `Input.dispatchMouseEvent` over CDP; `Input.dispatchTouchEvent` for touch taps on mobile); for a cross-window dock drop, send `Input.dispatchDragEvent` (`dragEnter`, `dragOver`, `drop`) over CDP with `application/x-apc-agent`. [Automating drops in Chromium](/docs/conformance#automating-drops-in-chromium) shows both helpers.
+- **In a unit or DOM test without real browser input**, pass `trusted: () => true` to `enablePinning` (in test harnesses only, never in production — page scripts cannot reach `enablePinning`'s options) or drive `createTapPin` directly as `orders-conformance.ts` does for `page.mobile`.
+
 On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile), and [phones](/docs/ux#phones) in the UX guide).
 
 ### The agent in the page
@@ -131,6 +140,8 @@ On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, a
 To show your agents as the dock does, put `<apc-pets>` in your header: each agent a pet, up to 3, then a "+N" (or list) button that opens a popover of every agent ([the agent in the page](/docs/spec#the-agent-in-the-page) holds the rules, [the UX guide](/docs/ux) the pattern). Each pet is a mark and only a mark, so `enablePinning` drags it like the bar's, and a tap or Enter on it arms the agent. Feed `petState` only what your page knows; a field you leave out stays at its default, so a pet never shows a wait your page cannot see. Pass `waiting` once your page reads the wait signal.
 
 <!-- include orders-page.ts#pets -->
+
+If you stop at Step 10 for Direct only, call `void refresh();` once after this block; the full app calls it at the end of Step 12 after `#waiting` so the bar, Direct list, header pets and waiting rows populate on initial load.
 
 - **Colours.** `scheme = "auto"` follows `prefers-color-scheme`. With your own theme switch, set `scheme` to `"light"` or `"dark"` when it changes. To tint the pet to a strict palette, set `tint` (`{ body, line }`, hex) or the custom properties `--apc-pet-body` and `--apc-pet-line`.
 - **Size.** `--apc-pets-size` (36 px by default) sizes the pets; each stays a 44 px target. A lone pet anywhere else is `createPet({ state, badge, label })` (or `<apc-pet>`), sized by `size` or `--apc-pet-size`.
@@ -143,6 +154,10 @@ Revoke holds in the app alone, at once, and calls nobody. The app keeps a hash o
 
 <!-- include orders-app.ts#revoke -->
 
+With both profiles, `unlink` separates a linked agent again while keeping both grants:
+
+<!-- include orders-app.ts#unlink -->
+
 ## 11. Try it with your agent
 
 Run the app on a public HTTPS origin (a tunnel works for a test), make an agent on the page, and add its URL to your agent (Claude, ChatGPT, Cursor, Grok: any client that takes a remote MCP server). Drag its mark onto an order and ask "what is this?". The agent sees `attention` on its next call, or calls `get_current_view`, then `get_order` with the focus's `next_args`.
@@ -154,22 +169,30 @@ Add `"dock"` to the profiles and list the hubs you pair with. A dock's agent arr
 <!-- include orders-app.ts#dock -->
 
 - **The hub is checked first, twice:** `parseDockDrop` takes the drag's hub only if it is exactly one of the origins on your allowlist, on the drop and again on the Allow (`hub_not_allowed` otherwise), and every hub call goes to the origin it returns.
-- **No grant for that agent yet:** the server answers `consent_required` with a nonce and a [pairing code](/docs/spec#the-pairing-code); the page asks the person and keeps the code to show after the Allow; only the Allow that brings the newest nonce back makes a grant (a newer drop replaces the consent, and the older Allow gets `consent_expired`). The grant is stored **in flight** and handed to the hub (`POST {hub}/apc/pair`, with the code). `pairWithHub` refuses redirects, ends at 10 s and reads 8 KiB at most; the grant is kept only if the hub acknowledges the code (`pairing_code: "required"` on a plain 200), and ends otherwise, before the server answers the page. No lock is held across that call; a second Allow meanwhile gets `pairing_in_progress`.
+- **No grant for that agent yet:** on a first drop, the server calls `POST {hub}/apc/connect` (`requestConnect`) and answers `connect_requested`; the person approves in their dock, which opens your `dock_connect` page with `#apc_connect=…` (a missing `/apc/connect`, an HTTP 404, is a refusal: the drop never falls back to asking on the page). On `dock_connect`, the server always answers `consent_required` with a nonce and a [pairing code](/docs/spec#the-pairing-code); the page asks the person and either shows the code in the consent prompt itself or holds it to show after the Allow in `<apc-handoff>` (as Pulse, Signals and `orders-connect.ts` do); only the Allow that brings the newest nonce back makes a grant (a newer drop replaces the consent, and the older Allow gets `consent_expired`). The grant is stored **in flight** and handed to the hub (`POST {hub}/apc/pair`, with the connect ticket and the code). `pairWithHub` refuses redirects, ends at 10 s and reads 8 KiB at most; the grant is kept only if the hub acknowledges the code (`pairing_code: "required"` on a plain 200), and ends otherwise, before the server answers the page. No lock is held across that call; a second Allow meanwhile gets `pairing_in_progress`.
 - **Waiting for the dock (handoff):** the acknowledgement moves the grant to handoff, if nothing ended it meanwhile. The person then allows it in their dock too, typing the code, and the hub's first `initialize` makes the grant **live**. Until then the page shows the code with Cancel, which revokes the grant and works only before the dock connected: if the person's own dock never asks for that code, the agent was someone else's.
 - **A grant already:** the server asks the hub whether the pairing still stands (`confirmWithHub`, `POST {hub}/apc/confirm`). Still pending: the page shows the same code, never a new one. Paired but not connected yet: it says so. Live: the drop pins it. `not_paired`, or the code's time is up: the grant ends and the person is asked again.
 - **The person unpairs in the dock** (or denies, types five wrong codes, or lets the request expire): the hub calls your `POST /apc/revoke` with the grant's MCP URL, and the grant ends. `handleDockGiveBack` answers the same 200 whatever it was sent.
 
-**Connect first (since 0.13).** A drop with no grant behind it never pairs by itself: the server sends it to the hub's `POST {hub}/apc/connect` (`requestConnect`), the person approves it in their dock, and the dock opens your `dock_connect` page with an `#apc_connect` fragment. Orders serves that page itself, and lists `dock_connect` in `apc.json` only while it offers Dock; [orders-connect.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-connect.ts) is its client, which asks the person and posts to `/api/connect/dock`. A Connect for an agent that already has a grant says it replaces the current connection, and the old grant ends only once the hub acknowledges the new pairing. A missing `/apc/connect` is a refusal; the one-release rollback fallback ended at 1.0.0.
+**Connect first (since 0.13).** A drop with no grant behind it never pairs by itself: the server sends it to the hub's `POST {hub}/apc/connect` (`requestConnect`), the person approves it in their dock, and the dock opens your `dock_connect` page with an `#apc_connect` fragment. Orders serves that page itself (`dockConnectPage`, a top-level helper outside `OrdersApp`), and lists `dock_connect` in `apc.json` only while it offers Dock. A Connect for an agent that already has a grant says it replaces the current connection, and the old grant ends only once the hub acknowledges the new pairing. A missing `/apc/connect` (an HTTP 404) is a refusal, not a cue to ask on the drop page: the one-release rollback fallback for pre-0.13 hubs ended at 1.0.0.
 
 <!-- include orders-app.ts#connect -->
+
+The `dock_connect` page's client ([orders-connect.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-connect.ts), built as `/assets/dock-connect.js`), which reads the fragment cleared into `sessionStorage` by the `<head>` script, asks the person, posts to `/api/connect/dock` and shows `<apc-handoff>`:
+
+<!-- include orders-connect.ts -->
 
 What a dock grant answers follows its state, and `dockGrantGate` decides it before the MCP transport and the wrapper of step 8 (in `mcp` above): 404 in flight, the `pairing` error to a tool call in handoff, the app's data only once live. A grant with no acknowledgement 30 s after the Allow, or no `initialize` 10 minutes after the acknowledgement, ends (404). Orders also sleeps: 30 minutes after the person's last wake action (the page's heartbeat, a drop) a live grant goes **dormant** and returns no data, only `idle`, until they are back; agent traffic never wakes it.
 
 **The binding (since 0.12).** Store with the grant, in the same statement that moves it to handoff, what the acknowledgement gave you: its `pairing_id`, whether it declared `binding: "pairing_id"` (`pairWithHub` returns `binding`), the agent and the hub. Pass them to `dockGrantGate` as `binding: { pairing_id, agent, declared }`: an `initialize` that names another pairing or agent then gets 404, and a declared grant commits only on its own. Whether a grant is a Dock grant is your own record, never its URL: on every grant that is **not** a Dock grant, call `directGrantGate(body)` first and return its 404 when it gives one, even for a revoked grant. Read the `_meta` keys from the body you gate on, never from an SDK handler or a second parse; if you validate `params._meta`, accept `apc.tineira.com/pairing_id` and `apc.tineira.com/agent`. An app that allows more than one hub passes `multiHub: true`. When `pairWithHub` refuses an acknowledgement over its binding (`hub_refused`), end the grant as on any refusal: the hub's request for it then ends at the person's approval (`pairing_ended`) or after two minutes. In the conformance suite, an app that offers both profiles and claims 0.12 gives `dock.lifecycle.directGrant()`, a new Direct agent made its own way: the suite hands its URL to the stand-in hub's `/apc/pair` and checks it never goes live. The suite's stand-in hub sends the binding keys to every app, whatever standard it claims, so an app must keep unknown `params._meta` keys. See [the binding](/docs/spec#the-binding).
 
-The page holds the code and shows it after the Allow, and shows the agents waiting for their dock (the reference apps use `<apc-handoff>` from `@tineira/apc-web`: the code large with a copy button, the time left and Cancel):
+**When the page displays the pairing code is the app's choice, not a rule.** The server's `consent_required` answer always carries `pairing_code`. An app may show the code inside the consent prompt itself (the page's choice), or hold it and show it only after the Allow inside `<apc-handoff>` (as Pulse, Signals and `orders-connect.ts` do); both shapes conform. What the [spec](/docs/spec#the-pairing-code) requires is a new code with every consent, shown only on the owner's page, and that same code sent raw in `pairing_code` of `/apc/pair`. Here is Orders' waiting panel, `<apc-handoff>`'s counterpart (`<apc-handoff>` shows the code large with a copy button, the time left and Cancel), and the drop handler, which only confirms in the dock:
 
 <!-- include orders-page.ts#waiting -->
+
+Call `void refresh();` once at the end of the page script after all elements and panels are wired:
+
+<!-- include orders-page.ts#start -->
 
 The hub reads your `apc.json` before it pairs: it must list `"dock"`, name your origin, and cover the MCP URL you send. The reference dock at `apc.tineira.com` pairs with any app that passes its checks, as **Not verified** until it is on its list: the person sees a warning with your domain first ([the hub's trust model](/docs/spec#the-hubs-trust-model)), and your results reach the agent marked untrusted.
 
@@ -181,14 +204,16 @@ What an app that offers only Dock must have, and nothing more. Orders has all of
 
 | Route | Who calls it | What it does | Helper |
 |---|---|---|---|
-| `GET /.well-known/apc.json` | the hub, before it pairs | lists `"dock"` while you can pair (M8), names your origin, covers `/{secret}` MCP URLs (`mcp.path`, or an `mcp.endpoints` entry ending in `/{secret}` that lists `dock`) | `apcManifest`, `apcJsonResponse` |
+| `GET /.well-known/apc.json` | the hub, before it pairs | lists `"dock"` and `dock_connect` while you can pair (M8, M13), names your origin, covers `/{secret}` MCP URLs (`mcp.path`, or an `mcp.endpoints` entry ending in `/{secret}` that lists `dock`) | `apcManifest`, `apcJsonResponse` |
+| the drop (`/api/drop` in Orders) | the person's page | checks the hub (`parseDockDrop`); if the agent has no grant yet (or an expired handoff grant was ended), calls `POST {hub}/apc/connect` (`requestConnect`; a missing `/apc/connect` is a refusal, never a drop-time consent); if the agent has a grant already, asks the hub (`confirmWithHub`) and pins | `parseDockDrop`, `requestConnect`, `confirmWithHub` |
+| `GET {dock_connect}` (`/connect/dock` in Orders) | the person's browser (opened by the dock with `#apc_connect=…`) | answers HTTP 200 (never 3xx, even when signed out) with `Referrer-Policy: no-referrer` and no third-party scripts; its synchronous `<head>` script moves `#apc_connect` into `sessionStorage` and clears the URL with `history.replaceState`, and the body's client script validates the stored handoff and asks consent | `takeApcConnect`, `clearApcConnect` |
+| the Connect consent and Allow (`/api/connect/dock` in Orders) | the `dock_connect` page | checks the hub (`parseDockDrop`), asks for consent with a pairing code (`DockConsent`), and on the Allow pairs with the connect ticket (`pairWithHub`), replacing any prior grant for that agent only once the hub acknowledges | `parseDockDrop`, `DockConsent`, `pairWithHub` |
 | `POST {mcp.path}{secret}` (and any other method) | the hub, for the agent | the grant's MCP endpoint: `dockGrantGate` answers by the grant's state first; the hub's first `initialize` makes it live; only then your wrapper and tools | `dockGrantGate`, `registerApcTools` |
+| Cancel (`/api/cancel` in Orders) | the person's page | revokes a grant still in handoff | |
+| the heartbeat (`/api/heartbeat` in Orders) | the person's page, every `T_idle / 4` | the person is here: wakes a dormant grant. An app that never sleeps still serves it (it then changes nothing) | |
 | `POST /apc/revoke` | the hub, when the person unpairs | ends the grant whose MCP URL it names; the same 200 to anything | `handleDockGiveBack` |
-| the drop, and its Allow | the person's page | checks the hub (`parseDockDrop`), asks for consent with a pairing code (`DockConsent`), and on the Allow pairs (`pairWithHub`); a drop of an agent that has a grant asks the hub (`confirmWithHub`) and pins | `parseDockDrop`, `DockConsent`, `pairWithHub`, `confirmWithHub` |
-| Cancel | the person's page | revokes a grant still in handoff | |
-| the heartbeat | the person's page, every `T_idle / 4` | the person is here: wakes a dormant grant. An app that never sleeps still serves it (it then changes nothing) | |
 
-The drop and the Allow may be one route, as in Orders (`/api/drop`, the Allow carrying the consent's nonce). The four owner routes take the person's session and the [M6](/docs/spec#the-app-and-the-hub-call) checks (`refuseOwner` above). What the app keeps per Dock grant: its state (in flight, handoff, live), when it was allowed, acknowledged and last woken, the pairing code and its expiry, and the hash of every revoked secret; all of it in storage that outlives the process, every time limit read through one clock (`now`). That is what lets the conformance adapter's `dock.lifecycle` move time, fail a write and restart the app ([how to wire it](/docs/conformance#wiring-docklifecycle)).
+In 0.13, the drop (`/api/drop`) and the Connect consent and Allow (`/api/connect/dock`, the Allow carrying the consent's nonce back) are separate owner `POST` routes; `GET {dock_connect}` answers HTTP 200 even when signed out (telling the person to sign in first) so it never redirects with the `#apc_connect` link. The four owner `POST` routes (the drop, the Allow, the heartbeat, Cancel) take the person's session and the [M6](/docs/spec#the-app-and-the-hub-call) checks (`refuseOwner` above). What the app keeps per Dock grant: its state (in flight, handoff, live), when it was allowed, acknowledged and last woken, the pairing code and its expiry, and the hash of every revoked secret; all of it in storage that outlives the process, every time limit read through one clock (`now`). That is what lets the conformance adapter's `dock.lifecycle` move time, fail a write and restart the app ([how to wire it](/docs/conformance#wiring-docklifecycle)).
 
 ### A Dock grant on localhost
 
@@ -199,7 +224,7 @@ Two ways to pair while you build, with no public hub:
 
 ## 13. Test it
 
-Run the conformance suite against your app before you ship: see [Conformance](/docs/conformance), whose adapter for Orders is the third file of this guide.
+Run the conformance suite against your app before you ship: see [Conformance](/docs/conformance), whose adapter for Orders is [orders-conformance.ts](https://github.com/tineira/agent-pointed-context/blob/main/apps/dock/src/docs/examples/orders-conformance.ts).
 
 ## A complete Direct app with a bearer token
 
@@ -323,6 +348,6 @@ The reference examples send presence on a page event stream. Without a long-live
 - If you show agents as pets: `<apc-pets>` in the header, its states fed only by what the page knows, its colours following the page's scheme.
 - Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token, `revokedResponse(host, at, { bearer: true })`); an unknown grant 404 (a plain 401 with a bearer token).
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
-- Dock: every drop goes to the server; the hub is on your allowlist, checked on the drop and on the Allow (`parseDockDrop`); consent is the server's nonce; the consent shows the pairing code, the server sends it to the hub and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
+- Dock: every drop goes to the server; the hub is on your allowlist, checked on the drop and on the Allow (`parseDockDrop`); a first drop calls `/apc/connect` (`requestConnect`) and consent happens on your `dock_connect` page (GET 200, `Referrer-Policy: no-referrer`, synchronous `<head>` script clearing `#apc_connect` into `sessionStorage`); consent uses the server's nonce and shows the pairing code, and the server sends the code to `/apc/pair` and keeps the grant only on the hub's acknowledgement (`pairWithHub`).
 - Dock: a grant serves data only after the hub's `initialize` (`dockGrantGate`), and only for its own pairing (its `binding`); a grant that is not a Dock grant refuses the hub's introduction (`directGrantGate`); `POST /apc/revoke` answers the same 200 to anything (`handleDockGiveBack`); the person's routes check `Origin`, `Sec-Fetch-Site` and the JSON media type; `apc.json` lists `dock` only while you can pair.
 - The conformance suite passes, on each profile you offer.
