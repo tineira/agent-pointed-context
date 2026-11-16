@@ -137,6 +137,10 @@ async function post(hub: string | URL, path: string, body: unknown, options: Hub
       discard();
       return { error: "hub_refused" };
     }
+    if (allowNotFound && response.status === 404 && response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+      discard();
+      return { error: "hub_refused" };
+    }
     let bytes: Uint8Array | null;
     try {
       bytes = await readCapped(response.body, HUB_ANSWER_MAX_BYTES, expired);
@@ -144,8 +148,13 @@ async function post(hub: string | URL, path: string, body: unknown, options: Hub
       return { error: error instanceof Expired || controller.signal.aborted ? "hub_unreachable" : "hub_refused" };
     }
     if (!bytes) return { error: "hub_refused" };
+    // The fallback is stricter than ordinary hub answers: no UTF-8 BOM and exactly one string member.
+    // JSON.parse alone discards duplicate keys, so check the single-member shape before parsing it.
+    const legacy404 = allowNotFound && response.status === 404;
+    if (legacy404 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return { error: "hub_refused" };
     const text = utf8(bytes);
     if (text === null) return { status: response.status, body: null };
+    if (legacy404 && !/^[ \t\r\n]*\{[ \t\r\n]*"(?:[^"\\]|\\.)*"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\]|\\.)*"[ \t\r\n]*\}[ \t\r\n]*$/.test(text)) return { error: "hub_refused" };
     try {
       const parsed = JSON.parse(text) as unknown;
       return { status: response.status, body: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null };
@@ -181,11 +190,16 @@ export async function pairWithHub(hub: string | URL, body: DockPairRequest, opti
   return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding };
 }
 
-/** First pairing (APC 0.13). Only an HTTP 404 whose JSON object body has `error: "not_found"` permits an app's temporary 0.12 fallback. */
-export async function requestConnect(hub: string | URL, body: DockConnectRequest, options: HubCallOptions = {}): Promise<DockConnectAnswer> {
+/** Local client result: only `legacyAbsent` permits the temporary 0.12 fallback; an error string never does. */
+export type RequestConnectResult = DockConnectAnswer | { ok: false; error: "not_found"; legacyAbsent: true };
+
+/** First pairing (APC 0.13). Fallback needs a non-redirected HTTP 404, application/json, no BOM, and exactly `{"error":"not_found"}` (no duplicate keys). */
+export async function requestConnect(hub: string | URL, body: DockConnectRequest, options: HubCallOptions = {}): Promise<RequestConnectResult> {
   const a = await post(hub, "/apc/connect", body, options, true);
   if ("error" in a) return { ok: false, error: a.error };
-  if (a.status === 404) return a.body?.error === "not_found" ? { ok: false, error: "not_found" } : { ok: false, error: "hub_refused" };
+  if (a.status === 404) return a.body?.error === "not_found" && Object.keys(a.body).length === 1
+    ? { ok: false, error: "not_found", legacyAbsent: true }
+    : { ok: false, error: "hub_refused" };
   const refused = refusal(a);
   if (refused) return { ok: false, error: refused };
   if (a.status !== 200 || a.body?.ok !== true || a.body.status !== "connect_requested") return { ok: false, error: "hub_refused" };

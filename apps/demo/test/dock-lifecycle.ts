@@ -896,8 +896,19 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.deepEqual(await i.object.pairHub(SID, app.origin, drop), { ok: false, error: "too_many_requests" });
     assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0);
 
+    for (const [status, body, error] of [
+      [404, { error: "not_found", detail: "missing route" }, "hub_refused"],
+      [400, { ok: false, error: "not_found" }, "not_found"],
+      [409, { ok: false, error: "not_found" }, "hub_refused"],
+      [429, { ok: false, error: "not_found" }, "hub_refused"],
+    ] as const) {
+      hub.connect = async () => Response.json(body, { status });
+      assert.deepEqual(await i.object.pairHub(SID, app.origin, drop), { ok: false, error });
+      assert.equal(hub.calls.includes("/apc/pair"), false, "a refusal never pairs or falls back");
+    }
+
     // 404 not_found triggers the 0.12 fallback path, then Allow calls /apc/pair with the drop ticket.
-    hub.connect = async () => Response.json({ ok: false, error: "not_found" }, { status: 404 });
+    hub.connect = async () => Response.json({ error: "not_found" }, { status: 404 });
     const asked = await i.object.pairHub(SID, app.origin, drop);
     assert.equal(asked.error, "consent_required");
     assert.equal(typeof asked.consent, "string");

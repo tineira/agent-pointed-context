@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { apcManifest, requestConnect } from "../src/index.ts";
 import { HUB_ANSWER_MAX_BYTES } from "@tineira/apc-protocol";
+import { createServer } from "node:http";
 
 const HUB = "https://dock.test";
 const body = { ticket: "a".repeat(32) + "." + "b".repeat(32), agent: "ag_1", app: { origin: "https://app.test" } };
 const success = { ok: true, status: "connect_requested" };
 const responding = (answer: () => Response | Promise<Response>) => (async () => answer()) as typeof fetch;
-test("requestConnect falls back only on a 404 whose JSON object says not_found, keeping M1 to M4 fail-closed guards", async () => {
+test("requestConnect keeps M1 to M4 fail-closed guards", async () => {
   let sent = 0;
   const sender = (async (url: string | URL | Request, init?: RequestInit) => {
     sent++;
@@ -20,8 +21,6 @@ test("requestConnect falls back only on a 404 whose JSON object says not_found, 
   assert.deepEqual(await requestConnect(HUB, body, { fetch: sender }), success);
   assert.deepEqual(await requestConnect(HUB + "/unsafe", body, { fetch: sender }), { ok: false, error: "hub_not_allowed" });
   assert.equal(sent, 1);
-  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => Response.json({ error: "not_found" }, { status: 404 })) }), { ok: false, error: "not_found" });
-  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => Response.json({ ok: false, error: "not_found" }, { status: 404 })) }), { ok: false, error: "not_found" });
   for (const response of [
     new Response("not JSON", { status: 404 }),
     new Response(null, { status: 404 }),
@@ -40,6 +39,73 @@ test("requestConnect falls back only on a 404 whose JSON object says not_found, 
   assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => followed404) }), { ok: false, error: "hub_refused" });
   assert.deepEqual(await requestConnect(HUB, body, { timeoutMs: 15, fetch: responding(() => new Promise(() => {})) }), { ok: false, error: "hub_unreachable" });
   assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => Response.json({ ok: false, error: "too_many_requests" }, { status: 400 })) }), { ok: false, error: "too_many_requests" });
+});
+
+test("requestConnect marks only the exact legacy 404 as legacyAbsent", async (t) => {
+  const cases = [
+    { name: "exact legacy body", status: 404, body: { error: "not_found" }, legacy: true },
+    { name: "extra detail", status: 404, body: { error: "not_found", detail: "missing route" } },
+    { name: "extra ok", status: 404, body: { ok: false, error: "not_found" } },
+    { name: "400 refusal", status: 400, body: { ok: false, error: "not_found" }, error: "not_found" },
+    ...[400, 409, 429, 500].map((status) => ({ name: `${status} not_found`, status, body: { error: "not_found" } })),
+    { name: "409 refusal", status: 409, body: { ok: false, error: "not_found" } },
+    { name: "429 refusal", status: 429, body: { ok: false, error: "not_found" } },
+    { name: "500 refusal", status: 500, body: { ok: false, error: "not_found" } },
+    { name: "non-JSON body", status: 404, body: "not JSON" },
+    { name: "followed redirect", status: 404, body: { error: "not_found" }, redirected: true },
+  ];
+  for (const c of cases) await t.test(c.name, async () => {
+    const response = typeof c.body === "string" ? new Response(c.body, { status: c.status }) : Response.json(c.body, { status: c.status });
+    if ("redirected" in c) Object.defineProperty(response, "redirected", { value: true });
+    const result = await requestConnect(HUB, body, { fetch: responding(() => response) });
+    assert.deepEqual(result, "legacy" in c
+      ? { ok: false, error: "not_found", legacyAbsent: true }
+      : { ok: false, error: "error" in c ? c.error : "hub_refused" });
+  });
+});
+
+test("requestConnect refuses a redirect chain ending in the exact legacy 404 even if a transport follows it", async () => {
+  const server = createServer((req, res) => {
+    if (req.url === "/apc/connect" || req.url === "/hop") {
+      res.writeHead(307, { location: req.url === "/hop" ? "/missing" : "/hop" }).end();
+    } else {
+      res.writeHead(404, { "content-type": "application/json" }).end('{"error":"not_found"}');
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const follows = ((input, init) => fetch(input, { ...init, redirect: "follow" })) as typeof fetch;
+    assert.deepEqual(await requestConnect(`http://127.0.0.1:${address.port}`, body, { fetch: follows }), { ok: false, error: "hub_refused" });
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+const strict404 = [
+  { name: "HTML media type", contentType: "text/html", text: '{"error":"not_found"}' },
+  { name: "plain text media type", contentType: "text/plain", text: '{"error":"not_found"}' },
+  { name: "UTF-8 BOM", contentType: "application/json", text: '\uFEFF{"error":"not_found"}' },
+  { name: "duplicate error keys", contentType: "application/json", text: '{"error":"other","error":"not_found"}' },
+];
+for (const c of strict404) test(`requestConnect refuses legacy 404 with ${c.name}`, async () => {
+  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => new Response(c.text, { status: 404, headers: { "content-type": c.contentType } })) }), { ok: false, error: "hub_refused" });
+});
+
+test("requestConnect preserves JSON whitespace, escaped member spelling and media-type parameters", async () => {
+  for (const text of [' \r\n { "error" \t: "not_found" } \n', '{"err\\u006fr":"not_found"}']) {
+    assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => new Response(text, { status: 404, headers: { "content-type": "Application/JSON; charset=utf-8" } })) }), { ok: false, error: "not_found", legacyAbsent: true });
+  }
+});
+
+test("requestConnect refuses other JSON shapes, duplicate escaped keys, missing media type and bodyless statuses", async () => {
+  for (const text of ['{"error":{"error":"not_found"}}', '[{"error":"not_found"}]', '"not_found"', '{"error":"not_found","err\\u006fr":"not_found"}']) {
+    assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => new Response(text, { status: 404, headers: { "content-type": "application/json" } })) }), { ok: false, error: "hub_refused" });
+  }
+  const noType = new Response(new TextEncoder().encode('{"error":"not_found"}'), { status: 404 });
+  assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => noType) }), { ok: false, error: "hub_refused" });
+  for (const status of [204, 304]) assert.deepEqual(await requestConnect(HUB, body, { fetch: responding(() => new Response(null, { status })) }), { ok: false, error: "hub_refused" });
 });
 test("reader connect answers require a claim and a four-digit check", async () => {
   const reader = { ticket: body.ticket, agent: body.agent, reader: true as const };

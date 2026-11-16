@@ -716,7 +716,7 @@ export class Sandbox extends DurableObject<Env> {
     const requestFirst = async (): Promise<PairHubAnswer> => {
       if (native) return { ok: true, status: "native_first_pairing_unsupported" };
       const answer = await requestConnect(hub, { ticket, agent, app: { origin } }, hubCallOptions(this.env));
-      if (!answer.ok) return answer.error === "not_found" ? askFirst() : answer;
+      if (!answer.ok) return "legacyAbsent" in answer && answer.legacyAbsent ? askFirst() : answer;
       kv.put(targetKey, JSON.stringify({ target, at: Date.now() }));
       return { ok: true, status: "connect_requested" };
     };
