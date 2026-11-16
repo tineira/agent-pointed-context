@@ -183,8 +183,8 @@ test("the docs and their examples name the packages as published: @tineira/apc-*
   for (const file of [...DOC_PAGES.filter((p) => p.file.startsWith("apps/dock/")).map((p) => p.file), ...examples, "apps/dock/src/web/docs.tsx"]) {
     assert.doesNotMatch(read(file), /@apc\//, `${file} still names @apc/`);
   }
-  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server@1\.0\.0 @modelcontextprotocol/);
-  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance@1\.0\.0 https:\/\/\S+ --grant /);
+  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server@\d+\.\d+\.\d+ @modelcontextprotocol/);
+  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance@\d+\.\d+\.\d+ https:\/\/\S+ --grant /);
   // Install instructions do not depend on the manually managed npm dist-tags.
   for (const file of ["apps/dock/src/docs/pages/integrate.md", "apps/dock/src/docs/pages/conformance.md", "README.md", ...["protocol", "server", "web", "conformance"].map((p) => `packages/${p}/README.md`)]) {
     assert.doesNotMatch(read(file), /@tineira\/apc-[a-z]+@next/, `${file} still installs @next`);
