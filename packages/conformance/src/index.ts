@@ -14,7 +14,7 @@
  * when the hub does not acknowledge the code; wrong codes and the code's time running out give the grant back;
  * the right code pairs). Since 0.10 an app on the Dock profile also gives `dock.lifecycle`, and the suite checks
  * the Dock profile as built (`dock-lifecycle.ts`): what a grant answers in each state, the transitions and their
- * time limits, the app's rules (M1 to M13) and one pending pairing. M14 is not conformance-tested.
+ * time limits, the app's rules (M1 to M13) and one pending pairing.
  *
  * Framework-free: `apcConformance(app)` returns named checks that throw `ConformanceError`, for any
  * test runner (`for (const c of apcConformance(app)) test(c.name, c.run)` under `node --test`), and

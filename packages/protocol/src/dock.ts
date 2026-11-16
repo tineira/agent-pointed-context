@@ -320,15 +320,8 @@ export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" 
  * - **M13** (0.13). A first drop calls /apc/connect. The app declares a fragment-free same-origin
  *   dock_connect: GET 200, no redirects, no-referrer, no third-party script. A synchronous head script
  *   clears #apc_connect before any other script or redirect and keeps it only in sessionStorage across login.
- * - **M14** (1.0). A scope is what the app isolates grants by, named by an identifier that does not change while the
- *   scope exists and by its owner (an account, a signed-out sandbox, a device instance). The app records the scope with
- *   the consent nonce before it shows that consent, on the app's `dock_connect` page opened by the hub; the app's server
- *   checks the bound scope again when creating the grant. Then either the grant is written in that scope, or the pairing
- *   is carried to another of the app's own scopes, which shows only to itself a fresh code made as a pairing code is made
- *   (`newPairingCode`, single-use, at most two minutes, refused after five wrong entries) and entered on `dock_connect`,
- *   bound to that scope and that one pairing, never possession of the carried ticket; otherwise the app refuses.
  */
-export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12" | "M13" | "M14";
+export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12" | "M13";
 
 /** The error a 404 of M11 or M12 SHOULD carry (APC 0.12). A hub reads it only as this exact token. */
 export const PAIRING_MISMATCH_ERROR = "pairing_mismatch";

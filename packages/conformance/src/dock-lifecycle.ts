@@ -17,7 +17,7 @@
  *   owner's endpoints** (M6, the configured origin, look-alike origins and a WebSocket heartbeat included), **the
  *   give-back** (M7), **`apc.json` with pairing disabled** (M8), **the code only in `/apc/pair`**, and **one pending
  *   pairing** (the spec's § "One pending pairing"). **The binding** (M10 to M12), **origin-bound Connect**
- *   (M13), and, for 1.0 claims, refusal of a missing Connect route. M14 is not conformance-tested.
+ *   (M13), and, for 1.0 claims, refusal of a missing Connect route.
  *
  * The hub call's own deadline (M3) runs on the real clock: `advance` moves the app's limits, not its timers. After
  * each check the suite gives back (`/apc/revoke`) every grant the stand-in hub received a pairing for meanwhile.

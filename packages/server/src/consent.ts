@@ -15,12 +15,13 @@ import type { ApcKv } from "./kv.ts";
  * The nonce lives in the app's own storage, reached only through the person's own session (the app's owner
  * cookie), so it is kept as is: it proves the request went through the page's consent, not who sent it, and
  * not which scope it was shown in. This store belongs to one person, so the nonce is keyed by the hub and the
- * agent. On a store shared by more than one person (a per-person database, one tenant per account), M14 (APC
- * 1.0) asks for more: key the consent by the immutable scope identity as well — the account, signed-out
+ * agent. On a store shared by more than one person (a per-person database, one tenant per account), that is not
+ * enough, and it is worth keying the consent by the immutable scope identity as well — the account, signed-out
  * sandbox or device instance the grant is for, named by an identifier that does not change while it exists and
- * by its owner, never a session id, an address or a slug — record it with the nonce before the page shows the
- * consent, and verify that scope and its owner again in the same step that writes the grant, since M5 forbids
- * holding a lock across the hub call.
+ * by its owner, never a session id, an address or a slug — recording it with the nonce before the page shows
+ * the consent, and verifying that scope and its owner again in the same step that writes the grant, since M5
+ * forbids holding a lock across the hub call. The standard does not require this; a shared store needs it all
+ * the same.
  * `ask` and `takeConsent` are synchronous: in a Durable Object nothing runs between the check and the write.
  */
 
