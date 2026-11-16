@@ -320,7 +320,9 @@ export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" 
  * - **M13** (0.13). A first drop calls /apc/connect. The app declares a fragment-free same-origin
  *   dock_connect: GET 200, no redirects, no-referrer, no third-party script. A synchronous head script
  *   clears #apc_connect before any other script or redirect and keeps it only in sessionStorage across login.
- * - **M14** (1.0). A handoff makes the grant only in the account whose authenticated session gave consent; otherwise it refuses.
+ * - **M14** (1.0). The grant is made in the scope (account, signed-out sandbox, device instance) that consented on the
+ *   hub's dock_connect page and is checked there again at grant time; a handoff to another scope pairs only on a value
+ *   that scope showed the person and that was confirmed on that page, never on the carried ticket, and refuses otherwise.
  */
 export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12" | "M13" | "M14";
 
