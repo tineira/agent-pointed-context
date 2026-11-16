@@ -1,7 +1,8 @@
 /**
  * The binding on the app's side (APC 0.12, TIN-910): `pairWithHub` reads the declared binding and refuses an
  * unknown one; `dockGrantGate` checks every initialize against the grant's binding (M11); `directGrantGate`
- * refuses a hub's introduction on a grant that is not a Dock grant, before anything else (M12).
+ * implements M12 for apps implementing Dock or still serving any Dock grant: it refuses a hub's introduction
+ * on a non-Dock grant before anything else.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -80,7 +81,7 @@ test("M11: a legacy grant (no id stored, not declared) is checked on its agent a
   assert.equal(gate("live", init({ [APC_PAIRING_ID_META]: ID, [APC_AGENT_META]: "ag_99999999" }), legacy).serve, false);
 });
 
-test("M12: on a grant that is not a Dock grant, an initialize with either key is a 404, any value; without one, nothing", async () => {
+test("M12 at an app implementing Dock or still serving any Dock grant: on a grant that is not a Dock grant, an initialize with either key is a 404, any value; without one, nothing", async () => {
   for (const meta of [{ [APC_PAIRING_ID_META]: ID }, { [APC_AGENT_META]: "ag_1" }, { [APC_PAIRING_ID_META]: null }, { [APC_PAIRING_ID_META]: [] }]) {
     const r = directGrantGate(init(meta));
     assert.equal(r?.status, 404, JSON.stringify(meta));

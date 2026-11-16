@@ -282,7 +282,9 @@ export type DockDropError = "hub_not_allowed" | "consent_expired" | "pairing_in_
 export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" | "H8" | "H9" | "H10";
 
 /**
- * The app MUSTs around the hub call (APC 0.10):
+ * The MUSTs for an app implementing Dock or still serving any Dock grant around the hub call (APC 0.10).
+ * M12 covers every non-Dock grant, including Direct grants, regardless of current pairability. Only an app
+ * that does not implement Dock and holds no Dock grant owes no M12 refusal; it MAY refuse anyway.
  *
  * - **M1. Allowlist.** Parse the drop's `hub` with `new URL`; refuse anything unparsable, not `https:` (but a
  *   declared local-dev origin), or with userinfo, a path other than `/`, a query or a fragment. Compare
@@ -315,13 +317,15 @@ export type DockHubRequirement = "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "H7" 
  * - **M11** (0.12). On a Dock grant in handoff, live or dormant, an `initialize` that does not hold the binding
  *   (`bindingVerdict`) gets HTTP 404, the state unchanged, SHOULD with `{ error: "pairing_mismatch" }`. Every
  *   `initialize` in a request counts, in a batch or without an `id`.
- * - **M12** (0.12). On a grant that is not a Dock grant, a request carrying an `initialize` with either binding
- *   key (`hasBindingKey`) gets HTTP 404 before any other answer, revoked included; the grant is unchanged.
+ * - **M12** (0.12). At an app implementing Dock or still serving any Dock grant, on every non-Dock grant, including
+ *   Direct grants, a request carrying an `initialize` with either binding key (`hasBindingKey`) gets HTTP 404
+ *   before any other answer, revoked included; the grant is unchanged. This holds while M8 omits `dock` from
+ *   `apc.json` and during a hub's 60-second cache window.
  * - **M13** (0.13). A first drop calls /apc/connect. The app declares a fragment-free same-origin
  *   dock_connect: GET 200, no redirects, no-referrer, no third-party script. A synchronous head script
  *   clears #apc_connect before any other script or redirect and keeps it only in sessionStorage across login.
  */
 export type DockAppRequirement = "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "M9" | "M10" | "M11" | "M12" | "M13";
 
-/** The error a 404 of M11 or M12 SHOULD carry (APC 0.12). A hub reads it only as this exact token. */
+/** The error a 404 of M11 or M12 at an app implementing Dock or still serving any Dock grant SHOULD carry (APC 0.12). A hub reads it only as this exact token. */
 export const PAIRING_MISMATCH_ERROR = "pairing_mismatch";

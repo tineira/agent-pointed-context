@@ -1003,7 +1003,7 @@ export class Sandbox extends DurableObject<Env> {
     this.sweepDock();
     const grant = this.grants().find((g) => g.secret === secret);
     const link = grant ? this.dockRow(grant.id) : null;
-    // A hub introducing itself to a grant that is not a Dock grant (M12, APC 0.12): 404 before anything else, a
+    // Pulse implements Dock: a hub introducing itself to a non-Dock grant (M12, APC 0.12) gets 404 before anything else, a
     // revoked Direct grant included, and nothing changes. Whether it is a Dock grant is Pulse's own record (the link,
     // or the revoked row's hub), never this request.
     const directGrant = grant ? !link : this.sql.exec("select 1 from revoked_grants where secret_hash = ? and hub is null", hash).toArray().length > 0;

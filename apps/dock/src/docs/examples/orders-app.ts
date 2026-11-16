@@ -132,7 +132,7 @@ export interface OrdersStore {
   grants: Map<string, Grant>;
   /** Revoked grants: the SHA-256 of the secret (never the secret) and when. */
   revoked: Map<string, string>;
-  /** The hashes of revoked Direct grants: a hub's introduction to one gets 404, never the revoked answer (APC 0.12, M12). */
+  /** Orders implements Dock: revoked Direct grant hashes let a hub's introduction get 404 before the revoked answer (APC 0.12, M12). */
   revokedDirect: Set<string>;
   /** One pin per grant, by grant id. */
   pins: Map<string, FocusRow>;
@@ -439,7 +439,7 @@ export class OrdersApp {
     // Nothing is awaited from here to the gate and the commit below: the grant's state cannot change in between.
     this.sweep();
     const grant = this.store.grants.get(secret);
-    // A hub introducing itself to a grant that is not a Dock grant (APC 0.12, M12): 404 before anything else, a revoked
+    // Orders implements Dock: a hub introducing itself to a non-Dock grant (APC 0.12, M12) gets 404 before anything else, a revoked
     // Direct grant included, and nothing changes. Whether it is a Dock grant is Orders' own record, never the URL:
     // here both profiles share /mcp/{secret}.
     if (grant ? grant.path === "direct" : this.store.revokedDirect.has(hash)) {

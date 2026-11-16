@@ -384,10 +384,13 @@ export type DockPairAnswer =
  *   authorizes nothing at the hub. Neither value is a secret: the agent handle is public (it is in the drag), and
  *   the app already had the `pairing_id` from its own acknowledgement. The check is equality with what the app
  *   stored from its own call, which nobody else can write.
- * - **The app (M10 to M12)** stores, with the move out of in flight, the hub's origin (context, not a check: the
- *   `initialize` names no hub), the agent, the `pairing_id` and whether `binding` was declared; refuses an
+ * - **The app implementing Dock or still serving any Dock grant (M10 to M12)** stores, with the move out of
+ *   in flight, the hub's origin (context, not a check: the `initialize` names no hub), the agent, the `pairing_id`
+ *   and whether `binding` was declared; refuses an
  *   `initialize` whose values differ from those (`bindingVerdict`); and refuses, before anything else, an
- *   `initialize` carrying either key on a grant that is not a Dock grant.
+ *   `initialize` carrying either key on any of its non-Dock grants, including Direct grants, regardless of current
+ *   pairability. Only an app that does not implement Dock and holds no Dock grant owes no M12 refusal;
+ *   it MAY refuse anyway.
  * - **Reading the keys** has three outcomes (`readBindingKey`): absent, invalid (present but not a string of the
  *   key's form: a number, `""`, an over-long string) and valid. Invalid counts as a mismatch, never as absent.
  */
@@ -428,7 +431,7 @@ export function readBindingKey(message: unknown, key: typeof APC_PAIRING_ID_META
   return typeof value === "string" && form.test(value) ? { kind: "valid", value } : { kind: "invalid" };
 }
 
-/** Whether a message carries either binding key, with any value (M12 keys on presence). */
+/** Whether a message carries either binding key, with any value (M12, for apps implementing Dock or still serving any Dock grant, keys on presence). */
 export function hasBindingKey(message: unknown): boolean {
   const meta = metaOf(message);
   return !!meta && (Object.prototype.hasOwnProperty.call(meta, APC_PAIRING_ID_META) || Object.prototype.hasOwnProperty.call(meta, APC_AGENT_META));

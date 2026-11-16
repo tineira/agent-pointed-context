@@ -180,7 +180,8 @@ async function rpc(mcpUrl: string, method: string, params: Record<string, unknow
  *
  * The binding (H8, APC 0.12): every `initialize` names the pairing, `APC_PAIRING_ID_META` (the `pairing_id` the
  * hub answered on `/apc/pair`) and `APC_AGENT_META` (its agent's handle), to every app, verified or not. An app
- * on 0.12 serves it only on the grant it handed to that pairing (M11), and refuses it on any other (M12).
+ * implementing Dock or still serving any Dock grant on 0.12 or later serves it only on the grant it handed to
+ * that pairing (M11), and refuses it on its non-Dock grants too (M12).
  */
 export async function initializeApp(mcpUrl: string, title: string, icon: string | null, transport: AppTransport = STRICT, agentClient: string | null = null, binding: { pairingId: string; agent: string }): Promise<void> {
   const icons = icon ? [{ src: icon, mimeType: "image/png", sizes: ["64x64"] }] : undefined;

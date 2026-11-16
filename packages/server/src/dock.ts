@@ -257,11 +257,16 @@ function pairingMismatch(): Response {
 }
 
 /**
- * M12 (APC 0.12): on a grant that is **not** a Dock grant, a request carrying an `initialize` (in a batch, or
- * without an `id`) with either binding key, whatever its value, is a hub introducing itself to a grant that was
- * never handed to a dock: HTTP 404 `{ error: "pairing_mismatch" }`, before any other answer (revoked
- * included), and the grant is unchanged. Null when the request carries none: serve it as before. Whether the
- * grant is a Dock grant is the app's own record (M10), never this request.
+ * M12 (APC 0.12), for apps implementing Dock or still serving any Dock grant: on every non-Dock grant, including
+ * a Direct grant, a request carrying an `initialize` (in a batch, or without an `id`) with either binding key,
+ * whatever its value, is a hub introducing itself to a grant that was never handed to a dock: HTTP 404
+ * `{ error: "pairing_mismatch" }`, before any other answer (revoked included), and the grant is unchanged.
+ * Null when the request carries none: serve it as before. Whether the grant is a Dock grant is the app's own
+ * record (M10), never this request. Do not condition this helper on the
+ * dynamic `profiles` list in `apc.json` or on current pairability: an app implementing Dock or still serving any
+ * Dock grant applies it to every non-Dock grant at all times, including while M8 omits `dock` and during a hub's
+ * 60-second cache window. Only an app that does not implement Dock and holds no Dock grant owes no M12 refusal;
+ * it MAY refuse anyway.
  */
 export function directGrantGate(body: unknown): Response | null {
   return rpcMessages(body).some((m) => isInitializeMessage(m) && hasBindingKey(m)) ? pairingMismatch() : null;

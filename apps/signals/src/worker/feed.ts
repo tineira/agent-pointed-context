@@ -685,7 +685,7 @@ export class Feed extends DurableObject<Env> {
     // A dock grant past T_ack or T_connect has ended (APC 0.10): it is gone before it is looked up.
     this.sweepDock();
     const grant = this.grants().find((g) => g.secret === secret);
-    // A hub introducing itself to a grant that is not a Dock grant (M12, APC 0.12): 404 before anything else, a revoked
+    // Signals implements Dock: a hub introducing itself to a non-Dock grant (M12, APC 0.12) gets 404 before anything else, a revoked
     // Direct grant included, and nothing changes. Whether it is a Dock grant is Signals' own record (its hub, or the
     // revoked row's), never this request.
     const directGrant = grant ? !grant.hub : this.sql.exec("select 1 from revoked_grants where secret_hash = ? and hub = ''", hash).toArray().length > 0;
