@@ -4,6 +4,7 @@
  * must name a file that exists; every included example region must exist. The landing and the extension page
  * link to the docs, and the dock's assets keep their frame protection.
  */
+import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -196,7 +197,7 @@ test("the docs page has a source for every page, and the static and React banner
   assert.match(docs, /<b>APC \{APC_STANDARD_VERSION\}\.<\/b> The standard is frozen and changes only by the/);
   const page = DOC_PAGES[0]!;
   const html = docPageHtml(page, read(page.file), {});
-  assert.match(html, /<b>APC 1\.0\.0\.<\/b> The standard is frozen and changes only by the/);
+  assert.ok(html.includes(`<b>APC ${APC_STANDARD_VERSION}.</b> The standard is frozen and changes only by the`), "the rendered banner names the standard's version");
   assert.doesNotMatch(html, /docs-draft|a 0\.x draft/);
   assert.match(docs, /CC BY 4\.0/);
 });

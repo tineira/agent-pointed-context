@@ -7,4 +7,4 @@
  * adds, and a major may break inside the deprecation window. Every contract
  * change adds an entry to `packages/protocol/CHANGELOG.md` and bumps this.
  */
-export const APC_STANDARD_VERSION = "1.0.0";
+export const APC_STANDARD_VERSION = "1.1.0";
