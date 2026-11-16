@@ -6,7 +6,7 @@
  */
 // #region imports
 import { apcConformance, runConformance, standInHub, type AgentConnection, type ApcAppAdapter, type ApcDockDropOutcome, type ApcDockLifecycleAdapter } from "@tineira/apc-conformance";
-import { LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, decodeApcConnect, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
+import { APC_AGENT_TYPE, LONG_DORMANCY_RECOMMENDED_MS, T_IDLE_RECOMMENDED_MS, agentDragPayload, decodeApcConnect, formatPairingCode, type ApcProfile, type FocusTarget, type PresenceMessage } from "@tineira/apc-protocol";
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";
 import { OrdersApp, newOrdersStore, type OrdersAppOptions } from "./orders-app.ts";
 // #endregion
@@ -301,3 +301,34 @@ export async function checkOrders(): Promise<boolean> {
 export function ordersChecks(profile: ApcProfile, options: { link?: boolean } = {}) {
   return apcConformance(ordersUnderTest(profile, options).adapter);
 }
+
+// #region browser-drop
+/**
+ * Automate a drop in Chromium over the Chrome DevTools Protocol (CDP — Playwright's `cdp.send` or a DevTools
+ * WebSocket). `enablePinning` defaults to `event.isTrusted === true` (and `<apc-agents>`, `<apc-pets>` and
+ * `<apc-pin>` check `event.isTrusted` on their buttons) so a page script cannot point an agent at data.
+ * Synthetic `dispatchEvent(...)` calls have `isTrusted: false` and are ignored; drive real browser input
+ * instead (or pass `trusted: () => true` in a non-production DOM test).
+ */
+export type CdpSend = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+
+/** Drag an in-page mark (`<apc-agents>`, `<apc-pets>`, `<apc-pin>`) to a `[data-focus]` target using pointer events. */
+export async function cdpPinMark(cdp: CdpSend, from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
+  await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+  await cdp("Input.dispatchMouseEvent", { type: "mousePressed", x: from.x, y: from.y, button: "left", clickCount: 1 });
+  await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: to.x, y: to.y, button: "left", buttons: 1 });
+  await cdp("Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", clickCount: 1 });
+}
+
+/** Drop a dock agent onto a `[data-focus]` target at `(x, y)` using HTML5 drag events carrying `application/x-apc-agent`. */
+export async function cdpDropFromDock(
+  cdp: CdpSend,
+  at: { x: number; y: number },
+  drop: { agent: string; hub: string; ticket: string },
+): Promise<void> {
+  const data = { items: [{ mimeType: APC_AGENT_TYPE, data: agentDragPayload(drop.agent, { hub: drop.hub, ticket: drop.ticket }) }], dragOperationsMask: 2 };
+  for (const type of ["dragEnter", "dragOver", "drop"]) {
+    await cdp("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data });
+  }
+}
+// #endregion
