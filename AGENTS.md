@@ -18,6 +18,7 @@ Agent rules: https://github.com/tineira/agentic-os (read `README.md` first). Thi
 | Migration commands | None. Durable Object migrations are `migrations` in `apps/*/wrangler.jsonc`, applied by `wrangler deploy` |
 | Local gate before push | `pnpm typecheck` + `pnpm test` + `pnpm build` (what the CI `check` job runs) |
 | CI | GitHub Actions: `ci.yml` on push to `main` and on every PR (`check`: install, typecheck, test, build; then `deploy` / `deploy-standard` on `main` only); `desktop.yml` on push/PR touching `apps/desktop*` (Windows `dotnet test` + build) and `workflow_dispatch`. Deploy secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` are repo secrets |
+| Release (npm) | Pushing a tag `apc-v<version>` on a commit of `main` runs `.github/workflows/publish.yml`, which packs the four packages with pnpm and publishes them on the `next` dist-tag by npm trusted publishing (OIDC). **There is no npm token anywhere and there must not be** — the job fails on one (`scripts/check-no-npm-token.mjs`), so a local `npm whoami` returning 401 is correct and a local `pnpm publish` is never the answer. Moving `latest` is Tomas's, by hand (OIDC does not cover `npm dist-tag`). Agents do not push `apc-v*` tags unless Tomas asks in that moment |
 | Freezes | None |
 | Run scope (if a run is active) | None |
 
