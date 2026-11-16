@@ -8,7 +8,7 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are released together at the standard's version, now 1.0.0 (`APC_STANDARD_VERSION`). A patch never changes the contract. Install all four at the same version; these commands select 1.0.0 explicitly, independently of npm dist-tags.
+The packages are released together at the standard's version (`APC_STANDARD_VERSION`, which the banner above names). A patch never changes the contract. Install all four at the same version; these commands select 1.0.0 explicitly, independently of npm dist-tags.
 
 ```sh
 npm i @tineira/apc-server@1.0.0 @modelcontextprotocol/sdk zod       # the server (the SDK and zod are peers)

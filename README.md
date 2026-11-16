@@ -125,7 +125,7 @@ The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) 
 
 ## Using the packages
 
-`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together at the standard's version, now 1.0.0 (`APC_STANDARD_VERSION`). Publishing uses the `next` dist-tag; Tomas moves npm dist-tags by hand. Install all four at the same version. These commands select 1.0.0 explicitly, independently of dist-tags.
+`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together at the standard's version (`APC_STANDARD_VERSION`). Publishing uses the `next` dist-tag; Tomas moves npm dist-tags by hand. Install all four at the same version. These commands select 1.0.0 explicitly, independently of dist-tags.
 
 ```sh
 npm i @tineira/apc-protocol@1.0.0 @tineira/apc-web@1.0.0                                 # the page
@@ -225,7 +225,7 @@ Per sandbox, until it is deleted 6 hours after its last use: its seed (V1; the s
 
 ## Releases and changelogs
 
-Two things are versioned apart. The **software** (Pulse, the dock, Signals, the extension, the desktop apps) is tagged `v0.1.0`, `v0.2.0` and so on, and [`CHANGELOG.md`](CHANGELOG.md) lists what changed, with an `Unreleased` section for what has merged since the last tag. The **APC standard**, the contract an app and an agent share (view, pin, presence, the focus format, `wait_for_focus`, the tools, the drag payload, pairing), has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, and its own [changelog](packages/protocol/CHANGELOG.md). It is at 1.0.0 and frozen; changes follow the [versioning and compatibility policy](https://apc.tineira.com/docs/spec#versioning-and-compatibility). The paper's version (V1) is not a 1.x of it. CI fails a pull request that changes more than docs and updates neither changelog, unless it carries the `no-changelog` label.
+Two things are versioned apart. The **software** (Pulse, the dock, Signals, the extension, the desktop apps) is tagged `v0.1.0`, `v0.2.0` and so on, and [`CHANGELOG.md`](CHANGELOG.md) lists what changed, with an `Unreleased` section for what has merged since the last tag. The **APC standard**, the contract an app and an agent share (view, pin, presence, the focus format, `wait_for_focus`, the tools, the drag payload, pairing), has its own semver, `APC_STANDARD_VERSION` in `@tineira/apc-protocol`, and its own [changelog](packages/protocol/CHANGELOG.md). It has been frozen since 1.0.0; changes follow the [versioning and compatibility policy](https://apc.tineira.com/docs/spec#versioning-and-compatibility). The paper's version (V1) is not a 1.x of it. CI fails a pull request that changes more than docs and updates neither changelog, unless it carries the `no-changelog` label.
 
 ## Status
 
