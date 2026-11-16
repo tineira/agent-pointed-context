@@ -3,6 +3,7 @@ import { formatPairingCode } from "@tineira/apc-protocol";
 import { useEffect, useState } from "react";
 
 const ERRORS: Record<string, string> = {
+  not_found: "Your dock did not accept the connection request and may be too old for Connect. Update your dock, then drop the agent again.",
   ticket_not_for_pairing: "Drop the agent again, then confirm in your dock.",
   ticket_origin_mismatch: "This link is for another app. Drop the agent again.",
   too_many_requests: "Your dock already has too many pending requests. Answer one, then drop the agent again.",

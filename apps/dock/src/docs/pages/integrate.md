@@ -200,7 +200,7 @@ With both profiles, the same agent connected both ways is offered `apc_link` and
 
 ### The minimum for the Dock profile
 
-What an app that offers only Dock must have, and nothing more. Orders has all of it (the regions above); the [conformance suite](/docs/conformance#the-dock-profile-as-built-010) checks each route.
+What an app that offers only Dock must have, and nothing more. Orders has all of it (the regions above); the [conformance suite](/docs/conformance#the-dock-profile-as-built-10) checks each route.
 
 | Route | Who calls it | What it does | Helper |
 |---|---|---|---|
@@ -213,7 +213,7 @@ What an app that offers only Dock must have, and nothing more. Orders has all of
 | the heartbeat (`/api/heartbeat` in Orders) | the person's page, every `T_idle / 4` | the person is here: wakes a dormant grant. An app that never sleeps still serves it (it then changes nothing) | |
 | `POST /apc/revoke` | the hub, when the person unpairs | ends the grant whose MCP URL it names; the same 200 to anything | `handleDockGiveBack` |
 
-In 0.13, the drop (`/api/drop`) and the Connect consent and Allow (`/api/connect/dock`, the Allow carrying the consent's nonce back) are separate owner `POST` routes; `GET {dock_connect}` answers HTTP 200 even when signed out (telling the person to sign in first) so it never redirects with the `#apc_connect` link. The four owner `POST` routes (the drop, the Allow, the heartbeat, Cancel) take the person's session and the [M6](/docs/spec#the-app-and-the-hub-call) checks (`refuseOwner` above). What the app keeps per Dock grant: its state (in flight, handoff, live), when it was allowed, acknowledged and last woken, the pairing code and its expiry, and the hash of every revoked secret; all of it in storage that outlives the process, every time limit read through one clock (`now`). That is what lets the conformance adapter's `dock.lifecycle` move time, fail a write and restart the app ([how to wire it](/docs/conformance#wiring-docklifecycle)).
+In APC 1.0, the drop (`/api/drop`) and the Connect consent and Allow (`/api/connect/dock`, the Allow carrying the consent's nonce back) are separate owner `POST` routes; `GET {dock_connect}` answers HTTP 200 even when signed out (telling the person to sign in first) so it never redirects with the `#apc_connect` link. The four owner `POST` routes (the drop, the Allow, the heartbeat, Cancel) take the person's session and the [M6](/docs/spec#the-app-and-the-hub-call) checks (`refuseOwner` above). What the app keeps per Dock grant: its state (in flight, handoff, live), when it was allowed, acknowledged and last woken, the pairing code and its expiry, and the hash of every revoked secret; all of it in storage that outlives the process, every time limit read through one clock (`now`). That is what lets the conformance adapter's `dock.lifecycle` move time, fail a write and restart the app ([how to wire it](/docs/conformance#wiring-docklifecycle)).
 
 ### A Dock grant on localhost
 

@@ -62,6 +62,7 @@ import {
 
 export type StandInHubMode =
   | "ack"
+  | "connect_not_found"
   | "no_ack"
   | "redirect"
   | "error_500"
@@ -317,6 +318,11 @@ export function standInHub(options: StandInHubOptions = {}): StandInHub {
 
   /** What `path` (`/apc/connect`, `/apc/pair`, or `/apc/confirm`) answers in `mode`. */
   const answerIn = async (path: "/apc/connect" | "/apc/pair" | "/apc/confirm", body: Record<string, unknown>, mode: StandInHubMode, redirect: RequestRedirect | undefined, signal: AbortSignal): Promise<Response> => {
+    // Remove only Connect: keep H9 ticket checks on Pair, so this cannot legitimize a fallback.
+    if (mode === "connect_not_found") {
+      if (path === "/apc/connect") return json({ error: "not_found" }, 404);
+      mode = "ack";
+    }
     const yes =
       path === "/apc/connect"
         ? { ok: true, status: "connect_requested" }

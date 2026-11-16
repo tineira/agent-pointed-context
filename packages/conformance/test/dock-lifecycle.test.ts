@@ -8,8 +8,8 @@ import { test } from "node:test";
 import { apcConformance, ConformanceError, type ApcAppAdapter, type ConformanceCheck } from "../src/index.ts";
 import { dockFixture, type FixtureBreak, type FixtureOptions } from "./dock-fixture.ts";
 
-/** The Dock checks: those of 0.10, 0.12 (TIN-910), and 0.13 (M13, TIN-916). */
-const ours = (checks: ConformanceCheck[]) => checks.filter((c) => c.name.includes("(dock): 0.10: ") || c.name.includes("(dock): 0.12: ") || c.name.includes("(dock): 0.13: "));
+/** The Dock lifecycle checks, including removal of the fallback in 1.0. */
+const ours = (checks: ConformanceCheck[]) => checks.filter((c) => /\(dock\): (0\.10|0\.12|0\.13|1\.0): /.test(c.name));
 const named = (checks: ConformanceCheck[], part: string) => {
   const found = ours(checks).filter((c) => c.name.includes(part));
   assert.equal(found.length, 1, `one Dock check named "${part}", found ${found.length}`);
@@ -52,10 +52,11 @@ test("M9 still covers Pair and Confirm for explicit pre-0.13 fixtures", async ()
 {
   const { adapter, hub } = dockFixture();
   const checks = ours(apcConformance(adapter));
-  test("the suite has the Dock checks of 0.10 (31), 0.12 (6), and 0.13 (2)", () => {
+  test("the suite has the Dock checks of 0.10 (31), 0.12 (6), 0.13 (2), and 1.0 (1)", () => {
     assert.equal(checks.filter((c) => c.name.includes(": 0.10: ")).length, 31);
     assert.equal(checks.filter((c) => c.name.includes(": 0.12: ")).length, 6);
     assert.equal(checks.filter((c) => c.name.includes(": 0.13: ")).length, 2);
+    assert.equal(checks.filter((c) => c.name.includes(": 1.0: ")).length, 1);
   });
   for (const check of checks) {
     test(`the conforming fixture passes, and every grant the check made is given back: ${check.name}`, async () => {
@@ -280,6 +281,7 @@ const broken: Array<[FixtureBreak, string, RegExp, FixtureOptions?]> = [
   ["dock_connect_404", "0.13: M13: apc.json declares dock_connect", /HTTP 404/],
   ["dock_connect_no_referrer_policy", "0.13: M13: apc.json declares dock_connect", /Referrer-Policy: no-referrer/],
   ["drop_pairs_without_connect", "0.13: M13: a first drop with no link", /\/apc\/connect/],
+  ["connect_404_fallback", "1.0: M13: a missing", /must refuse without consent or a grant, got page=consent/],
 ];
 
 for (const [brk, part, message, options] of broken) {
@@ -299,8 +301,48 @@ test("an app claiming 0.10-0.12 passes existing Dock checks without dock_connect
   }
 });
 
-test("every Dock check (0.10, 0.12 and 0.13) has a broken app that fails it", () => {
+test("every Dock check (0.10, 0.12, 0.13 and 1.0) has a broken app that fails it", () => {
   const { adapter } = dockFixture();
   const covered = new Set(broken.map(([, part]) => named(apcConformance(adapter), part).name));
   assert.deepEqual(ours(apcConformance(adapter)).map((c) => c.name).filter((n) => !covered.has(n)), []);
+});
+
+test("restoring only the 404 fallback passes all 39 previous Dock lifecycle checks", async () => {
+  const { adapter } = dockFixture({ break: "connect_404_fallback" });
+  const previous = ours(apcConformance(adapter)).filter((c) => !c.name.includes(": 1.0: "));
+  assert.equal(previous.length, 39);
+  for (const check of previous) await check.run();
+});
+
+for (const standard of ["0.12.0", "0.13.0"]) {
+  test(`the missing Connect refusal check is gated on 1.0, not ${standard}`, async () => {
+    const { adapter } = dockFixture({ standard, break: "connect_404_fallback" });
+    const check = named(apcConformance(adapter), "1.0: M13: a missing");
+    await check.run();
+    assert.match(check.note ?? "", /before 1\.0\.0/);
+  });
+}
+
+test("the missing Connect check probes a drop with a real nonce, not just the first drop", async () => {
+  const { adapter, hub } = dockFixture();
+  const original = adapter.fetch!;
+  let replayed = false;
+  adapter.fetch = async (request) => {
+    if (new URL(request.url).pathname === "/api/drop" && request.method === "POST") {
+      const body = await request.clone().json() as { consent?: string };
+      if (body.consent) {
+        replayed = true;
+        // Prove this is an unused, valid Connect consent by allowing it on the Connect route.
+        const previousMode = hub.mode;
+        hub.mode = "ack";
+        try {
+          return await original(new Request(request.url.replace("/api/drop", "/api/connect/dock"), request));
+        } finally { hub.mode = previousMode; }
+      }
+    }
+    return original(request);
+  };
+  await fails(named(apcConformance(adapter), "1.0: M13: a missing"), /valid Connect nonce must refuse/);
+  assert.equal(replayed, true);
+  assert.equal(hub.received.length, 1, "the nonce really authorized a grant on the Connect route");
 });

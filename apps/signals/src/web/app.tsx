@@ -45,6 +45,7 @@ interface FeedState {
   grants: GrantState[];
 }
 const PAIR_ERRORS: Record<string, string> = {
+  not_found: "your dock did not accept the connection request and may be too old for Connect; update your dock, then drag the agent again",
   ticket_not_for_pairing: "drop the agent again, then confirm in your dock",
   ticket_origin_mismatch: "that link is for another app; drag the agent from the dock again",
   too_many_requests: "your dock already has too many pending requests; answer one, then drag the agent again",
@@ -248,7 +249,7 @@ function Feed({ sid }: { sid: string }) {
           else if (r.ok && (r.status === "pending" || r.status === "connecting")) {
             if (r.pin_error) say(`Not pinned where you dropped it (${r.pin_error}). Once your dock connects, drop the agent there again.`);
           } else if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
-          else say(`Not pinned: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`);
+          else say(`Not pinned: ${pairError(r.error)}`);
           refresh();
         },
         onPin: async (grantId, target) => {

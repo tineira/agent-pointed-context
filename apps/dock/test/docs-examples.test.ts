@@ -392,7 +392,7 @@ test("Orders 1.0: a missing Connect route refuses the drop, and /connect/dock pa
   const HUB = "https://dock.test";
   const ORIGIN = "https://orders.test";
   let connectAnswer = () => Response.json({ ok: true, status: "connect_requested" });
-  let pairAnswer = () => Response.json({ ok: false, error: "ticket_not_for_pairing" }, { status: 400 });
+  let pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "a".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });
   const called: Array<{ url: string; body: Record<string, unknown> }> = [];
   let cookie = "orders_session=1";
 
@@ -452,7 +452,6 @@ test("Orders 1.0: a missing Connect route refuses the drop, and /connect/dock pa
   assert.equal(called.some((c) => c.url.endsWith("/apc/pair")), false, "Connect consent cannot authorize a drop-time Allow");
 
   // 4. Full /api/connect/dock consent -> Allow -> pending + pairing code, then drop on linked agent confirms.
-  pairAnswer = () => Response.json({ ok: true, pairing_id: "pr_" + "a".repeat(32), binding: "pairing_id", status: "pending", pairing_code: "required", agent: { name: "Agent", icon: null } });
   const connectTicket = `${"c".repeat(32)}.${"d".repeat(32)}`;
   const connectAsked = await (await post("/api/connect/dock", { hub: HUB, agent: "ag_o1", ticket: connectTicket })).json() as { error: string; consent: string };
   assert.equal(connectAsked.error, "consent_required");
@@ -554,6 +553,59 @@ function assertParsesWithTsc(source: string, filename: string): void {
   }
 }
 
+for (const [answer, message] of [
+  [{ ok: false, error: "not_found" }, /cannot take a connection request.*too old for Connect.*Update your dock/],
+  [{ ok: false, error: "hub_refused" }, /refused the connection request.*Check your dock/],
+  [{ ok: false, error: "too_many_requests" }, /too many pending requests.*Answer one/],
+  [{ ok: false, error: "hub_not_allowed" }, /does not pair with that dock.*Use a dock allowed/],
+  [{ ok: false, error: "ticket_not_for_pairing" }, /Drop the agent again, then confirm/],
+  [{ ok: false, error: "unexpected_refusal" }, /could not connect.*Check your dock/],
+  [{ ok: true, status: "connect_requested" }, /Confirm in your dock/],
+] as const) {
+  test(`Orders page: ${"error" in answer ? answer.error : answer.status} remains visible across refresh and the waiting-code interval`, async () => {
+    // Execute the published handler and countdown, including replaceChildren wiping waiting's contents.
+    class Element {
+      children: Element[] = [];
+      textContent = "";
+      attributes = new Map<string, string>();
+      setAttribute(key: string, value: string) { this.attributes.set(key, value); }
+      append(...elements: Element[]) { this.children.push(...elements); }
+      replaceChildren(...elements: Element[]) { this.textContent = ""; this.children = elements; }
+      addEventListener() {}
+      before(element: Element) { root.children.splice(root.children.indexOf(this), 0, element); }
+    }
+    const root = new Element();
+    const waiting = new Element();
+    root.append(waiting);
+    const onRefresh: Array<(rows: unknown[]) => void> = [];
+    let tick: (() => void) | undefined;
+    const source = readFileSync(resolve(import.meta.dirname, "../src/docs/examples/orders-page.ts"), "utf8");
+    const region = exampleRegion(source, "waiting");
+    assert.ok(region);
+    const context = vm.createContext({
+      document: { querySelector: () => waiting, createElement: () => new Element() },
+      onRefresh, onDockDrop: undefined,
+      post: async () => answer,
+      refresh: async () => { for (const fn of onRefresh) fn([]); },
+      formatPairingCode: (code: string) => code,
+      setInterval: (fn: () => void, ms: number) => { assert.equal(ms, 1000); tick = fn; },
+    });
+    vm.runInContext(stripTypeScriptTypes(region), context);
+    for (const rows of [[], [{ id: "other_agent", waiting: "code", pairing: { code: "K7M4P2", expires_at: new Date(Date.now() + 60_000).toISOString() } }]]) {
+      onRefresh[0]!(rows);
+      await vm.runInContext('dropFromDock({ hub: "https://dock.test", agent: "ag_1", ticket: "drop" }, { kind: "order", id: "ord_1001" })', context);
+      const status = root.children[0]!;
+      assert.notEqual(status, waiting, "the status is attached outside the redrawn waiting rows");
+      assert.equal(status.attributes.get("role"), "status");
+      assert.match(status.textContent, message, "the real drop handler leaves an actionable message");
+      onRefresh[0]!(rows); // A later server refresh redraws the panel.
+      tick!(); // The real one-second callback redraws another agent's waiting-code row.
+      assert.match(status.textContent, message, "refresh and interval preserve the drop message");
+      if (rows.length) assert.match(waiting.children[0]!.textContent, /Waiting for your dock/);
+    }
+  });
+}
+
 /** Run assembled `orders-page.ts` excerpts with stubbed browser/package globals to verify `void refresh()` has no TDZ or missing-symbol errors. */
 async function runAssembledOrdersPage(regions: string[], pageSrc: string): Promise<void> {
   const parts = regions.map((name) => {
@@ -565,7 +617,7 @@ async function runAssembledOrdersPage(regions: string[], pageSrc: string): Promi
   assertParsesWithTsc(regions.map((name) => exampleRegion(pageSrc, name)!).join("\n"), "orders-page.ts");
   const js = stripTypeScriptTypes(assembled);
 
-  const fakeEl = () => ({ setAttribute() {}, append() {}, replaceChildren() {}, addEventListener() {}, dataset: {} as Record<string, string>, textContent: "" });
+  const fakeEl = () => ({ setAttribute() {}, append() {}, before() {}, replaceChildren() {}, addEventListener() {}, dataset: {} as Record<string, string>, textContent: "" });
   const doc = { querySelector: () => fakeEl(), createElement: () => fakeEl(), body: fakeEl() };
   const noop = () => {};
   let listFetched = false;

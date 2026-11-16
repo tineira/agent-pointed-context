@@ -21,6 +21,7 @@ export async function mountDockConnect(): Promise<void> {
     return response.json() as Promise<Answer & { sid?: string }>;
   };
   const refused = (error?: string) => error === "ticket_expired" || error === "dock_expired" || error === "consent_expired" ? EXPIRED
+    : error === "not_found" ? "Your dock did not accept the connection request and may be too old for Connect. Update your dock, then try connecting again."
     : error === "ticket_not_for_pairing" ? "Drop the agent again, then confirm in your dock."
     : `Could not connect: ${error ?? "the app did not answer"}.`;
   try {

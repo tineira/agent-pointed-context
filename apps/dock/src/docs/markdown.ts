@@ -251,6 +251,7 @@ export function resolveHref(href: string, file: string): string | null {
  */
 export const ANCHOR_ALIASES: Readonly<Record<string, string>> = {
   "versioning-and-deprecation": "versioning-and-compatibility",
+  "the-dock-profile-as-built-010": "the-dock-profile-as-built-10",
 };
 
 export function fragmentTarget(hash: string): string | null {
