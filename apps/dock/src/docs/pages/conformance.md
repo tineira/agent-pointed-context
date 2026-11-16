@@ -46,7 +46,7 @@ The suite has no DOM check and cannot prove which code the app renders from its 
 `@tineira/apc-conformance` has a command, `apc-conformance`, that checks a live app over HTTP with no code (the package is published at the standard's version):
 
 ```sh
-npx @tineira/apc-conformance@1.0.0 https://orders.example --grant https://orders.example/mcp/<secret>
+npx @tineira/apc-conformance@1.1.0 https://orders.example --grant https://orders.example/mcp/<secret>
 ```
 
 ```text
