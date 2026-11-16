@@ -173,6 +173,8 @@ export type FixtureBreak =
   | "connect_404_fallback";
 
 export interface FixtureOptions {
+  /** A private drop refusal uses HTTP 409 and a nested error, normalized by the adapter. */
+  nestedDropRefusal?: boolean;
   /** The page withholds its code until Allow; the consent adapter omits code. */
   withholdCode?: boolean;
   break?: FixtureBreak;
@@ -248,6 +250,7 @@ interface Storage {
   page: { open: boolean; presence: PresenceEvent[] };
 }
 interface Config {
+  nestedDropRefusal: boolean;
   brk: Set<FixtureBreak>;
   standard: string;
   pairing: boolean;
@@ -432,7 +435,11 @@ class Fixture {
       this.chain = run.catch(() => {});
       return json(await run);
     }
-    return json(await handler(body));
+    const answer = await handler(body);
+    if (this.config.nestedDropRefusal && new URL(request.url).pathname === "/api/drop" && (answer as Record<string, unknown>)?.error === "not_found") {
+      return json({ error: { code: "not_found" } }, 409);
+    }
+    return json(answer);
   }
 
   /** The heartbeat over a WebSocket: its handshake follows the Origin rule. 200 stands in for 101 in Node. */
@@ -911,6 +918,7 @@ class Fixture {
 export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdapter; hub: StandInHub } {
   const brk = new Set<FixtureBreak>(options.break ? [options.break] : []);
   const config: Config = {
+    nestedDropRefusal: options.nestedDropRefusal ?? false,
     brk,
     standard: options.standard ?? APC_STANDARD_VERSION,
     pairing: true,
@@ -943,7 +951,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
   const post = async (path: string, body: unknown) =>
     (await (await current.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", headers: { ...SESSION, "content-type": "application/json", origin: ORIGIN }, body: JSON.stringify(body) }))).json()) as Record<string, unknown>;
 
-  const dropOutcome = (r: Record<string, unknown>, baseDrop: { hub: string; agent: string; ticket: string; target: FocusTarget; connect_ticket?: boolean }): ApcDockDropOutcome => {
+  const dropOutcome = (r: Record<string, unknown>, baseDrop: Record<string, unknown>): ApcDockDropOutcome => {
     if (r.error === "consent_required") {
       return {
         page: "consent",
@@ -961,7 +969,8 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
     if (r.ok === true && r.status === "connect_requested") return { page: "connecting" };
     if (r.ok === true && r.status === "pending") return { page: "waiting", code: String((r.pairing as { code: string }).code) };
     if (r.ok === true && r.status === "paired") return r.pinned ? { page: "pinned" } : { page: "connecting" };
-    return { page: "refused", error: String(r.error) };
+    const error = r.error && typeof r.error === "object" ? (r.error as { code?: unknown }).code : r.error;
+    return { page: "refused", error: String(error) };
   };
 
   const dropAgent = async (d: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome> => {
@@ -998,6 +1007,7 @@ export function dockFixture(options: FixtureOptions = {}): { adapter: ApcAppAdap
 
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
+    readDropResponse: async (response, body) => dropOutcome(await response.json() as Record<string, unknown>, body),
     connectDock,
     allowCarriesHub,
     hubDeadlineMs: DEADLINE_MS,

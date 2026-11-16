@@ -1608,6 +1608,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
     }),
 
     checkSince("1.0.0", "1.0", "removal of the Connect fallback", "M13: a missing /apc/connect route refuses the drop, even with a valid Connect consent nonce", async (life, d) => {
+      expect(typeof life.readDropResponse === "function", "the app claims 1.0.0 or later: give dock.lifecycle.readDropResponse in the adapter to read the private drop response");
       const hub = d.hub;
       const savedMode = hub.mode;
       try {
@@ -1627,13 +1628,15 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
         expect(prepared && typeof prepared.agent === "string", "preparing the Connect consent did not call /apc/connect");
         hub.mode = "connect_not_found";
         const beforeNonce = hub.requests.length;
+        const body = { hub: hub.origin, agent: prepared.agent, ...allow };
         const response = await fetchApp(new Request(new URL(life.owner.drop.path, life.owner.origin), {
           method: "POST",
           headers: { ...life.owner.session, "content-type": "application/json", origin: life.owner.origin, "sec-fetch-site": "same-origin" },
-          body: JSON.stringify({ hub: hub.origin, agent: prepared.agent, ...allow }),
+          body: JSON.stringify(body),
         }));
-        const answer: unknown = await response.json();
-        expect(isObject(answer) && answer.ok !== true && typeof answer.error === "string" && answer.error !== "consent_required" && answer.consent === undefined && answer.pairing_code === undefined && answer.pairing === undefined && answer.grant_id === undefined,
+        // The adapter describes the page's outcome; the standard does not prescribe this private endpoint's JSON.
+        const answer = await life.readDropResponse!(response, body);
+        expect(answer.page === "refused",
           "a drop carrying a valid Connect nonce must refuse without consent, a code or a grant");
         expect(hub.requests.slice(beforeNonce).includes(`${hub.origin}/apc/connect`), "a drop carrying a valid Connect nonce bypassed /apc/connect");
         expect(!hub.requests.slice(beforeNonce).some((url) => new URL(url).pathname === "/apc/pair"), "a drop carrying a valid Connect nonce called /apc/pair");

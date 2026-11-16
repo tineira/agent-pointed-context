@@ -147,6 +147,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
    */
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
+    readDropResponse: async (response, body) => shownFor(await response.json() as Record<string, unknown>, "/api/drop", body),
     connectDock,
     // The page's Allow sends the drop again with the nonce, hub included: the app checks it against its allowlist again (M1).
     allowCarriesHub: true,

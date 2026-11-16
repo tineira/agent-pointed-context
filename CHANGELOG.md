@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **The 1.0 Connect refusal check reads private drop responses through the app's adapter.** An HTTP 409 with a nested error passes; the valid-nonce replay still requires refusal without consent or a grant and independently rejects every `/apc/pair` call. (`packages/conformance/`, `apps/demo/test/dock-conformance.ts`, `apps/dock/src/docs/`)
+
 - **Dock refusal checks catch the removed Connect fallback, and refusals stay visible in the example apps.** A 1.0-gated lifecycle check rejects the exact missing-route response, including a drop carrying a valid Connect nonce; Orders preserves its status across waiting-row refreshes, clients explain older docks, and the public guides describe the Connect flow and current coverage. (`packages/conformance/`, `apps/demo/`, `apps/signals/`, `apps/dock/`)
 
 - **Declare APC 1.0.0: 0.13 frozen, with no change to the contract.** All four packages move to 1.0.0, the docs state the freeze and the compatibility policy, TIN-924's two fixes ship in 1.0.0, and Pulse, Signals and Orders refuse missing Connect routes instead of offering drop-time consent. (`packages/`, `apps/dock/src/docs/`, `apps/dock/src/web/`, `apps/demo/`, `apps/signals/`, `DESIGN.md`, `scripts/lib/packages.mjs`, `scripts/test/packages.test.mjs`, `README.md`)

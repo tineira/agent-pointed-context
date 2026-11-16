@@ -129,6 +129,7 @@ export function dockLifecycle(o: DockLifecycleOptions): ApcDockLifecycleAdapter 
   };
   return {
     dropAgent,
+    readDropResponse: async (response, body) => outcome(await response.json() as Record<string, unknown>, "/hub/pair", body),
     connectDock,
     cancel: async (grantId) => (await post("/hub/cancel", { grant_id: grantId })).ok === true,
     // The page's heartbeat is its WebSocket (answered by the runtime); the apps do not sleep, so it wakes nothing.

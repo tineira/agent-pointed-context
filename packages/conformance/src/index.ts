@@ -238,6 +238,13 @@ export interface ApcDockLifecycleAdapter {
    */
   dropAgent(drop: { agent: string; ticket: string; hub: string; target?: FocusTarget }): Promise<ApcDockDropOutcome>;
   /**
+   * Reads an answer from `owner.drop` as the page does, without sending another request or giving consent.
+   * Required for the 1.0 missing-Connect check, which replays a valid Connect Allow body on the drop route.
+   * `body` is the request sent by the suite. Report `refused` only when no consent, code or grant was created;
+   * the app's private HTTP status and response format are its own choice.
+   */
+  readDropResponse?(response: Response, body: Record<string, unknown>): Promise<ApcDockDropOutcome>;
+  /**
    * Opens the `dock_connect` URL (with `#apc_connect=...`) returned by `hub.approveConnect` (APC 0.13), showing the
    * consent outcome to Allow pairing via `/apc/pair`.
    * Forward the decoded payload to the server without normalizing its hub: M9 supplies a trailing slash to
