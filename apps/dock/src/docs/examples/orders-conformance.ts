@@ -50,7 +50,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
   /**
    * A first drop asks the hub to connect (APC 0.13): the dock's owner approves, and the dock opens Orders'
    * `dock_connect` page with `#apc_connect=...`; its script asks the person there (`/api/connect/dock`) with the
-   * connect ticket. A hub before 0.13 answers 404, and the drop asks the person itself. The Allow goes where they were asked.
+   * connect ticket. A missing Connect route refuses the drop; the Allow runs only on the Connect page.
    */
   async function ask(first: { hub: string; agent: string; ticket: string; target?: unknown }) {
     let drop = first;
@@ -147,6 +147,7 @@ export function ordersUnderTest(profile: ApcProfile, options: { link?: boolean }
    */
   const lifecycle: ApcDockLifecycleAdapter = {
     dropAgent,
+    readDropResponse: async (response, body) => shownFor(await response.json() as Record<string, unknown>, "/api/drop", body),
     connectDock,
     // The page's Allow sends the drop again with the nonce, hub included: the app checks it against its allowlist again (M1).
     allowCarriesHub: true,

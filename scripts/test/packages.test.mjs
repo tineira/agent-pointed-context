@@ -10,13 +10,14 @@ import { PACKAGES, PUBLISH_TEMP_PREFIX, REPOSITORY_URL, checkManifest, checkVers
 const at = (version) => PACKAGES.map((n) => ({ name: `@tineira/apc-${n}`, version }));
 const repo = (path) => new URL(`../../${path}`, import.meta.url);
 
-test("the four packages share one version, a 0.x patch of the standard's", () => {
+test("the four packages share one version, a patch of the standard's", () => {
   assert.equal(checkVersions({ manifests: at("0.7.0"), standard: "0.7.0" }).ok, true);
   assert.equal(checkVersions({ manifests: at("0.7.2"), standard: "0.7.0" }).ok, true, "a software patch on the same contract");
   assert.equal(checkVersions({ manifests: at("0.7.0"), standard: "0.7.1" }).ok, false, "behind the standard");
   assert.equal(checkVersions({ manifests: at("0.6.9"), standard: "0.7.0" }).ok, false);
   assert.equal(checkVersions({ manifests: at("0.8.0"), standard: "0.7.0" }).ok, false);
-  assert.equal(checkVersions({ manifests: at("1.0.0"), standard: "1.0.0" }).ok, false, "1.0 waits for the published standard");
+  assert.equal(checkVersions({ manifests: at("1.0.0"), standard: "1.0.0", tag: "apc-v1.0.0" }).ok, true, "the frozen standard can be released");
+  assert.equal(checkVersions({ manifests: at("1.0.0"), standard: "0.13.0" }).ok, false, "a package cannot advance the standard on its own");
   const split = [...at("0.7.0").slice(1), { name: "@tineira/apc-protocol", version: "0.7.1" }];
   assert.match(checkVersions({ manifests: split, standard: "0.7.0" }).problems.join(), /do not share one version/);
   assert.equal(checkVersions({ manifests: at("0.7.0"), standard: null }).ok, false);

@@ -42,8 +42,8 @@ You can try both at [apc.tineira.com](/): open your [dock](/dock), or connect di
 - [For agents](/docs/agents): instructions, tools, `then`, `attention`, and untrusted marking.
 - [The standard's changelog](/docs/changelog): every change to the contract, version by version.
 
-## A draft, in the open
+## A frozen standard, in the open
 
-The standard is a 0.x draft: anything may still change, and 1.0 will freeze the contract. The code is at [github.com/tineira/agent-pointed-context](https://github.com/tineira/agent-pointed-context) (MIT); these docs and the spec are CC BY 4.0. To propose a change to the contract, open a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
+The standard is at 1.0.0 and frozen. It changes only by the [versioning and compatibility policy](/docs/spec#versioning-and-compatibility). The code is at [github.com/tineira/agent-pointed-context](https://github.com/tineira/agent-pointed-context) (MIT); these docs and the spec are CC BY 4.0. To propose a change to the contract, open a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
 
 APC started with a paper, *Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen* ([doi:10.5281/zenodo.23382909](https://doi.org/10.5281/zenodo.23382909)), with its [design records and payload specification](https://doi.org/10.5281/zenodo.23383101). The demo it describes is kept as it was, as [version 1](/v1/).

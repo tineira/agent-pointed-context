@@ -182,18 +182,22 @@ test("the docs and their examples name the packages as published: @tineira/apc-*
   for (const file of [...DOC_PAGES.filter((p) => p.file.startsWith("apps/dock/")).map((p) => p.file), ...examples, "apps/dock/src/web/docs.tsx"]) {
     assert.doesNotMatch(read(file), /@apc\//, `${file} still names @apc/`);
   }
-  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server @modelcontextprotocol/);
-  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance https:\/\/\S+ --grant /);
-  // No install line on a dist-tag (TIN-914): both tags carry the same release, and the minor version is the standard's.
+  assert.match(read("apps/dock/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server@1\.0\.0 @modelcontextprotocol/);
+  assert.match(read("apps/dock/src/docs/pages/conformance.md"), /npx @tineira\/apc-conformance@1\.0\.0 https:\/\/\S+ --grant /);
+  // Install instructions do not depend on the manually managed npm dist-tags.
   for (const file of ["apps/dock/src/docs/pages/integrate.md", "apps/dock/src/docs/pages/conformance.md", "README.md", ...["protocol", "server", "web", "conformance"].map((p) => `packages/${p}/README.md`)]) {
     assert.doesNotMatch(read(file), /@tineira\/apc-[a-z]+@next/, `${file} still installs @next`);
   }
 });
 
-test("the docs page has a source for every page, and says on every page that the standard is a draft", () => {
+test("the docs page has a source for every page, and the static and React banners state the frozen standard", () => {
   const docs = read("apps/dock/src/web/docs.tsx");
   for (const { path } of DOC_PAGES) assert.match(docs, new RegExp(`"${path}": \\w+,`), `${path} has no source in docs.tsx`);
-  assert.match(docs, /<b>Draft\.<\/b> The APC standard is at \{APC_STANDARD_VERSION\}, a 0\.x draft/);
+  assert.match(docs, /<b>APC \{APC_STANDARD_VERSION\}\.<\/b> The standard is frozen and changes only by the/);
+  const page = DOC_PAGES[0]!;
+  const html = docPageHtml(page, read(page.file), {});
+  assert.match(html, /<b>APC 1\.0\.0\.<\/b> The standard is frozen and changes only by the/);
+  assert.doesNotMatch(html, /docs-draft|a 0\.x draft/);
   assert.match(docs, /CC BY 4\.0/);
 });
 

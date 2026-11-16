@@ -181,6 +181,10 @@ enablePinning({
  * dock took the code, the row says it is connecting.
  */
 const waiting = document.querySelector<HTMLElement>("#waiting") ?? document.body.appendChild(document.createElement("div"));
+// Keep the latest drop's outcome outside the waiting rows: refresh and the countdown redraw those rows.
+const dropMessage = document.createElement("p");
+dropMessage.setAttribute("role", "status");
+waiting.before(dropMessage);
 /** A drop that paired but could not pin its target (the server's `pin_error`), by grant: its row says so. */
 const pinErrors = new Map<string, string>();
 let waitingRows: AgentRow[] = [];
@@ -211,19 +215,24 @@ setInterval(() => waitingRows.some((a) => a.waiting === "code") && showWaiting()
 onRefresh.push(showWaiting);
 
 /**
- * Fallback consent when a pre-0.13 hub does not implement `/apc/connect` (`consent_required` with a nonce and a
- * pairing code); their Allow sends the nonce back, and their dock then asks for the code. A refusal says why:
- * `hub_not_allowed` (a dock this app does not pair with), `consent_expired`, `pairing_in_progress`.
+ * The server requests Connect in the dock for an unlinked agent; consent runs only on /connect/dock.
+ * Existing pairings confirm and pin. A refusal never opens a consent card on the drop page.
  */
-async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget, consent?: string): Promise<void> {
-  const answer = await post("/api/drop", { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target, consent });
-  if (answer.ok === true && answer.status === "connect_requested") { waiting.textContent = "Confirm in your dock"; return; }
-  if (answer.error === "ticket_not_for_pairing") { waiting.textContent = "Drop the agent again, then confirm in your dock."; return; }
-  if (answer.error === "consent_required" && typeof answer.consent === "string" && typeof answer.pairing_code === "string") {
-    const host = new URL(drag.hub).host;
-    if (confirm(`Let your agent from the dock at ${host} read Orders? After OK, your dock asks for this code: ${formatPairingCode(answer.pairing_code)}. Type it only in your own dock; never give it to anyone.`)) await dropFromDock(drag, target, answer.consent);
+async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, target: FocusTarget): Promise<void> {
+  const answer = await post("/api/drop", { hub: drag.hub, agent: drag.agent, ticket: drag.ticket, target });
+  if (answer.ok === true && answer.status === "connect_requested") { dropMessage.textContent = "Confirm in your dock"; return; }
+  if (answer.ok !== true) {
+    const messages: Record<string, string> = {
+      not_found: "Your dock cannot take a connection request and may be too old for Connect. Update your dock, then drop the agent again.",
+      ticket_not_for_pairing: "Drop the agent again, then confirm in your dock.",
+      hub_refused: "Your dock refused the connection request. Check your dock, then try again.",
+      too_many_requests: "Your dock has too many pending requests. Answer one in your dock, then drop the agent again.",
+      hub_not_allowed: "Orders does not pair with that dock. Use a dock allowed by Orders.",
+    };
+    dropMessage.textContent = messages[String(answer.error)] ?? "Orders could not connect to your dock. Check your dock, then drop the agent again.";
     return;
   }
+  dropMessage.textContent = "";
   // Paired, but the pin on the drop's target failed: the waiting row says so.
   if (answer.ok === true && typeof answer.grant_id === "string" && typeof answer.pin_error === "string") pinErrors.set(answer.grant_id, answer.pin_error);
   await refresh();

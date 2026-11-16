@@ -361,12 +361,8 @@ export class Feed extends DurableObject<Env> {
   }
 
   /**
-   * The person dropped an agent from a dock here (DESIGN.md 12.1, as in Pulse's v2): a grant for it,
-   * handed to the dock's hub server to server with the drag's ticket, and the pin. An agent Signals holds
-   * no grant for gets one only with the person's yes on this page, checked here (APC 0.7, TIN-606): the
-   * answer is `consent_required` with a nonce, and only a request that brings the nonce back pairs.
-   * Since APC 0.9 (TIN-859) the answer carries a pairing code too: the page shows it, the hub gets it with the
-   * grant (`pairWithHub`, which keeps the grant only if the hub says it keeps the code), and the dock's Allow needs it.
+   * A dock drop confirms an existing pairing or requests Connect in the dock. Only the owner's
+   * /connect/dock route asks for consent and takes its nonce to make a grant with a connect ticket.
    */
   async pairHub(sid: string, origin: string, raw: unknown, connect = false): Promise<PairHubAnswer> {
     if (!this.offers("dock")) return { ok: false, error: "not_available" };
@@ -390,8 +386,8 @@ export class Feed extends DurableObject<Env> {
   }
 
   private async pairHubOnce(sid: string, origin: string, hub: string, agent: string, ticket: string, target: unknown, consent: unknown, connect: boolean): Promise<PairHubAnswer> {
-    // Consent belongs to this ticket and this entry point. Only a real 404 can ask on the drop path.
-    const scope = `${agent} ${ticket} ${connect ? "connect" : "fallback"}`;
+    // Only the Connect page can ask for consent, bound to this ticket.
+    const scope = `${agent} ${ticket} connect`;
     const kv = sqlKv(this.sql);
     const targetKey = `connect-target:${hub} ${agent}`;
     if (connect && target === undefined) {
@@ -402,7 +398,7 @@ export class Feed extends DurableObject<Env> {
     }
     const requestFirst = async (): Promise<PairHubAnswer> => {
       const answer = await requestConnect(hub, { ticket, agent, app: { origin } }, hubCallOptions(this.env));
-      if (!answer.ok) return "legacyAbsent" in answer && answer.legacyAbsent ? askFirst() : answer;
+      if (!answer.ok) return { ok: false, error: answer.error };
       kv.put(targetKey, JSON.stringify({ target, at: Date.now() }));
       return { ok: true, status: "connect_requested" };
     };
@@ -411,7 +407,7 @@ export class Feed extends DurableObject<Env> {
       const asked = this.consent.ask(hub, scope);
       // This consent replaces any older one for the same dock and agent: only its nonce pairs from now on.
       this.sql.exec("insert into dock_consents (hub, agent, nonce) values (?, ?, ?) on conflict(hub, agent) do update set nonce = excluded.nonce", hub, agent, asked.nonce);
-      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code, ...(connect && linked ? { replaces: true } : {}) };
+      return { ok: false, error: CONSENT_REQUIRED, consent: asked.nonce, pairing_code: asked.pairing_code, ...(linked ? { replaces: true } : {}) };
     };
     const pinNote = (pinned: { ok: boolean; error?: string }) => (pinned.ok ? {} : { pin_error: pinned.error ?? "pin_failed" });
     this.sweepDock();
@@ -435,7 +431,7 @@ export class Feed extends DurableObject<Env> {
       const now = this.grants().find((g) => g.secret === linked.secret) ?? null;
       if (!check.ok) {
         if (check.error !== "not_paired") return { ok: false, error: check.error };
-        // The dock no longer pairs them: the grant ends, and the ticket is still good, so the person can say yes here and pair at once.
+        // The dock no longer pairs them: end the grant and request Connect with the unspent ticket.
         if (now) this.endDockGrant(now.id);
         return requestFirst();
       }
@@ -461,24 +457,23 @@ export class Feed extends DurableObject<Env> {
       }
       return { ...(await this.pin(now.id, target)), grant_id: now.id, status: check.status };
     }
-    // No grant for this agent: one is made only with the person's yes on this page, proven by the nonce it was shown with.
+    // A drop can only request Connect, even if it carries a nonce from the Connect page.
+    if (!connect) return requestFirst();
+    // Only the Connect page makes a grant, with the nonce proving consent there.
     const { id, secret, created_at } = newDirectGrant();
     // Before anything is written: the secret's hash, which the grant keeps for a give-back and for Cancel.
     const hash = await secretHash(secret);
-    if (!connect && linkOf()) return { ok: false, error: "pairing_in_progress" };
-    // A drop (no nonce) is asked, and its consent replaces the one before. An Allow on a consent a newer drop
-    // replaced is refused before the nonce is looked at: one pending consent per dock and agent.
-    if (consent === undefined || consent === null) return connect ? askFirst() : requestFirst();
+    // A Connect visit asks anew. Only its newest consent can authorize the Allow.
+    if (consent === undefined || consent === null) return askFirst();
     // Used or not, a nonce that was sent goes: it works once.
     if (this.latestConsent(hub, agent) !== consent) return (this.consent.takeConsent(consent, hub, scope), { ok: false, error: "consent_expired" });
     const taken = this.consent.takeConsent(consent, hub, scope);
     this.sql.exec("delete from dock_consents where hub = ? and agent = ?", hub, agent);
-    // A drop (no nonce) is asked. An Allow whose nonce does not take (used, timed out, another agent's) fails closed
-    // (APC 0.10, `consent_expired`): the person drags the agent again, and that drop is asked anew.
+    // A used, timed-out or mismatched Connect nonce fails closed.
     if (!taken.ok) return { ok: false, error: "consent_expired" };
     // A re-Connect replaces an existing grant only after the hub acknowledges the new pairing, so a refused
     // call leaves the working grant untouched. While replacing, grants still holds the unique (hub, agent) row.
-    const replacing = connect ? linkOf() : null;
+    const replacing = linkOf();
     const allowedAt = this.dockNow();
     if (!replacing) {
       // In flight (APC 0.10): the grant exists before the hub hears of it, and answers 404 to everything until the

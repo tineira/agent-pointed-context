@@ -64,7 +64,7 @@ function fakeHub(t: TestContext) {
   const hub = {
     pair: async (_body: Json): Promise<Response> => Response.json(ACK),
     confirm: async (_body: Json): Promise<Response> => Response.json({ ok: true, status: "pending", agent: { name: "Agent via dock", icon: null } }),
-    connect: undefined as undefined | ((_body: Json) => Promise<Response>),
+    connect: async (_body: Json): Promise<Response> => Response.json({ ok: true, status: "connect_requested" }),
     calls: [] as string[],
     sent: [] as Json[],
   };
@@ -72,8 +72,6 @@ function fakeHub(t: TestContext) {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== HUB) throw new TypeError(`no network in this test: ${url}`);
-    // Legacy lifecycle checks model a 0.12 hub unless hub.connect is configured.
-    if (url.pathname === "/apc/connect" && !hub.connect) return Response.json({ error: "not_found" }, { status: 404 });
     hub.calls.push(url.pathname);
     const body = (await request.json()) as Json;
     hub.sent.push(body);
@@ -150,9 +148,9 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
   /** A new agent dropped and Allowed: the grant, the MCP URL the hub was sent, and the code the consent showed. */
   const allow = async (i: Instance, hub: ReturnType<typeof fakeHub>, agent: string, target: Json = app.targets[0]) => {
     const drop = { hub: HUB, agent, ticket: ticket(), target };
-    const asked = await i.object.pairHub(SID, app.origin, drop);
+    const asked = await i.object.pairHub(SID, app.origin, drop, true);
     assert.equal(asked.error, "consent_required");
-    const answer = await i.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent });
+    const answer = await i.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent }, true);
     const sent = hub.sent.filter((b) => b.agent === agent && typeof b.pairing_code === "string").at(-1);
     return { drop, asked, answer, grantId: answer.grant_id ?? "", mcpUrl: String(sent?.mcp_url ?? ""), code: String(asked.pairing_code) };
   };
@@ -167,8 +165,8 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
       return Response.json(ACK);
     };
     const drop = { hub: HUB, agent, ticket: ticket(), target: app.targets[0] };
-    const consent = await i.object.pairHub(SID, app.origin, drop);
-    const answer = i.object.pairHub(SID, app.origin, { ...drop, consent: consent.consent });
+    const consent = await i.object.pairHub(SID, app.origin, drop, true);
+    const answer = i.object.pairHub(SID, app.origin, { ...drop, consent: consent.consent }, true);
     await asked;
     const mcpUrl = String(hub.sent.at(-1)!.mcp_url);
     const grantId = app.grantIds(await i.object.state()).at(-1)!;
@@ -301,10 +299,10 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.equal((await i.initialize(g.mcpUrl)).status, 404, "initialize, past T_connect");
     assert.equal((await i.rpc(g.mcpUrl, { jsonrpc: "2.0", method: "notifications/initialized" })).status, 404);
     assert.deepEqual(app.grantIds(await i.object.state()), [], "the page lists it no more");
-    // The next drop of that agent asks the person again; the hub is not asked about a grant that ended.
+    // The next drop requests Connect again, without confirming a grant that ended.
     const before = hub.calls.length;
-    assert.equal((await i.object.pairHub(SID, app.origin, { hub: HUB, agent: "ag_connect", ticket: ticket(), target: app.targets[0] })).error, "consent_required");
-    assert.equal(hub.calls.length, before);
+    assert.equal((await i.object.pairHub(SID, app.origin, { hub: HUB, agent: "ag_connect", ticket: ticket(), target: app.targets[0] })).status, "connect_requested");
+    assert.deepEqual(hub.calls.slice(before), ["/apc/connect"]);
   });
 
   test(name(`T_ack: a grant still in flight ${T_ACK_MAX_MS / 1000} s after the Allow ends, whatever the hub then answers`), async (t) => {
@@ -335,7 +333,7 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     after.set(held.grantId, "allowed_at", Date.now() - T_ACK_MAX_MS - 1);
     assert.equal((await after.initialize(held.mcpUrl)).status, 404);
     assert.deepEqual(app.grantIds(await after.object.state()), []);
-    assert.equal((await after.object.pairHub(SID, app.origin, drop)).error, "consent_required");
+    assert.equal((await after.object.pairHub(SID, app.origin, drop)).status, "connect_requested");
     held.open();
     await held.answer;
   });
@@ -453,16 +451,16 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     const hub = fakeHub(t);
     const i = await start();
     const drop = { hub: HUB, agent: "ag_m1_allow", ticket: ticket(), target: app.targets[0] };
-    const asked = await i.object.pairHub(SID, app.origin, drop);
+    const asked = await i.object.pairHub(SID, app.origin, drop, true);
     assert.equal(asked.error, "consent_required");
     // The operator takes the hub off the list: the consent the page still shows pairs nothing.
     const after = i.restart({ ...app.env, HUB_ORIGINS: "https://other-dock.test" });
-    assert.deepEqual(await after.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent }), { ok: false, error: "hub_not_allowed" });
+    assert.deepEqual(await after.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent }, true), { ok: false, error: "hub_not_allowed" });
     assert.deepEqual(hub.calls, []);
     assert.deepEqual(app.grantIds(await after.object.state()), []);
     // With no hub left at all, the app does not offer the Dock profile.
     const none = i.restart({ ...app.env, HUB_ORIGINS: "" });
-    assert.deepEqual(await none.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent }), { ok: false, error: "not_available" });
+    assert.deepEqual(await none.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent }, true), { ok: false, error: "not_available" });
   });
 
   // ---- section 4: one pending pairing ----
@@ -471,15 +469,15 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     const hub = fakeHub(t);
     const i = await start();
     const drop = { hub: HUB, agent: "ag_stale", ticket: ticket(), target: app.targets[0] };
-    const asked = await i.object.pairHub(SID, app.origin, drop);
-    const other = await i.object.pairHub(SID, app.origin, { ...drop, agent: "ag_other" });
+    const asked = await i.object.pairHub(SID, app.origin, drop, true);
+    const other = await i.object.pairHub(SID, app.origin, { ...drop, agent: "ag_other" }, true);
     for (const consent of [`cn_${"0".repeat(32)}`, "not-a-nonce", 7, other.consent]) {
-      assert.deepEqual(await i.object.pairHub(SID, app.origin, { ...drop, consent }), { ok: false, error: "consent_expired" }, String(consent));
+      assert.deepEqual(await i.object.pairHub(SID, app.origin, { ...drop, consent }, true), { ok: false, error: "consent_expired" }, String(consent));
     }
     assert.deepEqual(hub.calls, []);
     assert.deepEqual(app.grantIds(await i.object.state()), []);
     // The real nonce still pairs, once; sent again it finds the grant in handoff and asks the hub, never a second grant.
-    assert.equal((await i.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent })).ok, true);
+    assert.equal((await i.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent }, true)).ok, true);
     const again = await i.object.pairHub(SID, app.origin, { ...drop, ticket: ticket(), consent: asked.consent });
     assert.equal(again.status, "pending");
     assert.deepEqual(hub.calls, ["/apc/pair", "/apc/confirm"]);
@@ -503,15 +501,15 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.deepEqual((await i.link(g.grantId))?.pairing, first, "and the page's card shows it");
   });
 
-  test(name("a second drop the hub answers not_paired, or one past the stored expiry, ends the grant and asks again with a new code"), async (t) => {
+  test(name("a second drop the hub answers not_paired, or one past the stored expiry, ends the grant and requests Connect again"), async (t) => {
     const hub = fakeHub(t);
     const i = await start();
     // not_paired: the dock dropped the request (denied, expired there, tombstoned).
     const a = await allow(i, hub, "ag_np");
     hub.confirm = async () => Response.json({ ok: false, error: "not_paired" }, { status: 400 });
     const asked = await i.object.pairHub(SID, app.origin, { hub: HUB, agent: "ag_np", ticket: ticket(), target: app.targets[0] });
-    assert.equal(asked.error, "consent_required");
-    assert.notEqual(asked.pairing_code, a.code, "a fresh consent shows a new code");
+    assert.equal(asked.status, "connect_requested");
+    assert.equal(asked.consent, undefined, "the drop cannot ask for consent");
     assert.equal((await i.initialize(a.mcpUrl)).status, 404, "the old grant ended");
     // Still pending at the hub, but the app's own stored expiry has passed: the same end.
     hub.confirm = async () => Response.json({ ok: true, status: "pending", agent: { name: null, icon: null } });
@@ -519,7 +517,7 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.equal(b.answer.ok, true, b.answer.error);
     i.set(b.grantId, "pairing_expires_at", new Date(Date.now() - 1000).toISOString());
     const late = await i.object.pairHub(SID, app.origin, { hub: HUB, agent: "ag_late", ticket: ticket(), target: app.targets[0] });
-    assert.equal(late.error, "consent_required");
+    assert.equal(late.status, "connect_requested");
     assert.equal((await i.initialize(b.mcpUrl)).status, 404);
     assert.deepEqual(app.grantIds(await i.object.state()), []);
   });
@@ -865,7 +863,7 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     }
   });
 
-  // ---- APC 0.13: Connect first, 404 fallback, dock_connect page & manifest ----
+  // ---- APC 0.13: Connect first, 404 refusal, dock_connect page & manifest ----
 
   test(name("0.13: drop with no link calls requestConnect (never /apc/pair or consent), and drop on a linked agent still confirms"), async (t) => {
     const hub = fakeHub(t);
@@ -888,7 +886,7 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
     assert.equal(hub.calls.at(-1), "/apc/confirm");
   });
 
-  test(name("0.13: only 404 not_found falls back to 0.12 consent and /apc/pair, where ticket_not_for_pairing asks to drop again; non-404 refuses directly"), async (t) => {
+  test(name("1.0: a missing /apc/connect and other hub refusals never offer drop-time consent"), async (t) => {
     const hub = fakeHub(t);
     hub.connect = async () => Response.json({ ok: false, error: "too_many_requests" }, { status: 400 });
     const i = await start();
@@ -907,16 +905,17 @@ export function dockLifecycleTests(app: DockAppUnderTest): void {
       assert.equal(hub.calls.includes("/apc/pair"), false, "a refusal never pairs or falls back");
     }
 
-    // 404 not_found triggers the 0.12 fallback path, then Allow calls /apc/pair with the drop ticket.
+    // Even the exact legacy 404 is a refusal. A Connect-page nonce cannot authorize a drop-time Allow.
     hub.connect = async () => Response.json({ error: "not_found" }, { status: 404 });
-    const asked = await i.object.pairHub(SID, app.origin, drop);
+    const on = { ...drop, ticket: ticket() };
+    const asked = await i.object.pairHub(SID, app.origin, on, true);
     assert.equal(asked.error, "consent_required");
-    assert.equal(typeof asked.consent, "string");
-    hub.pair = async () => Response.json({ ok: false, error: "ticket_not_for_pairing" }, { status: 400 });
-    const refused = await i.object.pairHub(SID, app.origin, { ...drop, consent: asked.consent });
-    assert.deepEqual(refused, { ok: false, error: "ticket_not_for_pairing" });
-    assert.equal(hub.sent.at(-1)?.ticket, drop.ticket, "fallback Allow sends the drop ticket to /apc/pair");
-    assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0, "in-flight grant is removed on refusal");
+    for (const body of [drop, { ...on, consent: asked.consent }]) {
+      assert.deepEqual(await i.object.pairHub(SID, app.origin, body), { ok: false, error: "not_found" });
+    }
+    assert.equal(hub.calls.includes("/apc/pair"), false, "a missing Connect route never pairs on drop");
+    assert.equal(((await i.object.state()) as { grants: unknown[] }).grants.length, 0);
+
   });
 
   test(name("0.13: a refused re-Connect leaves the working grant serving; the consent says it replaces it, and only an acknowledged one does"), async (t) => {

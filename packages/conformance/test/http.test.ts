@@ -319,7 +319,7 @@ test("an app whose grants share one URL and a bearer token passes with --bearer,
   await assert.rejects(runHttpConformance({ origin: ORIGIN, grant: SHARED, bearer: "two words", fetch }), HttpConformanceUsageError);
 });
 
-test("a newer patch of the checks' own standard passes with a note; a newer minor fails", async () => {
+test("a newer patch or minor of the checks' own 1.x standard passes with a note", async () => {
   const [major, minor, patch] = APC_STANDARD_VERSION.split(".").map(Number) as [number, number, number];
   const manifest = (standard: string) => ({ name: "Fake", standard, origin: ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/" }, direct: { connect: `${ORIGIN}/?connect` } });
   const nextPatch = `${major}.${minor}.${patch + 1}`;
@@ -328,7 +328,8 @@ test("a newer patch of the checks' own standard passes with a note; a newer mino
   assert.equal(result.status, "pass", result.detail);
   assert.match(result.note ?? "", /newer patch .* never changes the contract/);
   const nextMinor = await run({ manifest: manifest(`${major}.${minor + 1}.0`) });
-  assert.equal(status(nextMinor, "apc-json-standard"), "fail");
+  assert.equal(status(nextMinor, "apc-json-standard"), "pass");
+  assert.match(nextMinor.results.find((r) => r.id === "apc-json-standard")!.note ?? "", /newer minor .* checked by .* rules/);
   assert.equal(status(await run({ manifest: manifest(APC_STANDARD_VERSION) }), "apc-json-standard"), "pass");
 
   assert.deepEqual(standardSupport("0.7.0", "0.7.1"), { ok: true });

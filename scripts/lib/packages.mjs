@@ -4,7 +4,7 @@
 /** The packages published to npm, in build order (protocol first: the others import it). */
 export const PACKAGES = ["protocol", "server", "web", "conformance"];
 
-/** The dist-tag every pre-release goes out on; `latest` waits for 1.0. */
+/** Publishing uses `next`; Tomas moves npm dist-tags by hand. */
 export const DIST_TAG = "next";
 
 /**
@@ -54,8 +54,8 @@ export function standardVersionOf(source) {
 
 /**
  * The versions agree: every package has the same version, it is a version of the standard (same major and
- * minor as `APC_STANDARD_VERSION`, a patch at least the standard's: 0.7.x ships the 0.7 contract), it stays
- * under 1.0 (pre-releases go out on `next`), and a release tag, when given, is `apc-v<that version>`.
+ * minor as `APC_STANDARD_VERSION`, a patch at least the standard's: 0.7.x ships the 0.7 contract),
+ * and a release tag, when given, is `apc-v<that version>`.
  * @param {{ manifests: Array<{ name: string; version: string }>; standard: string | null; tag?: string }} input
  * @returns {{ ok: boolean; version: string | null; problems: string[] }}
  */
@@ -72,7 +72,6 @@ export function checkVersions({ manifests, standard, tag }) {
     else if (!s) problems.push(`APC_STANDARD_VERSION ${standard} is not a semver version`);
     else {
       if (v[1] !== s[1] || v[2] !== s[2] || Number(v[3]) < Number(s[3])) problems.push(`the packages are ${version} but the standard is ${standard}: they ship ${s[1]}.${s[2]}.x from ${standard} on`);
-      if (Number(v[1]) >= 1) problems.push(`${version} is 1.0 or later: the packages stay 0.x on the "${DIST_TAG}" tag until the standard is published`);
     }
   }
   if (tag !== undefined && version && tag !== `apc-v${version}`) problems.push(`the tag is ${tag}, but the packages are ${version}: tag apc-v${version}`);

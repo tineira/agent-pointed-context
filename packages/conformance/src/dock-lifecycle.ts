@@ -16,7 +16,8 @@
  * - **The hub call** (M1 to M5, M9; M2 to M4 on `/apc/pair` and `/apc/confirm`) through the stand-in hub, **the
  *   owner's endpoints** (M6, the configured origin, look-alike origins and a WebSocket heartbeat included), **the
  *   give-back** (M7), **`apc.json` with pairing disabled** (M8), **the code only in `/apc/pair`**, and **one pending
- *   pairing** (the spec's § "One pending pairing").
+ *   pairing** (the spec's § "One pending pairing"). **The binding** (M10 to M12), **origin-bound Connect**
+ *   (M13), and, for 1.0 claims, refusal of a missing Connect route.
  *
  * The hub call's own deadline (M3) runs on the real clock: `advance` moves the app's limits, not its timers. After
  * each check the suite gives back (`/apc/revoke`) every grant the stand-in hub received a pairing for meanwhile.
@@ -1604,6 +1605,44 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       expect(sent, `no /apc/connect body for agent ${freshAgent} was received`);
       const appInfo = sent.app as { origin?: unknown } | undefined;
       expect(appInfo?.origin === life.owner.origin, `/apc/connect sent app.origin=${JSON.stringify(appInfo?.origin)}, expected ${life.owner.origin}`);
+    }),
+
+    checkSince("1.0.0", "1.0", "removal of the Connect fallback", "M13: a missing /apc/connect route refuses the drop, even with a valid Connect consent nonce", async (life, d) => {
+      expect(typeof life.readDropResponse === "function", "the app claims 1.0.0 or later: give dock.lifecycle.readDropResponse in the adapter to read the private drop response");
+      const hub = d.hub;
+      const savedMode = hub.mode;
+      try {
+        hub.mode = "connect_not_found";
+        const before = hub.requests.length;
+        const outcome = await drop(life, d, newAgent());
+        expect(outcome.page === "refused", `HTTP 404 {"error":"not_found"} on /apc/connect must refuse without consent or a grant, got page=${outcome.page}`);
+        expect(hub.requests.slice(before).includes(`${hub.origin}/apc/connect`), "the refused first drop did not call /apc/connect");
+        expect(!hub.requests.slice(before).some((url) => new URL(url).pathname === "/apc/pair"), "the refused first drop called /apc/pair");
+
+        // Prepare a real, unused Connect consent, then replay its Allow body on the drop route.
+        // This must still request Connect: a valid nonce cannot turn a drop into a Connect Allow.
+        hub.mode = "ack";
+        const allow = await life.owner.allow.body();
+        expect(isObject(allow), "owner.allow.body() must provide a valid Connect Allow body");
+        const prepared = hub.connectReceived.at(-1);
+        expect(prepared && typeof prepared.agent === "string", "preparing the Connect consent did not call /apc/connect");
+        hub.mode = "connect_not_found";
+        const beforeNonce = hub.requests.length;
+        const body = { hub: hub.origin, agent: prepared.agent, ...allow };
+        const response = await fetchApp(new Request(new URL(life.owner.drop.path, life.owner.origin), {
+          method: "POST",
+          headers: { ...life.owner.session, "content-type": "application/json", origin: life.owner.origin, "sec-fetch-site": "same-origin" },
+          body: JSON.stringify(body),
+        }));
+        // The adapter describes the page's outcome; the standard does not prescribe this private endpoint's JSON.
+        const answer = await life.readDropResponse!(response, body);
+        expect(answer.page === "refused",
+          "a drop carrying a valid Connect nonce must refuse without consent, a code or a grant");
+        expect(hub.requests.slice(beforeNonce).includes(`${hub.origin}/apc/connect`), "a drop carrying a valid Connect nonce bypassed /apc/connect");
+        expect(!hub.requests.slice(beforeNonce).some((url) => new URL(url).pathname === "/apc/pair"), "a drop carrying a valid Connect nonce called /apc/pair");
+      } finally {
+        hub.mode = savedMode;
+      }
     }),
   ];
 }

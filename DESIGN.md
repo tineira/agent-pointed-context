@@ -1013,7 +1013,7 @@ The 1.0 review asked what the contract is, what a change to it may do, and what 
 **What the contract is.** Everything one party relies on from another party it did not build:
 
 - the wire formats: the focus format and the drag payload; the core tools, their inputs and results, error codes included; `apc.json`, `mcp.endpoints` included; the presence channel and its events, wait events included;
-- the Dock profile's protocol: `/apc/pair`, `/apc/confirm` and `/apc/revoke`, the pairing code, the binding, the grant states and what each answers, the hub's duties (H1 to H8) and the app's (M1 to M12);
+- the Dock profile's protocol: `/apc/pair`, `/apc/confirm` and `/apc/revoke`, the pairing code, the binding, the grant states and what each answers, the hub's duties (H1 to H10) and the app's (M1 to M13);
 - the Direct profile: the grant requirements and the bearer and secret-URL answers; `apc_link`;
 - every MUST and SHOULD in the spec.
 
@@ -1031,7 +1031,7 @@ It is **not**: presentation (the pet, the cards, badges, wording and motion, whi
 
 **Coexistence.** The reference hub serves the current major and the previous one, the previous one for at least 12 months after a new major ships.
 
-**Apps on 0.x when 1.0 ships.** 1.0 is 0.12 frozen under the number 1.0: an app on 0.12 claims 1.0 by changing only `standard`. Apps that claim 0.10 or 0.11 keep working with a 1.x hub for at least 6 months after 1.0 (and, by the 0.12 binding's own window, at least until 2027-05-14). The hub may show them as made for an older version and refuses nothing on that claim; it counts the claims, to know when the window can close, and enforces nothing. Apps below 0.10 are not supported by a 1.0 hub; none of the known adopters is (Autio, Surplus, Pulse and Signals are on 0.11). 0.10 is the floor because it is the first version with the grant states and the hub's and app's duties that 1.0 keeps.
+**Apps on 0.x when 1.0 ships.** 1.0 is 0.13 frozen under the number 1.0: an app on 0.13 claims 1.0 by changing only `standard`, once it has dropped the temporary 0.12 fallback, which 1.0.0 ends. The origin-bound first-pairing cut (§ 28) moved that floor from 0.12: new Dock first pairing requires 0.13 regardless of the app's claim, while existing pairings claiming 0.10 to 0.12 keep confirming and relaying with a 1.x hub for at least 6 months after 1.0 (and, by the 0.12 binding's own window, at least until 2027-05-14). The hub counts claims to know when the window can close. Apps below 0.10 are not supported by a 1.0 hub; none of the known adopters is (Autio is on 0.11.1, Surplus on 0.13.0, and the reference apps Pulse and Signals move to 1.0.0). 0.10 is the existing-pairing floor because it is the first version with the grant states and the hub's and app's duties that 1.0 keeps.
 
 **Deprecation, normative from 1.0.** Marked deprecated in a minor release (in the changelog and the spec), then kept for at least one more minor **and** 3 months, whichever is longer, before a major removes it. A security fix may shorten the window; the changelog says why, and the conformance suite gets the check in the same release.
 
