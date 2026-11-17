@@ -8,15 +8,15 @@ The server is plain Web standard `Request` and `Response`, so it runs on Node, D
 
 ## 1. Install
 
-The packages are released together at the standard's version (`APC_STANDARD_VERSION`, which the banner above names). A patch never changes the contract. Install all four at the same version; these commands select 1.1.0 explicitly, independently of npm dist-tags.
+The packages are released together at the standard's version (`APC_STANDARD_VERSION`, which the banner above names). A patch never changes the contract. Install all four at the same version; these commands select 1.1.1 explicitly, independently of npm dist-tags.
 
 ```sh
-npm i @tineira/apc-server@1.1.0 @modelcontextprotocol/sdk zod       # the server (the SDK and zod are peers)
-npm i @tineira/apc-protocol@1.1.0 @tineira/apc-web@1.1.0  # the page
-npm i -D @tineira/apc-conformance@1.1.0                    # the tests
+npm i @tineira/apc-server@1.1.1 @modelcontextprotocol/sdk zod       # the server (the SDK and zod are peers)
+npm i @tineira/apc-protocol@1.1.1 @tineira/apc-web@1.1.1  # the page
+npm i -D @tineira/apc-conformance@1.1.1                    # the tests
 ```
 
-Use these commands for the 1.1.0 release. The sources are also in the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
+Use these commands for the 1.1.1 release. The sources are also in the repo: [`packages/protocol`](https://github.com/tineira/agent-pointed-context/tree/main/packages/protocol), [`packages/server`](https://github.com/tineira/agent-pointed-context/tree/main/packages/server), [`packages/web`](https://github.com/tineira/agent-pointed-context/tree/main/packages/web) and [`packages/conformance`](https://github.com/tineira/agent-pointed-context/tree/main/packages/conformance), small enough to add to your workspace or copy.
 
 They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-web` have no Node imports (`@tineira/apc-web` is browser code for any bundler); `@tineira/apc-server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@tineira/apc-conformance` needs Node 22.15+.
 
@@ -256,7 +256,7 @@ The conformance test: `connect` gives each agent's token in `headers`, and `page
 Over HTTP, with the app running: make two agents, revoke one in the page, then run the command line once with the live one and the revoked one (see [Conformance](/docs/conformance#run-it-from-the-command-line)):
 
 ```sh
-APC_TOKEN=… APC_REVOKED_TOKEN=… npx @tineira/apc-conformance@1.1.0 https://tickets.example --grant https://tickets.example/mcp --bearer-env APC_TOKEN --revoked https://tickets.example/mcp --revoked-bearer-env APC_REVOKED_TOKEN
+APC_TOKEN=… APC_REVOKED_TOKEN=… npx @tineira/apc-conformance@1.1.1 https://tickets.example --grant https://tickets.example/mcp --bearer-env APC_TOKEN --revoked https://tickets.example/mcp --revoked-bearer-env APC_REVOKED_TOKEN
 ```
 
 ## Localize the page
