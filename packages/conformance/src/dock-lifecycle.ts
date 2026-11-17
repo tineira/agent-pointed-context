@@ -1452,7 +1452,7 @@ export function dockLifecycleChecks(app: ApcAppAdapter, dock: ApcDockAdapter | u
       expect(posted.status === 200 && pairing, "the stand-in hub took the request with its owner-approved ticket (it checks no mcp_url coverage)");
       const decided = await d.hub.decide(pairing.id, "approve", "K7M4P2");
       expect(decided.ok, `the stand-in hub did not approve: ${decided.error}`);
-      expect(pairing.status === "refused", `the hub's introduction (initialize naming a pairing) on a Direct grant was served: the pairing is ${pairing.status}. A grant that is not a Dock grant refuses it (HTTP 404, or any refusal: 401 for a bearer grant)`);
+      expect(pairing.status === "refused", `the hub's introduction (initialize naming a pairing) on a Direct grant was served: the pairing is ${pairing.status}. At an app implementing Dock or still serving any Dock grant, every non-Dock grant, including a Direct grant, refuses it regardless of current pairability (HTTP 404, or any refusal: 401 for a bearer grant)`);
       // A hub sends tools/list once its introduction is served (the stand-in does): a refused one gets nothing more.
       expect(pairing.calls.every((c) => c === "initialize"), `the hub sent ${pairing.calls.join(", ")} to the Direct grant: its introduction was served`);
       for (const [label, body] of [

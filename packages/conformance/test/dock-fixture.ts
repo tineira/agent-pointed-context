@@ -760,7 +760,10 @@ class Fixture {
     return { grantId: g.id, mcpUrl: this.urlOf(g) };
   }
 
-  /** M12: a hub's introduction (an initialize with a binding key) to a grant that is not a Dock grant: 404, first. */
+  /**
+   * M12 at an app implementing Dock or still serving any Dock grant: every non-Dock grant, Direct included,
+   * refuses a hub's introduction (an initialize with a binding key) with 404 first, regardless of current pairability.
+   */
   private async directMcp(request: Request, g: Grant): Promise<Response> {
     if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
     const body = (await request.json().catch(() => null)) as unknown;
