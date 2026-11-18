@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { checkChangelog, isDocs } from "../lib/changelog.mjs";
 
 const code = ["apps/dock/src/web/hub.tsx", "apps/dock/test/hub.test.ts"];
+
+test("the root changelog keeps entries below the Unreleased heading and its intro intact", () => {
+  const changelog = readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8");
+  const preamble = changelog.split(/^## Unreleased$/m)[0];
+  assert.doesNotMatch(preamble, /^- /m, "no entry may be spliced into the intro");
+  assert.match(preamble, /adds an entry under `## Unreleased`; see `AGENTS.md`\./);
+  assert.match(changelog, /^## Unreleased$/m, "the real section heading must exist");
+});
 
 test("a PR that changes code and no changelog fails", () => {
   const result = checkChangelog({ files: code, labels: [] });

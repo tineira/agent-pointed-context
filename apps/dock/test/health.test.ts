@@ -132,14 +132,16 @@ test("root forwarding strips credentials and preserves methods, conditional/Rang
     assert.equal(response.headers.get("content-range"), "bytes 0-9/100");
     assert.equal(response.headers.get("cache-control"), "public, max-age=0, must-revalidate");
     assert.equal(response.headers.get("etag"), '"site"');
-    assert.equal(response.headers.get("content-security-policy"), "site policy");
-    assert.equal(response.headers.get("x-frame-options"), "SAMEORIGIN");
+    assert.equal(response.headers.get("content-security-policy"), "frame-ancestors 'none'");
+    assert.equal(response.headers.get("x-frame-options"), "DENY");
     assert.equal(await response.text(), method === "HEAD" ? "" : "site bytes");
   }
   for (const status of [304, 405, 503]) {
     const response = await app.request("https://example.com/", {}, { SITE: { fetch: async () => new Response(null, { status, headers: { "cache-control": "no-store" } }) } });
     assert.equal(response.status, status);
     assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("content-security-policy"), "frame-ancestors 'none'");
+    assert.equal(response.headers.get("x-frame-options"), "DENY");
   }
 });
 

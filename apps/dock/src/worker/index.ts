@@ -30,7 +30,7 @@ export { JoinCodes } from "./join-codes.ts";
 
 const COOKIE = "apc_dock";
 type Stub = DurableObjectStub<Hub>;
-type Vars = { did: string; owner: string; siteResponse?: boolean };
+type Vars = { did: string; owner: string };
 
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
@@ -43,10 +43,10 @@ const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 const NO_FRAMING ={ "content-security-policy": "frame-ancestors 'none'", "x-frame-options": "DENY" } as const;
 app.use("*", async (c, next) => {
   await next();
-  if (c.res.status === 101 || c.get("siteResponse")) return;
-  const res = new Response(c.res.body, c.res);
-  for (const [k, v] of Object.entries(NO_FRAMING)) res.headers.set(k, v);
-  c.res = res;
+  if (c.res.status === 101) return;
+  c.res = new Response(c.res.body, c.res);
+  // Hono merges the previous headers in its response setter; enforce these after assigning it.
+  for (const [k, v] of Object.entries(NO_FRAMING)) c.res.headers.set(k, v);
 });
 
 /** A computer removed while its request ran (Hub.asOwner, TIN-909) is answered as one whose cookie no longer opens the dock. */
@@ -496,11 +496,10 @@ app.all("/", async (c) => {
     return c.redirect(`/dock${url.search}`, 302);
   }
   // The site needs no credentials. Keep method/body, query, Range, HEAD and conditional headers;
-  // return its streaming response unchanged, including status, cache and frame protection.
+  // preserve its streaming response, status and cache headers; middleware enforces Dock frame protection.
   const headers = new Headers(c.req.raw.headers);
   for (const name of ["cookie", "authorization", OWNER_HEADER]) headers.delete(name);
   const response = await c.env.SITE.fetch(new Request(c.req.raw, { headers }));
-  c.set("siteResponse", true);
   return response;
 });
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));

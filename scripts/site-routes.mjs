@@ -19,6 +19,10 @@ async function check(path, { status = 200, type = /text\/html/, body = /Agent Po
 }
 try {
   const landing = await check("/");
+  for (const path of ["/", "/try", "/docs"]) {
+    await check(path, { headers: { "sec-fetch-mode": "navigate" }, body: path === "/docs" ? /<article class="docs-body"><h1/ : /Agent Pointed Context/ });
+    rows[rows.length - 1] = rows.at(-1).replace(`GET ${path} |`, `GET ${path} (Sec-Fetch-Mode: navigate) |`);
+  }
   await check("/?start_over=1");
   await check("/?utm=site");
   for (const path of ["/try", "/try?ref=test", "/build", "/build/direct", "/build/dock", "/build/both"]) await check(path);

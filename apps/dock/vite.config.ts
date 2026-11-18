@@ -64,10 +64,25 @@ function extensionZip(): Plugin {
   };
 }
 
+/** Plain root links use the site's Vite namespace; start_over stays on the Dock ownership handler. */
+function siteLinks(): Plugin {
+  return {
+    name: "apc-dock-dev-site-links",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname !== "/" || url.searchParams.has("start_over") || !["GET", "HEAD"].includes(req.method ?? "GET")) return next();
+        res.writeHead(302, { location: `http://localhost:5202${req.url}` });
+        res.end();
+      });
+    },
+  };
+}
+
 // The Dock and hub build independently of the standard's site.
 export default defineConfig({
   // No inspector: Pulse's dev server holds port 9229 when the three apps run side by side.
-  plugins: [extensionZip(), react(), cloudflare({ inspectorPort: false })],
+  plugins: [siteLinks(), extensionZip(), react(), cloudflare({ inspectorPort: false })],
   define: { __APC_EXTENSION_LATEST__: JSON.stringify(latest) },
   server: { port: 5200, strictPort: true },
 });

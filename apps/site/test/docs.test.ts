@@ -1,8 +1,8 @@
 /**
  * The APC docs at /docs (TIN-611): the Markdown renderer, and a link check over every page as the site shows
  * it. Site links must name a docs page and a heading on it, or another page of the site; links into the repo
- * must name a file that exists; every included example region must exist. The landing and the extension page
- * link to the docs, and the dock's assets keep their frame protection.
+ * must name a file that exists; every included example region must exist. The landing links to the docs,
+ * and the site's assets keep their frame protection.
  */
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import assert from "node:assert/strict";
@@ -79,7 +79,7 @@ test("a link is only ever http(s), mailto, a site path, an anchor or a file in t
   ];
   for (const href of unsafe) assert.equal(resolveHref(href, "x/y.md"), null, JSON.stringify(href));
   // In a page, such a link is text: the link check reports it.
-  assert.deepEqual(brokenIn({ path: "/docs/x", file: "apps/dock/README.md" }, parseMarkdown("# T\n\n[x](javascript:alert%281%29) [y](data:,x)")), ["javascript:alert%281%29: unsafe link", "data:,x: unsafe link"]);
+  assert.deepEqual(brokenIn({ path: "/docs/x", file: "apps/site/README.md" }, parseMarkdown("# T\n\n[x](javascript:alert%281%29) [y](data:,x)")), ["javascript:alert%281%29: unsafe link", "data:,x: unsafe link"]);
 });
 
 test("an anchor a heading had before it was renamed still lands on it, with a script and without (TIN-913)", () => {
@@ -159,7 +159,7 @@ test("the link check finds what is broken", () => {
 <!-- include orders-app.ts#mcp -->
 <!-- include orders-app.ts#nope -->
 <!-- include nope.ts -->`;
-  assert.deepEqual(brokenIn({ path: "/docs/x", file: "apps/dock/README.md" }, parseMarkdown(md)), [
+  assert.deepEqual(brokenIn({ path: "/docs/x", file: "apps/site/README.md" }, parseMarkdown(md)), [
     "#nowhere: no such heading here",
     "/docs/spec#nope: no heading #nope on /docs/spec",
     "/docs/nope: no such page on the site",
@@ -180,7 +180,10 @@ for (const { page, blocks } of pages) {
 
 test("the docs and their examples name the packages as published: @tineira/apc-*, never @apc/*", () => {
   const examples = ["orders-app.ts", "orders-page.ts", "orders-conformance.ts"].map((f) => `${EXAMPLES_DIR}/${f}`);
-  for (const file of [...DOC_PAGES.filter((p) => p.file.startsWith("apps/dock/")).map((p) => p.file), ...examples, "apps/site/src/web/docs.tsx"]) {
+  const docFiles = DOC_PAGES.filter((p) => p.file.startsWith("apps/site/")).map((p) => p.file);
+  assert.deepEqual(docFiles.map((file) => file.split("/").at(-1)).sort(), readdirSync(new URL("apps/site/src/docs/pages/", root)).filter((file) => file.endsWith(".md")).sort(), "every docs Markdown page is checked");
+  assert.ok(docFiles.length >= 6, "the page check must not pass on an empty selection");
+  for (const file of [...docFiles, ...examples, "apps/site/src/web/docs.tsx"]) {
     assert.doesNotMatch(read(file), /@apc\//, `${file} still names @apc/`);
   }
   assert.match(read("apps/site/src/docs/pages/integrate.md"), /npm i @tineira\/apc-server@\d+\.\d+\.\d+ @modelcontextprotocol/);
@@ -202,11 +205,10 @@ test("the docs page has a source for every page, and the static and React banner
   assert.match(docs, /CC BY 4\.0/);
 });
 
-test("every page of the site (its top bar) and the extension page link to the docs", () => {
+test("every page of the site (its top bar) links to the docs", () => {
   // The top bar has Docs on every page (TIN-627), so the footers, which never repeat their page, do not.
   assert.match(read("apps/site/src/web/site.tsx"), /<a href=\{DOCS\}>Docs<\/a>/);
   assert.match(read("apps/site/src/web/landing.tsx"), /<SiteHeader page="landing" \/>/);
-  assert.match(read("apps/dock/src/web/extension.tsx"), /href="\/docs/);
 });
 
 test("the docs are static assets, and the assets keep their frame protection", () => {
@@ -220,7 +222,7 @@ test("the docs are static assets, and the assets keep their frame protection", (
 
 // The docs without JavaScript (TIN-914): what the build writes beside index.html. scripts/dock-pairing.mjs GETs
 // the built pages in workerd too.
-const SHELL = '<!doctype html><html><head><title>Agent dock</title><script type="module" src="/assets/x.js"></script></head><body><div id="root"></div></body></html>';
+const SHELL = '<!doctype html><html><head><title>APC site</title><script type="module" src="/site-assets/x.js"></script></head><body><div id="root"></div></body></html>';
 const sources = Object.fromEntries(DOC_PAGES.map((p) => [p.path, read(p.file)]));
 const examplesDir = new URL(`${EXAMPLES_DIR}/`, root);
 const examples = Object.fromEntries(readdirSync(examplesDir).filter((f) => f.endsWith(".ts")).map((f) => [f, readFileSync(new URL(f, examplesDir), "utf8")]));
@@ -243,7 +245,7 @@ for (const { page, blocks } of pages) {
     const html = built.get(docHtmlFile(page));
     assert.ok(html, `no ${docHtmlFile(page)} in the build`);
     assert.ok(html.includes('<div id="root"><main class="docs">'), "the text is in #root");
-    assert.ok(html.includes('<script type="module" src="/assets/x.js"></script>'), "the page's script stays, so it still renders itself");
+    assert.ok(html.includes('<script type="module" src="/site-assets/x.js"></script>'), "the page's script stays, so it still renders itself");
     assert.ok(html.includes(`<link rel="alternate" type="text/markdown" href="${docMarkdownPath(page)}" />`), "the page names its Markdown");
     const text = textOf(html);
     const missing: string[] = [];
@@ -283,16 +285,16 @@ test("the static pages escape the text, and /llms.txt names every page's Markdow
   assert.throws(() => staticDocFiles("<html><body></body></html>", sources, examples), /index\.html has no empty/);
   // The asset server answers /docs with docs.html and /docs/spec with docs/spec.html.
   assert.deepEqual(DOC_PAGES.map(docHtmlFile).slice(0, 2), ["docs.html", "docs/spec.html"]);
-  assert.match(read("apps/site/vite.config.ts"), /plugins: \[[^\]]*staticDocs\(\)/, "the dock's build writes the static docs");
+  assert.match(read("apps/site/vite.config.ts"), /plugins: \[[^\]]*staticDocs\(\)/, "the site's build writes the static docs");
 });
 
 test("each static page has its own description, from its first paragraph, escaped (TIN-914 review)", () => {
-  const withMeta = SHELL.replace("</title>", '</title><meta name="description" content="Agent dock" />');
+  const withMeta = SHELL.replace("</title>", '</title><meta name="description" content="APC site" />');
   const files = new Map(staticDocFiles(withMeta, sources, examples).map((f) => [f.file, f.content]));
   const descriptions = DOC_PAGES.map((p) => files.get(docHtmlFile(p))!.match(/<meta name="description" content="([^"]*)"/g) ?? []);
-  for (const found of descriptions) assert.equal(found.length, 1, "one description, the dock's replaced");
+  for (const found of descriptions) assert.equal(found.length, 1, "one description, the site's replaced");
   assert.equal(new Set(descriptions.map((d) => d[0])).size, DOC_PAGES.length, "a different one per page");
-  assert.ok(!descriptions.some((d) => d[0]!.includes("Agent dock")));
+  assert.ok(!descriptions.some((d) => d[0]!.includes("APC site")));
   const page = DOC_PAGES[0]!;
   const one = staticDocFiles(withMeta, { ...sources, [page.path]: '# T\n\nSay "hi" & <go>.' }, examples).find((f) => f.file === docHtmlFile(page))!.content;
   assert.ok(one.includes('<meta name="description" content="Say &quot;hi&quot; &amp; &lt;go&gt;." />'));

@@ -3,7 +3,7 @@
  * /docs/<page>.md, so a crawler or an agent with only HTTP GET reads them. The page (src/web/docs.tsx) still
  * renders itself once its script runs; this is the same text, already there.
  *
- * Pure, from the same parser and the same example regions as the page: the dock's Vite build writes what
+ * Pure, from the same parser and the same example regions as the page: the site's Vite build writes what
  * `staticDocFiles` returns next to its index.html (vite.config.ts), and test/docs.test.ts checks it.
  */
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";

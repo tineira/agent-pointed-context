@@ -1,11 +1,16 @@
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** The site, Dock and Pulse Workers in workerd, and the fetch that reaches them. */
 export async function startWorkerd({ connectManifestFixture = false } = {}) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const siteConfig = JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8"));
+  const sitePrefixes = siteConfig.routes.map(({ pattern }) => {
+    if (!pattern.startsWith("apc.tineira.com/") || !pattern.endsWith("*") || pattern.slice(0, -1).includes("*")) throw new Error(`unsupported site route: ${pattern}`);
+    return pattern.slice("apc.tineira.com".length, -1);
+  });
   // wrangler is the dock's devDependency, and Miniflare is wrangler's: the versions `vite dev` and `wrangler deploy` use.
   const wranglerPath = createRequire(join(root, "apps/dock/package.json")).resolve("wrangler");
   const fileUrl = (p) => new URL(`file:///${p.replaceAll("\\", "/")}`).href;
@@ -40,7 +45,7 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
         if (host === "apc.tineira.com") {
           const path = new URL(request.url).pathname;
           // The six zone patterns precede the Dock Custom Domain, query strings included.
-          const site = ["/docs", "/build", "/try", "/llms.txt", "/site-assets/", "/media/"].some((prefix) => path.startsWith(prefix));
+          const site = ${JSON.stringify(sitePrefixes)}.some((prefix) => path.startsWith(prefix));
           return site ? env.SITE.fetch(request) : env.DOCK.fetch(request);
         }
         if (host === "pulse.apc.tineira.com") {
