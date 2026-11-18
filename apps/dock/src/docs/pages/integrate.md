@@ -276,7 +276,7 @@ Localizing changes no protocol text, the tools or conformance: [Conformance](/do
 
 ## Operating APC on stateless hosts
 
-The Orders sample keeps its state in one process, as a Durable Object does. Many apps have no such process: a function per request (Vercel, say) and a Postgres database (Supabase, say). Two apps built that way, Autio (its dealer and personal MCPs) and Surplus, rewrote the server side and met the same traps. This section is what they learned. It is guidance, not rules: the [spec](/docs/spec) says what must hold, and this says what it took to hold on a host with no memory between requests. The ids in parentheses are the issues where each point was found.
+The Orders sample keeps its state in one process, as a Durable Object does. Many apps have no such process: a function per request (Vercel, say) and a Postgres database (Supabase, say). Two apps built that way, Autio (its dealer and personal MCPs) and Surplus, rewrote the server side and met the same traps. This section is what they learned. It is guidance, not rules: the [spec](/docs/spec) says what must hold, and this says what it took to hold on a host with no memory between requests.
 
 ### A wait is a row
 
