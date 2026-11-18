@@ -16,7 +16,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { AgentPet } from "./apc-pet.tsx";
-import { canDrag, dragTitle, startAgentDrag } from "./agent-drag.ts";
+import { canDrag, dragImageOf, dragTitle, startAgentDrag } from "./agent-drag.ts";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";
 import { READER_NOTICE } from "../worker/reading.ts";
 import { cardOuterSize, FLOAT_START, fitsCard, floatSizeReducer } from "./float-size.ts";
@@ -548,8 +548,9 @@ export function HubDock() {
     const t = tickets.current.get(agentId);
     const fresh = t && t.expires_at - Date.now() > 3_000 ? { hub: location.origin, ticket: t.ticket } : undefined;
     if (!startAgentDrag(e, agent, fresh)) return false;
-    // The drag image is the character itself (not the whole tile), held where the person grabbed it.
-    const pet = (e.currentTarget as HTMLElement | null)?.querySelector(".apc-pet");
+    // The drag image is the character itself (not the whole tile), held where the person grabbed it: the dragged
+    // agent's own pet, from the element the drag started on (TIN-969), never the first one on the page.
+    const pet = dragImageOf(e);
     if (pet && e.dataTransfer) {
       const r = pet.getBoundingClientRect();
       e.dataTransfer.setDragImage(pet, Math.min(Math.max(e.clientX - r.left, 0), r.width), Math.min(Math.max(e.clientY - r.top, 0), r.height));

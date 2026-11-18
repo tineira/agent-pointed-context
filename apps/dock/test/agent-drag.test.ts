@@ -79,3 +79,37 @@ test("No file of the dock's page writes a drag of its own: every drag goes throu
     assert.ok(!/draggable\s*:\s*true\b/.test(src), `${file} has draggable: true`);
   }
 });
+
+test("the drag image is the dragged agent's own pet, never the first pet on the page (TIN-969)", async () => {
+  const { dragImageOf } = await import("../src/web/agent-drag.ts");
+  // React's root holds every tile: its first pet is the first agent's (Claude's).
+  const claudePet = { name: "claude-pet" };
+  const grokPet = { name: "grok-pet" };
+  const el = (pet: object, closest: object | null = null) => ({ querySelector: (s: string) => (s === ".apc-pet" ? pet : null), closest: (s: string) => (s === ".apc-pet" ? closest : null) });
+  const root = el(claudePet);
+  const grokTile = el(grokPet);
+  // The native event React hands the handler: currentTarget is the root, target the tile that was dragged.
+  const native = { target: grokTile, currentTarget: root } as unknown as { target: EventTarget };
+  assert.equal(dragImageOf(native), grokPet);
+  // A drag that starts on the pet itself shows that pet.
+  assert.equal(dragImageOf({ target: el({ name: "inner" }, grokPet) as unknown as EventTarget }), grokPet);
+  assert.equal(dragImageOf({ target: null }), null);
+  // A drag that starts on a child with no pet below it (an image): the pet of the draggable element it sits in.
+  const draggable = el(grokPet);
+  const child = { querySelector: () => null, closest: (s: string) => (s === '[draggable="true"]' ? draggable : null) };
+  assert.equal(dragImageOf({ target: child as unknown as EventTarget }), grokPet);
+  // A drag that starts on text: its parent element stands for it.
+  assert.equal(dragImageOf({ target: { parentElement: grokTile } as unknown as EventTarget }), grokPet);
+  // Something with no DOM methods gives no image, never another agent's.
+  assert.equal(dragImageOf({ target: {} as unknown as EventTarget }), null);
+  assert.equal(dragImageOf({ target: { querySelector: () => claudePet } as unknown as EventTarget }), null);
+});
+
+test("every drag start in the dock takes its image through dragImageOf, never from the event's currentTarget (TIN-969)", () => {
+  const hub = readFileSync(new URL("../src/web/hub.tsx", import.meta.url), "utf8");
+  assert.match(hub, /const pet = dragImageOf\(e\);/);
+  for (const name of readdirSync(new URL("../src/web/", import.meta.url)).filter((f) => f.endsWith(".tsx"))) {
+    const source = readFileSync(new URL(`../src/web/${name}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /currentTarget[^;\n]*querySelector\(\s*["']\.apc-pet/, `${name} picks the drag image from currentTarget`);
+  }
+});
