@@ -7,7 +7,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type FocusTarget, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, ringHub, ringKey, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
@@ -196,7 +196,9 @@ export class Sandbox extends DurableObject<Env> {
     // live from the hub's first committed initialize. A link from before has no state: its hub read it already (live).
     // The times are ms since the epoch; secret_hash is how a give-back and Cancel find the grant without its secret.
     // Whether the hub's acknowledgement declared the binding (APC 0.12, TIN-910); the value is pairing_id, kept since TIN-389.
-    for (const column of ["state text", "secret_hash text", "allowed_at integer", "acked_at integer", "declared integer"]) {
+    // Where and how to ring the hub after a pin (TIN-962, experimental): its ring address and the grant's ring key, from
+    // the hub's answer to /apc/pair or /apc/confirm. Server side only.
+    for (const column of ["state text", "secret_hash text", "allowed_at integer", "acked_at integer", "declared integer", "ring_url text", "ring_id text", "ring_key text"]) {
       try {
         this.sql.exec(`alter table hub_links add column ${column}`);
       } catch {
@@ -506,7 +508,19 @@ export class Sandbox extends DurableObject<Env> {
     this.log("pin", grantId, { kind: t.kind, id: t.id, part: t.part, params: t.params, pinned_at: pinnedAt });
     const pin = this.focusRow(grantId)!;
     this.broadcast({ type: "pin", grant_id: grantId, pin });
+    this.ringDock(grantId);
     return { ok: true, pin };
+  }
+
+  /**
+   * The doorbell (TIN-962, experimental): a pin on a dock grant tells its hub "a pin happened", with no target, so an
+   * agent that is not calling can be woken. In the background; a failure only means the agent hears of it when it calls.
+   */
+  private ringDock(grantId: string): void {
+    const r = this.sql.exec<{ ring_url: string | null; ring_id: string | null; ring_key: string | null }>("select ring_url, ring_id, ring_key from hub_links where grant_id = ?", grantId).toArray()[0];
+    if (!r?.ring_url || !r.ring_id || !r.ring_key) return;
+    const ringing = ringHub({ url: r.ring_url, id: r.ring_id }, r.ring_key, hubCallOptions(this.env));
+    (this.ctx as { waitUntil?: (promise: Promise<unknown>) => void }).waitUntil?.(ringing);
   }
 
   async unpin(grantId: string): Promise<void> {
@@ -737,7 +751,10 @@ export class Sandbox extends DurableObject<Env> {
       }
       // Already handed to the dock: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
       const grant = this.grants().find((g) => g.id === linked.grant_id);
-      const answer = grant ? await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${grant.secret}` }, hubCallOptions(this.env)) : ({ ok: false, error: "not_paired" } as const);
+      const mcpUrl = grant ? `${origin}/mcp/${sid}/${grant.secret}` : null;
+      // The grant's ring key (TIN-962): from the exact MCP URL this call sends, worked out before it.
+      const key = mcpUrl ? await ringKey(mcpUrl) : null;
+      const answer = grant && mcpUrl ? await confirmWithHub(hub, { ticket, agent, mcp_url: mcpUrl }, hubCallOptions(this.env)) : ({ ok: false, error: "not_paired" } as const);
       // Everything below is synchronous: the grant is read again, since a Cancel, a Revoke, a give-back or its time
       // running out may have taken it while the hub answered.
       this.sweepDock();
@@ -750,6 +767,8 @@ export class Sandbox extends DurableObject<Env> {
       }
       // Gone while the hub answered. The ticket is spent: the person drags the agent again.
       if (!now) return { ok: false, error: "pairing_ended" };
+      // A grant paired before the ring learns its address here (TIN-962), still this same grant.
+      if (answer.ring && key) this.sql.exec("update hub_links set ring_url = ?, ring_id = ?, ring_key = ? where grant_id = ?", answer.ring.url, answer.ring.id, key, linked.grant_id);
       this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: answer.agent.icon }]), linked.grant_id);
       if (now.state === "handoff") {
         if (answer.status === "paired") {
@@ -817,7 +836,10 @@ export class Sandbox extends DurableObject<Env> {
     const allowedAt = this.dockNow();
     // No lock is held across the call (M5): for a first pairing the row above says a pairing is under way; on a
     // re-Connect the existing link remains untouched until the hub acknowledges the new pairing.
-    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Pulse", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}`, pairing_code: taken.pairing_code }, hubCallOptions(this.env));
+    const mcpUrl = `${origin}/mcp/${sid}/${secret}`;
+    // The grant's ring key (TIN-962): from the exact MCP URL this call sends, worked out before it.
+    const key = await ringKey(mcpUrl);
+    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Pulse", origin }, mcp_url: mcpUrl, pairing_code: taken.pairing_code }, hubCallOptions(this.env));
     // Synchronous from here to the answer.
     // By the secret's hash, never the id alone: a grant that went meanwhile, and whose id a later one took, is not this one.
     const mine = () => this.sql.exec("select 1 from hub_links where grant_id = ? and secret_hash = ?", id, hash).toArray().length > 0;
@@ -866,6 +888,7 @@ export class Sandbox extends DurableObject<Env> {
       // The agent's mark from the hub (TIN-388), so its first pin shows its logo; initialize keeps it current.
       this.sql.exec("update grants set client_title = ?, client_icon = ? where id = ?", title, icon, id);
     }
+    if (answer.ring) this.sql.exec("update hub_links set ring_url = ?, ring_id = ?, ring_key = ? where grant_id = ?", answer.ring.url, answer.ring.id, key, id);
     this.log("hub_paired", id, { hub, agent });
     this.broadcast({ type: "grants" });
     // Handed to the hub and waiting for the code in the dock, whatever the pin does: a pin that failed is said apart.

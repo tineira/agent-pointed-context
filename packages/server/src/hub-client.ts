@@ -1,4 +1,5 @@
 import { badContentLength, bareOrigin, LOOPBACK_HOST, readCapped, utf8 } from "./util.ts";
+import { parseRing, ringBody, isRingKey, type HubRing } from "./ring.ts";
 import { declaredBinding, HUB_ANSWER_MAX_BYTES, HUB_CALL_DEADLINE_MS, isStoredPairingId, PAIRING_CODE_ACK, type DockConnectRequest, type DockConnectAnswer, type DockPairRequest, type HubCallError, type PAIRING_BINDING } from "@tineira/apc-protocol";
 
 /**
@@ -53,9 +54,12 @@ export interface HubAgent {
   icon: string | null;
 }
 
-/** `binding`: `"pairing_id"` when the acknowledgement declared it (APC 0.12), null from a hub that does not bind. */
-export type PairWithHubResult = { ok: true; pairing_id: string; status: "pending"; agent: HubAgent; binding: typeof PAIRING_BINDING | null } | { ok: false; error: string };
-export type ConfirmWithHubResult = { ok: true; status: "pending" | "paired"; agent: HubAgent } | { ok: false; error: string };
+/**
+ * `binding`: `"pairing_id"` when the acknowledgement declared it (APC 0.12), null from a hub that does not bind.
+ * `ring`: where to ring the hub after a pin (TIN-962, `ring.ts`), only when the hub sent a well-formed one.
+ */
+export type PairWithHubResult = { ok: true; pairing_id: string; status: "pending"; agent: HubAgent; binding: typeof PAIRING_BINDING | null; ring?: HubRing } | { ok: false; error: string };
+export type ConfirmWithHubResult = { ok: true; status: "pending" | "paired"; agent: HubAgent; ring?: HubRing } | { ok: false; error: string };
 
 const HUB_ERROR = /^[a-z_]{1,64}$/;
 
@@ -187,7 +191,8 @@ export async function pairWithHub(hub: string | URL, body: DockPairRequest, opti
   // The binding the hub declares (APC 0.12, M10): an unknown one, or a declared id out of form, is a refusal.
   const binding = declaredBinding(a.body);
   if (binding === "refused") return { ok: false, error: "hub_refused" };
-  return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding };
+  const ring = parseRing(hubCallOrigin(hub), a.body.ring);
+  return { ok: true, pairing_id: a.body.pairing_id, status: "pending", agent: agentOf(a.body.agent), binding, ...(ring ? { ring } : {}) };
 }
 
 /** Local client result: only `legacyAbsent` permits the temporary 0.12 fallback; an error string never does. */
@@ -218,5 +223,22 @@ export async function confirmWithHub(hub: string | URL, body: { ticket: string; 
   const refused = refusal(a);
   if (refused) return { ok: false, error: refused };
   if (a.status !== 200 || a.body?.ok !== true || (a.body.status !== "pending" && a.body.status !== "paired")) return { ok: false, error: "hub_refused" };
-  return { ok: true, status: a.body.status, agent: agentOf(a.body.agent) };
+  const ring = parseRing(hubCallOrigin(hub), a.body.ring);
+  return { ok: true, status: a.body.status, agent: agentOf(a.body.agent), ...(ring ? { ring } : {}) };
+}
+
+/**
+ * The doorbell (TIN-962, `ring.ts`): tell the hub a pin happened on this grant, signed with the grant's ring key. Fire
+ * and forget: the answer says nothing, and a failure only means the agent hears of the pin the usual way (when it calls).
+ * The same hardening as the other hub calls (M2 to M4, M9). Never throws.
+ */
+export async function ringHub(ring: HubRing, keyHex: string, options: HubCallOptions = {}): Promise<void> {
+  try {
+    if (!isRingKey(keyHex)) return;
+    const url = new URL(ring.url);
+    if (!parseRing(hubCallOrigin(url.origin), ring)) return;
+    await post(url.origin, url.pathname, await ringBody(ring, keyHex), options);
+  } catch {
+    // the ring is best effort
+  }
 }

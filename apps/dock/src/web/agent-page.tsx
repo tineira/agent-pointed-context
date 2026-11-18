@@ -3,6 +3,7 @@
  * the dock, the apps it reads, how to connect it (folded), and Remove. Also the dock's shared types
  * and calls, and the Remove confirm (TIN-418).
  */
+import type { DockWake } from "./wake-on-pin.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Onboarding } from "../onboarding.ts";
 import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
@@ -44,6 +45,9 @@ export interface DockAgent {
   /** The page readings sent to this agent (TIN-422): site, time and size, newest first. */
   readings: ReadingRow[];
   focus: { app: AppRef; label: string; pinned_at: string; seen: boolean } | null;
+  /** Wake on pin (TIN-962): offered because the agent reports as Grok bot, and its webhook when set (never the key). */
+  wake_offer?: boolean;
+  wake?: DockWake | null;
   /** Apps, and browsers sending page readings (kind "reader", TIN-421). */
   /** revoked: the app revoked the grant itself (APC 0.2); revoked_by is the app's host. */
   /** warning: a pending unverified app whose domain the person has not approved in this dock asks with the warning (TIN-581). */

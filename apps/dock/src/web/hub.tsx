@@ -26,6 +26,7 @@ import { floatApp, PET, PET_AGENT, petApp, PetHint, PetView, PetWaiting } from "
 import { ConnectAgent, DESKTOP_SHELL, DESKTOP_SHORTCUT, Install, ReconnectAgent, Setup } from "./setup.tsx";
 import { setupProgress } from "../onboarding.ts";
 import { DownloadItems } from "./downloads.tsx";
+import { WakeOnPin } from "./wake-on-pin.tsx";
 import { DockMenu } from "./dock-menu.tsx";
 import { ExtensionOutdatedNotice } from "./extension.tsx";
 import { FloatIcon, PlusIcon } from "./icons.tsx";
@@ -789,6 +790,19 @@ export function HubDock() {
                 <summary>Connect an app</summary>
                 <ConnectApp apps={state.apps ?? []} connected={new Set(a.pairings.filter((p) => p.status === "paired").map((p) => p.app.origin))} create={(target) => call(`${base}/connects`, { agent: a.id, host: target })} refresh={refresh} />
               </details>
+              {(a.wake_offer || a.wake) && (
+                // Wake on pin (TIN-962): Grok bot only, and wherever a webhook is set, so Turn off stays reachable.
+                <details className="tile-details">
+                  <summary>Wake on pin{a.wake ? " · on" : ""}</summary>
+                  <WakeOnPin
+                    wake={a.wake ?? null}
+                    set={(body) => call(`${base}/agents/${a.id}/wake`, body)}
+                    clear={() => call(`${base}/agents/${a.id}/wake/clear`, {})}
+                    test={() => call(`${base}/agents/${a.id}/wake/test`, {})}
+                    refresh={refresh}
+                  />
+                </details>
+              )}
             </li>
           );
         })}

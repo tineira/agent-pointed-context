@@ -9,7 +9,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, ringHub, ringKey, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, cleanAgentName, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
 import type { Post } from "../../../demo/src/model/market.ts";
 import { demoMarket } from "../../../demo/src/model/demo-world.ts";
 import { anyPageOpen, loopHinted } from "../../../demo/src/worker/page.ts";
@@ -167,7 +167,7 @@ export class Feed extends DurableObject<Env> {
     `);
     // client_icon since TIN-388, the names since TIN-578; a dock grant's lifecycle, its secret's hash and the code it
     // waits on since APC 0.10 (TIN-892). The two times are ms since the epoch.
-    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text", "pairing_id text", "declared integer"]) {
+    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text", "pairing_id text", "declared integer", "ring_url text", "ring_id text", "ring_key text"]) {
       try {
         this.sql.exec(`alter table grants add column ${column}`);
       } catch {
@@ -352,7 +352,19 @@ export class Feed extends DurableObject<Env> {
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("insert into agent_focus (grant_id, kind, target_id, part, pinned_at, seen_at) values (?, ?, ?, ?, ?, null)", grantId, t.kind, t.id, t.part, new Date().toISOString());
     this.broadcast();
+    this.ringDock(grantId);
     return { ok: true };
+  }
+
+  /**
+   * The doorbell (TIN-962, experimental): a pin on a dock grant tells its hub "a pin happened", with no target, so an
+   * agent that is not calling can be woken. In the background; a failure only means the agent hears of it when it calls.
+   */
+  private ringDock(grantId: string): void {
+    const r = this.sql.exec<{ ring_url: string | null; ring_id: string | null; ring_key: string | null }>("select ring_url, ring_id, ring_key from grants where id = ?", grantId).toArray()[0];
+    if (!r?.ring_url || !r.ring_id || !r.ring_key) return;
+    const ringing = ringHub({ url: r.ring_url, id: r.ring_id }, r.ring_key, hubCallOptions(this.env));
+    (this.ctx as { waitUntil?: (promise: Promise<unknown>) => void }).waitUntil?.(ringing);
   }
 
   async unpin(grantId: string): Promise<void> {
@@ -424,7 +436,10 @@ export class Feed extends DurableObject<Env> {
         return requestFirst();
       }
       // Already handed to the dock: the hub must still say so (TIN-389). If it does not, the grant goes and the person is asked again.
-      const check = await confirmWithHub(hub, { ticket, agent, mcp_url: `${origin}/mcp/${sid}/${linked.secret}` }, hubCallOptions(this.env));
+      const mcpUrl = `${origin}/mcp/${sid}/${linked.secret}`;
+      // The grant's ring key (TIN-962): from the exact MCP URL this call sends, worked out before it.
+      const key = await ringKey(mcpUrl);
+      const check = await confirmWithHub(hub, { ticket, agent, mcp_url: mcpUrl }, hubCallOptions(this.env));
       // Everything below is synchronous: the grant is read again, since a Cancel, a Revoke, a give-back or its time
       // running out may have taken it while the hub answered.
       this.sweepDock();
@@ -437,6 +452,8 @@ export class Feed extends DurableObject<Env> {
       }
       // Gone while the hub answered. The ticket is spent: the person drags the agent again.
       if (!now) return { ok: false, error: "pairing_ended" };
+      // A grant paired before the ring learns its address here (TIN-962), still this same grant.
+      if (check.ring) this.sql.exec("update grants set ring_url = ?, ring_id = ?, ring_key = ? where id = ?", check.ring.url, check.ring.id, key, now.id);
       this.sql.exec("update grants set client_icon = coalesce(?, client_icon) where id = ?", pickClientIcon([{ src: check.agent.icon }]), now.id);
       if (now.state === "handoff") {
         if (check.status === "paired") {
@@ -485,7 +502,10 @@ export class Feed extends DurableObject<Env> {
     }
     // No lock is held across the call (M5): for a first pairing the row above says a pairing is under way; on a
     // re-Connect the existing grant remains untouched until the hub acknowledges the new pairing.
-    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Signals", origin }, mcp_url: `${origin}/mcp/${sid}/${secret}`, pairing_code: taken.pairing_code }, hubCallOptions(this.env));
+    const mcpUrl = `${origin}/mcp/${sid}/${secret}`;
+    // The grant's ring key (TIN-962): from the exact MCP URL this call sends, worked out before it.
+    const key = await ringKey(mcpUrl);
+    const answer = await pairWithHub(hub, { ticket, agent, app: { name: "Signals", origin }, mcp_url: mcpUrl, pairing_code: taken.pairing_code }, hubCallOptions(this.env));
     // Synchronous from here to the answer.
     if (!answer.ok) {
       if (!replacing && this.holds(secret)) this.endDockGrant(id);
@@ -521,6 +541,7 @@ export class Feed extends DurableObject<Env> {
         return { ok: false, error: "pairing_ended" };
       }
     }
+    if (answer.ring) this.sql.exec("update grants set ring_url = ?, ring_id = ?, ring_key = ? where secret = ?", answer.ring.url, answer.ring.id, key, secret);
     this.broadcast();
     // Handed to the hub and waiting for the code in the dock, whatever the pin does: a pin that failed is said apart.
     kv.delete(targetKey);
