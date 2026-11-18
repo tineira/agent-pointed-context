@@ -4,6 +4,7 @@
  * Sandbox on Node's SQLite (durableObjectRoom), the webhook and the hub stubbed at fetch, the clock mocked.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test, type TestContext } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import { WAKE_DAY_MAX } from "@tineira/apc-server";
@@ -20,10 +21,10 @@ function globalBudget(t: TestContext) {
   const budget = new WakeBudget(room.ctx, {});
   const namespace = {
     idFromName: (name: string) => { assert.equal(name, "global"); return name; },
-    get: (id: string) => { assert.equal(id, "global"); return { take: async (now: number) => budget.take(now) }; },
+    get: (id: string) => { assert.equal(id, "global"); return { take: async () => budget.take() }; },
   };
   const fill = () => {
-    for (let i = 0; i < WAKE_GLOBAL_DAY_MAX; i++) assert.equal(budget.take(Date.now()), true);
+    for (let i = 0; i < WAKE_GLOBAL_DAY_MAX; i++) assert.equal(budget.take(), true);
   };
   return { room, budget, namespace, fill };
 }
@@ -112,28 +113,42 @@ async function pulse(t: TestContext, client = "Cursor", shared?: ReturnType<type
   return { sandbox, room, owner, engine, agent, connect, dockGrant, sent, rings, hook, pass, wakeKeys, grantState, global };
 }
 
-test("global budget refuses the 2,001st slot, including concurrent callers and object restart", async (t) => {
+test("global budget refuses the 2,001st slot, including object restart", async (t) => {
   const g = globalBudget(t);
-  const now = Date.parse("2026-11-17T12:00:00Z");
-  const results = await Promise.all(Array.from({ length: 2_001 }, () => g.namespace.get("global").take(now)));
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-17T12:00:00Z") });
+  const results = await Promise.all(Array.from({ length: 2_001 }, () => g.namespace.get("global").take()));
   assert.equal(results.filter(Boolean).length, 2_000);
   assert.equal(results[2_000], false);
-  assert.equal(new WakeBudget(g.room.ctx, {}).take(now), false, "persisted across eviction");
+  assert.equal(new WakeBudget(g.room.ctx, {}).take(), false, "persisted across eviction");
 });
 
 test("global budget resets at UTC midnight and drops old days", (t) => {
   const g = globalBudget(t);
   const before = Date.parse("2026-11-17T23:59:59.999Z");
-  for (let i = 0; i < 2_000; i++) assert.equal(g.budget.take(before), true);
-  assert.equal(g.budget.take(before), false);
-  assert.equal(g.budget.take(before + 1), true);
+  t.mock.timers.enable({ apis: ["Date"], now: before });
+  for (let i = 0; i < 2_000; i++) assert.equal(g.budget.take(), true);
+  assert.equal(g.budget.take(), false);
+  t.mock.timers.tick(1);
+  assert.equal(g.budget.take(), true);
   assert.deepEqual(g.room.db.prepare("select day, count from wake_days").all().map((r) => ({ ...r })), [{ day: "2026-11-18", count: 1 }]);
+});
+
+test("global budget uses its own clock despite stale or future caller timestamps", (t) => {
+  const g = globalBudget(t);
+  const midnight = Date.parse("2026-11-18T00:00:00Z");
+  t.mock.timers.enable({ apis: ["Date"], now: midnight - 1 });
+  g.fill();
+  assert.equal(Reflect.apply(g.budget.take, g.budget, [midnight]), false, "caller cannot move the budget into tomorrow");
+  t.mock.timers.tick(1);
+  assert.equal(g.budget.take(), true);
+  assert.equal(Reflect.apply(g.budget.take, g.budget, [midnight - 1]), true);
+  assert.deepEqual(g.room.db.prepare("select day, count from wake_days").all().map((r) => ({ ...r })), [{ day: "2026-11-18", count: 2 }], "stale caller cannot recreate yesterday");
 });
 
 test("two sandboxes share the global budget for owner tests", async (t) => {
   const p = await pulse(t);
   const q = await pulse(t, "Cursor", p.global);
-  for (let i = 0; i < 1_999; i++) assert.equal(p.global.budget.take(Date.now()), true);
+  for (let i = 0; i < 1_999; i++) assert.equal(p.global.budget.take(), true);
   await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
   await q.sandbox.setWake(q.agent.id, { url: WEBHOOK, key: KEY });
   assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: true, status: "ok" });
@@ -189,17 +204,25 @@ test("a global-slot RPC reserves the send, and a webhook changed during it is ne
       reached();
       return new Promise<boolean>((resolve) => { release = resolve; });
     } }));
-    const sending = p.sandbox.testWake(p.agent.id);
+    // An automatic wake has no test throttle: too_soon below proves the reservation alone.
+    await p.sandbox.pin(p.agent.id, target());
+    t.mock.timers.tick(2_000);
     await waiting;
-    assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: false, error: "too_soon" });
+    let refused: unknown;
+    void p.sandbox.testWake(p.agent.id).then((answer: unknown) => { refused = answer; });
+    await settle();
+    assert.deepEqual(refused, { ok: false, error: "too_soon" }, "reservation refuses immediately without a test throttle");
     if (action === "clear") await p.sandbox.clearWake(p.agent.id);
     if (action === "replace") await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
     if (action === "revoke") await p.sandbox.revokeGrant(p.agent.id);
     if (action === "reset") await p.sandbox.reset();
+    const afterAction = p.room.db.prepare("select value from apc_kv where key = ?").get(`wake:${p.agent.id}`);
+    if (action === "replace") assert.ok(afterAction, "replacement exists");
+    else assert.equal(afterAction, undefined, "the old row was deleted");
     release(true);
-    await sending;
+    await p.engine.idle();
     assert.equal(p.sent.length, 0);
-    assert.equal(p.engine.view(p.agent.id)?.status ?? null, null);
+    assert.deepEqual(p.room.db.prepare("select value from apc_kv where key = ?").get(`wake:${p.agent.id}`), afterAction, "late completion neither restores a deleted row nor changes its replacement");
     assert.equal(p.room.db.prepare("select count(*) as n from apc_kv where key like 'wake_budget:%'").get()!.n, 0);
   });
 });
@@ -210,7 +233,88 @@ test("a failed global-slot RPC fails closed without spending local budgets", asy
   t.mock.method(p.global.namespace, "get", () => ({ take: async () => { throw new Error("budget unavailable"); } }));
   assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: true, status: "error" });
   assert.equal(p.sent.length, 0);
+  assert.equal((await p.agent.callTool("wake_on_pin")).structuredContent.last_delivery, null, "no POST was attempted");
+  const row = JSON.parse(String(p.room.db.prepare("select value from apc_kv where key = ?").get(`wake:${p.agent.id}`)!.value));
+  for (const field of ["delivered_at", "delivered_event", "delivered_outcome", "delivered_code"]) assert.equal(row[field], null, field);
+  assert.equal(p.engine.view(p.agent.id)?.status, "error");
   assert.equal(p.room.db.prepare("select count(*) as n from apc_kv where key like 'wake_budget:%'").get()!.n, 0);
+});
+
+test("a refused or failed slot RPC preserves an earlier real delivery", async (t) => {
+  for (const failure of ["refused", "error"] as const) await t.test(failure, async (t) => {
+    const p = await pulse(t);
+    await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+    await p.sandbox.testWake(p.agent.id);
+    const last = (await p.agent.callTool("wake_on_pin")).structuredContent.last_delivery;
+    assert.equal(last.outcome, "ok");
+    await p.pass(10_000);
+    t.mock.method(p.global.namespace, "get", () => ({ take: async () => {
+      if (failure === "error") throw new Error("budget unavailable");
+      return false;
+    } }));
+    await p.sandbox.testWake(p.agent.id);
+    assert.equal(p.sent.length, 1);
+    assert.deepEqual((await p.agent.callTool("wake_on_pin")).structuredContent.last_delivery, last, "the real delivery remains the last one");
+  });
+});
+
+test("a pin during the slot RPC waits 15 seconds after the first POST", async (t) => {
+  const p = await pulse(t);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  let release!: (allowed: boolean) => void;
+  let reached!: () => void;
+  const waiting = new Promise<void>((resolve) => { reached = resolve; });
+  const original = p.global.namespace.get.bind(p.global.namespace);
+  const held = t.mock.method(p.global.namespace, "get", () => ({ take: () => {
+    reached();
+    return new Promise<boolean>((resolve) => { release = resolve; });
+  } }));
+  await p.sandbox.pin(p.agent.id, target());
+  t.mock.timers.tick(2_000);
+  await waiting;
+  await p.sandbox.pin(p.agent.id, target(1));
+  // Let the RPC take time: the gap starts at the POST, not the reservation.
+  t.mock.timers.tick(1_000);
+  held.mock.mockImplementation(original);
+  release(true);
+  await p.engine.idle();
+  assert.equal(p.sent.length, 1);
+  assert.equal(p.engine.nextDue(), Date.now() + 15_000, "pending pin rescheduled from actual send time");
+  assert.equal(p.room.alarm, p.engine.nextDue(), "alarm follows the corrected due");
+  await p.pass(14_999);
+  assert.equal(p.sent.length, 1, "no second POST before the gap");
+  await p.pass(1);
+  assert.equal(p.sent.length, 2, "pending pin is sent at the gap");
+});
+
+test("a never-settling slot RPC reaches the send deadline and frees its reservation", async (t) => {
+  const p = await pulse(t);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  const held = t.mock.method(p.global.namespace, "get", () => ({ take: () => new Promise<boolean>(() => {}) }));
+  let finished = false;
+  const sending = p.sandbox.testWake(p.agent.id).then((result: unknown) => { finished = true; return result; });
+  await settle();
+  t.mock.timers.tick(9_999);
+  await settle();
+  assert.equal(finished, false, "not before the deadline");
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(finished, true, "deadline settles even when the RPC never does");
+  assert.deepEqual(await sending, { ok: true, status: "error" });
+  assert.equal(p.sent.length, 0);
+  assert.equal((await p.agent.callTool("wake_on_pin")).structuredContent.last_delivery, null);
+  held.mock.restore();
+  assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: true, status: "ok" }, "reservation is free after deadline");
+  assert.equal(p.sent.length, 1);
+  await p.sandbox.pin(p.agent.id, target());
+  await p.pass(2_000);
+  assert.equal(p.sent.length, 2, "automatic wakes also recover");
+});
+
+test("the owner test and status use the same limit copy for either budget", () => {
+  const source = readFileSync(new URL("../src/web/wake-on-pin.tsx", import.meta.url), "utf8");
+  assert.equal(/const TEST_TEXT[\s\S]*?limit: STATUS_TEXT\.limit,/.test(source), true, "owner test reuses the status limit sentence");
+  assert.equal(/limit: "Today's wakes are used up\. Wakes start again tomorrow \(UTC\)\."/.test(source), true, "sentence covers either daily budget");
 });
 
 test("Wake on pin is offered only for a Grok bot agent on a Direct grant, and the owner's routes take only this sandbox's Direct grants", async (t) => {

@@ -9,8 +9,9 @@
  * The pure parts (limits, checks, copy) and `WakeEngine`, the state machine both run: one per Durable Object, over a
  * synchronous `WakeStore` (the hub's own tables, or `kvWakeStore` over an `ApcKv`) and a `WakeHost` that answers what
  * only the server knows (is the agent's source still live, was the pin handed over, is a call in flight). Every method
- * checks and reserves before its first await; after an optional global-slot check or the POST, state is written only
- * on the webhook it was sent for (its `gen`), read again, never from a snapshot taken before the await.
+ * reserves each send and clears its pending wake before the first await. After the optional global-slot RPC it
+ * rechecks state, spends local budgets and records the send time before the POST. After an await, state is written
+ * only on the webhook it was sent for (its `gen`), read again, never from a snapshot taken before the await.
  */
 import { z } from "zod";
 import { toolResult, type ToolResult } from "./envelope.ts";
@@ -31,7 +32,7 @@ export const WAKE_DEFER_MS = 3_000;
 export const WAKE_DEFER_MAX_MS = 60_000;
 /** One test per agent in this window. */
 export const WAKE_TEST_GAP_MS = 10_000;
-/** The webhook's deadline, headers included. */
+/** The send's deadline, including the optional slot RPC and webhook headers. */
 export const WAKE_DEADLINE_MS = 10_000;
 /** How often the offer in a result may come back (no MCP session to count one by). */
 export const WAKE_HINT_EVERY_MS = 24 * 3_600_000;
@@ -437,7 +438,8 @@ export class WakeEngine {
    * The agent's pending wake, when due: dropped if the server is gone, the source is no longer live, the pin was
    * handed over or is gone, or the webhook is broken; paused if the client no longer declares Grok bot; put off while a
    * POST of the agent's is in flight, or (up to WAKE_DEFER_MAX_MS) a call or wait of it; refused over the budget;
-   * otherwise one POST. Every check and write happens before the POST.
+   * otherwise one POST. The pending wake is cleared and the send reserved before any slot RPC; state is checked
+   * again after that RPC, then local budgets and the send time are written before the POST.
    */
   async deliver(id: string): Promise<void> {
     if (this.resetting) return;
@@ -483,7 +485,7 @@ export class WakeEngine {
    */
   deliverDue(): void {
     const now = Date.now();
-    // Each deliver runs up to its POST before the next line: by then its row is sent, dropped or put off.
+    // Each deliver clears its pending wake and reserves the send before any slot RPC or POST await, or drops/defers it.
     for (const { id, due } of this.store.pending()) if (due <= now) this.later(this.deliver(id));
     // One whose host threw before it decided is dropped: a past due would make the alarm ring again at once, for ever.
     for (const { id, due } of this.store.pending()) if (due <= now) this.drop(id);
@@ -497,10 +499,20 @@ export class WakeEngine {
     const timer = setTimeout(() => controller.abort(), WAKE_DEADLINE_MS);
     let outcome: "ok" | "broken" | "error";
     let code: number | null = null;
+    let attempted = false;
+    let stopWaiting: (() => void) | undefined;
     try {
       // Only Grok Bot's trigger, whatever the store holds.
       if (!WAKE_URL.test(w.url)) throw new Error("not a webhook");
-      const allowed = this.host.allowSend ? await this.host.allowSend(Date.now()) : true;
+      let allowed = true;
+      if (this.host.allowSend) {
+        const aborted = new Promise<never>((_resolve, reject) => {
+          const onAbort = () => reject(new Error("wake aborted"));
+          controller.signal.addEventListener("abort", onAbort, { once: true });
+          stopWaiting = () => controller.signal.removeEventListener("abort", onAbort);
+        });
+        allowed = await Promise.race([this.host.allowSend(Date.now()), aborted]);
+      }
       // The slot RPC may yield: clearing, replacing, revoking or resetting must still prevent the POST.
       const current = this.store.get(id);
       if (controller.signal.aborted || this.resetting || !current || current.gen !== w.gen || !this.host.alive(id)) return "error";
@@ -517,7 +529,12 @@ export class WakeEngine {
         this.setStatus(id, w.gen, "limit");
         return "limit";
       }
-      if (body.event !== "test") this.store.put(id, { ...current, sent_at: Date.now() });
+      if (body.event !== "test") {
+        const sentAt = Date.now();
+        this.store.put(id, { ...current, sent_at: sentAt, due: current.due === null ? null : Math.max(current.due, sentAt + WAKE_GAP_MS) });
+        this.schedule(id);
+      }
+      attempted = true;
       const response = await fetch(w.url, {
         method: "POST",
         headers: { authorization: `Bearer ${w.key}`, "content-type": "application/json" },
@@ -532,8 +549,13 @@ export class WakeEngine {
       // Never the URL or the key in a log: the error may carry them.
       outcome = "error";
     } finally {
+      stopWaiting?.();
       clearTimeout(timer);
       if (this.aborts.get(id) === controller) this.aborts.delete(id);
+    }
+    if (!attempted) {
+      this.setStatus(id, w.gen, outcome);
+      return outcome;
     }
     // Only for the webhook that was sent, read again now: one cleared or set again meanwhile keeps its own state, and a
     // pin that came during the POST keeps its pending wake.

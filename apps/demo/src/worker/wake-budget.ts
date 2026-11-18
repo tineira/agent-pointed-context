@@ -10,8 +10,8 @@ export class WakeBudget extends DurableObject<unknown> {
     ctx.storage.sql.exec("create table if not exists wake_days (day text primary key, count integer not null)");
   }
 
-  take(now: number): boolean {
-    const day = new Date(now).toISOString().slice(0, 10);
+  take(): boolean {
+    const day = new Date(Date.now()).toISOString().slice(0, 10);
     const sql = this.ctx.storage.sql;
     sql.exec("delete from wake_days where day < ?", day);
     const rows = sql.exec<{ count: number }>(

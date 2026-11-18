@@ -27,7 +27,7 @@ const TEST_TEXT: Record<string, string> = {
   broken: "Grok Bot refused the key, or the trigger is gone.",
   error: "The test didn't go through.",
   too_soon: "Wait a few seconds between tests.",
-  limit: `Today's ${WAKE_DAY_MAX} wakes are used up.`,
+  limit: STATUS_TEXT.limit,
   no_webhook: "Set the webhook first.",
   paused: "This agent no longer reports as Grok bot.",
   unknown_grant: "This agent is gone.",

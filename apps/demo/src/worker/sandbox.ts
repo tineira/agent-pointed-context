@@ -284,7 +284,7 @@ export class Sandbox extends DurableObject<Env> {
         return !row || (!!row.seen_at && Date.parse(row.seen_at) > pendingAt);
       },
       offered: (id) => this.wakeOffered(id),
-      allowSend: (now) => this.env.WAKE_BUDGET.get(this.env.WAKE_BUDGET.idFromName("global")).take(now),
+      allowSend: () => this.env.WAKE_BUDGET.get(this.env.WAKE_BUDGET.idFromName("global")).take(),
       deferred: (id) => (this.callsInFlight.get(id) ?? 0) > 0,
       arm: () => this.arm(),
       changed: () => this.broadcast({ type: "grants" }),
@@ -449,7 +449,7 @@ export class Sandbox extends DurableObject<Env> {
     if (Number(this.meta("expires_at") ?? 0) <= Date.now()) return this.expire();
     try {
       this.wake.deliverDue();
-      // The POSTs it started finish within this alarm (10 s deadline each), so their outcome is written.
+      // The sends it started finish within this alarm (10 s for the slot RPC and POST together), so their outcome is written.
       await this.wake.idle();
     } finally {
       await this.arm();

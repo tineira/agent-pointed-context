@@ -64,6 +64,7 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
           const { now, count } = await request.json();
           const budget = env.WAKE_BUDGET.get(env.WAKE_BUDGET.idFromName("global"));
           let granted = 0;
+          // Deliberately pass an obsolete caller timestamp: the real class must ignore it and use its own clock.
           for (let i = 0; i < count; i++) if (await budget.take(now)) granted++;
           return Response.json({ granted });
         } };`,
