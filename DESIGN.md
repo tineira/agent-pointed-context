@@ -247,11 +247,11 @@ A local hub (extension, desktop app) cannot take that POST; the app's page would
 
 v2 reuses the v1 pin as it is. Each `(agent, app)` pair is one v1 grant held by the hub, so the app stores `FocusRow` per grant, resolves `FocusPayload` and trims it to that grant exactly as today. C5 holds per app.
 
-The hub learns about pins with v1's own tool. While the dock is open, the hub keeps one `wait_for_focus` running against each paired app, so the hub does the N waits and the agent does one. A wait that returns `page_open: false` comes back at once, so the hub backs off for that app (one retry every 15 s) instead of spinning. Once the dock closes, the hub stops watching.
+The hub learns about pins with v1's own tools, and only while an agent is calling. It runs no watcher: the first design, one `wait_for_focus` kept running against each paired app while the dock is open, was not built (§ 12.8). Inside an agent's call the hub asks the apps itself. It sends `get_current_view` to each paired app (`look()`, run first by the hub's `get_current_view`, `call_app_tool` and `list_app_tools`), so a new pin rides as `attention` on any call. During its own `wait_for_focus` it sends one `wait_for_focus` to each app in parallel (`waitApps()`). A wait that finds the page closed comes back at once, and the hub does not ask that app again in that wait. Between calls nothing asks the apps.
 
-The app's `seen_at` now means "the hub received it"; the hub logs the agent's own `seen`.
+The app's `seen_at` means "the hub took the pin", which happens when an agent's call is running, not when the pin is made. The hub keeps its own `seen_at` for the agent's pointer and sets it when the pin is handed to the agent (`markPointerSeen`).
 
-A doorbell is built, experimentally, for one use: waking an agent that is not calling (§ 30). It carries no target; the hub still reads the focus as before. (Of the watcher described above, nothing was kept: § 12.8.)
+A doorbell is built, experimentally, for one use: waking an agent that is not calling (§ 30). It carries no target; the hub still reads the focus as before.
 
 ### 12.3 Tool names and the app on the focus
 
