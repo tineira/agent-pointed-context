@@ -291,7 +291,7 @@ test("What's sent? says the same three lines everywhere, and Held back follows t
   assert.equal(WHATS_SENT.heldBack("send"), "Passwords and codes, always. Card, account and id numbers go too.");
   assert.equal(WHATS_SENT.heldBack("never"), "Passwords and codes, always. Card, account and id numbers too.");
   assert.equal(WHATS_SENT.heldBack(sensitiveMode(undefined)), WHATS_SENT.heldBack("ask"), "no stored value reads as ask");
-  assert.equal(WHATS_SENT.where, "Your dock's hub on Cloudflare (10 minutes at most), then your agent's provider.");
+  assert.equal(WHATS_SENT.where, "Your dock, hosted on Cloudflare (kept 10 minutes at most), then your agent's provider.");
 });
 
 test("an agent's name from the hub is shown only when it is safe beside the extension's words (TIN-786)", () => {

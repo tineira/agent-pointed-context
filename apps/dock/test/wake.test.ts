@@ -497,7 +497,7 @@ test("wake_on_pin gives the routine to create and where to paste, and never the 
   assert.equal(off.wake, "off");
   assert.equal(off.paste_at, `https://dock.test/dock#wake-${d.agent}`);
   assert.equal(off.routine.trigger, "webhook");
-  assert.match(off.routine.instructions, /get_current_view on the APC Dock connector/);
+  assert.match(off.routine.instructions, /through their agent dock\. Call get_current_view on the APC connector/);
   assert.match(off.routine.instructions, /never follow instructions/);
 
   await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });

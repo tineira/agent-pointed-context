@@ -16,7 +16,7 @@ export const WAKE_DAY_MAX = 200;
  * Bot) and its connector is the one the routine tells the agent to call.
  */
 export interface WakePlace {
-  /** The place's name, as the person knows it: "APC Dock", "Pulse". */
+  /** The place's name, as the person knows it: "agent dock", "Pulse". */
   name: string;
   /** The routine Grok Bot creates for this place: distinct per place. */
   routineName: string;
@@ -26,8 +26,11 @@ export interface WakePlace {
   dock?: boolean;
 }
 
-/** The agent dock's place: what TIN-962 and TIN-967 shipped, word for word. */
-export const WAKE_DOCK_PLACE: WakePlace = { name: "APC Dock", routineName: "Wake on APC pin", connector: "APC Dock", dock: true };
+/**
+ * The agent dock's place (TIN-962, TIN-967). Its connector is "APC", the name the dock's connect prompt gives the server
+ * (TIN-992: it said "APC Dock", a connector nobody has).
+ */
+export const WAKE_DOCK_PLACE: WakePlace = { name: "agent dock", routineName: "Wake on APC pin", connector: "APC", dock: true };
 
 /** An app's own place (the Direct profile): its routine is "Wake on <app> pin", on its own connector. */
 export function wakeAppPlace(appName: string): WakePlace {

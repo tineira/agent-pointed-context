@@ -481,14 +481,13 @@ public sealed class MainWindow : Window
 
     /// <summary>
     /// Start over (TIN-411), as on the web: this app's sandbox and session go, after a confirm that says
-    /// what goes, links the other sites' Start over, and gives the prompt that drops "APC" from the agent.
+    /// what goes, links the other sites' Start over. It gives no prompt to drop the "APC" server: this
+    /// app pairs only through the dock, and the dock keeps working (TIN-992).
     /// </summary>
     async Task StartOverAsync()
     {
-        const string disconnect = "Please remove the remote MCP server named \"APC\" (its URL starts with https://apc.tineira.com/mcp/) from your connectors. If you can remove it yourself, do it now and tell me when it's gone. If you can't, tell me the exact steps to remove it in the app I'm using you in right now.";
         var go = new Button { Content = "Delete and start over", Classes = { "accent" } };
         var cancel = new Button { Content = "Cancel", IsCancel = true, IsDefault = true };
-        var copy = new Button { Content = "Copy", VerticalAlignment = VerticalAlignment.Top };
         Button Link(string name, string url)
         {
             var b = new Button { Content = $"Start over in {name}" };
@@ -512,23 +511,9 @@ public sealed class MainWindow : Window
                     new TextBlock { Text = "This deletes this app's Pulse sandbox: the agents your dock paired here and their pins, your view, and the event log. The app forgets its session.", TextWrapping = TextWrapping.Wrap },
                     new TextBlock { Text = "To start from zero everywhere, do the same on the other sites (each opens in your browser and asks you there):", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold },
                     new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl), Link("Pulse (web)", "https://pulse.apc.tineira.com/agents"), Link("Signals", "https://signals.apc.tineira.com/") } },
-                    new TextBlock { Text = "And remove the \"APC\" server from your agent. Paste this to your agent:", TextWrapping = TextWrapping.Wrap },
-                    new DockPanel
-                    {
-                        Children =
-                        {
-                            copy.Also(c => { DockPanel.SetDock(c, Dock.Right); c.Margin = new Thickness(8, 0, 0, 0); }),
-                            new TextBlock { Text = disconnect, TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas, monospace"), FontSize = 12, Foreground = Muted },
-                        },
-                    },
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, go } },
                 },
             },
-        };
-        copy.Click += async (_, _) =>
-        {
-            if (dialog.Clipboard is { } clip) await clip.SetTextAsync(disconnect);
-            copy.Content = "Copied";
         };
         go.Click += (_, _) => dialog.Close(true);
         cancel.Click += (_, _) => dialog.Close(false);

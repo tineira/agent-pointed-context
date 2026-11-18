@@ -38,7 +38,7 @@ import { REMOVED_CLOSE } from "../worker/devices.ts";
 import { approveAndOpen, beginAnswer, decisionNotice, endAnswer, inFlightOf, isCodeRetryError, isConnectingAnswer, type CodeError, type InFlight, type Sent } from "./request-state.ts";
 
 /** What the dock's Start over deletes (TIN-411). */
-const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app gets its grant back)", "where your agents point"];
+const DOCK_WIPES = ["your agents and their MCP URLs", "their pairings with apps (each app loses those agents' access)", "where your agents are pinned"];
 
 /**
  * Draw an agent's icon (an <svg> or an <img> from AgentIcon) as a 64 px PNG data URI: the agent's
