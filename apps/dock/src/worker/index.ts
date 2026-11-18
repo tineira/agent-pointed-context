@@ -18,7 +18,6 @@ import { parseRingBody } from "./wake.ts";
 const RING_BODY_MAX = 2048;
 import { deviceLabel, normalizeJoinCode } from "./devices.ts";
 import { DIRECTORY } from "./join-codes.ts";
-import { withByteRanges } from "./range.ts";
 import { loggable } from "./redact.ts";
 
 /** The dock's own apc.json (APC 0.5). Not exported: a Worker's named exports are its entrypoints. */
@@ -45,9 +44,9 @@ const NO_FRAMING ={ "content-security-policy": "frame-ancestors 'none'", "x-fram
 app.use("*", async (c, next) => {
   await next();
   if (c.res.status === 101) return;
-  const res = new Response(c.res.body, c.res);
-  for (const [k, v] of Object.entries(NO_FRAMING)) res.headers.set(k, v);
-  c.res = res;
+  c.res = new Response(c.res.body, c.res);
+  // Hono merges the previous headers in its response setter; enforce these after assigning it.
+  for (const [k, v] of Object.entries(NO_FRAMING)) c.res.headers.set(k, v);
 });
 
 /** A computer removed while its request ran (Hub.asOwner, TIN-909) is answered as one whose cookie no longer opens the dock. */
@@ -489,20 +488,19 @@ app.all("/v1/*", (c) => c.json({ error: "not_found" }, 404));
  * (GET /api/dock/mine) leads on. The one redirect left is ?start_over=1, the link from another site's Start over
  * dialog (TIN-412), which the dock page answers: a visitor who has a dock goes to /dock?start_over=1.
  */
-app.get("/", async (c) => {
+app.all("/", async (c) => {
   const url = new URL(c.req.url);
-  if (url.searchParams.has("start_over") && (await ownsDock(c.env, getCookie(c, COOKIE)))) return c.redirect(`/dock${url.search}`, 302);
-  return c.env.ASSETS.fetch(c.req.raw);
-});
-/**
- * The landing's clip and poster (TIN-623): the asset layer ignores Range, and Safari will not play a video
- * without 206 answers, so the Worker serves /media/* and cuts the byte range itself (src/worker/range.ts).
- */
-app.on(["GET", "HEAD"], "/media/*", async (c) => {
-  const req = c.req.raw;
-  // The asset layer's HEAD has no Content-Length, so a HEAD asks it with GET and sends none of the body.
-  const asset = await c.env.ASSETS.fetch(req.method === "HEAD" ? new Request(req, { method: "GET" }) : req);
-  return withByteRanges(req, asset);
+  if ((c.req.method === "GET" || c.req.method === "HEAD") && url.searchParams.has("start_over") && (await ownsDock(c.env, getCookie(c, COOKIE)))) {
+    c.header("cache-control", "no-store");
+    c.header("vary", "Cookie");
+    return c.redirect(`/dock${url.search}`, 302);
+  }
+  // The site needs no credentials. Keep method/body, query, Range, HEAD and conditional headers;
+  // preserve its streaming response, status and cache headers; middleware enforces Dock frame protection.
+  const headers = new Headers(c.req.raw.headers);
+  for (const name of ["cookie", "authorization", OWNER_HEADER]) headers.delete(name);
+  const response = await c.env.SITE.fetch(new Request(c.req.raw, { headers }));
+  return response;
 });
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 

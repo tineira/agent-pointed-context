@@ -6,7 +6,7 @@
  * The engine and its pure parts live in `@tineira/apc-server` (wake.ts, TIN-973), shared with apps that wake the agents
  * connected to them directly; this file keeps what is the dock's alone: the ring's form and the dock's copy.
  */
-import { productOf } from "../../../demo/src/model/products.ts";
+import { productOf } from "../model/products.ts";
 import { RING_NONCE, RING_SIG, RING_WINDOW_MS, WAKE_DOCK_PLACE, wakeHint, wakeResultHint, wakeTool } from "@tineira/apc-server";
 
 export { WAKE_DAY_MAX, WAKE_DEADLINE_MS, WAKE_DEFER_MAX_MS, WAKE_DEFER_MS, WAKE_GAP_MS, WAKE_HINT_EVERY_MS, WAKE_KEY, WAKE_SETTLE_MS, WAKE_TEST_GAP_MS, WAKE_URL, parseWake, wakeDay, wakeOutcome, withKey, type WakeDelivery, type WakeKind, type WakeStatus } from "@tineira/apc-server";

@@ -70,8 +70,8 @@ test("activating the dock's service worker waits on no client, so no fetch of th
 
 test("the service worker carries a version, so a deploy that must reach open pages changes the file", () => {
   assert.match(source, /const VERSION = "[^"]+";/);
-  // TIN-621: open docks must reload, so they stop offering the demo apps and calling the gone /world route.
-  assert.match(source, /2026-11-04\.tin-621/);
+  // The route split updates old scope-/ registrations in place.
+  assert.match(source, /2026-11-18\.tin-1006/);
 });
 
 test("the service worker caches nothing and leaves V1 alone: only the dock's navigations are answered, offline with a note", async () => {
@@ -86,7 +86,10 @@ test("the service worker caches nothing and leaves V1 alone: only the dock's nav
   handlers.get("fetch")!({ request: { mode: "cors", url: `${ORIGIN}/api/d/x/state` }, respondWith });
   handlers.get("fetch")!({ request: { mode: "navigate", url: `${ORIGIN}/v1/` }, respondWith });
   handlers.get("fetch")!({ request: { mode: "navigate", url: `${ORIGIN}/v1` }, respondWith });
-  assert.equal(answered.length, 0, "a non-navigation, and any V1 page, is left to the network");
+  for (const path of ["/", "/?start_over=1", "/docs", "/docs/spec", "/try", "/build", "/build/direct", "/extension", "/dockyard"]) {
+    handlers.get("fetch")!({ request: { mode: "navigate", url: `${ORIGIN}${path}` }, respondWith });
+  }
+  assert.equal(answered.length, 0, "every non-Dock navigation is left to the network, including offline");
   handlers.get("fetch")!({ request: { mode: "navigate", url: `${ORIGIN}/dock` }, respondWith });
   assert.equal(answered.length, 1);
   assert.match(await (await answered[0]!).text(), /needs a connection/);

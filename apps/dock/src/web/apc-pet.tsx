@@ -10,7 +10,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPet, petPhase, petState, pinPhase, watchRead, type PetHandle, type PetState, type ReadWatch } from "@tineira/apc-web";
-import { brandFor } from "../../../demo/src/web/agent-brands.ts";
+import { brandFor } from "./agent-brands.ts";
 import type { DockAgent } from "./agent-page.tsx";
 
 /**

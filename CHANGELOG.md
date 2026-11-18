@@ -4,6 +4,8 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **The standard’s site and docs run independently of Dock.** A new apc-site Worker serves the existing pages, docs and media URLs; Dock delegates the landing and keeps Start over, pairing and its offline page (`apps/site`, `apps/dock`, `scripts/lib/dock-workerd.mjs`, `.github/workflows/ci.yml`).
+
 - **APC 1.3.0 adds profile-word recommendations; nothing is marked and no reader changes (TIN-1005).** Origins SHOULD use words that match `[a-z][a-z0-9_-]{0,31}` in full and list at most 8 words, with the reader's endpoint rejection stated and the reference parser's top-level refusal named as reference behaviour, not a rule of the page; the standard and four packages move to 1.3.0, an app on 1.2 changes only `standard`, and install pins stay at 1.2.0. (`apps/dock/src/docs/pages/spec.md`, `apps/dock/src/docs/pages/overview.md`, `packages/protocol/src/version.ts`, `packages/protocol/CHANGELOG.md`, `packages/*/package.json`)
 
 - **The docs install 1.2.0 (TIN-1004).** `latest` now points at 1.2.0, so the pinned install commands in the README, the integrate page and the conformance page name it. (`README.md`, `apps/dock/src/docs/pages/integrate.md`, `apps/dock/src/docs/pages/conformance.md`)

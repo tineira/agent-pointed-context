@@ -8,12 +8,12 @@
 // the dock's own pages hear the change of controller and reload themselves (sw-reload.ts). The worker
 // never navigates a client: a navigation's fetch waits for the worker to finish activating, so awaiting
 // one in activate would hold every fetch of the origin, V1's at /v1 included.
-const VERSION = "2026-11-04.tin-621";
+const VERSION = "2026-11-18.tin-1006";
 
-/** V1 (apps/v1, the paper's demo) shares this host; this worker never answers its navigations. */
-const isV1 = (url) => {
+/** Existing scope-/ registrations update in place. Only Dock navigations get the offline note. */
+const isDock = (url) => {
   const path = new URL(url).pathname;
-  return path === "/v1" || path.startsWith("/v1/");
+  return path === "/dock" || path.startsWith("/dock/");
 };
 
 self.addEventListener("install", () => {
@@ -22,7 +22,7 @@ self.addEventListener("install", () => {
 // Nothing here waits on a client.
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener("fetch", (event) => {
-  if (event.request.mode !== "navigate" || isV1(event.request.url)) return;
+  if (event.request.mode !== "navigate" || !isDock(event.request.url)) return;
   event.respondWith(
     fetch(event.request).catch(
       () => new Response("<!doctype html><meta charset=utf-8><title>Agent dock</title><p style=\"font:15px system-ui;padding:16px\">The agent dock needs a connection. It will come back when you are online.</p>", { headers: { "content-type": "text/html; charset=utf-8" } }),

@@ -19,5 +19,6 @@ test("the dock serves the extension it was built with, and every download link p
   assert.ok(!/run_worker_first[^\]]*\/extension/.test(wrangler), "served as an asset, with public/_headers");
   assert.match(readFileSync(new URL("../public/_headers", import.meta.url), "utf8"), /^\/\*\n\s+Content-Security-Policy: frame-ancestors 'none'\n\s+X-Frame-Options: DENY/m);
   const page = readFileSync(new URL("../src/web/extension.tsx", import.meta.url), "utf8");
+  assert.match(page, /href="\/docs/, "the extension page links to the standard's docs");
   assert.ok(!page.includes("github.com/tineira/agent-pointed-context/releases"), "/extension links the dock's own zip");
 });

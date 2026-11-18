@@ -8,7 +8,7 @@ licence (CC BY 4.0), like the paper that introduced it:
 
 That text is, in this repository:
 
-  - apps/dock/src/docs/pages/ (the docs: overview, spec, integration guide, conformance, for agents)
+  - apps/site/src/docs/pages/ (the docs: overview, spec, integration guide, conformance, for agents)
   - packages/protocol/CHANGELOG.md (the standard's changelog)
 
 You may share and adapt it, for any purpose, provided you give appropriate credit ("Agent Pointed
@@ -16,4 +16,4 @@ Context, https://apc.tineira.com/docs, Tomas Neira"), link to the licence, and i
 made.
 
 Everything else in this repository, the code included (the @tineira/apc-* packages, the examples in
-apps/dock/src/docs/examples, the reference apps), is licensed under the MIT licence in LICENSE.
+apps/site/src/docs/examples, the reference apps), is licensed under the MIT licence in LICENSE.

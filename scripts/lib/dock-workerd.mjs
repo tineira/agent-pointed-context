@@ -1,11 +1,16 @@
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/** The two Workers in workerd, and the fetch that reaches them. */
+/** The site, Dock and Pulse Workers in workerd, and the fetch that reaches them. */
 export async function startWorkerd({ connectManifestFixture = false } = {}) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const siteConfig = JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8"));
+  const sitePrefixes = siteConfig.routes.map(({ pattern }) => {
+    if (!pattern.startsWith("apc.tineira.com/") || !pattern.endsWith("*") || pattern.slice(0, -1).includes("*")) throw new Error(`unsupported site route: ${pattern}`);
+    return pattern.slice("apc.tineira.com".length, -1);
+  });
   // wrangler is the dock's devDependency, and Miniflare is wrangler's: the versions `vite dev` and `wrangler deploy` use.
   const wranglerPath = createRequire(join(root, "apps/dock/package.json")).resolve("wrangler");
   const fileUrl = (p) => new URL(`file:///${p.replaceAll("\\", "/")}`).href;
@@ -37,7 +42,12 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
     script: `export default {
       async fetch(request, env) {
         const host = new URL(request.url).hostname;
-        if (host === "apc.tineira.com") return env.DOCK.fetch(request);
+        if (host === "apc.tineira.com") {
+          const path = new URL(request.url).pathname;
+          // The six zone patterns precede the Dock Custom Domain, query strings included.
+          const site = ${JSON.stringify(sitePrefixes)}.some((prefix) => path.startsWith(prefix));
+          return site ? env.SITE.fetch(request) : env.DOCK.fetch(request);
+        }
         if (host === "pulse.apc.tineira.com") {
           const response = await env.PULSE.fetch(request);
           // Hub-only 0.13 tests provide the app manifest declaration; app pages ship in the separate app branch.
@@ -50,11 +60,11 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
         return new Response("no network in this test: " + host, { status: 502 });
       },
     };`,
-    serviceBindings: { DOCK: "apc-dock", PULSE: "apc-pulse" },
+    serviceBindings: { DOCK: "apc-dock", PULSE: "apc-pulse", SITE: "apc-site" },
   };
   const mf = new Miniflare(
     convertV4MiniflareOptions({
-      workers: [internet, builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"), {
+      workers: [internet, builtWorker("apc-site", "apps/site/dist/apc_site/wrangler.json"), builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"), {
         // Test-only access to the real exported class and binding; never a route in the shipped Worker.
         name: "wake-budget-probe",
         modules: true,

@@ -15,10 +15,10 @@ import { APC_LINK_KEY, CONNECT_REQUEST_TTL_MS, encodeApcConnect, declaresMcpUrl,
 import { announceWaits, attachAttention, attachThen, InflightCalls, MemoryWaitSlots, ringKey, ringSignature, sameString, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
 import { WakeEngine, type WakeHost, type WakeRow, type WakeStore } from "@tineira/apc-server";
 import { isWakeProduct, parseRingBody, WAKE_HINT, WAKE_PLACE, WAKE_RESULT_HINT, WAKE_TOOL, withKey, RING_SEEN_MAX, RING_WINDOW_MS, type WakeKind } from "./wake.ts";
-import { anyPageOpen } from "../../../demo/src/worker/page.ts";
-import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
-import { productName } from "../../../demo/src/model/products.ts";
-import { sessionPoint } from "../../../demo/src/worker/sessions.ts";
+import { anyPageOpen } from "./page.ts";
+import { pickClientIcon } from "./client-icon.ts";
+import { productName } from "../model/products.ts";
+import { sessionPoint } from "./sessions.ts";
 import { AppCallError, callAppTool, failureReason, initializeApp, listAppTools, giveBackOutcome, readApcJson, structured, type AppTool, type AppToolResult, type AppTransport } from "./app-client.ts";
 import { appIdFor, combineAttendance, detachKeys, dockReadEntry, errorOf, focusLabel, HIDDEN_TOOLS, hubFocus, readsPin, type AppRef, type CallEntry, type HubFocus } from "./logic.ts";
 import { READING_TTL_MS, readerAllowed, readingEntry, readingText, shapeReading, type PageReading, type ReadingRow } from "./reading.ts";
@@ -50,6 +50,8 @@ export interface Env {
   /** The join codes' directory (TIN-838): which dock a code typed on another computer belongs to. */
   JOIN_CODES: DurableObjectNamespace<JoinCodes>;
   ASSETS: Fetcher;
+  /** The public standard site; root dispatch sends no owner credentials. */
+  SITE: Fetcher;
   /** Comma-separated origins of the apps a hub may pair with: the verified apps (TIN-580). */
   APP_ORIGINS?: string;
   /** The verified apps "Connect an app" lists (comma-separated origins, each also in APP_ORIGINS). Unset lists every verified app; a verified app left out is still connected by typing its host. */

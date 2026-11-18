@@ -5,7 +5,7 @@
  * these computers reaches the same agent.
  */
 import { useEffect, useRef, useState } from "react";
-import { Qr } from "../../../demo/src/web/qr.tsx";
+import { Qr } from "./qr.tsx";
 import { formatJoinCode, joinLink, normalizeJoinCode } from "../worker/devices.ts";
 import { call, type DockDevice, type DockJoin, type DockState } from "./agent-page.tsx";
 import { CopyRow } from "./setup.tsx";
