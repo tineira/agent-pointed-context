@@ -95,8 +95,8 @@ test("a refused answer is said, not dropped: the hub's 400 becomes a visible not
   for (const error of ["unknown_pairing", "warning_required", "app_blocked", "revoked", "invalid_action", "unreachable"]) {
     assert.ok(decisionNotice(error).length > 20, error);
   }
-  assert.match(decisionNotice("<script>"), /That did not go through \(<script>\)/, "an unknown code is shown as text (React escapes it)");
-  assert.match(renderNotice(decisionNotice("<script>")), /\(&lt;script&gt;\)/);
+  assert.equal(decisionNotice("<script>"), "That did not go through. Try again in a moment.", "an unknown code is never shown");
+  assert.doesNotMatch(renderNotice(decisionNotice("<script>")), /script/);
 });
 after(async () => {
   await vite?.close();

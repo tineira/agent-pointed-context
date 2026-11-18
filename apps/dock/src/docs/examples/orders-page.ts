@@ -202,7 +202,7 @@ function showWaiting(rows: AgentRow[] = waitingRows): void {
           : left > 0
             ? `Waiting for your dock — code ${formatPairingCode(a.pairing!.code)} (${left} s left). If your dock doesn't ask for this code, the agent wasn't yours: Cancel.`
             : "Your dock didn't finish in time. Drop the agent here again for a new code.";
-      line.textContent = `${says} ${pinError ? `Not pinned where you dropped it (${pinError}). ` : ""}`;
+      line.textContent = `${says} ${pinError ? "The agent could not be pointed at what you dropped it on. Drop it there again. " : ""}`;
       const cancel = Object.assign(document.createElement("button"), { type: "button", textContent: "Cancel" });
       cancel.addEventListener("click", () => void post("/api/cancel", { grant_id: a.id }).then(refresh));
       line.append(cancel);
@@ -223,7 +223,7 @@ async function dropFromDock(drag: AgentDrag & { hub: string; ticket: string }, t
   if (answer.ok === true && answer.status === "connect_requested") { dropMessage.textContent = "Confirm in your dock"; return; }
   if (answer.ok !== true) {
     const messages: Record<string, string> = {
-      not_found: "Your dock cannot take a connection request and may be too old for Connect. Update your dock, then drop the agent again.",
+      not_found: "Your dock cannot take a connection request and may be too old to connect to apps. Update your dock, then drop the agent again.",
       ticket_not_for_pairing: "Drop the agent again, then confirm in your dock.",
       hub_refused: "Your dock refused the connection request. Check your dock, then try again.",
       too_many_requests: "Your dock has too many pending requests. Answer one in your dock, then drop the agent again.",

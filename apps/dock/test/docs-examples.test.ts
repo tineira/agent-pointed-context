@@ -554,7 +554,7 @@ function assertParsesWithTsc(source: string, filename: string): void {
 }
 
 for (const [answer, message] of [
-  [{ ok: false, error: "not_found" }, /cannot take a connection request.*too old for Connect.*Update your dock/],
+  [{ ok: false, error: "not_found" }, /cannot take a connection request.*too old to connect to apps.*Update your dock/],
   [{ ok: false, error: "hub_refused" }, /refused the connection request.*Check your dock/],
   [{ ok: false, error: "too_many_requests" }, /too many pending requests.*Answer one/],
   [{ ok: false, error: "hub_not_allowed" }, /does not pair with that dock.*Use a dock allowed/],
@@ -813,5 +813,13 @@ test("orders-connect.ts mounts against a fake DOM and drives the 0.13 Dock Conne
     assert.equal(ui.messageEl.textContent, "Connection cancelled.");
   } finally {
     Object.assign(globalThis, saved);
+  }
+});
+
+test("Orders pages show plain sentences: no raw pin_error, no refusal code, no 'too old for Connect' (TIN-998)", () => {
+  for (const file of ["orders-page.ts", "orders-connect.ts"]) {
+    const source = readFileSync(resolve(import.meta.dirname, "../src/docs/examples", file), "utf8");
+    assert.doesNotMatch(source, /too old for Connect/, file);
+    assert.doesNotMatch(source, /\$\{(pinError|paired\.pin_error|error\b[^}]*)\}/, `${file} interpolates a code into text`);
   }
 });
