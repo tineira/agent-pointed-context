@@ -87,6 +87,9 @@ const agentRoute = (path: string) => path.match(/^\/dock\/agents\/(ag_[0-9a-f]+)
 /** The link another computer opens to join this dock (TIN-838): /dock/join#<code>. */
 const JOIN_ROUTE = /^\/dock\/join\/?$/.test(location.pathname);
 
+/** The Wake on pin section a `#wake-<agent id>` address names (TIN-967), or null. */
+const wakeFromHash = (): string | null => (/^#wake-ag_[0-9a-f]+$/.test(location.hash) ? location.hash.slice(1) : null);
+
 export function HubDock() {
   // The dock's own address: the list at /dock, an agent's page at /dock/agents/<id>; Back works.
   const [path, setPath] = useState(location.pathname);
@@ -110,6 +113,25 @@ export function HubDock() {
   const [state, setState] = useState<DockState | null>(null);
   // A new object on each failure, so a failed retry sets up the next one.
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
+  // wake_on_pin's link (TIN-967): /dock#wake-<agent id> opens that agent's Wake on pin and brings it into view, on load and
+  // in a dock already open (hashchange), as the extension page's #update does. The hash is then taken off the address, so
+  // a reload does not open it again and the same link works again; closing the section by hand closes it for good.
+  const [wakeOpen, setWakeOpen] = useState(wakeFromHash);
+  useEffect(() => {
+    const onHash = () => {
+      const target = wakeFromHash();
+      if (target) setWakeOpen(target);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  useEffect(() => {
+    if (!wakeOpen || !state || !wakeFromHash()) return;
+    const el = document.getElementById(wakeOpen);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    history.replaceState(history.state, "", location.pathname + location.search);
+  }, [wakeOpen, state]);
   const [dragging, setDragging] = useState<string | null>(null);
   /** Answers on their way per request (Review round 1 and Fix check 2 on #120): ref guards double-clicks before re-render. */
   const decidingRef = useRef<Sent>(new Map());
@@ -792,7 +814,14 @@ export function HubDock() {
               </details>
               {(a.wake_offer || a.wake) && (
                 // Wake on pin (TIN-962): Grok bot only, and wherever a webhook is set, so Turn off stays reachable.
-                <details className="tile-details">
+                <details
+                  className="tile-details"
+                  id={`wake-${a.id}`}
+                  open={wakeOpen === `wake-${a.id}` || undefined}
+                  onToggle={(e) => {
+                    if (!e.currentTarget.open && wakeOpen === `wake-${a.id}`) setWakeOpen(null);
+                  }}
+                >
                   <summary>Wake on pin{a.wake ? " · on" : ""}</summary>
                   <WakeOnPin
                     wake={a.wake ?? null}

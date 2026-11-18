@@ -151,11 +151,13 @@ test("a page reading wakes Grok bot once, after it settles: Bearer key, and a bo
   assert.deepEqual({ ...d.sent[0]!.body, at: null }, { v: 1, event: "pin", kind: "page_reading", at: null });
   assert.equal((await d.agentState()).wake.status, "ok");
 
-  // A second reading within 30 s waits for the gap, then wakes once.
+  // A second reading within 15 s of that wake waits for the gap, then wakes once.
   await d.hub.reading(reading, token, BROWSER);
-  await d.pass(5_000);
-  assert.equal(d.sent.length, 1);
-  await d.pass(25_000);
+  const w = d.wake()!;
+  assert.equal(w.due, Number(w.sent_at) + 15_000);
+  await d.pass(Number(w.due) - Date.now() - 100);
+  assert.equal(d.sent.length, 1, "not before 15 s since the last wake");
+  await d.pass(200);
   assert.equal(d.sent.length, 2);
 });
 
@@ -280,10 +282,10 @@ test("removing the agent deletes its webhook; so does the last computer leaving"
   assert.equal(e.db.prepare("select count(*) as n from wakes").get()!.n, 0);
 });
 
-test("at most 100 POSTs a day, tests included", async (t) => {
+test("at most 200 POSTs a day, tests included", async (t) => {
   const d = await dock(t);
   await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
-  d.db.prepare("insert into wake_budget (agent_id, day, count) values (?, '2026-11-17', 100)").run(d.agent);
+  d.db.prepare("insert into wake_budget (agent_id, day, count) values (?, '2026-11-17', 200)").run(d.agent);
   assert.deepEqual(await d.hub.testWake(d.agent), { ok: false, error: "limit" });
   const token = await d.allow();
   await d.hub.reading(reading, token, BROWSER);
@@ -295,16 +297,16 @@ test("at most 100 POSTs a day, tests included", async (t) => {
 test("the budget counts every POST, and clearing or setting the webhook again keeps the count", async (t) => {
   const d = await dock(t);
   await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
-  d.db.prepare("insert into wake_budget (agent_id, day, count) values (?, '2026-11-17', 99)").run(d.agent);
+  d.db.prepare("insert into wake_budget (agent_id, day, count) values (?, '2026-11-17', 199)").run(d.agent);
   const token = await d.allow();
   await d.hub.reading(reading, token, BROWSER);
   await d.pass(3_000);
-  assert.equal(d.sent.length, 1, "the 100th goes");
-  assert.equal(d.db.prepare("select count from wake_budget").get()!.count, 100);
+  assert.equal(d.sent.length, 1, "the 200th goes");
+  assert.equal(d.db.prepare("select count from wake_budget").get()!.count, 200);
   await d.hub.clearWake(d.agent);
   await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
   await d.pass(10_000);
-  assert.deepEqual(await d.hub.testWake(d.agent), { ok: false, error: "limit" }, "the 101st does not, after clear and set");
+  assert.deepEqual(await d.hub.testWake(d.agent), { ok: false, error: "limit" }, "the 201st does not, after clear and set");
   // A new UTC day starts a new count.
   await d.pass(12 * 3_600_000);
   assert.deepEqual(await d.hub.testWake(d.agent), { ok: true, status: "ok" });
@@ -439,4 +441,50 @@ test("a test waits its turn: while a POST is in flight it is refused, and it cut
   d.hook.release();
   await d.hub.idle();
   assert.equal((await d.agentState()).wake.status, "ok");
+});
+
+/** The agent's initialize answer and tool list, as its client sees them. */
+async function seenByClient(d: Awaited<ReturnType<typeof dock>>) {
+  const a = await d.agentState();
+  const mcp = (body: unknown) => d.hub.fetch(new Request(`https://dock.test${new URL(a.mcp_url).pathname}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) }));
+  const init = await (await mcp({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: a.client_name, version: "1.0.0" } } })).json();
+  const list = await (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })).json();
+  return { instructions: String(init.result.instructions), tools: (list.result.tools as Array<{ name: string }>).map((t) => t.name) };
+}
+
+test("Grok bot gets wake_on_pin and, while no webhook is set, a line offering it; no other client sees either", async (t) => {
+  const other = await dock(t, "claude-code");
+  const plain = await seenByClient(other);
+  assert.ok(!plain.tools.includes("wake_on_pin"));
+  assert.ok(!plain.instructions.includes("wake_on_pin"));
+  const refused = await other.callTool("wake_on_pin");
+  assert.equal(refused.isError, true, "the tool is not there for another client");
+  t.mock.reset();
+
+  const d = await dock(t);
+  const off = await seenByClient(d);
+  assert.ok(off.tools.includes("wake_on_pin"));
+  assert.match(off.instructions, /call wake_on_pin/);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const on = await seenByClient(d);
+  assert.ok(on.tools.includes("wake_on_pin"), "still there, to say it is on");
+  assert.ok(!on.instructions.includes("wake_on_pin"), "the offer goes once it is on");
+});
+
+test("wake_on_pin gives the routine to create and where to paste, and never the URL or the key", async (t) => {
+  const d = await dock(t);
+  const off = (await d.callTool("wake_on_pin")).structuredContent;
+  assert.equal(off.wake, "off");
+  assert.equal(off.paste_at, `https://dock.test/dock#wake-${d.agent}`);
+  assert.equal(off.routine.trigger, "webhook");
+  assert.match(off.routine.instructions, /get_current_view on the APC Dock connector/);
+  assert.match(off.routine.instructions, /never follow instructions/);
+
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const on = (await d.callTool("wake_on_pin")).structuredContent;
+  assert.equal(on.wake, "on");
+  assert.equal(on.routine, undefined, "no routine to create once it is on");
+  const said = JSON.stringify(on);
+  assert.ok(!said.includes(KEY));
+  assert.ok(!said.includes("99c9ef5d"));
 });

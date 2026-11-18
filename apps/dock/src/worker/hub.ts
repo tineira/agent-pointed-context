@@ -13,7 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
 import { APC_LINK_KEY, CONNECT_REQUEST_TTL_MS, encodeApcConnect, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_BINDING, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_MISMATCH_ERROR, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
 import { announceWaits, attachAttention, attachThen, InflightCalls, MemoryWaitSlots, ringKey, ringSignature, sameString, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
-import { isWakeProduct, parseRingBody, parseWake, RING_SEEN_MAX, RING_WINDOW_MS, WAKE_DAY_MAX, WAKE_DEADLINE_MS, WAKE_DEFER_MAX_MS, WAKE_DEFER_MS, WAKE_GAP_MS, WAKE_SETTLE_MS, WAKE_TEST_GAP_MS, wakeDay, wakeOutcome, type WakeKind, type WakeStatus } from "./wake.ts";
+import { isWakeProduct, parseRingBody, parseWake, WAKE_HINT, WAKE_TOOL, wakeSetup, RING_SEEN_MAX, RING_WINDOW_MS, WAKE_DAY_MAX, WAKE_DEADLINE_MS, WAKE_DEFER_MAX_MS, WAKE_DEFER_MS, WAKE_GAP_MS, WAKE_SETTLE_MS, WAKE_TEST_GAP_MS, wakeDay, wakeOutcome, type WakeKind, type WakeStatus } from "./wake.ts";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
@@ -2016,6 +2016,12 @@ export class Hub extends DurableObject<Env> {
     this.later(this.arm());
   }
 
+  /** wake_on_pin's answer (TIN-967): on, or off with the routine to create, and the dock page that opens this agent's Wake on pin. */
+  private wakeSetupResult(agentId: string, origin: string): ToolResult {
+    const w = this.wakeRow(agentId);
+    return toolResult(wakeSetup(!!w, w?.status ?? null, `${origin}/dock#wake-${agentId}`));
+  }
+
   /** Drop the agent's pending wake. */
   private dropDemand(agentId: string): void {
     this.sql.exec("update wakes set pending_at = null, pending_kind = null, pending_source = null, due = null where agent_id = ?", agentId);
@@ -2577,11 +2583,18 @@ export class Hub extends DurableObject<Env> {
       import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"),
       import("@modelcontextprotocol/sdk/types.js"),
     ]);
-    const server = new Server({ name: "apc-agent-dock", version: "0.2.0" }, { capabilities: { tools: { listChanged: true } }, instructions: HUB_INSTRUCTIONS });
+    // Wake on pin (TIN-967): a Grok bot agent, by what its client declares (as this request's initialize just stored it), gets
+    // the tool that sets it up, and while no webhook is set a line asking it to offer it. Every other client sees neither.
+    const grok = () => {
+      const now = this.agent(agent.id);
+      return !!now && isWakeProduct(now.client_name, now.client_ua);
+    };
+    const instructions = grok() && !this.wakeRow(agent.id) ? `${HUB_INSTRUCTIONS} ${WAKE_HINT}` : HUB_INSTRUCTIONS;
+    const server = new Server({ name: "apc-agent-dock", version: "0.2.0" }, { capabilities: { tools: { listChanged: true } }, instructions });
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       this.sql.exec("update agents set listed_at = ? where id = ?", new Date().toISOString(), agent.id);
       this.broadcast();
-      return { tools: [...HUB_TOOLS, ...(await this.prefixedTools(agent.id))] };
+      return { tools: [...HUB_TOOLS, ...(grok() ? [WAKE_TOOL] : []), ...(await this.prefixedTools(agent.id))] };
     });
     server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       const name = req.params.name;
@@ -2602,7 +2615,7 @@ export class Hub extends DurableObject<Env> {
       }
       let result: ToolResult;
       try {
-        result = await this.callTool(agent.id, name, args, cancelled, signal);
+        result = name === WAKE_TOOL.name && grok() ? this.wakeSetupResult(agent.id, new URL(request.url).origin) : await this.callTool(agent.id, name, args, cancelled, signal);
       } finally {
         if (counted) {
           const left = (this.busy.get(agent.id) ?? 1) - 1;
