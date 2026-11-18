@@ -317,14 +317,14 @@ A pin is lost if you mark it seen on a read the client never receives.
 
 ### Revoke, and the order of locks
 
-- **Lock the grant row first, then its children.** A transaction that touches a grant and the rows that point to it (tokens, codes, pin, wait rows) locks the grant row first, then the children in one fixed order (Surplus: codes, links, pin, wait). A revoke deletes the grant's pin and wait rows in its own transaction, and a pin re-checks that the grant is live under the grant's lock, so a pin can never land after a revoke (both apps; in Autio, `apc_pin` and `apc_grant_revoked_cleanup`).
+- **Lock the grant row first, then its children.** A transaction that touches a grant and the rows that point to it (tokens, codes, pin, wait rows) locks the grant row first, then the children in one fixed order (Surplus: codes, links, pin, wait). A revoke deletes the grant's pin and wait rows in its own transaction, and a pin re-checks that the grant is live under the grant's lock, so a pin can never land after a revoke (Surplus; in Autio, `apc_pin` and `apc_grant_revoked_cleanup`).
 - **`FOR NO KEY UPDATE`, not `FOR UPDATE`, for a grant writer.** A child insert (a token, a wait claim) takes a `KEY SHARE` lock on its grant through the foreign key. `FOR UPDATE` blocks it; `FOR NO KEY UPDATE` does not, and still keeps grant writers in line. Nobody changes a grant's id, so it is enough. The owner's pin takes `FOR SHARE`, so a pin and a revoke run one after the other: the pin commits first and the revoke deletes it, or the pin fails.
 - **A job that touches several grants locks them in one order.** Surplus's page heartbeat locks the owner's dock grants with `order by id for no key update` before it writes any of them, as revoke-all does. Two transactions that take the same rows in different orders can deadlock. The heartbeat also retries once on a deadlock (40P01) or a serialization loss (40001), logs the SQLSTATE if that fails too, and never fails the page for it.
 - **Prove it on two real connections.** Surplus has tests that run two transactions at once on the real migrations (`ledger-grant-children-concurrency`, `ledger-dock-concurrency`). A mock cannot show a deadlock.
 
 ### Ship order, and rollback order
 
-Every grant check reads the grant's columns, on every request. So a migration that adds a grant column ships **before** the build that reads it. If the build goes first, every agent gets a 401 until the migration lands (this happened with Surplus's dock grants migration).
+Every grant check reads the grant's columns, on every request. So a migration that adds a grant column ships **before** the build that reads it. If the build goes first, every agent gets a 401 until the migration lands (Surplus's dock grants migration is an example).
 
 - **Roll back in the opposite order.** Revert the app to a build that does not read the columns, then run the rollback migration. Keep that rollback as a file next to the migration.
 - **Do not fall back on a missing column.** Surplus's token lookup does not catch 42703. The grant checks after it read the same columns, so a fallback would only move the failure. Failing closed is right.

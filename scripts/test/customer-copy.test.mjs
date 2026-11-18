@@ -19,6 +19,7 @@ const CODE_ROOTS = [
   "packages/protocol/src",
   "packages/server/src",
   "packages/web/src",
+  "packages/conformance/src",
 ];
 const CODE_EXT = /\.(ts|tsx|mjs|js|cs)$/;
 const MARKUP_EXT = /\.(html|axaml)$/;
@@ -38,7 +39,8 @@ function walk(dir, out = []) {
 /**
  * The text with its comments blanked out (newlines kept, so line numbers hold). A small scanner: code, strings ('
  * and " end at a newline, ` spans lines), line and block comments. It errs towards keeping text (an apostrophe in JSX
- * text opens a "string" to the end of its line), so it can report too much, never too little outside comments.
+ * text opens a "string" to the end of its line), so it can report too much, never too little outside comments. A `//`
+ * right after a `:` is a URL's, not a comment: JSX text is unquoted, so `https://` there must not hide the rest.
  */
 export function stripComments(src) {
   let out = "";
@@ -49,7 +51,7 @@ export function stripComments(src) {
     const c = src[i];
     const n = src[i + 1];
     if (mode === "code") {
-      if (c === "/" && n === "/") mode = "line";
+      if (c === "/" && n === "/" && src[i - 1] !== ":") mode = "line";
       else if (c === "/" && n === "*") mode = "block";
       else if (c === "'" || c === '"' || c === "`") {
         mode = "string";
@@ -99,9 +101,9 @@ function hits(file, text) {
 }
 
 test("the scanner keeps strings and drops comments", () => {
-  const src = 'const a = "see (TIN-1)"; // TIN-2\n/* TIN-3\n TIN-4 */ <p>Pulse\'s (TIN-5)</p>\nconst u = "https://x/y"; // TIN-6\n{/* TIN-7 */}';
+  const src = 'const a = "see (TIN-1)"; // TIN-2\n/* TIN-3\n TIN-4 */ <p>Pulse\'s (TIN-5)</p>\nconst u = "https://x/y"; // TIN-6\n{/* TIN-7 */}\n<p>See https://x.example (TIN-8)</p>';
   const left = stripComments(src);
-  assert.deepEqual([...left.matchAll(TICKET)].map((m) => m[0]), ["TIN-1", "TIN-5"]);
+  assert.deepEqual([...left.matchAll(TICKET)].map((m) => m[0]), ["TIN-1", "TIN-5", "TIN-8"]);
   assert.equal(left.split("\n").length, src.split("\n").length);
 });
 
