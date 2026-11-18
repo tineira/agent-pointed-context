@@ -27,6 +27,15 @@ app.use("/mcp/*", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Pulse"
 app.use("/apc/*", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Pulse") ?? next());
 app.use("/.well-known/apc.json", async (c, next) => profilesRefusal(c.env.APC_PROFILES, "Pulse") ?? next());
 
+// Every POST the page sends has a body, and many routes (Connect an agent, Revoke, a refusal) never read it. The local
+// runtime then answers the next request on that connection with "fetch failed", which the page saw as a /state 500
+// (TIN-995). So the body is read to the end after the route, whatever it answered. Registered before the other /api
+// middleware, so their early answers are covered too.
+app.use("/api/*", async (c, next) => {
+  await next();
+  if (c.req.raw.body && !c.req.raw.bodyUsed) await c.req.raw.arrayBuffer().catch(() => undefined);
+});
+
 function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
