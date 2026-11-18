@@ -13,7 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
 import { APC_LINK_KEY, CONNECT_REQUEST_TTL_MS, encodeApcConnect, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_BINDING, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_MISMATCH_ERROR, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
 import { announceWaits, attachAttention, attachThen, InflightCalls, MemoryWaitSlots, ringKey, ringSignature, sameString, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
-import { isWakeProduct, parseRingBody, parseWake, WAKE_HINT, WAKE_TOOL, wakeSetup, RING_SEEN_MAX, RING_WINDOW_MS, WAKE_DAY_MAX, WAKE_DEADLINE_MS, WAKE_DEFER_MAX_MS, WAKE_DEFER_MS, WAKE_GAP_MS, WAKE_SETTLE_MS, WAKE_TEST_GAP_MS, wakeDay, wakeOutcome, type WakeKind, type WakeStatus } from "./wake.ts";
+import { isWakeProduct, parseRingBody, parseWake, WAKE_HINT, WAKE_HINT_EVERY_MS, WAKE_RESULT_HINT, WAKE_TOOL, wakeSetup, withKey, type WakeDelivery, RING_SEEN_MAX, RING_WINDOW_MS, WAKE_DAY_MAX, WAKE_DEADLINE_MS, WAKE_DEFER_MAX_MS, WAKE_DEFER_MS, WAKE_GAP_MS, WAKE_SETTLE_MS, WAKE_TEST_GAP_MS, wakeDay, wakeOutcome, type WakeKind, type WakeStatus } from "./wake.ts";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
@@ -267,6 +267,11 @@ interface WakeRow {
   /** The pairing (or the browser's reader) whose pin made the wake due: checked again before the POST. */
   pending_source: string | null;
   due: number | null;
+  /** The last POST to this webhook (TIN-967): when, a test or a wake, how it went, and the HTTP status (null: no answer). */
+  delivered_at: number | null;
+  delivered_event: string | null;
+  delivered_outcome: string | null;
+  delivered_code: number | null;
 }
 
 /** How long an agent shows as calling tools after its last call ended: long enough for the dock to see it (TIN-483). */
@@ -383,7 +388,7 @@ export class Hub extends DurableObject<Env> {
       this.sql.exec("delete from meta where key = 'owner'");
     }
     // Added in TIN-384; a dock from TIN-382 lacks them (its old focus table is no longer read).
-    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"], ["pairings", "ended_reason text"], ["pairings", "app_standard text"], ["pairings", "unverified_acked integer"], ["tickets", "connect_attempts integer"], ["pairings", "ring_at integer"]]) {
+    for (const [table, column] of [["agents", "listed_at text"], ["agents", "prefixed_calls integer"], ["agents", "relay_calls integer"], ["agents", "waits integer"], ["agents", "badge text"], ["agents", "client_version text"], ["pairings", "approved_at text"], ["readers", "read_at text"], ["pairings", "revoked_at text"], ["pairings", "verified integer"], ["pairings", "declared_name text"], ["unverified_ok", "nonce text"], ["pairings", "pairing_code text"], ["pairings", "code_attempts integer"], ["pairings", "code_expires_at text"], ["pairings", "ended_at text"], ["pairings", "introduced_at text"], ["pairings", "intro_attempts integer"], ["pairings", "idle integer"], ["agents", "reconnect_since text"], ["joins", "check_code text"], ["pairings", "ended_reason text"], ["pairings", "app_standard text"], ["pairings", "unverified_acked integer"], ["tickets", "connect_attempts integer"], ["pairings", "ring_at integer"], ["agents", "wake_hint_at integer"], ["agents", "wake_declined_at integer"], ["wakes", "delivered_at integer"], ["wakes", "delivered_event text"], ["wakes", "delivered_outcome text"], ["wakes", "delivered_code integer"]]) {
       try {
         this.sql.exec(`alter table ${table} add column ${column}`);
       } catch {
@@ -2017,9 +2022,33 @@ export class Hub extends DurableObject<Env> {
   }
 
   /** wake_on_pin's answer (TIN-967): on, or off with the routine to create, and the dock page that opens this agent's Wake on pin. */
-  private wakeSetupResult(agentId: string, origin: string): ToolResult {
+  private wakeSetupResult(agentId: string, origin: string, args: Record<string, unknown> = {}): ToolResult {
+    const pasteAt = `${origin}/dock#wake-${agentId}`;
     const w = this.wakeRow(agentId);
-    return toolResult(wakeSetup(!!w, w?.status ?? null, `${origin}/dock#wake-${agentId}`));
+    // The person said no (TIN-967): the dock stops suggesting it. They can still ask: this tool keeps answering.
+    if (args.declined === true && !w) {
+      this.sql.exec("update agents set wake_declined_at = ? where id = ?", Date.now(), agentId);
+      return toolResult({ wake: "off", declined: true, paste_at: pasteAt, note: "Noted: the dock will not suggest Wake on pin again. If the person asks for it later, call wake_on_pin again." });
+    }
+    const last: WakeDelivery | null = w && w.delivered_at !== null
+      ? { at: new Date(w.delivered_at).toISOString(), event: w.delivered_event === "test" ? "test" : "pin", outcome: w.delivered_outcome === "ok" ? "ok" : w.delivered_outcome === "broken" ? "broken" : "error", http_status: w.delivered_code ?? null }
+      : null;
+    return toolResult(wakeSetup(!!w, w?.status ?? null, pasteAt, last));
+  }
+
+  /** The person declined Wake on pin (TIN-967). */
+  private wakeDeclined(agentId: string): boolean {
+    return (this.sql.exec<{ at: number | null }>("select wake_declined_at as at from agents where id = ?", agentId).toArray()[0]?.at ?? null) !== null;
+  }
+
+  /** Whether this result may carry the Wake on pin hint (TIN-967): off, not declined, not in the last day. Marks it given. */
+  private wakeHintDue(agentId: string): boolean {
+    if (this.wakeRow(agentId) || this.wakeDeclined(agentId)) return false;
+    const now = Date.now();
+    const at = this.sql.exec<{ at: number | null }>("select wake_hint_at as at from agents where id = ?", agentId).toArray()[0]?.at ?? null;
+    if (at !== null && now - at < WAKE_HINT_EVERY_MS) return false;
+    this.sql.exec("update agents set wake_hint_at = ? where id = ?", now, agentId);
+    return true;
   }
 
   /** Drop the agent's pending wake. */
@@ -2089,6 +2118,7 @@ export class Hub extends DurableObject<Env> {
     this.wakeAborts.set(agentId, controller);
     const timer = setTimeout(() => controller.abort(), WAKE_DEADLINE_MS);
     let outcome: "ok" | "broken" | "error";
+    let code: number | null = null;
     try {
       const response = await fetch(w.url, {
         method: "POST",
@@ -2099,6 +2129,7 @@ export class Hub extends DurableObject<Env> {
       });
       void response.body?.cancel().catch(() => {});
       outcome = wakeOutcome(response);
+      code = (response.type as string) === "opaqueredirect" ? null : response.status;
     } catch {
       // Never the URL or the key in a log: the error may carry them.
       outcome = "error";
@@ -2107,6 +2138,10 @@ export class Hub extends DurableObject<Env> {
       if (this.wakeAborts.get(agentId) === controller) this.wakeAborts.delete(agentId);
     }
     // Only for the webhook that was sent: one cleared or set again meanwhile keeps its own state.
+    this.sql.exec(
+      "update wakes set delivered_at = ?, delivered_event = ?, delivered_outcome = ?, delivered_code = ? where agent_id = ? and gen = ?",
+      Date.now(), body.event === "test" ? "test" : "pin", outcome, code, agentId, w.gen,
+    );
     this.setWakeStatus(agentId, w.gen, outcome);
     return outcome;
   }
@@ -2136,7 +2171,7 @@ export class Hub extends DurableObject<Env> {
     if (!wake) return { ok: false, error: "invalid" };
     this.stopWake(agentId);
     this.sql.exec(
-      "insert into wakes (agent_id, gen, url, key, created_at) values (?, ?, ?, ?, ?) on conflict(agent_id) do update set gen = excluded.gen, url = excluded.url, key = excluded.key, created_at = excluded.created_at, sent_at = null, status = null, status_at = null, pending_at = null, pending_kind = null, pending_source = null, due = null",
+      "insert into wakes (agent_id, gen, url, key, created_at) values (?, ?, ?, ?, ?) on conflict(agent_id) do update set gen = excluded.gen, url = excluded.url, key = excluded.key, created_at = excluded.created_at, sent_at = null, status = null, status_at = null, pending_at = null, pending_kind = null, pending_source = null, due = null, delivered_at = null, delivered_event = null, delivered_outcome = null, delivered_code = null",
       agentId, randomHex(8), wake.url, wake.key, new Date().toISOString(),
     );
     this.broadcast();
@@ -2589,7 +2624,7 @@ export class Hub extends DurableObject<Env> {
       const now = this.agent(agent.id);
       return !!now && isWakeProduct(now.client_name, now.client_ua);
     };
-    const instructions = grok() && !this.wakeRow(agent.id) ? `${HUB_INSTRUCTIONS} ${WAKE_HINT}` : HUB_INSTRUCTIONS;
+    const instructions = grok() && !this.wakeRow(agent.id) && !this.wakeDeclined(agent.id) ? `${HUB_INSTRUCTIONS} ${WAKE_HINT}` : HUB_INSTRUCTIONS;
     const server = new Server({ name: "apc-agent-dock", version: "0.2.0" }, { capabilities: { tools: { listChanged: true } }, instructions });
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       this.sql.exec("update agents set listed_at = ? where id = ?", new Date().toISOString(), agent.id);
@@ -2615,7 +2650,7 @@ export class Hub extends DurableObject<Env> {
       }
       let result: ToolResult;
       try {
-        result = name === WAKE_TOOL.name && grok() ? this.wakeSetupResult(agent.id, new URL(request.url).origin) : await this.callTool(agent.id, name, args, cancelled, signal);
+        result = name === WAKE_TOOL.name && grok() ? this.wakeSetupResult(agent.id, new URL(request.url).origin, args) : await this.callTool(agent.id, name, args, cancelled, signal);
       } finally {
         if (counted) {
           const left = (this.busy.get(agent.id) ?? 1) - 1;
@@ -2635,6 +2670,10 @@ export class Hub extends DurableObject<Env> {
       // A wait that came back with no focus ends the loop: no then on it.
       const emptyWait = name === "wait_for_focus" && result.structuredContent?.focus == null;
       result = attachThen(result, !emptyWait && thenApplies(this.attendance(agent.id), this.pointer(agent.id)?.focus.pinned_at));
+      // Wake on pin, offered on the calls an agent makes anyway (TIN-967): Grok bot only, while off and not declined, once a day.
+      // Only on a real answer: never on an error or a refused wait (retry_after_s), which would spend the day's offer.
+      const answered = !result.isError && result.structuredContent?.retry_after_s === undefined;
+      if ((name === "get_current_view" || name === "wait_for_focus") && answered && !cancelled() && grok() && this.wakeHintDue(agent.id)) result = withKey(result, "wake", WAKE_RESULT_HINT);
       this.broadcast();
       return result;
     });

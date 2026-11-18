@@ -101,8 +101,8 @@ async function dock(t: TestContext, client = "Cursor") {
     await hub.idle();
     await hub.idle();
   };
-  const callTool = async (name: string) => {
-    const response = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } });
+  const callTool = async (name: string, args: Record<string, unknown> = {}) => {
+    const response = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
     return (await response.json()).result;
   };
   const wake = () => db.prepare("select * from wakes").all()[0] as Record<string, unknown> | undefined;
@@ -487,4 +487,70 @@ test("wake_on_pin gives the routine to create and where to paste, and never the 
   const said = JSON.stringify(on);
   assert.ok(!said.includes(KEY));
   assert.ok(!said.includes("99c9ef5d"));
+});
+
+test("while off, Grok bot's get_current_view and wait_for_focus carry the offer at most once a day, and never once declined", async (t) => {
+  const d = await dock(t);
+  const first = (await d.callTool("get_current_view")).structuredContent;
+  assert.deepEqual(first.wake?.state, "off");
+  assert.match(first.wake.hint, /call wake_on_pin/);
+  assert.equal((await d.callTool("get_current_view")).structuredContent.wake, undefined, "not again the same day");
+  await d.pass(24 * 3_600_000);
+  assert.equal((await d.callTool("wait_for_focus")).structuredContent.wake?.state, "off", "a day later, on wait_for_focus too");
+
+  // The person says no: the hint and the instructions line stop for good; the tool still answers.
+  const declined = (await d.callTool("wake_on_pin", { declined: true })).structuredContent;
+  assert.equal(declined.declined, true);
+  await d.pass(48 * 3_600_000);
+  assert.equal((await d.callTool("get_current_view")).structuredContent.wake, undefined);
+  assert.ok(!(await seenByClient(d)).instructions.includes("wake_on_pin"));
+  assert.equal((await d.callTool("wake_on_pin")).structuredContent.wake, "off", "the person can still ask");
+});
+
+test("the offer never reaches another client, nor Grok bot once Wake on pin is on", async (t) => {
+  const other = await dock(t, "claude-code");
+  assert.equal((await other.callTool("get_current_view")).structuredContent.wake, undefined);
+  t.mock.reset();
+  const d = await dock(t);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  assert.equal((await d.callTool("get_current_view")).structuredContent.wake, undefined);
+});
+
+test("the steps say to update an existing routine rather than make a second", async (t) => {
+  const d = await dock(t);
+  const steps = (await d.callTool("wake_on_pin")).structuredContent.steps as string[];
+  assert.match(steps[0]!, /If a routine with this name already exists, update its instructions and resume it instead of creating a new one\./);
+});
+
+test("while on, wake_on_pin says how the last call to the webhook went, and a new webhook starts with none", async (t) => {
+  const d = await dock(t);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const before = (await d.callTool("wake_on_pin")).structuredContent;
+  assert.equal(before.last_delivery, null);
+  assert.match(before.note, /Send a test/);
+
+  await d.hub.testWake(d.agent);
+  const ok = (await d.callTool("wake_on_pin")).structuredContent;
+  assert.deepEqual({ ...ok.last_delivery, at: null }, { at: null, event: "test", outcome: "ok", http_status: 202 });
+  assert.equal(ok.last_delivery.at, new Date().toISOString());
+
+  d.hook.answer = 401;
+  const token = await d.allow();
+  await d.hub.reading(reading, token, BROWSER);
+  await d.pass(20_000);
+  const refused = (await d.callTool("wake_on_pin")).structuredContent;
+  assert.deepEqual({ ...refused.last_delivery, at: null }, { at: null, event: "pin", outcome: "broken", http_status: 401 });
+  assert.match(refused.note, /did not take the last call/);
+  assert.ok(!JSON.stringify(refused).includes(KEY));
+
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: `${KEY}2` });
+  assert.equal((await d.callTool("wake_on_pin")).structuredContent.last_delivery, null);
+});
+
+test("an error from wait_for_focus carries no offer and does not spend the day's", async (t) => {
+  const d = await dock(t);
+  const bad = await d.callTool("wait_for_focus", { timeout_s: 999 });
+  assert.equal(bad.isError, true);
+  assert.equal(bad.structuredContent?.wake, undefined);
+  assert.equal((await d.callTool("get_current_view")).structuredContent.wake?.state, "off");
 });
