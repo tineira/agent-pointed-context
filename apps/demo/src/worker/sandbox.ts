@@ -19,6 +19,7 @@ import { cleanName } from "./names.ts";
 import { tourStep, type TourStep } from "./tour.ts";
 import { productOf, sameProduct } from "../model/products.ts";
 import { sessionPoint } from "./sessions.ts";
+import type { WakeBudget } from "./wake-budget.ts";
 
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
 /** The most Direct agents one sandbox holds, as in Signals (TIN-607). Dock-paired grants have their own cap in the hub. */
@@ -47,6 +48,7 @@ export const WAIT_CEILING_S = 50;
 
 export interface Env {
   SANDBOX: DurableObjectNamespace<Sandbox>;
+  WAKE_BUDGET: DurableObjectNamespace<WakeBudget>;
   ASSETS: Fetcher;
   NEW_SANDBOX?: RateLimit;
   SANDBOX_CALLS?: RateLimit;
@@ -269,7 +271,7 @@ export class Sandbox extends DurableObject<Env> {
     const g = this.sql.exec<{ client_name: string | null; client_ua: string | null }>("select client_name, client_ua from grants where id = ?", grantId).toArray()[0];
     return !!g && productOf(g.client_name, g.client_ua)?.id === "grok-bot";
   }
-  /** What only the sandbox knows, for the wake engine. Every answer is synchronous. */
+  /** Synchronous sandbox checks, plus the single global wake-budget RPC before a send. */
   private wakeHost(): WakeHost {
     return {
       // Not async alive(): that wipes. An expired sandbox wakes nobody.
@@ -282,6 +284,7 @@ export class Sandbox extends DurableObject<Env> {
         return !row || (!!row.seen_at && Date.parse(row.seen_at) > pendingAt);
       },
       offered: (id) => this.wakeOffered(id),
+      allowSend: (now) => this.env.WAKE_BUDGET.get(this.env.WAKE_BUDGET.idFromName("global")).take(now),
       deferred: (id) => (this.callsInFlight.get(id) ?? 0) > 0,
       arm: () => this.arm(),
       changed: () => this.broadcast({ type: "grants" }),

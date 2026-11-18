@@ -12,6 +12,21 @@ import { HUB, SID } from "./dock-lifecycle.ts";
 
 installWorkersStandIn();
 const { Sandbox } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);
+const { WakeBudget, WAKE_GLOBAL_DAY_MAX } = await import(new URL("../src/worker/wake-budget.ts", import.meta.url).href);
+
+function globalBudget(t: TestContext) {
+  const room = durableObjectRoom();
+  t.after(() => room.db.close());
+  const budget = new WakeBudget(room.ctx, {});
+  const namespace = {
+    idFromName: (name: string) => { assert.equal(name, "global"); return name; },
+    get: (id: string) => { assert.equal(id, "global"); return { take: async (now: number) => budget.take(now) }; },
+  };
+  const fill = () => {
+    for (let i = 0; i < WAKE_GLOBAL_DAY_MAX; i++) assert.equal(budget.take(Date.now()), true);
+  };
+  return { room, budget, namespace, fill };
+}
 
 const ORIGIN = "https://pulse.test";
 const DEPLOY = { APC_V2: "1", HUB_ORIGINS: HUB, PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
@@ -30,8 +45,9 @@ interface Engine {
 }
 
 /** A Pulse sandbox with one Direct agent whose client says `client` (Grok bot sends "Cursor"), and the webhook stubbed. */
-async function pulse(t: TestContext, client = "Cursor") {
-  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-11-17T12:00:00.000Z") });
+async function pulse(t: TestContext, client = "Cursor", shared?: ReturnType<typeof globalBudget>) {
+  if (!shared) t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.parse("2026-11-17T12:00:00.000Z") });
+  const global = shared ?? globalBudget(t);
   const sent: Array<{ url: string; authorization: string | null; body: Record<string, unknown> }> = [];
   const rings: unknown[] = [];
   const hook = { answer: 202, hold: false, aborted: 0, release: () => {} };
@@ -58,7 +74,7 @@ async function pulse(t: TestContext, client = "Cursor") {
     return new Response("no", { status: 500 });
   });
   const room = durableObjectRoom();
-  const sandbox = new Sandbox(room.ctx, DEPLOY);
+  const sandbox = new Sandbox(room.ctx, { ...DEPLOY, WAKE_BUDGET: global.namespace });
   const { owner } = await sandbox.init();
   const engine = (sandbox as unknown as { wake: Engine }).wake;
   /** A Direct agent: its grant, and its MCP calls as its client makes them. */
@@ -93,8 +109,109 @@ async function pulse(t: TestContext, client = "Cursor") {
   };
   const wakeKeys = () => (room.db.prepare("select key from apc_kv where key like 'wake%' order by key").all() as Array<{ key: string }>).map((r) => r.key);
   const grantState = async (id: string) => ((await sandbox.state()) as { grants: Array<{ id: string; wake_offer: boolean; wake: { url_tail: string; status: string | null } | null }> }).grants.find((g) => g.id === id)!;
-  return { sandbox, room, owner, engine, agent, connect, dockGrant, sent, rings, hook, pass, wakeKeys, grantState };
+  return { sandbox, room, owner, engine, agent, connect, dockGrant, sent, rings, hook, pass, wakeKeys, grantState, global };
 }
+
+test("global budget refuses the 2,001st slot, including concurrent callers and object restart", async (t) => {
+  const g = globalBudget(t);
+  const now = Date.parse("2026-11-17T12:00:00Z");
+  const results = await Promise.all(Array.from({ length: 2_001 }, () => g.namespace.get("global").take(now)));
+  assert.equal(results.filter(Boolean).length, 2_000);
+  assert.equal(results[2_000], false);
+  assert.equal(new WakeBudget(g.room.ctx, {}).take(now), false, "persisted across eviction");
+});
+
+test("global budget resets at UTC midnight and drops old days", (t) => {
+  const g = globalBudget(t);
+  const before = Date.parse("2026-11-17T23:59:59.999Z");
+  for (let i = 0; i < 2_000; i++) assert.equal(g.budget.take(before), true);
+  assert.equal(g.budget.take(before), false);
+  assert.equal(g.budget.take(before + 1), true);
+  assert.deepEqual(g.room.db.prepare("select day, count from wake_days").all().map((r) => ({ ...r })), [{ day: "2026-11-18", count: 1 }]);
+});
+
+test("two sandboxes share the global budget for owner tests", async (t) => {
+  const p = await pulse(t);
+  const q = await pulse(t, "Cursor", p.global);
+  for (let i = 0; i < 1_999; i++) assert.equal(p.global.budget.take(Date.now()), true);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  await q.sandbox.setWake(q.agent.id, { url: WEBHOOK, key: KEY });
+  assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: true, status: "ok" });
+  assert.deepEqual(await q.sandbox.testWake(q.agent.id), { ok: false, error: "limit" });
+  assert.equal(q.sent.length, 1);
+});
+
+test("a wake at the global cap records limit and sends nothing", async (t) => {
+  const p = await pulse(t);
+  p.global.fill();
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  await p.sandbox.pin(p.agent.id, target());
+  await p.pass(3_000);
+  assert.equal((await p.grantState(p.agent.id)).wake?.status, "limit");
+  assert.equal(p.sent.length, 0);
+  assert.equal(p.engine.nextDue(), null);
+});
+
+test("an owner test at the global cap answers limit and sends nothing", async (t) => {
+  const p = await pulse(t);
+  p.global.fill();
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
+  const response = await worker.fetch(new Request(`${ORIGIN}/api/s/${SID}/grants/${p.agent.id}/wake/test`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: `apc_session=${SID}.${p.owner}`, origin: ORIGIN },
+    body: "{}",
+  }), { ...DEPLOY, SANDBOX: { idFromName: (name: string) => name, get: () => p.sandbox } });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { ok: false, error: "limit" });
+  assert.equal(p.sent.length, 0);
+});
+
+test("a refused global slot spends neither sandbox nor grant budget", async (t) => {
+  const p = await pulse(t);
+  p.global.fill();
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  await p.sandbox.pin(p.agent.id, target());
+  await p.pass(3_000);
+  await p.sandbox.testWake(p.agent.id);
+  assert.equal(p.room.db.prepare("select count(*) as n from apc_kv where key like 'wake_budget:%'").get()!.n, 0);
+  assert.equal(p.sent.length, 0);
+});
+
+test("a global-slot RPC reserves the send, and a webhook changed during it is never sent or overwritten", async (t) => {
+  for (const action of ["clear", "replace", "revoke", "reset"] as const) await t.test(action, async (t) => {
+    const p = await pulse(t);
+    await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+    let release!: (allowed: boolean) => void;
+    let reached!: () => void;
+    const waiting = new Promise<void>((resolve) => { reached = resolve; });
+    t.mock.method(p.global.namespace, "get", () => ({ take: () => {
+      reached();
+      return new Promise<boolean>((resolve) => { release = resolve; });
+    } }));
+    const sending = p.sandbox.testWake(p.agent.id);
+    await waiting;
+    assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: false, error: "too_soon" });
+    if (action === "clear") await p.sandbox.clearWake(p.agent.id);
+    if (action === "replace") await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+    if (action === "revoke") await p.sandbox.revokeGrant(p.agent.id);
+    if (action === "reset") await p.sandbox.reset();
+    release(true);
+    await sending;
+    assert.equal(p.sent.length, 0);
+    assert.equal(p.engine.view(p.agent.id)?.status ?? null, null);
+    assert.equal(p.room.db.prepare("select count(*) as n from apc_kv where key like 'wake_budget:%'").get()!.n, 0);
+  });
+});
+
+test("a failed global-slot RPC fails closed without spending local budgets", async (t) => {
+  const p = await pulse(t);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  t.mock.method(p.global.namespace, "get", () => ({ take: async () => { throw new Error("budget unavailable"); } }));
+  assert.deepEqual(await p.sandbox.testWake(p.agent.id), { ok: true, status: "error" });
+  assert.equal(p.sent.length, 0);
+  assert.equal(p.room.db.prepare("select count(*) as n from apc_kv where key like 'wake_budget:%'").get()!.n, 0);
+});
 
 test("Wake on pin is offered only for a Grok bot agent on a Direct grant, and the owner's routes take only this sandbox's Direct grants", async (t) => {
   const p = await pulse(t);

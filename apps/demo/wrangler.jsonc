@@ -16,9 +16,9 @@
   // per agent, made on the Agents screen) and Dock (dropped from a dock's hub). One of them alone works too.
   "vars": { "APC_V2": "1", "HUB_ORIGINS": "https://apc.tineira.com", "PUBLIC_ORIGIN": "https://pulse.apc.tineira.com", "APC_PROFILES": "direct,dock" },
   "durable_objects": {
-    "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }]
+    "bindings": [{ "name": "SANDBOX", "class_name": "Sandbox" }, { "name": "WAKE_BUDGET", "class_name": "WakeBudget" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }, { "tag": "v2", "new_sqlite_classes": ["WakeBudget"] }],
   // New sandboxes per IP, and calls per sandbox (the page and its agents together). Periods are 10 or 60 s.
   "ratelimits": [
     { "name": "NEW_SANDBOX", "namespace_id": "1007", "simple": { "limit": 10, "period": 60 } },

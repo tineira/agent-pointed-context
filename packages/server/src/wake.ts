@@ -9,7 +9,7 @@
  * The pure parts (limits, checks, copy) and `WakeEngine`, the state machine both run: one per Durable Object, over a
  * synchronous `WakeStore` (the hub's own tables, or `kvWakeStore` over an `ApcKv`) and a `WakeHost` that answers what
  * only the server knows (is the agent's source still live, was the pin handed over, is a call in flight). Every method
- * checks and writes before its first await; the one await is the POST, and what it writes afterwards is written only
+ * checks and reserves before its first await; after an optional global-slot check or the POST, state is written only
  * on the webhook it was sent for (its `gen`), read again, never from a snapshot taken before the await.
  */
 import { z } from "zod";
@@ -277,7 +277,7 @@ export function kvWakeStore(kv: ApcKv): WakeStore {
 
 // ---- the engine ----
 
-/** What only the server knows. Every method is synchronous. */
+/** What only the server knows. State checks are synchronous; a global slot may need an RPC. */
 export interface WakeHost {
   /** The server still holds this agent (the dock or the sandbox has not expired, the agent or grant exists). */
   alive(id: string): boolean;
@@ -292,6 +292,8 @@ export interface WakeHost {
   offered(id: string): boolean;
   /** A call or a wait of the agent is in flight: it will deliver the pin itself. */
   deferred(id: string): boolean;
+  /** Optional global budget, taken before local budgets or the POST. Failure prevents sending. */
+  allowSend?(now: number): Promise<boolean>;
   /** Set the object's alarm again (it includes `nextDue()`). */
   arm(): Promise<void>;
   /** The page's state changed. */
@@ -419,7 +421,7 @@ export class WakeEngine {
   }
 
   /** One more POST for the agent today, if the day's budgets allow it (counted before it is sent). */
-  private spend(id: string, now: number): boolean {
+  private spend(id: string, now: number, commit = true): boolean {
     const day = wakeDay(now);
     const scopes = this.sharedScope ? [id, this.sharedScope] : [id];
     const counts = scopes.map((scope) => {
@@ -427,7 +429,7 @@ export class WakeEngine {
       return b && b.day === day ? b.count : 0;
     });
     if (counts.some((count) => count >= WAKE_DAY_MAX)) return false;
-    scopes.forEach((scope, i) => this.store.setBudget(scope, { day, count: counts[i]! + 1 }));
+    if (commit) scopes.forEach((scope, i) => this.store.setBudget(scope, { day, count: counts[i]! + 1 }));
     return true;
   }
 
@@ -464,14 +466,14 @@ export class WakeEngine {
       this.store.put(id, { ...cur, due: now + WAKE_DEFER_MS });
       return this.schedule(id);
     }
-    if (!this.spend(id, now)) {
+    if (!this.spend(id, now, false)) {
       this.drop(id);
       this.setStatus(id, w.gen, "limit");
       return;
     }
     const cur = same();
     if (!cur) return;
-    this.store.put(id, { ...cur, pending_at: null, pending_kind: null, pending_source: null, due: null, sent_at: now });
+    this.store.put(id, { ...cur, pending_at: null, pending_kind: null, pending_source: null, due: null });
     await this.post(id, cur, { v: 1, event: "pin", kind, at: new Date(now).toISOString() });
   }
 
@@ -488,7 +490,7 @@ export class WakeEngine {
   }
 
   /** One POST to the agent's webhook, no retry: a run may have started even when the answer was lost. */
-  private async post(id: string, w: WakeRow, body: Record<string, unknown>): Promise<"ok" | "broken" | "error"> {
+  private async post(id: string, w: WakeRow, body: Record<string, unknown>): Promise<"ok" | "broken" | "error" | "limit"> {
     // One POST per agent at a time (deliver waits, test refuses), so none cuts another.
     const controller = new AbortController();
     this.aborts.set(id, controller);
@@ -498,6 +500,24 @@ export class WakeEngine {
     try {
       // Only Grok Bot's trigger, whatever the store holds.
       if (!WAKE_URL.test(w.url)) throw new Error("not a webhook");
+      const allowed = this.host.allowSend ? await this.host.allowSend(Date.now()) : true;
+      // The slot RPC may yield: clearing, replacing, revoking or resetting must still prevent the POST.
+      const current = this.store.get(id);
+      if (controller.signal.aborted || this.resetting || !current || current.gen !== w.gen || !this.host.alive(id)) return "error";
+      if (!this.host.offered(id)) {
+        this.setStatus(id, w.gen, "paused");
+        return "error";
+      }
+      if (body.event !== "test") {
+        const kind: WakeKind = w.pending_kind === "page_reading" ? "page_reading" : "pin";
+        const source = w.pending_source ?? "";
+        if (!this.host.live(id, source, kind) || this.host.covered(id, source, w.pending_at!, kind)) return "error";
+      }
+      if (!allowed || !this.spend(id, Date.now())) {
+        this.setStatus(id, w.gen, "limit");
+        return "limit";
+      }
+      if (body.event !== "test") this.store.put(id, { ...current, sent_at: Date.now() });
       const response = await fetch(w.url, {
         method: "POST",
         headers: { authorization: `Bearer ${w.key}`, "content-type": "application/json" },
@@ -592,9 +612,10 @@ export class WakeEngine {
     if (!this.host.offered(id)) return { ok: false, error: "paused" };
     const now = Date.now();
     if (this.aborts.has(id) || now - (this.tests.get(id) ?? 0) < WAKE_TEST_GAP_MS) return { ok: false, error: "too_soon" };
-    if (!this.spend(id, now)) return { ok: false, error: "limit" };
+    if (!this.spend(id, now, false)) return { ok: false, error: "limit" };
     this.tests.set(id, now);
     const status = await this.post(id, w, { v: 1, event: "test", at: new Date(now).toISOString() });
+    if (status === "limit") return { ok: false, error: "limit" };
     return { ok: true, status };
   }
 

@@ -23,6 +23,10 @@ const call = async (url, body, extra = {}) => {
   return { status: response.status, body: await response.json().catch(() => null) };
 };
 try {
+  const midnight = Date.parse("2026-11-17T23:59:59.999Z");
+  must((await runtime.takeWakeSlots(midnight, 2_001)).granted === 2_000, "Pulse's exported WakeBudget grants exactly 2,000 slots in workerd");
+  must((await runtime.takeWakeSlots(midnight, 1)).granted === 0, "another RPC to the same global budget stays capped in workerd");
+  must((await runtime.takeWakeSlots(midnight + 1, 1)).granted === 1, "Pulse's global wake budget resets at UTC midnight in workerd");
   const opened = await call(DOCK + "/api/dock/new", {});
   must(opened.status === 200, "a new victim dock opens in workerd");
   dock = `${DOCK}/api/d/${opened.body.did}`;

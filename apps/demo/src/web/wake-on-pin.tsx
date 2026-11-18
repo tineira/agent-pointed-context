@@ -19,7 +19,7 @@ const STATUS_TEXT: Record<NonNullable<PulseWake["status"]>, string> = {
   broken: "Grok Bot refused the key, or the trigger is gone. Paste them again.",
   error: "The last wake didn't go through. The next pin tries again.",
   paused: "Paused: this agent no longer reports as Grok bot.",
-  limit: `Today's ${WAKE_DAY_MAX} wakes are used up. Wakes start again tomorrow (UTC).`,
+  limit: "Today's wakes are used up. Wakes start again tomorrow (UTC).",
 };
 
 const TEST_TEXT: Record<string, string> = {

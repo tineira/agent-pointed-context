@@ -54,10 +54,30 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
   };
   const mf = new Miniflare(
     convertV4MiniflareOptions({
-      workers: [internet, builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json")],
+      workers: [internet, builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"), {
+        // Test-only access to the real exported class and binding; never a route in the shipped Worker.
+        name: "wake-budget-probe",
+        modules: true,
+        compatibilityDate: "2026-10-01",
+        durableObjects: { WAKE_BUDGET: { className: "WakeBudget", scriptName: "apc-pulse", useSQLite: true } },
+        script: `export default { async fetch(request, env) {
+          const { now, count } = await request.json();
+          const budget = env.WAKE_BUDGET.get(env.WAKE_BUDGET.idFromName("global"));
+          let granted = 0;
+          for (let i = 0; i < count; i++) if (await budget.take(now)) granted++;
+          return Response.json({ granted });
+        } };`,
+      }],
     }),
   );
-  const runtime = { send: (url, init) => mf.dispatchFetch(url, init), stop: () => mf.dispose() };
+  const runtime = {
+    send: (url, init) => mf.dispatchFetch(url, init),
+    stop: () => mf.dispose(),
+    takeWakeSlots: async (now, count) => {
+      const probe = await mf.getWorker("wake-budget-probe");
+      return (await probe.fetch("https://probe.test", { method: "POST", body: JSON.stringify({ now, count }) })).json();
+    },
+  };
   try {
     await mf.ready;
   } catch (error) {

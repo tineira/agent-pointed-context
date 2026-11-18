@@ -14,6 +14,7 @@ import { givenBack, isOwnerStateRequest, ownerRequestRefusal, publicOrigin } fro
 import { SANDBOX_TTL_MS, servedProfiles, type Env } from "./sandbox.ts";
 
 export { Sandbox } from "./sandbox.ts";
+export { WakeBudget } from "./wake-budget.ts";
 
 const COOKIE = "apc_session";
 type Stub = DurableObjectStub<import("./sandbox.ts").Sandbox>;
