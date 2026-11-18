@@ -112,7 +112,7 @@ export function HubDock() {
   const [did, setDid] = useState<string | null>(null);
   const [state, setState] = useState<DockState | null>(null);
   // A new object on each failure, so a failed retry sets up the next one.
-  const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
+  const [error, setError] = useState<{ retry: boolean } | null>(null);
   // wake_on_pin's link (TIN-967): /dock#wake-<agent id> opens that agent's Wake on pin and brings it into view, on load and
   // in a dock already open (hashchange), as the extension page's #update does. The hash is then taken off the address, so
   // a reload does not open it again and the same link works again; closing the section by hand closes it for good.
@@ -226,7 +226,7 @@ export function HubDock() {
         })
         .catch((e: unknown) => {
           if (FLOATING) retry = window.setTimeout(open, 2000);
-          else setError({ message: String(e), retry: unreachable(e) });
+          else setError({ retry: unreachable(e) });
         });
     const again = () => {
       clearTimeout(retry);
@@ -252,7 +252,7 @@ export function HubDock() {
         setChooser(null);
         setDid(r.did);
       },
-      (e: unknown) => setError({ message: String(e), retry: unreachable(e) }),
+      (e: unknown) => setError({ retry: unreachable(e) }),
     ).finally(() => setCreating(false));
   };
   const base = did ? `/api/d/${did}` : null;
@@ -269,7 +269,7 @@ export function HubDock() {
         setDid(null);
         setState(null);
         setReopen((n) => n + 1);
-      } else setError({ message: String(e), retry: FLOATING || unreachable(e) });
+      } else setError({ retry: FLOATING || unreachable(e) });
     });
   }, [base]);
   const keptAtHand = useCallback(() => {
@@ -433,7 +433,7 @@ export function HubDock() {
     );
   // The strip and the pets with no dock say where to choose and wait quietly; they never make one.
   if (noDock && FLOATING && !base) return PET ? <PetHint note="No dock yet: open your dock to create or join one" /> : <div className="float float-empty">No dock yet: choose in the dock window.</div>;
-  if (error) return PET ? <PetWaiting note={unreached} /> : STRIP ? <div className="float float-empty">{unreached}</div> : <main><Header /><p>{error.retry ? unreached : `Could not open your dock: ${error.message}`}</p></main>;
+  if (error) return PET ? <PetWaiting note={unreached} /> : STRIP ? <div className="float float-empty">{unreached}</div> : <main><Header /><p>{error.retry ? unreached : "Could not open your dock. Reload the page and try again."}</p></main>;
   if (!state || !base) return PET ? <PetWaiting note="Opening your dock…" /> : STRIP ? <div className="float float-empty">Opening your dock…</div> : <main><Header /><p>Opening your dock…</p></main>;
 
   const pending = state.agents.flatMap((a) => a.pairings.filter((p) => p.status === "pending").map((p) => ({ agent: a, pairing: p })));

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { approveAndOpen, beginAnswer, CODE_IN_DOCK, connectCheckErrorText, decisionNotice, endAnswer, type OpenedWindow, type Sent } from "../src/web/request-state.ts";
+import { approveAndOpen, beginAnswer, callFailureText, CODE_IN_DOCK, connectCheckErrorText, decisionNotice, endAnswer, type OpenedWindow, type Sent } from "../src/web/request-state.ts";
 import { fakeApp, manifestOf, world } from "./hostile-world.ts";
 import { connectList } from "../src/worker/trust.ts";
 
@@ -24,6 +24,15 @@ test("request-state: connect approval & check errors produce clear copy", () => 
   assert.match(connectCheckErrorText("too_many_requests"), /too many/i);
   assert.match(connectCheckErrorText("https_required"), /HTTPS/i);
   assert.match(connectCheckErrorText("unreachable"), /Could not reach/i);
+});
+
+test("request-state: a code the dock does not know is never shown, in the check, the notice or the calls list", () => {
+  for (const text of [connectCheckErrorText("weird_code_42"), decisionNotice("weird_code_42"), callFailureText("weird_code_42"), callFailureText("error"), connectCheckErrorText(undefined)]) {
+    assert.doesNotMatch(text, /weird_code|_code|\(error\)/);
+  }
+  assert.equal(connectCheckErrorText("weird_code_42"), "Could not check that app. Try again in a moment.");
+  assert.match(callFailureText("idle"), /asleep/);
+  assert.match(callFailureText("revoked"), /took its access back/);
 });
 
 function makeFakeWindow() {

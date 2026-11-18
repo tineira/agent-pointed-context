@@ -13,7 +13,7 @@ import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } f
 import { NotVerified } from "./unverified.tsx";
 import { PairingRequest } from "./pairing-request.tsx";
 import { ConnectApp, ConnectRequest, type ConnectAction, type ConnectCardItem, type DockConnect } from "./connect-request.tsx";
-import type { CodeError, InFlight } from "./request-state.ts";
+import { callFailureText, type CodeError, type InFlight } from "./request-state.ts";
 
 export interface AppRef {
   id: string;
@@ -326,7 +326,7 @@ export function AgentPage(props: {
                   <span className="call-app">{c.app ? (names.get(c.app) ?? c.app) : "Dock"}</span>
                   <code>{toolName(c)}</code>
                   {c.pin && <span className="pin" title="It read where you pointed it">read the pin: {c.pin}</span>}
-                  {c.error && <span className="warn">failed: {c.error}</span>}
+                  {c.error && <span className="warn">failed: {callFailureText(c.error)}</span>}
                 </li>
               ))}
             </ol>

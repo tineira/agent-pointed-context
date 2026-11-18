@@ -25,9 +25,9 @@ export async function mountOrdersConnect(): Promise<void> {
     return response.json() as Promise<Answer>;
   };
   const refused = (error?: string) => error === "ticket_expired" || error === "dock_expired" || error === "consent_expired" ? EXPIRED
-    : error === "not_found" ? "Your dock did not accept the connection request and may be too old for Connect. Update your dock, then try connecting again."
+    : error === "not_found" ? "Your dock did not accept the connection request and may be too old to connect to apps. Update your dock, then try connecting again."
     : error === "ticket_not_for_pairing" ? "Drop the agent again, then confirm in your dock."
-    : `Could not connect: ${error ?? "Orders did not answer"}.`;
+    : "Could not connect. Check your dock, then try again.";
   try {
     // The stored handoff is validated before any request. Nothing is kept in localStorage.
     const connect = takeApcConnect();
@@ -59,7 +59,7 @@ export async function mountOrdersConnect(): Promise<void> {
         if (!paired.ok || !paired.grant_id || !paired.pairing) return end(refused(paired.error));
         const grant = paired.grant_id;
         card.replaceChildren();
-        message.textContent = paired.pin_error ? `Connected, but not pinned (${paired.pin_error}). Drop the agent again after your dock connects.` : "Type this code only in your own dock.";
+        message.textContent = paired.pin_error ? "Connected, but the agent could not be pointed at what you dropped it on. Drop it there again after your dock connects." : "Type this code only in your own dock.";
         defineHandoff();
         handoff.hidden = false;
         handoff.host = host;

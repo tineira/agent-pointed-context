@@ -107,7 +107,22 @@ export function decisionNotice(error: unknown, context: "pairing" | "connect" = 
     case "unknown_agent":
       return "That agent is no longer in your dock.";
     default:
-      return `That did not go through (${typeof error === "string" ? error.slice(0, 40) : "error"}). Try again.`;
+      return "That did not go through. Try again in a moment.";
+  }
+}
+
+/** What the agent's page says about a call that failed, in plain words: the code the app answered with is never shown. */
+export function callFailureText(error: unknown): string {
+  switch (error) {
+    case "idle":
+      return "the app was asleep. Open it to wake it";
+    case "pairing":
+      return "the app is still pairing with your dock";
+    case "pairing_ended":
+    case "revoked":
+      return "the app took its access back";
+    default:
+      return "the app did not answer it";
   }
 }
 
@@ -137,7 +152,7 @@ export function connectCheckErrorText(error: unknown): string {
     case "unreachable":
       return "Could not reach your dock. Try again.";
     default:
-      return `Could not check that app (${typeof error === "string" ? error.slice(0, 40) : "error"}).`;
+      return "Could not check that app. Try again in a moment.";
   }
 }
 
