@@ -10,6 +10,7 @@ import { DirectAgents } from "./direct-agents.tsx";
 import { ActiveCustomersChart, CustomerBridge } from "./charts.tsx";
 import { DockHint } from "./dock-only.tsx";
 import { StartOver } from "./start-over.tsx";
+import { WakeOnPinList } from "./wake-on-pin.tsx";
 import { customerFocus, figureFocus } from "./focus.ts";
 
 export interface Filters {
@@ -305,6 +306,8 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           <p className="hint">To cut an agent, use ⊘ next to its mark in the bar at the top.</p>
         </section>
       )}
+      {/* Wake on pin (TIN-973): a card per Grok bot agent connected directly, below the list (its element stays as it is). */}
+      {(!state.v2 || state.profiles?.includes("direct")) && <WakeOnPinList api={api} grants={state.grants.filter((g) => !hubLinked.has(g.id))} names={names} onChanged={props.onChanged} />}
       {/* On the v2 deploy without Direct, the dock manages the agents (TIN-410): this screen is Pulse's settings only. */}
       {!state.v2 && (
       <section className="card">

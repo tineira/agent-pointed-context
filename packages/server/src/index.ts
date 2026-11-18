@@ -13,3 +13,4 @@ export * from "./hub-client.ts";
 export * from "./ring.ts";
 export * from "./dock.ts";
 export * from "./dock-secret.ts";
+export * from "./wake.ts";

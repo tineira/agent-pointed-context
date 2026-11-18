@@ -1,4 +1,6 @@
 /**
+ * @experimental Not part of the APC standard: these exports may change or go without a major version.
+ *
  * The doorbell (TIN-962, experimental, not part of the APC standard yet): after a pin on a dock grant, the app's server
  * tells the hub "a pin happened", with no target, so the hub can wake an agent that is not calling (a Grok Bot webhook).
  * The hub learns of pins only when the agent calls; without the ring, an idle agent never hears of one.

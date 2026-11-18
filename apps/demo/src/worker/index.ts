@@ -182,6 +182,24 @@ app.post("/api/s/:sid/grants/:id/revoke", async (c) => {
   const result = await rpc(c.env, c.var.sid, (s) => s.revokeGrant(c.req.param("id")), 1);
   return c.json(result, result.ok ? 200 : 400);
 });
+/**
+ * Wake on pin for a Grok bot Direct agent (TIN-973, experimental): the person's webhook URL and key, Turn off, Send a
+ * test. One try each (a test is one POST, never retried); the sandbox takes only its own Direct grants. The body is
+ * never logged.
+ */
+app.post("/api/s/:sid/grants/:id/wake", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const result = await rpc(c.env, c.var.sid, (s) => s.setWake(c.req.param("id"), body), 1);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/s/:sid/grants/:id/wake/clear", async (c) => {
+  const result = await rpc(c.env, c.var.sid, (s) => s.clearWake(c.req.param("id")), 1);
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/s/:sid/grants/:id/wake/test", async (c) => {
+  const result = await rpc(c.env, c.var.sid, (s) => s.testWake(c.req.param("id")), 1);
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/s/:sid/tour", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { action?: unknown };
   return c.json(await rpc(c.env, c.var.sid, (s) => s.tourAction(body.action)));

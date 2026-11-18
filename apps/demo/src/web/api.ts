@@ -5,6 +5,14 @@ import { HEARTBEAT_MS } from "../worker/page.ts";
 
 export type { CompatRow };
 
+/** Wake on pin in Direct mode (TIN-973): what Pulse says of a grant's webhook; never its key, of its URL only the end. */
+export interface PulseWake {
+  url_tail: string;
+  status: "ok" | "broken" | "error" | "paused" | "limit" | null;
+  status_at: string | null;
+  sent_at: string | null;
+}
+
 export interface GrantState {
   id: string;
   secret: string;
@@ -20,6 +28,9 @@ export interface GrantState {
   created_at: string;
   last_active_at: string | null;
   pin: FocusRow | null;
+  /** Wake on pin (TIN-973): offered for a Grok bot agent connected directly, and its webhook while one is set. */
+  wake_offer?: boolean;
+  wake?: PulseWake | null;
 }
 
 export type TourStep = "off" | "connect" | "connected" | "point" | "pinned" | "read_once" | "read_twice";
@@ -81,6 +92,10 @@ export function createApi(sid: string) {
     hubCancel: (grantId: string) => post<{ ok: boolean; error?: string }>("/hub/cancel", { grant_id: grantId }),
     tour: (action: "ack" | "skip" | "done") => post<{ ok: boolean }>("/tour", { action }),
     rename: (grantId: string, name: string) => post<{ ok: boolean }>(`/grants/${grantId}/name`, { name }),
+    /** Wake on pin (TIN-973): the webhook's URL and key, Turn off, Send a test. */
+    wakeSet: (grantId: string, body: { url: string; key: string }) => post<{ ok: boolean; error?: string }>(`/grants/${grantId}/wake`, body),
+    wakeClear: (grantId: string) => post<{ ok: boolean; error?: string }>(`/grants/${grantId}/wake/clear`, {}),
+    wakeTest: (grantId: string) => post<{ ok: boolean; error?: string; status?: string }>(`/grants/${grantId}/wake/test`, {}),
     compat: () => call<CompatRow[]>(`${base}/compat.json`),
     eventsUrl: `${base}/events.jsonl`,
     connect(onMessage: (message: ServerMessage) => void): () => void {
