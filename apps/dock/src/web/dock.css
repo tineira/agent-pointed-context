@@ -486,3 +486,14 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent); tex
 .computer-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .computer-who .muted { font-size: 12px; }
 .computer-this { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); white-space: nowrap; }
+
+/* Wake on pin (TIN-962), on a Grok bot agent's tile. */
+.wake { display: flex; flex-direction: column; gap: 6px; }
+.wake p { margin: 0; }
+.wake-lead { color: var(--muted); }
+.wake-state { color: var(--fg); }
+.wake-status.ok { color: var(--ok); }
+.wake-status.warn, .wake-note { color: var(--fg); }
+.wake-form { display: flex; flex-direction: column; gap: 4px; }
+.wake-form label { color: var(--muted); }
+.wake-form input { min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); font: inherit; }

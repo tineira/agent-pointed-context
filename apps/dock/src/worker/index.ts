@@ -12,6 +12,10 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { APC_STANDARD_VERSION, type ApcManifest } from "@tineira/apc-protocol";
 import { apcJsonResponse } from "@tineira/apc-server";
 import { DOCK_TTL_MS, NOT_OWNER, OWNER_HEADER, type Env, type Hub, type OwnerMethod } from "./hub.ts";
+import { parseRingBody } from "./wake.ts";
+
+/** The most a ring's body may be (TIN-962). */
+const RING_BODY_MAX = 2048;
 import { deviceLabel, normalizeJoinCode } from "./devices.ts";
 import { DIRECTORY } from "./join-codes.ts";
 import { withByteRanges } from "./range.ts";
@@ -255,6 +259,19 @@ app.post("/api/d/:did/agents/:aid/badge", async (c) => {
   const result = await owned(c, "setBadge", c.req.param("aid"), body.badge);
   return c.json(result, result.ok ? 200 : 400);
 });
+/** Wake on pin (TIN-962): the agent's Grok Bot webhook, set, cleared and tested by the dock's owner. */
+app.post("/api/d/:did/agents/:aid/wake", async (c) => {
+  const result = await owned(c, "setWake", c.req.param("aid"), await c.req.json().catch(() => null));
+  return c.json(result, result.ok ? 200 : 400);
+});
+app.post("/api/d/:did/agents/:aid/wake/clear", async (c) => {
+  const result = await owned(c, "clearWake", c.req.param("aid"));
+  return c.json(result, result.ok ? 200 : 404);
+});
+app.post("/api/d/:did/agents/:aid/wake/test", async (c) => {
+  const result = await owned(c, "testWake", c.req.param("aid"));
+  return c.json(result, result.ok ? 200 : 400);
+});
 app.post("/api/d/:did/agents/:aid/remove", async (c) => {
   const result = await owned(c, "removeAgent", c.req.param("aid"));
   return c.json(result, result.ok ? 200 : 404);
@@ -305,17 +322,84 @@ app.post("/apc/pair", async (c) => {
   const did = typeof body?.ticket === "string" ? body.ticket.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1] : undefined;
   if (!did) return c.json({ ok: false, error: "ticket_expired" }, 400);
   const result = await stubFor(c.env, did).pair(body);
+  // Where the app rings this hub after a pin (TIN-962, experimental): an app that does not know it ignores it.
+  if (result.ok && result.pairing_id) return c.json({ ...result, ring: ringOf(c.req.url, did, result.pairing_id) });
   return c.json(result, result.ok ? 200 : 400);
 });
+
+/** The ring address of a dock's pairing (TIN-962). */
+const ringOf = (requestUrl: string, did: string, id: string) => ({ url: `${new URL(requestUrl).origin}/apc/ring/${did}`, id });
 
 /** An app checks that the hub still pairs an agent with its grant, on a drop (TIN-389). */
 app.post("/apc/confirm", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { ticket?: unknown } | null;
   const did = typeof body?.ticket === "string" ? body.ticket.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1] : undefined;
   if (!did) return c.json({ ok: false, error: "ticket_expired" }, 400);
-  const result = await stubFor(c.env, did).confirm(body);
+  const { ring_id, ...result } = await stubFor(c.env, did).confirm(body);
+  // An app paired before the ring learns its address on its next drop (TIN-962).
+  if (result.ok && ring_id) return c.json({ ...result, ring: ringOf(c.req.url, did, ring_id) });
   return c.json(result, result.ok ? 200 : 400);
 });
+
+/**
+ * An app rings (TIN-962, experimental): a pin happened on one of its grants. A malformed request is 400; anything else is
+ * 200 with nothing said, whether or not the dock, the pairing or a webhook exist. The body is capped.
+ */
+app.post("/apc/ring/:did", async (c) => {
+  const did = c.req.param("did");
+  if (!/^[0-9a-f]{32}$/.test(did)) return c.json({ ok: false, error: "invalid" }, 400);
+  const length = c.req.header("content-length");
+  if (length !== undefined && (!/^\d{1,4}$/.test(length) || Number(length) > RING_BODY_MAX)) return c.json({ ok: false, error: "invalid" }, 400);
+  const text = await readBounded(c.req.raw.body, RING_BODY_MAX);
+  let body: unknown = null;
+  try {
+    body = text === null ? null : JSON.parse(text);
+  } catch {
+    // malformed
+  }
+  if (!parseRingBody(body)) return c.json({ ok: false, error: "invalid" }, 400);
+  // The answer never waits on the dock: whether a pairing exists, and the HMAC's work, show neither in it nor in its time.
+  const ringing = stubFor(c.env, did).ring(body).catch(() => {});
+  try {
+    c.executionCtx.waitUntil(ringing);
+  } catch {
+    // no execution context (a test): the ring runs on its own
+  }
+  return c.json({ ok: true });
+});
+
+/** A request body read up to `cap` bytes, as UTF-8; null past the cap (the rest is not read) or on a read error. */
+async function readBounded(stream: ReadableStream<Uint8Array> | null, cap: number): Promise<string | null> {
+  if (!stream) return "";
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > cap) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(all);
+  } catch {
+    return null;
+  }
+}
 
 /** The dock a ticket, claim or reader token belongs to: each starts with the dock's id. */
 const dockOf = (value: unknown) => (typeof value === "string" ? value.match(/^([0-9a-f]{32})\.[0-9a-f]{32}$/)?.[1] : undefined);
