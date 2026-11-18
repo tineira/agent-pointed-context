@@ -29,12 +29,37 @@ app.use("/.well-known/apc.json", async (c, next) => profilesRefusal(c.env.APC_PR
 
 // Every POST the page sends has a body, and many routes (Connect an agent, Revoke, a refusal) never read it. The local
 // runtime then answers the next request on that connection with "fetch failed", which the page saw as a /state 500
-// (TIN-995). So the body is read to the end after the route, whatever it answered. Registered before the other /api
-// middleware, so their early answers are covered too.
+// (TIN-995). So an unread body is drained after the route, whatever it answered: the page's few bytes are read to the
+// end; past DRAIN_MAX_BYTES or DRAIN_MAX_MS the rest is cancelled, never buffered or waited for. Registered before the
+// other /api middleware, so their early answers are covered too.
+const DRAIN_MAX_BYTES = 64 * 1024;
+const DRAIN_MAX_MS = 500;
 app.use("/api/*", async (c, next) => {
   await next();
-  if (c.req.raw.body && !c.req.raw.bodyUsed) await c.req.raw.arrayBuffer().catch(() => undefined);
+  const body = c.req.raw.bodyUsed ? null : c.req.raw.body;
+  if (body) await drain(body);
 });
+
+/** Read a body to its end if it is small and quick, else cancel the rest. Never throws, never holds more than one chunk. */
+async function drain(body: ReadableStream<Uint8Array>): Promise<void> {
+  const reader = body.getReader();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), DRAIN_MAX_MS)));
+  try {
+    for (let read = 0; read <= DRAIN_MAX_BYTES; ) {
+      const chunk = await Promise.race([reader.read(), late]);
+      if (chunk === "late") break;
+      if (chunk.done) return;
+      read += chunk.value.byteLength;
+    }
+    // Too big or too slow: cancelled, not awaited (a stuck source must not hold the answer).
+    reader.cancel().catch(() => undefined);
+  } catch {
+    // a broken stream needs no draining
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
 
 function randomHex(bytes: number): string {
   return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
