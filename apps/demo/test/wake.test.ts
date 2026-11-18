@@ -281,6 +281,26 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
 };
 
+/**
+ * Resolves once a wait of this sandbox has claimed its place, so the call is in flight whatever the runner's speed. A
+ * fixed number of ticks (settle) was not enough on a slow CI runner (TIN-1001).
+ */
+function onClaim(t: { mock: { method: typeof import("node:test").mock.method } }, sandbox: unknown): Promise<void> {
+  const slots = (sandbox as { waitSlots: { for(id: string): { claim(): Promise<unknown> } } }).waitSlots;
+  const original = slots.for.bind(slots);
+  let claimed!: () => void;
+  const done = new Promise<void>((resolve) => (claimed = resolve));
+  t.mock.method(slots, "for", (id: string) => {
+    const slot = original(id);
+    return { ...slot, claim: async () => {
+      const result = await slot.claim();
+      claimed();
+      return result;
+    } };
+  });
+  return done;
+}
+
 test("the offer rides only on a real answer: a refused wait, a cancelled or hung-up wait and an error neither carry it nor spend the day's", async (t) => {
   const p = await pulse(t);
   const hintKey = `wake_hint:${p.agent.id}`;
@@ -294,8 +314,9 @@ test("the offer rides only on a real answer: a refused wait, a cancelled or hung
   // The person does not share their view: a wait runs to its timeout (on the mocked clock), never ended by a closed page.
   await p.sandbox.setSetting("share_view", false);
   // A wait that holds the place...
+  const held = onClaim(t, p.sandbox);
   const waiting = call(7, "wait_for_focus", { timeout_s: 45 });
-  await settle();
+  await held;
   // ...makes a second one within the claim gap a refused wait: retry_after_s, and no offer.
   const refused = await resultOf(await call(8, "wait_for_focus", { timeout_s: 45 }));
   assert.equal(typeof refused?.structuredContent?.retry_after_s, "number");
@@ -360,15 +381,21 @@ test("a wake is put off while a call of that grant is in flight, and goes once t
   await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
   // A wait that is in flight but has not looked yet: its claim is held until the test lets it answer (refused).
   let answerClaim = () => {};
+  // The claim is reached only once the call counts as in flight: pin after that, not after a fixed number of ticks (TIN-1001).
+  let claimed!: () => void;
+  const inFlight = new Promise<void>((resolve) => (claimed = resolve));
   const slots = (p.sandbox as unknown as { waitSlots: { for(id: string): unknown } }).waitSlots;
   t.mock.method(slots, "for", () => ({
     atomic: true,
-    claim: () => new Promise((resolve) => (answerClaim = () => resolve({ retryAfterS: 1 }))),
+    claim: () => {
+      claimed();
+      return new Promise((resolve) => (answerClaim = () => resolve({ retryAfterS: 1 })));
+    },
     holds: async () => false,
     release: async () => false,
   }));
   const waiting = p.agent.callTool("wait_for_focus", { timeout_s: 45 });
-  await settle();
+  await inFlight;
   await p.sandbox.pin(p.agent.id, target());
   await p.pass(2_500);
   assert.equal(p.sent.length, 0, "not while the call is in flight");
