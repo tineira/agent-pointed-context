@@ -181,7 +181,7 @@ public sealed class MainWindow : Window
                 card.Cancel.Click += async (_, _) => await Try(async () =>
                 {
                     var r = await client.CancelAsync(grantId);
-                    Say(r.Ok ? "Cancelled: Pulse took that dock's access back." : $"Not cancelled: {Describe(r.Error)}");
+                    Say(r.Ok ? "Cancelled: Pulse took that dock's access back." : $"Not cancelled. {Describe(r.Error)}");
                     await RefreshAsync();
                 });
                 cards[l.grant_id] = card;
@@ -414,28 +414,44 @@ public sealed class MainWindow : Window
             else if (r.Error == "consent_required" && r.Consent is not null && r.PairingCode is not null) await ConsentAsync(drag, target, r.Consent);
             else if (r.Ok && r.Status == "pending" && r.Pairing is not null) Say($"Waiting for your dock: type the code in the card above there to allow it.{PinNote(r.PinError)}");
             else if (r.Ok) Say($"Pinned {state?.grants.FirstOrDefault(g => g.id == r.GrantId)?.Name ?? "your agent"}. Now ask it about \"this\".");
-            else Say($"Not pinned: {Describe(r.Error)}");
+            else Say($"Not pinned. {Describe(r.Error)}");
         });
         await RefreshAsync();
     }
 
     /// <summary>A pairing that went through while the pin on the drop's target failed (pin_error): said, not dropped.</summary>
-    static string PinNote(string? pinError) => pinError is null ? "" : $" Not pinned where you dropped it ({pinError}): drop the agent there again once your dock connects.";
+    static string PinNote(string? pinError) => pinError is null ? "" : $" Not pinned where you dropped it. {DescribePin(pinError)} Drop the agent there again once your dock connects.";
 
-    /// <summary>A refusal in words, as the page says it (hub-consent.tsx).</summary>
+    /// <summary>A pin that failed, in words (the same sentences as the web's plain-errors.ts; "not_found" means something else when pinning).</summary>
+    static string DescribePin(string? error) => error == "not_found" ? "That is no longer in the data. Drop the agent on something else." : Describe(error);
+
+    /// <summary>A refusal in words, with the same sentences as the web (apps/demo/src/web/plain-errors.ts). A code not listed gets the generic one: never the code.</summary>
     static string Describe(string? error) => error switch
     {
-        "ticket_expired" => "the drag is too old. Drag the agent from the dock again.",
-        "consent_required" => "this question is too old. Drag the agent from the dock again.",
+        "not_found" => "Your dock did not accept the connection request and may be too old to connect to apps. Update your dock, then drop the agent again.",
+        "ticket_not_for_pairing" => "Drop the agent again, then confirm in your dock.",
+        "ticket_origin_mismatch" => "This link is for another app. Drop the agent again.",
+        "too_many_requests" => "Your dock already has too many pending requests. Answer one, then drop the agent again.",
+        "ticket_expired" or "dock_expired" => "The drag is too old. Drag the agent from the dock again.",
+        "consent_required" or "consent_expired" => "This question is too old. Drag the agent from the dock again.",
         "hub_not_allowed" => "Pulse does not pair with that dock.",
-        "hub_unreachable" => "the dock did not answer. Try again in a moment.",
-        "hub_refused" => "the dock did not answer as a dock should, so Pulse didn't pair.",
-        "hub_ignores_pairing_code" => "this dock can't check pairing codes, so Pulse didn't pair.",
-        "invalid_pairing_code" or "pairing_code_required" => "the dock refused the pairing code. Drag the agent from the dock again.",
-        "not_cancellable" => "the dock has connected already, so Cancel no longer applies. To take its access back, revoke the agent in Pulse on the web (pulse.apc.tineira.com, in the agent bar).",
-        "pairing_ended" => "that pairing ended before the dock connected. Drag the agent from the dock again.",
-        null => "it did not go through.",
-        _ => error,
+        "app_not_allowed" => "The dock does not pair with this Pulse.",
+        "hub_unreachable" => "The dock did not answer. Try again in a moment.",
+        "hub_refused" => "The dock did not answer as a dock should, so Pulse didn't pair.",
+        "hub_ignores_pairing_code" => "This dock can't check pairing codes, so Pulse didn't pair.",
+        "invalid_pairing_code" => "The dock refused the pairing code. Drag the agent from the dock again.",
+        "pairing_code_required" => "The dock wants a pairing code. Drag the agent from the dock again.",
+        "pairing_in_progress" => "Pulse is still pairing this agent with the dock. Try again in a moment.",
+        "pairing_ended" => "That pairing ended before the dock connected. Drag the agent from the dock again.",
+        "not_cancellable" => "The dock has connected already, so Cancel no longer applies. To take its access back, revoke the agent in Pulse on the web (pulse.apc.tineira.com, in the agent bar).",
+        "not_available" => "This Pulse does not pair with docks.",
+        "unknown_grant" => "That agent is no longer connected here. Connect it again, then try once more.",
+        "invalid_target" => "The agent can't be pointed at that. Drop it on a customer, a chart or a post instead.",
+        "out_of_grant" => "That agent can't read that part of the data, so it can't be pointed there.",
+        "rate_limited" => "Too many requests. Wait a minute, then try again.",
+        "invalid" or "forbidden" or "unauthorized" => "That did not go through. Reload the page and try again.",
+        "expired" or "sandbox_expired" => "This demo has expired. Start over to begin a new one.",
+        _ => "That did not go through. Try again in a moment.",
     };
 
     /// <summary>
@@ -476,7 +492,7 @@ public sealed class MainWindow : Window
         string? scope = region.SelectedIndex switch { 1 => "latam", 2 => "na", 3 => "emea", _ => null };
         var r = await client.HubPairAsync(drag, target, scope, consent);
         // Paired: the card in the window shows the code until the dock connects. Not paired: said.
-        Say(r.FirstPairingMessage ?? (r.Ok ? $"Paired with the dock at {host}. Type the code in the card above there to allow it, then ask your agent about \"this\".{PinNote(r.PinError)}" : $"Not paired: {Describe(r.Error)}"));
+        Say(r.FirstPairingMessage ?? (r.Ok ? $"Paired with the dock at {host}. Type the code in the card above there to allow it, then ask your agent about \"this\".{PinNote(r.PinError)}" : $"Not paired. {Describe(r.Error)}"));
     }
 
     /// <summary>
@@ -508,7 +524,7 @@ public sealed class MainWindow : Window
                 Children =
                 {
                     new TextBlock { Text = "Start over in Pulse for desktop?", FontSize = 17, FontWeight = FontWeight.Bold },
-                    new TextBlock { Text = "This deletes this app's Pulse sandbox: the agents your dock paired here and their pins, your view, and the event log. The app forgets its session.", TextWrapping = TextWrapping.Wrap },
+                    new TextBlock { Text = "This deletes this app's Pulse demo: the agents your dock paired here and their pins, your view, and the event log. The app forgets its session.", TextWrapping = TextWrapping.Wrap },
                     new TextBlock { Text = "To start from zero everywhere, do the same on the other sites (each opens in your browser and asks you there):", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold },
                     new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children = { Link("Agent dock", DockUrl), Link("Pulse (web)", "https://pulse.apc.tineira.com/agents"), Link("Signals", "https://signals.apc.tineira.com/") } },
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, go } },
@@ -544,7 +560,7 @@ public sealed class MainWindow : Window
         catch (Exception e)
         {
             Console.Error.WriteLine(e);
-            Say($"Something went wrong: {e.Message}");
+            Say("Something went wrong. Try again in a moment.");
         }
     }
 

@@ -17,6 +17,7 @@ import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
 import { openSession } from "./session.ts";
+import { plainError, plainPinError } from "../../../demo/src/web/plain-errors.ts";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { DirectAgents } from "../../../demo/src/web/direct-agents.tsx";
 
@@ -44,29 +45,9 @@ interface FeedState {
   profiles: ApcProfile[];
   grants: GrantState[];
 }
-const PAIR_ERRORS: Record<string, string> = {
-  not_found: "your dock did not accept the connection request and may be too old for Connect; update your dock, then drag the agent again",
-  ticket_not_for_pairing: "drop the agent again, then confirm in your dock",
-  ticket_origin_mismatch: "that link is for another app; drag the agent from the dock again",
-  too_many_requests: "your dock already has too many pending requests; answer one, then drag the agent again",
-  ticket_expired: "the drag is too old; drag the agent from the dock again",
-  consent_required: "the drag is too old; drag the agent from the dock again",
-  consent_expired: "the question is too old; drag the agent from the dock again",
-  hub_unreachable: "the dock did not answer; try again in a moment",
-  hub_refused: "the dock did not answer as a dock should, so Signals didn't pair",
-  hub_ignores_pairing_code: "this dock can't check pairing codes, so Signals didn't pair",
-  invalid_pairing_code: "the dock refused the pairing code; drag the agent from the dock again",
-  pairing_code_required: "the dock wants a pairing code; drag the agent from the dock again",
-  hub_not_allowed: "Signals does not pair with that dock",
-  pairing_in_progress: "Signals is still pairing this agent with the dock; try again in a moment",
-  pairing_ended: "that pairing ended before the dock connected; drag the agent from the dock again",
-  not_cancellable: "the dock has connected already; to take its access back, revoke the agent in the agent bar",
-  not_available: "this Signals does not pair with docks",
-};
-
 /** A refusal in words, for the page's notices and the handoff card. */
 function pairError(error: string | undefined): string {
-  return PAIR_ERRORS[error ?? ""] ?? error ?? "it did not go through";
+  return plainError("Signals", error);
 }
 
 const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
@@ -110,7 +91,7 @@ export function App() {
       live = false;
     };
   }, []);
-  if (error) return <Shell><p className="muted">Could not open Signals: {error}</p></Shell>;
+  if (error) return <Shell><p className="muted">Could not open Signals. Reload the page to try again.</p></Shell>;
   if (!sid) return <Shell><p className="muted">Opening Signals…</p></Shell>;
   return <Feed sid={sid} />;
 }
@@ -247,9 +228,9 @@ function Feed({ sid }: { sid: string }) {
           if (r.ok && r.status === "connect_requested") { refresh(); say("Confirm in your dock"); return; }
           // Still waiting on the dock (APC 0.10): the waiting card, drawn from Signals' state, shows the same code again, or that the dock is connecting.
           else if (r.ok && (r.status === "pending" || r.status === "connecting")) {
-            if (r.pin_error) say(`Not pinned where you dropped it (${r.pin_error}). Once your dock connects, drop the agent there again.`);
+            if (r.pin_error) say(`Not pinned where you dropped it. ${plainPinError("Signals", r.pin_error)} Once your dock connects, drop the agent there again.`);
           } else if (r.ok) say(`Pinned ${stateRef.current?.grants.find((g) => g.id === r.grant_id)?.name ?? "your agent"}. Ask it about "this".`);
-          else say(`Not pinned: ${pairError(r.error)}`);
+          else say(`Not pinned. ${pairError(r.error)}`);
           refresh();
         },
         onPin: async (grantId, target) => {
@@ -257,7 +238,7 @@ function Feed({ sid }: { sid: string }) {
           const current = stateRef.current?.grants.find((g) => g.id === grantId)?.pin;
           if (current && canonicalTarget(current) === canonicalTarget(target)) return;
           const r = await call<{ ok: boolean; error?: string }>(`${base}/pin`, { grant_id: grantId, target });
-          say(r.ok ? `Pinned ${stateRef.current?.grants.find((g) => g.id === grantId)?.name ?? "your agent"}. Ask it about "this".` : `Not pinned: ${r.error}`);
+          say(r.ok ? `Pinned ${stateRef.current?.grants.find((g) => g.id === grantId)?.name ?? "your agent"}. Ask it about "this".` : `Not pinned. ${plainPinError("Signals", r.error)}`);
         },
       }),
     [base],
@@ -314,7 +295,7 @@ function Feed({ sid }: { sid: string }) {
         agents={directAgents}
         onAdd={() =>
           void call<{ ok: boolean; error?: string }>(`${base}/grants/agent`, {}).then((r) => {
-            if (!r.ok) say(`No new agent: ${r.error}`);
+            if (!r.ok) say(`No new agent. ${plainError("Signals", r.error)}`);
             refresh();
           })
         }
@@ -343,8 +324,8 @@ function Feed({ sid }: { sid: string }) {
     const name = state.grants.find((g) => g.id === id)?.name ?? "Your agent";
     void call<{ ok: boolean; error?: string }>(`${base}/grants/${id}/revoke`, {})
       .then(
-        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, connect it again here, or drop it here again from your dock.` : `Not revoked: ${r.error}`),
-        (e: unknown) => `Not revoked: ${e instanceof Error ? e.message : String(e)}`,
+        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, connect it again here, or drop it here again from your dock.` : `Not revoked. ${plainError("Signals", r.error)}`),
+        () => `Not revoked. ${plainError("Signals", undefined)}`,
       )
       .then((message) => {
         say(message);
@@ -355,8 +336,8 @@ function Feed({ sid }: { sid: string }) {
   const cancel = (id: string): Promise<void> =>
     call<{ ok: boolean; error?: string }>(`${base}/hub/cancel`, { grant_id: id })
       .then(
-        (r) => (r.ok ? "Cancelled: Signals took that dock's access back." : `Not cancelled: ${PAIR_ERRORS[r.error ?? ""] ?? r.error}`),
-        (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`,
+        (r) => (r.ok ? "Cancelled: Signals took that dock's access back." : `Not cancelled. ${pairError(r.error)}`),
+        () => `Not cancelled. ${pairError(undefined)}`,
       )
       .then((message) => {
         say(message);

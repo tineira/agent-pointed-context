@@ -44,8 +44,8 @@ export function QrRow(props: { text: string; hint?: string }) {
 
 /** The agent's manual as a skill for Claude Code and other CLIs (skills/pulse-agent/SKILL.md in the repo). */
 export const SKILL_COMMAND = "npx skills add https://github.com/tineira/agent-pointed-context --skill pulse-agent";
-/** The MCP server name an agent card's Claude Code command uses. */
-export const serverName = (grant: { regions: unknown[] | null }) => (grant.regions ? "pulse-restricted" : "pulse");
+/** The MCP server name the connect prompt gives (askYourAgentPrompt: "Pulse", for every agent), so the slash command is /mcp__Pulse__guide. */
+export const serverName = "Pulse";
 
 /** The agent most people connect first: the first unrestricted one. */
 export const defaultGrant = (state: SandboxState): GrantState => state.grants.find((g) => !g.regions) ?? state.grants[0]!;
@@ -177,7 +177,7 @@ export function AgentCard(props: {
           <QrRow text={url} />
           {props.manual && (
             <p className="hint">
-              Its manual, if you want it to have one: the server's prompt named guide (<code>/mcp__{serverName(g)}__guide</code> in Claude Code, the + menu in Claude Desktop), or the pulse-agent skill (<code>{SKILL_COMMAND}</code>).
+              Its manual, if you want it to have one: the server's prompt named guide (<code>/mcp__{serverName}__guide</code> in Claude Code, the + menu in Claude Desktop), or the pulse-agent skill (<code>{SKILL_COMMAND}</code>).
             </p>
           )}
         </div>
@@ -257,7 +257,7 @@ export function ConnectPanel(props: { sid: string; state: SandboxState }) {
           type="button"
           className="link dismiss"
           aria-label="Dismiss"
-          title="Dismiss for this sandbox"
+          title="Dismiss for this demo"
           onClick={() => {
             try {
               localStorage.setItem(dismissKey(props.sid), "1");
@@ -270,7 +270,7 @@ export function ConnectPanel(props: { sid: string; state: SandboxState }) {
           ×
         </button>
       </div>
-      <p className="hint">No agent is connected to this sandbox yet, so there is no one to point at these charts. Add this URL to your agent as a remote MCP server (Streamable HTTP); no login, the secret in the URL is the access.</p>
+      <p className="hint">No agent is connected to this demo yet, so there is no one to point at these charts. Add this URL to your agent as a remote MCP server (Streamable HTTP); no login, the secret in the URL is the access.</p>
       <div className="connect-body">
         <div className="connect-fields">
           <CopyField text={url} />

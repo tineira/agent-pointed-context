@@ -26,15 +26,15 @@ pub const COMMIT: &str = match option_env!("APC_DOCK_COMMIT") {
 /// How long the first check waits after the app starts, so the dock and the pets open first.
 const DELAY: Duration = Duration::from_secs(20);
 
-const TITLE: &str = "APC Dock";
+const TITLE: &str = "Dock for Windows";
 
-/// The build, as the tray shows it: "APC dock 0.2.N (abc1234)".
+/// The build, as the tray shows it: "Dock for Windows 0.2.N (abc1234)".
 pub fn label(version: &str) -> String {
-    format!("APC dock {version} ({COMMIT})")
+    format!("Dock for Windows {version} ({COMMIT})")
 }
 
 fn question(offered: &str, current: &str) -> String {
-    format!("APC dock {offered} is ready (you have {current}). Install now?")
+    format!("Dock for Windows {offered} is ready (you have {current}). Install now?")
 }
 
 /// Whether a check is running, so a click on the tray during the startup check asks nothing twice.
@@ -64,7 +64,7 @@ fn notice(outcome: &Outcome, asked: Asked, current: &str) -> Option<String> {
     match (outcome, asked) {
         (Outcome::Ready, _) | (_, Asked::OnStart) => None,
         (Outcome::CheckFailed, Asked::FromTray) => Some("Couldn't check for updates.".into()),
-        (Outcome::UpToDate, Asked::FromTray) => Some(format!("APC dock {current} is up to date.")),
+        (Outcome::UpToDate, Asked::FromTray) => Some(format!("Dock for Windows {current} is up to date.")),
         (Outcome::DownloadFailed, Asked::FromTray) => Some("Couldn't download the update.".into()),
     }
 }
@@ -134,7 +134,7 @@ fn fetch(app: &AppHandle, current: &str) -> (Outcome, Option<(Update, Vec<u8>)>)
     };
     let tray = app.tray_by_id("tray");
     if let Some(tray) = &tray {
-        let _ = tray.set_tooltip(Some(format!("Downloading APC dock {}…", update.version)));
+        let _ = tray.set_tooltip(Some(format!("Downloading Dock for Windows {}…", update.version)));
     }
     let bytes = tauri::async_runtime::block_on(update.download(|_, _| {}, || {}));
     if let Some(tray) = &tray {
@@ -164,7 +164,7 @@ fn ask(app: &AppHandle, offered: &str, current: &str) -> bool {
 fn install(app: &AppHandle, update: &Update, bytes: &[u8], current: &str) {
     if let Err(e) = update.install(bytes) {
         eprintln!("install of {} failed: {e}", update.version);
-        tell(app, &format!("Couldn't install the update. You still have APC dock {current}."), MessageDialogKind::Warning);
+        tell(app, &format!("Couldn't install the update. You still have Dock for Windows {current}."), MessageDialogKind::Warning);
     }
 }
 
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(notice(&Outcome::Ready, Asked::FromTray, "0.2.5"), None);
         assert_eq!(notice(&Outcome::CheckFailed, Asked::FromTray, "0.2.5").unwrap(), "Couldn't check for updates.");
         assert_eq!(notice(&Outcome::DownloadFailed, Asked::FromTray, "0.2.5").unwrap(), "Couldn't download the update.");
-        assert_eq!(notice(&Outcome::UpToDate, Asked::FromTray, "0.2.5").unwrap(), "APC dock 0.2.5 is up to date.");
+        assert_eq!(notice(&Outcome::UpToDate, Asked::FromTray, "0.2.5").unwrap(), "Dock for Windows 0.2.5 is up to date.");
     }
 
     #[test]
@@ -238,8 +238,8 @@ mod tests {
 
     #[test]
     fn the_question_names_both_versions() {
-        assert_eq!(question("0.2.140", "0.2.131"), "APC dock 0.2.140 is ready (you have 0.2.131). Install now?");
-        assert!(label("0.2.131").starts_with("APC dock 0.2.131 ("));
+        assert_eq!(question("0.2.140", "0.2.131"), "Dock for Windows 0.2.140 is ready (you have 0.2.131). Install now?");
+        assert!(label("0.2.131").starts_with("Dock for Windows 0.2.131 ("));
     }
 
     /// Standard base64, enough to read the public key's comment.

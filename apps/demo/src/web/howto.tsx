@@ -194,7 +194,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged }: Ctx) {
     ),
   };
   return (
-    <Section id="connect" title="Connect your agent" lead="About two minutes, once per agent. The sandbox, its URL and its log last 6 hours after you last use them.">
+    <Section id="connect" title="Connect your agent" lead="About two minutes, once per agent. The demo, its URL and its log last 6 hours after you last use them.">
       <Chips items={["An agent that speaks MCP", "This page open in this browser"]} />
       <Steps
         steps={[
@@ -207,7 +207,7 @@ function ConnectTopic({ api, sid, state, initials, onChanged }: Ctx) {
                 <QrRow text={url} />
               </>
             ),
-            note: "Keep it to yourself. Anyone with it can read this sandbox's synthetic data, but only this browser can point.",
+            note: "Keep it to yourself. Anyone with it can read this demo's synthetic data, but only this browser can point.",
           },
           {
             title: "Don't know how to connect an MCP server? Ask your agent.",
@@ -440,7 +440,7 @@ function ExamplesTopic(ctx: Ctx) {
               title: "Your agent answers with numbers Pulse never had.",
               text: (
                 <>
-                  Total MRR for the bar and the best customer per seat. Check for yourself: in this sandbox's{" "}
+                  Total MRR for the bar and the best customer per seat. Check for yourself: in this demo's{" "}
                   <a href={ctx.api.eventsUrl} className="text-filament underline underline-offset-2">
                     log
                   </a>
@@ -483,7 +483,7 @@ function ExamplesTopic(ctx: Ctx) {
         </div>
       </Section>
 
-      <Section id="results" title="What your agents did" lead="Live from this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.">
+      <Section id="results" title="What your agents did" lead="Live from this demo's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.">
         <div className="overflow-hidden rounded-xl border border-line bg-cream p-2">
           <CompatTable api={ctx.api} initials={ctx.initials} grants={ctx.state.grants} refreshKey={ctx.activity} />
         </div>

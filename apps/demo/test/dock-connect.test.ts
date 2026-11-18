@@ -188,7 +188,7 @@ test("dock_connect clears fragment before any fetch, shows signed-in sandbox, co
   await mountDockConnect();
   assert.equal(events[0], "replaceState:/connect/dock");
   assert.ok(events.indexOf("replaceState:/connect/dock") < events.indexOf("fetch:/api/session"));
-  assert.equal(accountEl.textContent, "Your Signals sandbox in this browser");
+  assert.equal(accountEl.textContent, "Your Signals demo in this browser");
   assert.doesNotMatch(accountEl.textContent ?? "", /sid_123/, "the sandbox id is a key: never shown");
   const allow = consentEl.elements().find((b) => b.textContent === "Allow") as (El & { onclick?: () => void }) | undefined;
   assert.ok(allow, "Allow button rendered");

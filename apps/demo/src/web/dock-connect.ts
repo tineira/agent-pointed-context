@@ -1,3 +1,4 @@
+import { plainError, plainPinError } from "./plain-errors.ts";
 import { clearApcConnect, defineHandoff, takeApcConnect, type ApcHandoffElement } from "@tineira/apc-web";
 
 const EXPIRED = "This link expired. Drop the agent again, or use Connect an app in your dock.";
@@ -21,9 +22,9 @@ export async function mountDockConnect(): Promise<void> {
     return response.json() as Promise<Answer & { sid?: string }>;
   };
   const refused = (error?: string) => error === "ticket_expired" || error === "dock_expired" || error === "consent_expired" ? EXPIRED
-    : error === "not_found" ? "Your dock did not accept the connection request and may be too old for Connect. Update your dock, then try connecting again."
+    : error === "not_found" ? "Your dock did not accept the connection request and may be too old to connect to apps. Update your dock, then try connecting again."
     : error === "ticket_not_for_pairing" ? "Drop the agent again, then confirm in your dock."
-    : `Could not connect: ${error ?? "the app did not answer"}.`;
+    : `Could not connect. ${plainError(main.dataset.app ?? "the app", error)}`;
   try {
     // Validates the stored handoff before even the session request. Nothing is kept in localStorage.
     const connect = takeApcConnect();
@@ -31,9 +32,9 @@ export async function mountDockConnect(): Promise<void> {
     const host = new URL(connect.hub).host;
     if (main.dataset.session !== "false") {
       const session = await post("/api/session", {});
-      if (!session.sid) throw new Error("Open the app to start a sandbox, then connect again.");
+      if (!session.sid) throw new Error("Open the app to start the demo, then connect again.");
       base = `/api/s/${session.sid}`;
-      account.textContent = `Your ${main.dataset.app} sandbox in this browser`;
+      account.textContent = `Your ${main.dataset.app} demo in this browser`;
     } else if (main.dataset.signedIn === "false") {
       account.textContent = main.dataset.account || "No account signed in.";
       message.textContent = "Sign in first, then return here to finish connecting.";
@@ -70,7 +71,7 @@ export async function mountDockConnect(): Promise<void> {
         if (!paired.ok || !paired.grant_id || !paired.pairing) return end(refused(paired.error));
         grant = paired.grant_id;
         card.replaceChildren();
-        message.textContent = paired.pin_error ? `Connected, but not pinned (${paired.pin_error}). Drop the agent again after your dock connects.` : "Type this code only in your own dock.";
+        message.textContent = paired.pin_error ? `Connected, but not pinned. ${plainPinError(main.dataset.app ?? "the app", paired.pin_error)} Drop the agent again after your dock connects.` : "Type this code only in your own dock.";
         defineHandoff();
         handoff.hidden = false;
         handoff.host = host;

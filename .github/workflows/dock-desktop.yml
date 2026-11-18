@@ -113,7 +113,7 @@ jobs:
           versioned="APCDockSetup-$VERSION.exe"
           mv ./*-setup.exe.sig "$versioned.sig"
           mv ./*-setup.exe "$versioned"
-          gh release view dock-desktop -R "$repo" > /dev/null 2>&1 || gh release create dock-desktop -R "$repo" --prerelease --target "$GITHUB_SHA" --title "APC dock for Windows (latest build)" --notes "The APC dock for Windows, built from main."
+          gh release view dock-desktop -R "$repo" > /dev/null 2>&1 || gh release create dock-desktop -R "$repo" --prerelease --target "$GITHUB_SHA" --title "Dock for Windows (latest build)" --notes "Dock for Windows, built from main."
 
           # A build older than what the release already has publishes nothing: older than what latest.json
           # announces, or than a versioned installer an earlier publish uploaded before it stopped. Only a
@@ -138,7 +138,7 @@ jobs:
           # 1. The versioned installer and its signature.
           gh release upload dock-desktop "$versioned" "$versioned.sig" -R "$repo" --clobber
           # 2. latest.json, naming exactly those bytes.
-          jq -n --arg version "$VERSION" --arg notes "APC dock $VERSION, built from main at $GITHUB_SHA." \
+          jq -n --arg version "$VERSION" --arg notes "Dock for Windows $VERSION, built from main at $GITHUB_SHA." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --rawfile signature "$versioned.sig" \
             --arg url "https://github.com/$repo/releases/download/dock-desktop/$versioned" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' > latest.json
@@ -153,4 +153,4 @@ jobs:
             gh release delete-asset dock-desktop "$old" -R "$repo" -y < /dev/null
             if grep -qxF "$old.sig" assets.txt; then gh release delete-asset dock-desktop "$old.sig" -R "$repo" -y < /dev/null; fi
           done
-          gh release edit dock-desktop -R "$repo" --notes "The APC dock for Windows (installer), the app the web dock offers on Windows: your agents as desktop pets on top of every window, each dragged onto an app to point it or anywhere else to move it (Alt+Shift+Space, tray). APC dock ${VERSION}, built from main at ${GITHUB_SHA}. It checks this release for updates (latest.json and the versioned installer it names, whose signature the app checks against the key built into it) and installs one on your yes. The installer is not code-signed: Windows SmartScreen asks once (More info, then Run anyway)."
+          gh release edit dock-desktop -R "$repo" --notes "Dock for Windows (installer), the app the web dock offers on Windows: your agents as desktop pets on top of every window, each dragged onto an app to point it or anywhere else to move it (Alt+Shift+Space, tray). APC dock ${VERSION}, built from main at ${GITHUB_SHA}. It checks this release for updates (latest.json and the versioned installer it names, whose signature the app checks against the key built into it) and installs one on your yes. The installer is not code-signed: Windows SmartScreen asks once (More info, then Run anyway)."
