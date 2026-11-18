@@ -59,7 +59,7 @@ apc-pin.apc-pin--dragging { opacity: 0.35; }
 .apc-pin__unpin { position: absolute; right: -8px; top: -8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--apc-line, #d6dce5);
   background: var(--apc-pin-unpin-bg, var(--apc-chip, #ffffff)); color: var(--apc-muted, #56627a); font-size: 12px; line-height: 13px; cursor: pointer; opacity: 0.85; }
 .apc-pin__unpin:hover { color: var(--apc-ink, #141a24); opacity: 1; }
-/* On touch the × sits beside the mark, never over its corner, and its hit area stops at the mark's edge (TIN-903):
+/* On touch the × sits beside the mark, never over its corner, and its hit area stops at the mark's edge:
    a tap on the mark arms or drags it, and a tap on the × unpins. The step between stacked badges is PIN_STACK_STEP_TOUCH. */
 @media ${APC_MOBILE_MEDIA} {
   .apc-pin__unpin { right: auto; top: 2px; left: calc(var(--apc-pin-size, 28px) + 4px); width: 24px; height: 24px; font-size: 16px; line-height: 21px; }

@@ -131,9 +131,9 @@ export function connectCheckErrorText(error: unknown): string {
     case "apc_json_unreachable":
       return "Could not reach that host's APC manifest. Try again.";
     case "apc_json_invalid":
-      return "That app's APC manifest is invalid or does not support APC 0.13 Dock connect.";
+      return "That app's APC manifest is invalid, or the app can't be connected from a dock.";
     case "dock_not_offered":
-      return "That app does not offer the Dock profile.";
+      return "That app does not take agents from a dock.";
     case "unreachable":
       return "Could not reach your dock. Try again.";
     default:

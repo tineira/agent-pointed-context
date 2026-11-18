@@ -515,7 +515,7 @@ export const WHATS_SENT = {
     mode === "send" ? "Passwords and codes, always. Card, account and id numbers go too."
     : mode === "never" ? "Passwords and codes, always. Card, account and id numbers too."
     : "Passwords and codes, always. Card, account and id numbers, unless you include them.",
-  where: "Your dock's hub on Cloudflare (10 minutes at most), then your agent's provider.",
+  where: "Your dock, hosted on Cloudflare (kept 10 minutes at most), then your agent's provider.",
 };
 
 /**

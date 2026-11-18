@@ -306,7 +306,7 @@ export function AgentPage(props: {
       <section className="agent-section">
         <h2>What it did</h2>
         {connected && (
-          <p className="compat" title="What this agent's client does with the dock, for the compatibility matrix (TIN-384)">
+          <p className="compat" title="What this agent's client does with the dock, for the compatibility matrix">
             Tools re-listed after pairing: {a.compat.listed_after_pairing ? "yes" : "not yet"} · prefixed calls {a.compat.prefixed_calls} · call_app_tool {a.compat.relay_calls} · waits {a.compat.waits}
           </p>
         )}

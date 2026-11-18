@@ -377,9 +377,9 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       {state.v2 && (
         <section className="card">
           <h2>Start over</h2>
-          <p className="hint">Delete this Pulse's demo data and start from zero (TIN-411). Your dock and Signals keep theirs until you start over there too.</p>
+          <p className="hint">Delete this Pulse's demo data and start from zero. Your dock and Signals keep theirs until you start over there too.</p>
           <div>
-            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents your dock paired here, and their pins", "your view and these settings", "this sandbox's event log"]} reset={() => api.reset()} />
+            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents you connected here or your dock paired here, and their pins", "your view and these settings", "this sandbox's event log"]} reset={() => api.reset()} />
           </div>
         </section>
       )}

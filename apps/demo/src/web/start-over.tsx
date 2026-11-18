@@ -1,7 +1,7 @@
 /**
  * Start over (TIN-411): wipe this site's demo data after a confirm, to test from zero. Each APC
  * site can only wipe its own (its cookie is its own, and httpOnly), so the dialog says which other
- * sites to start over in too, and that the agent keeps the dock's server until the person removes it.
+ * sites to start over in too, and that the agent keeps this site's server until the person removes it.
  * Shared by the dock, Pulse and Signals; styled with system colors so it fits all three.
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
@@ -13,6 +13,16 @@ export const APC_SITES = [
   { name: "Pulse", host: "pulse.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5199/agents" : "https://pulse.apc.tineira.com/agents" },
   { name: "Signals", host: "signals.apc.tineira.com", url: import.meta.env.DEV ? "http://localhost:5201/" : "https://signals.apc.tineira.com/" },
 ] as const;
+
+/**
+ * The MCP server whose URL this site's Start over breaks, under the name its connect prompt gave it (TIN-992): the
+ * dock's is "APC"; Pulse's and Signals' own servers (agents connected directly) carry the site's name.
+ */
+export function startOverServer(site: (typeof APC_SITES)[number]["name"]): { name: string; host: string; text: string } {
+  const host = APC_SITES.find((s) => s.name === site)!.host;
+  if (site === "Agent dock") return { name: "APC", host, text: `And remove the "APC" server from your agent: its URL stops working once the dock starts over. Paste this to your agent:` };
+  return { name: site, host, text: `If you connected your agent to ${site} directly, also remove the "${site}" server from it: its URL stops working once ${site} starts over. Paste this to your agent:` };
+}
 
 /**
  * A site opened with ?start_over=1 (a link from another site's dialog, TIN-412) opens its Start over
@@ -65,7 +75,8 @@ export function StartOver(props: {
   }, [opener]);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const disconnect = askToDisconnectPrompt("APC", APC_SITES[0].host);
+  const server = startOverServer(props.site);
+  const disconnect = askToDisconnectPrompt(server.name, server.host);
   const others = APC_SITES.filter((s) => s.name !== props.site);
   useEffect(() => {
     if (!asked) return;
@@ -126,7 +137,7 @@ export function StartOver(props: {
             </li>
           ))}
         </ul>
-        <p style={{ margin: "0 0 6px" }}>And remove the "APC" server from your agent: its URL stops working once the dock starts over. Paste this to your agent:</p>
+        <p style={{ margin: "0 0 6px" }}>{server.text}</p>
         <div style={{ display: "flex", gap: 8, alignItems: "stretch", margin: "0 0 14px" }}>
           <code style={{ flex: 1, minWidth: 0, padding: "6px 8px", borderRadius: 8, font: "12px/1.45 ui-monospace, monospace", whiteSpace: "pre-wrap", background: "color-mix(in srgb, CanvasText 7%, transparent)" }}>{disconnect}</code>
           <button
