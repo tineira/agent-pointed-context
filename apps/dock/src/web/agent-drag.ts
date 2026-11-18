@@ -55,3 +55,18 @@ export function startAgentDrag(e: { dataTransfer: DragSink | null; preventDefaul
 export function dragTitle(agent: DraggedAgent & { name: string }, where = "anything in an APC app"): string {
   return canDrag(agent) ? `Drag ${agent.name} onto ${where} to point it there (or to pair it with that app)` : `Connect ${agent.name} first: use Connect this agent in the dock`;
 }
+
+/**
+ * The pet a drag shows as its image: the one in the element the drag started on (TIN-969). Every drag start passes
+ * React's native event, whose currentTarget is React's root container, not the tile: looking there found the first
+ * agent's pet on the page (Claude's, while dragging Grok bot). The native event's target is the dragged element itself.
+ */
+export function dragImageOf(e: { target: EventTarget | null }): Element | null {
+  // A drag that starts on text inside the tile has a Text node as its target: its parent element stands for it.
+  const node = e.target as (Element & { parentElement?: Element | null }) | null;
+  const from = node && typeof node.closest === "function" ? node : (node?.parentElement ?? null);
+  if (!from || typeof from.querySelector !== "function" || typeof from.closest !== "function") return null;
+  // The pet itself, or one inside the dragged element, or the one of the draggable element it sits in (a drag that
+  // starts on a child, an image say): never further out, so never another agent's.
+  return from.closest(".apc-pet") ?? from.querySelector(".apc-pet") ?? from.closest('[draggable="true"]')?.querySelector(".apc-pet") ?? null;
+}
