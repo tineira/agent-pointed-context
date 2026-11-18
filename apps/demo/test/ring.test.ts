@@ -73,3 +73,50 @@ test("Pulse keeps the hub's ring address and rings it after a pin, signed with t
   assert.equal(rings.length, 2);
   assert.equal((room.db.prepare("select ring_url from hub_links where grant_id = ?").get(done2.grant_id) as { ring_url: string | null }).ring_url, null);
 });
+
+test("a grant paired before the ring learns it from the hub's /apc/confirm answer on its next drop, and rings from then on", async (t) => {
+  const paired: Array<{ mcp_url: string }> = [];
+  const confirmed: Array<{ mcp_url: string }> = [];
+  const rings: Array<Record<string, unknown>> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const body = (await request.json()) as Record<string, unknown>;
+    // A hub from before the ring: its /apc/pair answer has none. Today it answers /apc/confirm with one.
+    if (request.url === `${HUB}/apc/pair`) {
+      paired.push(body as { mcp_url: string });
+      return Response.json(ACK);
+    }
+    if (request.url === `${HUB}/apc/confirm`) {
+      confirmed.push(body as { mcp_url: string });
+      return Response.json({ ok: true, status: "pending", agent: { name: "Grok bot via dock", icon: null }, ring: RING });
+    }
+    if (request.url === RING.url) {
+      rings.push(body);
+      return Response.json({ ok: true });
+    }
+    return new Response("no", { status: 500 });
+  });
+  const room = durableObjectRoom();
+  const sandbox = new Sandbox(room.ctx, DEPLOY);
+  await sandbox.init();
+  const drop = { hub: HUB, agent: "ag_legacy", ticket: `${"d".repeat(32)}.${"5".repeat(16)}`, target: { kind: "customer", id: customers[0]!.id, part: null, params: null } };
+  const asked = await sandbox.pairHub(SID, ORIGIN, drop, true);
+  const done = await sandbox.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true);
+  assert.equal(done.ok, true, done.error);
+  await settle();
+  const ringOf = () => ({ ...(room.db.prepare("select ring_url, ring_id, ring_key from hub_links where grant_id = ?").get(done.grant_id) as Record<string, string | null>) });
+  assert.deepEqual(ringOf(), { ring_url: null, ring_id: null, ring_key: null });
+  assert.equal(rings.length, 0, "a legacy grant rings nobody");
+
+  // The next drop of the same agent confirms the pairing: the answer's ring is kept, for this same grant.
+  const again = await sandbox.pairHub(SID, ORIGIN, { ...drop, ticket: `${"d".repeat(32)}.${"6".repeat(16)}`, target: { kind: "customer", id: customers[1]!.id, part: null, params: null } });
+  assert.equal(again.ok, true, again.error);
+  assert.equal(again.grant_id, done.grant_id);
+  await settle();
+  assert.equal(confirmed[0]!.mcp_url, paired[0]!.mcp_url);
+  const key = await ringKey(confirmed[0]!.mcp_url);
+  assert.deepEqual(ringOf(), { ring_url: RING.url, ring_id: RING.id, ring_key: key });
+  assert.equal(rings.length, 1, "the drop's pin rang");
+  const r = rings[0] as { id: string; at: number; n: string; sig: string };
+  assert.equal(r.sig, await ringSignature(key, r.id, r.at, r.n));
+});

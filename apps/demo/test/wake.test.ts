@@ -26,6 +26,7 @@ interface Engine {
   idle(): Promise<void>;
   stopAll(): void;
   nextDue(): number | null;
+  view(id: string): { status: string | null } | null;
 }
 
 /** A Pulse sandbox with one Direct agent whose client says `client` (Grok bot sends "Cursor"), and the webhook stubbed. */
@@ -63,8 +64,8 @@ async function pulse(t: TestContext, client = "Cursor") {
   /** A Direct agent: its grant, and its MCP calls as its client makes them. */
   const connect = async (name: string) => {
     const grant = (await sandbox.addAgentGrant()) as { id: string; secret: string };
-    const mcp = (body: unknown) =>
-      sandbox.fetch(new Request(`${ORIGIN}/mcp/${SID}/${grant.secret}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) }));
+    const mcp = (body: unknown, signal?: AbortSignal): Promise<Response> =>
+      sandbox.fetch(new Request(`${ORIGIN}/mcp/${SID}/${grant.secret}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) }));
     const init = await (await mcp({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name, version: "1.0.0" } } })).json();
     const callTool = async (tool: string, args: Record<string, unknown> = {}) => (await (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args } })).json()).result;
     const seen = async () => {
@@ -72,7 +73,7 @@ async function pulse(t: TestContext, client = "Cursor") {
       const list = await (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })).json();
       return { instructions: String(again.result.instructions), tools: list.result.tools as Array<{ name: string; inputSchema: { properties?: Record<string, { type?: string }> } }> };
     };
-    return { id: grant.id, instructions: String(init.result.instructions), callTool, seen };
+    return { id: grant.id, instructions: String(init.result.instructions), mcp, callTool, seen };
   };
   const agent = await connect(client);
   /** A dock agent dropped here and paired (its grant is a dock grant), pinned on the drop. */
@@ -271,4 +272,182 @@ test("the alarm at the sandbox's end deletes it, its webhooks with it", async (t
   await p.sandbox.alarm();
   assert.deepEqual(p.wakeKeys(), []);
   assert.equal(p.room.db.prepare("select count(*) as n from grants").get()!.n, 0);
+});
+
+// ---- the review's test gaps (TIN-981) ----
+
+/** Let the requests and timers already started run as far as they can without the clock moving. */
+const settle = async () => {
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+};
+
+test("the offer rides only on a real answer: a refused wait, a cancelled or hung-up wait and an error neither carry it nor spend the day's", async (t) => {
+  const p = await pulse(t);
+  const hintKey = `wake_hint:${p.agent.id}`;
+  const call = (id: number, name: string, args: Record<string, unknown> = {}, signal?: AbortSignal) =>
+    p.agent.mcp({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }, signal);
+  const resultOf = async (response: Response) => {
+    const text = await response.text();
+    return text ? (JSON.parse(text) as { result?: { structuredContent?: Record<string, unknown>; isError?: boolean } }).result : undefined;
+  };
+
+  // The person does not share their view: a wait runs to its timeout (on the mocked clock), never ended by a closed page.
+  await p.sandbox.setSetting("share_view", false);
+  // A wait that holds the place...
+  const waiting = call(7, "wait_for_focus", { timeout_s: 45 });
+  await settle();
+  // ...makes a second one within the claim gap a refused wait: retry_after_s, and no offer.
+  const refused = await resultOf(await call(8, "wait_for_focus", { timeout_s: 45 }));
+  assert.equal(typeof refused?.structuredContent?.retry_after_s, "number");
+  assert.equal(refused?.structuredContent?.wake, undefined, "a refused wait carries no offer");
+  assert.ok(!p.wakeKeys().includes(hintKey), "nor spends the day's");
+
+  // The first wait is cancelled by notifications/cancelled, in a POST of its own.
+  await p.agent.mcp({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7, reason: "user" } });
+  const cancelled = await resultOf(await waiting);
+  assert.equal(cancelled?.structuredContent?.wake, undefined, "a cancelled wait carries no offer");
+  assert.ok(!p.wakeKeys().includes(hintKey), "nor spends the day's");
+
+  // A wait whose client hung up (the request aborted).
+  await p.pass(30_000);
+  const hangUp = new AbortController();
+  const hungUp = call(9, "wait_for_focus", { timeout_s: 45 }, hangUp.signal);
+  await settle();
+  hangUp.abort();
+  await hungUp.then(resultOf, () => undefined);
+  await settle();
+  assert.ok(!p.wakeKeys().includes(hintKey), "a hung-up wait spends nothing");
+
+  // An error (out of range: the tool's schema refuses it).
+  await p.pass(30_000);
+  const bad = await resultOf(await call(10, "wait_for_focus", { timeout_s: 99_999 }));
+  assert.equal(bad?.isError, true);
+  assert.equal(bad?.structuredContent?.wake, undefined);
+  assert.ok(!p.wakeKeys().includes(hintKey), "an error spends nothing");
+
+  // The first real answer still carries it.
+  assert.equal((await p.agent.callTool("get_current_view")).structuredContent.wake?.state, "off");
+  assert.ok(p.wakeKeys().includes(hintKey));
+});
+
+test("wake_on_pin checks again at call time: an agent adopted as another client gets not_offered, and its next wake is paused", async (t) => {
+  const p = await pulse(t);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  // Another product on the same URL raises a conflict; the client stays Grok bot until the person answers it.
+  await p.agent.mcp({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "1.0.0" } } });
+  assert.equal((await p.grantState(p.agent.id)).wake_offer, true);
+  // The request registers wake_on_pin while the client says Grok bot; the person adopts the newcomer while the call runs.
+  const sandbox = p.sandbox as unknown as { log(type: string, grantId: string | null, data: Record<string, unknown>): void };
+  const log = sandbox.log.bind(sandbox);
+  t.mock.method(sandbox, "log", (type: string, grantId: string | null, data: Record<string, unknown>) => {
+    log(type, grantId, data);
+    if (type === "inbound" && data.tool === "wake_on_pin") void p.sandbox.resolveConflict(p.agent.id, "adopt");
+  });
+  const answer = await p.agent.callTool("wake_on_pin");
+  assert.equal(answer.isError, true);
+  assert.equal(answer.structuredContent.error, "not_offered");
+  assert.equal((await p.grantState(p.agent.id)).wake_offer, false, "adopted: no longer Grok bot");
+
+  // The webhook stays (Turn off stays reachable), but the next wake is paused, not sent.
+  await p.sandbox.pin(p.agent.id, target());
+  await p.pass(3_000);
+  assert.equal(p.sent.length, 0);
+  assert.equal((await p.grantState(p.agent.id)).wake?.status, "paused");
+});
+
+test("a wake is put off while a call of that grant is in flight, and goes once the call ends", async (t) => {
+  const p = await pulse(t);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  // A wait that is in flight but has not looked yet: its claim is held until the test lets it answer (refused).
+  let answerClaim = () => {};
+  const slots = (p.sandbox as unknown as { waitSlots: { for(id: string): unknown } }).waitSlots;
+  t.mock.method(slots, "for", () => ({
+    atomic: true,
+    claim: () => new Promise((resolve) => (answerClaim = () => resolve({ retryAfterS: 1 }))),
+    holds: async () => false,
+    release: async () => false,
+  }));
+  const waiting = p.agent.callTool("wait_for_focus", { timeout_s: 45 });
+  await settle();
+  await p.sandbox.pin(p.agent.id, target());
+  await p.pass(2_500);
+  assert.equal(p.sent.length, 0, "not while the call is in flight");
+  await p.pass(10_000);
+  assert.equal(p.sent.length, 0, "put off again and again while it lasts");
+  answerClaim();
+  await waiting;
+  // The call ended (its count went back to zero): the next try sends it.
+  await p.pass(3_500);
+  assert.equal(p.sent.length, 1);
+});
+
+test("the start-up cleanup of a deploy without Direct purges the leftover grant's webhook and hint", async (t) => {
+  const p = await pulse(t);
+  assert.equal((await p.agent.callTool("get_current_view")).structuredContent.wake?.state, "off");
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  assert.deepEqual(p.wakeKeys().filter((k) => k.endsWith(p.agent.id)), [`wake:${p.agent.id}`, `wake_hint:${p.agent.id}`]);
+  // The object starts again on a deploy that offers only the Dock profile: the Direct grant is a leftover and goes.
+  const again = new Sandbox(p.room.ctx, { ...DEPLOY, APC_PROFILES: "dock" });
+  await again.isOwner(p.owner);
+  assert.equal(p.room.db.prepare("select count(*) as n from grants where id = ?").get(p.agent.id)!.n, 0);
+  assert.deepEqual(p.wakeKeys().filter((k) => k.endsWith(p.agent.id)), [], "its webhook and hint go with it");
+});
+
+test("an owner's wake route sweeps first: a dock grant past its time ends there, its wake keys with it", async (t) => {
+  const p = await pulse(t);
+  const dock = await p.dockGrant();
+  const row = { gen: "x", url: WEBHOOK, key: KEY, created_at: "x", sent_at: null, status: null, status_at: null, pending_at: null, pending_kind: null, pending_source: null, due: null, delivered_at: null, delivered_event: null, delivered_outcome: null, delivered_code: null };
+  p.room.db.prepare("insert into apc_kv (key, value) values (?, ?), (?, ?)").run(`wake:${dock}`, JSON.stringify(row), `wake_hint:${dock}`, String(Date.now()));
+  // Still in handoff long after T_connect: overdue, but nothing has swept it yet.
+  await (p.sandbox as unknown as { advanceDockClock(ms: number): Promise<void> }).advanceDockClock(24 * 3_600_000);
+  assert.deepEqual(await p.sandbox.setWake(dock, { url: WEBHOOK, key: KEY }), { ok: false, error: "unknown_grant" });
+  assert.equal(p.room.db.prepare("select count(*) as n from grants where id = ?").get(dock)!.n, 0, "the route ended it");
+  assert.deepEqual(p.wakeKeys().filter((k) => k.endsWith(dock)), [], "and purged its webhook and hint");
+});
+
+test("the owner's wake routes through the Worker: the session cookie, the Origin check, and each answer's status", async (t) => {
+  const p = await pulse(t);
+  const { default: worker } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
+  const env = { ...DEPLOY, SANDBOX: { idFromName: (name: string) => name, get: (id: string) => (id === SID ? p.sandbox : assert.fail(`no sandbox ${id}`)) } };
+  const cookie = `apc_session=${SID}.${p.owner}`;
+  const json = { "content-type": "application/json" };
+  const post = async (path: string, headers: Record<string, string>, body: unknown = {}) => {
+    const r = (await worker.fetch(new Request(`${ORIGIN}/api/s/${SID}/grants/${path}`, { method: "POST", headers, body: JSON.stringify(body) }), env)) as Response;
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  };
+  const owner = { ...json, cookie, origin: ORIGIN, "sec-fetch-site": "same-origin" };
+  const id = p.agent.id;
+
+  // Not the owner, or not the page: refused before the sandbox is asked.
+  for (const path of [`${id}/wake`, `${id}/wake/clear`, `${id}/wake/test`]) {
+    assert.deepEqual(await post(path, json, { url: WEBHOOK, key: KEY }), { status: 403, body: { error: "forbidden" } }, path);
+    assert.deepEqual(await post(path, { ...json, cookie: `apc_session=${SID}.${"0".repeat(32)}` }, { url: WEBHOOK, key: KEY }), { status: 404, body: { error: "sandbox_expired" } }, path);
+    assert.deepEqual(await post(path, { ...owner, origin: "https://evil.test" }, { url: WEBHOOK, key: KEY }), { status: 403, body: { error: "origin_not_allowed" } }, path);
+    assert.deepEqual(await post(path, { ...owner, "content-type": "text/plain" }, { url: WEBHOOK, key: KEY }), { status: 415, body: { error: "json_required" } }, path);
+  }
+  assert.equal(p.wakeKeys().length, 0, "nothing was set");
+
+  // The owner: set, test, clear, each with its status.
+  assert.deepEqual(await post(`${id}/wake`, owner, { url: "https://evil.test/automations/webhook/x", key: KEY }), { status: 400, body: { ok: false, error: "invalid" } });
+  assert.deepEqual(await post("g_ffffffff/wake", owner, { url: WEBHOOK, key: KEY }), { status: 400, body: { ok: false, error: "unknown_grant" } });
+  assert.deepEqual(await post(`${id}/wake/test`, owner), { status: 400, body: { ok: false, error: "no_webhook" } });
+  assert.deepEqual(await post(`${id}/wake`, owner, { url: WEBHOOK, key: KEY }), { status: 200, body: { ok: true } });
+  assert.deepEqual(await post(`${id}/wake/test`, owner), { status: 200, body: { ok: true, status: "ok" } });
+  assert.equal(p.sent.length, 1);
+  assert.deepEqual(await post(`${id}/wake/test`, owner), { status: 400, body: { ok: false, error: "too_soon" } });
+  assert.deepEqual(await post(`${id}/wake/clear`, owner), { status: 200, body: { ok: true } });
+  assert.deepEqual(await post("g_ffffffff/wake/clear", owner), { status: 400, body: { ok: false, error: "unknown_grant" } });
+  assert.equal((await p.grantState(id)).wake, null);
+});
+
+test("a wake whose grant is no longer Direct is dropped as not live, not paused as if its client had changed", async (t) => {
+  const p = await pulse(t);
+  await p.sandbox.setWake(p.agent.id, { url: WEBHOOK, key: KEY });
+  await p.sandbox.pin(p.agent.id, target());
+  // Before it is due, a dock holds the grant (its link is there and live): the pin is now the dock's to wake for.
+  p.room.db.prepare("insert into hub_links (hub, agent, grant_id, created_at, state) values (?, 'ag_x', ?, ?, 'live')").run(HUB, p.agent.id, new Date().toISOString());
+  await p.pass(3_000);
+  assert.equal(p.sent.length, 0);
+  assert.equal(p.engine.view(p.agent.id)!.status, null, "dropped, not marked paused");
+  assert.equal(p.engine.nextDue(), null);
 });
