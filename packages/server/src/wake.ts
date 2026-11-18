@@ -384,6 +384,7 @@ export class WakeEngine {
     const w = this.store.get(id);
     if (!w) return;
     const now = Date.now();
+    // Deliberate (TIN-964, kept): the first due stands (no starvation by pins), while pending_at, and with it the 60 s defer cap, restarts with each pin.
     const due = w.due ?? Math.max(now + WAKE_SETTLE_MS, (w.sent_at ?? 0) + WAKE_GAP_MS);
     this.store.put(id, { ...w, pending_at: now, pending_kind: kind, pending_source: source, due });
     this.schedule(id);

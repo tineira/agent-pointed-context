@@ -59,3 +59,50 @@ test("Signals keeps the hub's ring address and rings it after a pin, signed with
   await settle();
   assert.equal(rings.length, 2);
 });
+
+test("a grant paired before the ring, even one with no pairing_id, learns it from the hub's /apc/confirm answer on its next drop", async (t) => {
+  const paired: Array<{ mcp_url: string }> = [];
+  const confirmed: Array<{ mcp_url: string }> = [];
+  const rings: Array<{ id: string; at: number; n: string; sig: string }> = [];
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const body = (await request.json()) as Record<string, unknown>;
+    // A hub from before the ring: its /apc/pair answer has none. Today it answers /apc/confirm with one.
+    if (request.url === `${HUB}/apc/pair`) {
+      paired.push(body as { mcp_url: string });
+      return Response.json(ACK);
+    }
+    if (request.url === `${HUB}/apc/confirm`) {
+      confirmed.push(body as { mcp_url: string });
+      return Response.json({ ok: true, status: "pending", agent: { name: "Grok bot via dock", icon: null }, ring: RING });
+    }
+    if (request.url === RING.url) {
+      rings.push(body as { id: string; at: number; n: string; sig: string });
+      return Response.json({ ok: true });
+    }
+    return new Response("no", { status: 500 });
+  });
+  const room = durableObjectRoom();
+  const feed = new Feed(room.ctx, DEPLOY);
+  await feed.init();
+  const drop = { hub: HUB, agent: "ag_legacy", ticket: `${"d".repeat(32)}.${"6".repeat(16)}`, target: { kind: "post", id: posts[0]!.id, part: null } };
+  const asked = await feed.pairHub(SID, ORIGIN, drop, true);
+  const done = await feed.pairHub(SID, ORIGIN, { ...drop, consent: asked.consent }, true);
+  assert.equal(done.ok, true, done.error);
+  await settle();
+  // Older still: a grant from before Signals kept the hub's pairing id.
+  room.db.prepare("update grants set pairing_id = null where id = ?").run(done.grant_id);
+  const ringOf = () => ({ ...(room.db.prepare("select ring_url, ring_id, ring_key from grants where id = ?").get(done.grant_id) as Record<string, string | null>) });
+  assert.deepEqual(ringOf(), { ring_url: null, ring_id: null, ring_key: null });
+  assert.equal(rings.length, 0, "a legacy grant rings nobody");
+
+  const again = await feed.pairHub(SID, ORIGIN, { ...drop, ticket: `${"d".repeat(32)}.${"7".repeat(16)}`, target: { kind: "post", id: posts[1]!.id, part: null } });
+  assert.equal(again.ok, true, again.error);
+  assert.equal(again.grant_id, done.grant_id);
+  await settle();
+  assert.equal(confirmed[0]!.mcp_url, paired[0]!.mcp_url);
+  const key = await ringKey(confirmed[0]!.mcp_url);
+  assert.deepEqual(ringOf(), { ring_url: RING.url, ring_id: RING.id, ring_key: key });
+  assert.equal(rings.length, 1, "the drop's pin rang");
+  assert.equal(rings[0]!.sig, await ringSignature(key, rings[0]!.id, rings[0]!.at, rings[0]!.n));
+});

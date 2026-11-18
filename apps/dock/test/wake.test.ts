@@ -574,3 +574,160 @@ test("an error from wait_for_focus carries no offer and does not spend the day's
   assert.equal(bad.structuredContent?.wake, undefined);
   assert.equal((await d.callTool("get_current_view")).structuredContent.wake?.state, "off");
 });
+
+// ---- the review's test gaps (TIN-964) ----
+
+/** The dock's Worker, with its Durable Objects stood in for by `hub` (anything the test gives). */
+async function dockWorker(hub: (did: string) => unknown) {
+  const { default: app } = await import(new URL("../src/worker/index.ts", import.meta.url).href);
+  const env = { HUB: { idFromName: (name: string) => name, get: (id: string) => hub(id) } };
+  return (request: Request) => app.fetch(request, env) as Promise<Response>;
+}
+const ringUrl = `https://dock.test/apc/ring/${DID}`;
+
+test("/apc/ring reads at most 2 KB of a body sent with no length: it cancels the rest and answers 400, asking no dock", async () => {
+  const worker = await dockWorker(() => assert.fail("no dock is asked"));
+  // A well-formed ring, padded past the cap with whitespace JSON allows: only the cap refuses it.
+  const text = JSON.stringify(await ringBody({ url: ringUrl, id: "pr_0123456789abcdef" }, await ringKey(APP_MCP))) + " ".repeat(16 * 1024);
+  const bytes = new TextEncoder().encode(text);
+  const CHUNK = 256;
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled * CHUNK >= bytes.length) return controller.close();
+      controller.enqueue(bytes.slice(pulled * CHUNK, (pulled + 1) * CHUNK));
+      pulled++;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const request = new Request(ringUrl, { method: "POST", headers: { "content-type": "application/json" }, body, duplex: "half" } as RequestInit);
+  assert.equal(request.headers.get("content-length"), null, "chunked: no length to check up front");
+  const r = await worker(request);
+  assert.equal(r.status, 400);
+  assert.deepEqual(await r.json(), { ok: false, error: "invalid" });
+  assert.equal(cancelled, true, "the rest of the body is cancelled, not read");
+  assert.ok(pulled * CHUNK <= 2048 + 2 * CHUNK, `read ${pulled * CHUNK} bytes of ${bytes.length}`);
+});
+
+test("/apc/ring answers 200 { ok: true } at once, even when the dock's ring() never resolves", async () => {
+  let asked = 0;
+  const worker = await dockWorker(() => ({
+    ring: () => {
+      asked++;
+      return new Promise<void>(() => {});
+    },
+  }));
+  const body = JSON.stringify(await ringBody({ url: ringUrl, id: "pr_0123456789abcdef" }, await ringKey(APP_MCP)));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("the answer waited on the dock")), 2_000)));
+  try {
+    const r = await Promise.race([worker(new Request(ringUrl, { method: "POST", headers: { "content-type": "application/json" }, body })), late]);
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { ok: true });
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.equal(asked, 1, "the ring went to the dock");
+});
+
+test("a ring whose pairing is unpaired, or whose nonce is taken, while its HMAC is worked out makes no demand", async (t) => {
+  const d = await dock(t);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const key = await ringKey(APP_MCP);
+  const id = d.pairApp();
+  const body = await ringBody({ url: ringUrl, id }, key);
+  // The hub hashes the grant's MCP URL (ringKey): the person unpairs the app meanwhile.
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  let meanwhile = () => {};
+  t.mock.method(crypto.subtle, "digest", async (...args: Parameters<SubtleCrypto["digest"]>) => {
+    const now = meanwhile;
+    meanwhile = () => {};
+    now();
+    return digest(...args);
+  });
+  meanwhile = () => void d.db.prepare("delete from pairings where id = ?").run(id);
+  await d.hub.ring(body);
+  assert.equal(d.wake()!.pending_at, null, "unpaired during the HMAC: no demand");
+  assert.equal(d.db.prepare("select count(*) as n from ring_seen").get()!.n, 0);
+
+  // The same ring twice at once: whichever checks second finds the nonce taken after its awaits, and does nothing.
+  const other = d.pairApp("paired", "pr_fedcba9876543210fedcba9876543210");
+  const twice = await ringBody({ url: ringUrl, id: other }, key);
+  await Promise.all([d.hub.ring(twice), d.hub.ring(twice)]);
+  assert.equal(d.db.prepare("select count(*) as n from ring_seen where n = ?").get(twice.n)!.n, 1);
+  assert.ok(d.wake()!.pending_at, "the first one's demand stands");
+  await d.pass(3_000);
+  assert.equal(d.sent.length, 1, "one wake");
+});
+
+test("get_current_view with a paired app is no proof unless that app's new pin was handed over: the wake still goes when the read fails or brings no new pin", async (t) => {
+  const app = { id: "pulse", name: "Pulse", origin: "https://pulse.test" };
+  const oldPin = (at: string) => ({ kind: "customer", id: "c1", part: null, params: null, app_url: "https://pulse.test/", pinned_at: at, next: "get_customer", next_args: {} });
+
+  // The app's read fails (the harness answers any app call 500): no pin of that source is handed over.
+  {
+    const d = await dock(t);
+    await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+    const pairing = d.pairApp();
+    await d.ring(pairing);
+    // Later than the ring: a read in the same millisecond never covers it.
+    await d.pass(500);
+    const seen = await d.callTool("get_current_view");
+    assert.equal(seen.structuredContent.focus, null);
+    await d.pass(3_000);
+    assert.equal(d.sent.length, 1, "the read failed: the wake goes");
+    t.mock.reset();
+  }
+
+  // The app answers with the pin the hub already took and handed over before the ring: no new pin.
+  const d = await dock(t);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const pairing = d.pairApp();
+  const before = new Date(Date.now() - 60_000).toISOString();
+  d.db.prepare("update pairings set taken_at = ? where id = ?").run(before, pairing);
+  d.db.prepare("insert into pointer (agent_id, pairing_id, app, focus, seen_at) values (?, ?, ?, ?, ?)").run(d.agent, pairing, JSON.stringify(app), JSON.stringify(oldPin(before)), new Date(Date.now() - 30_000).toISOString());
+  const harness = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.startsWith("https://pulse.test/")) return harness(input, init);
+    const message = JSON.parse(String(input instanceof Request ? await input.text() : init?.body)) as { id?: number };
+    const result = { view: { screen: "customers" }, focus: oldPin(before) };
+    return Response.json({ jsonrpc: "2.0", id: message.id ?? null, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
+  });
+  await d.ring(pairing);
+  await d.pass(500);
+  const seen = await d.callTool("get_current_view");
+  assert.equal(seen.structuredContent.focus?.pinned_at, before, "the agent got the old pin, already seen");
+  await d.pass(3_000);
+  assert.equal(d.sent.length, 1, "the new pin was never handed over: the wake goes");
+});
+
+test("demand() keeps the first due: a second pin does not push the wake out, and the 60 s cap on putting it off runs from the newest pin (deliberate, TIN-964)", async (t) => {
+  const d = await dock(t);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const pairing = d.pairApp();
+  await d.ring(pairing);
+  const due = Number(d.wake()!.due);
+  await d.pass(1_500);
+  await d.ring(pairing);
+  assert.equal(Number(d.wake()!.due), due, "the second pin keeps the first pin's due");
+  assert.equal(Number(d.wake()!.pending_at), Date.now(), "and is the one to cover");
+  await d.pass(1_000);
+  assert.equal(d.sent.length, 1, "it goes at the first pin's time");
+
+  // While a call is in flight the wake is put off, at most 60 s after the newest pin: each new pin restarts that cap.
+  await d.pass(20_000);
+  const busy = (d.hub as unknown as { busy: Map<string, number> }).busy;
+  busy.set(d.agent, 1);
+  await d.ring(pairing);
+  await d.pass(50_000);
+  await d.ring(pairing);
+  await d.pass(50_000);
+  assert.equal(d.sent.length, 1, "100 s after the first of these pins, still put off: the cap restarted at the second");
+  await d.pass(15_000);
+  assert.equal(d.sent.length, 2, "60 s after the newest pin it goes, call or not");
+  busy.delete(d.agent);
+});

@@ -9,6 +9,7 @@ import { useEffect, useId, useState } from "react";
 import { WAKE_DAY_MAX, WAKE_GAP_MS, wakeAppPlace, wakeRoutinePrompt } from "../../../../packages/server/src/wake-shared.ts";
 import type { Api, GrantState, PulseWake } from "./api.ts";
 import { CopyField } from "./connect.tsx";
+import { wakeAfterToggle, wakeCardOf, wakeLinkAtLoad, wakeOnHashChange, wakeScrollDue } from "./wake-hash.ts";
 
 const PLACE = wakeAppPlace("Pulse");
 const LIMITS_TEXT = `at most one every ${WAKE_GAP_MS / 1000} s, ${WAKE_DAY_MAX} a day`;
@@ -32,13 +33,13 @@ const TEST_TEXT: Record<string, string> = {
   unknown_grant: "This agent is gone.",
 };
 
-/** The Wake on pin section a `#wake-<grant id>` address names, or null. */
-const wakeFromHash = (): string | null => (/^#wake-g_[0-9a-f]+$/.test(location.hash) ? location.hash.slice(1) : null);
+/** The Wake on pin section the address names now, or null. */
+const wakeFromHash = (): string | null => wakeCardOf(location.hash);
 /**
  * The section the address named when the page loaded: read once, as this module loads, because Pulse's routing and its
  * sandbox start can rewrite the address (dropping the hash) before the cards mount.
  */
-let atLoad: string | null = typeof location === "undefined" ? null : wakeFromHash();
+const atLoad = wakeLinkAtLoad(typeof location === "undefined" ? null : location.hash);
 
 function when(iso: string | null): string {
   if (!iso) return "";
@@ -51,19 +52,15 @@ export function WakeOnPinList(props: { api: Api; grants: GrantState[]; names: Ma
   const shown = props.grants.filter((g) => g.wake_offer || g.wake);
   // wake_on_pin's link: opens that agent's card and brings it into view, on load and in a page already open (hashchange).
   // The hash is then taken off the address, so a reload does not open it again; closing the card by hand closes it for good.
-  const [open, setOpen] = useState(() => {
-    const target = wakeFromHash() ?? atLoad;
-    atLoad = null;
-    return target;
-  });
+  const [open, setOpen] = useState(() => atLoad.mount(location.hash));
   // Whether the address still has to be scrolled to (the hash may already be gone from it, see atLoad).
   const [pending, setPending] = useState(() => open !== null);
   useEffect(() => {
     const onHash = () => {
-      const target = wakeFromHash();
-      if (target) {
-        setOpen(target);
-        setPending(true);
+      const next = wakeOnHashChange(location.hash);
+      if (next) {
+        setOpen(next.open);
+        setPending(next.pending);
       }
     };
     window.addEventListener("hashchange", onHash);
@@ -72,7 +69,7 @@ export function WakeOnPinList(props: { api: Api; grants: GrantState[]; names: Ma
   // The cards shown now: a card that comes later (an agent that just connected) is scrolled to when it appears.
   const ready = shown.map((g) => g.id).join(",");
   useEffect(() => {
-    if (!open || !ready || !pending) return;
+    if (!wakeScrollDue(open, ready, pending)) return;
     const el = document.getElementById(open);
     if (!el) return;
     setPending(false);
@@ -96,7 +93,8 @@ export function WakeOnPinList(props: { api: Api; grants: GrantState[]; names: Ma
           className="mt-2 rounded-lg border border-line px-3 py-2"
           open={open === `wake-${g.id}` || undefined}
           onToggle={(e) => {
-            if (!e.currentTarget.open && open === `wake-${g.id}`) setOpen(null);
+            const next = wakeAfterToggle(open, `wake-${g.id}`, e.currentTarget.open);
+            if (next !== open) setOpen(next);
           }}
         >
           <summary className="cursor-pointer font-medium">
