@@ -71,7 +71,7 @@ test("No file of the dock's page writes a drag of its own: every drag goes throu
     assert.ok(!/\bsetData\s*\(/.test(src), `${file} writes a drag itself`);
     assert.ok(!/\bitems\s*\.\s*add\s*\(/.test(src), `${file} adds an item to a drag itself`);
     assert.ok(!/DownloadURL/.test(src), `${file} puts a DownloadURL on a drag`);
-    assert.ok(!/askYourAgentPrompt/.test(src) || file === "setup.tsx", `${file} builds the connect prompt`);
+    assert.ok(!/askYourAgentPrompt/.test(src) || file === "setup.tsx" || file === "qr.tsx", `${file} builds the connect prompt`);
     assert.ok(!/drag[^.\n]*into (your|the) agent.s chat/i.test(src), `${file} still says to drag into the chat`);
     // A `draggable` that is always true would start a drag for an agent not connected yet.
     assert.ok(!/^\s*draggable\s*$/m.test(src) && !/<[A-Za-z][^>]*\sdraggable(?=\s*\/?>|\s+[A-Za-z-]+=)/.test(src), `${file} has a bare draggable`);

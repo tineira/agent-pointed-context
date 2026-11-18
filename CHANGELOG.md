@@ -1,6 +1,8 @@
 # Changelog
 
-This is the changelog of the software. The APC standard (the contract an app and an agent share) is versioned apart, with its own [changelog](packages/protocol/CHANGELOG.md). Every PR that changes behavior adds an entry under `## Unreleased`; see `AGENTS.md`.
+This is the changelog of the software. The APC standard (the contract an app and an agent share) is versioned apart, with its own [changelog](packages/protocol/CHANGELOG.md). Every PR that changes behavior adds an entry under `## Unreleased
+
+- **The standard’s site and docs run independently of Dock.** A new apc-site Worker serves the existing pages, docs and media URLs; Dock delegates the landing and keeps Start over, pairing and its offline page (apps/site, apps/dock, scripts/lib/dock-workerd.mjs, .github/workflows/ci.yml).`; see `AGENTS.md`.
 
 ## Unreleased
 

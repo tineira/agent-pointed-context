@@ -13,6 +13,7 @@ const TICKET = /\bTIN-\d+/g;
 const CODE_ROOTS = [
   "apps/demo/src",
   "apps/dock/src",
+  "apps/site/src",
   "apps/signals/src",
   "apps/extension/src",
   "apps/desktop",
@@ -24,7 +25,7 @@ const CODE_ROOTS = [
 const CODE_EXT = /\.(ts|tsx|mjs|js|cs)$/;
 const MARKUP_EXT = /\.(html|axaml)$/;
 /** Served as they are: every line is customer-facing. */
-const DOCS_ROOT = "apps/dock/src/docs/pages";
+const DOCS_ROOT = "apps/site/src/docs/pages";
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {

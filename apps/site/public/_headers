@@ -1,0 +1,4 @@
+# Site assets use the same frame protection as the Dock.
+/*
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY

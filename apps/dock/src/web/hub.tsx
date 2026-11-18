@@ -13,8 +13,8 @@
  */
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { AgentIcon } from "../../../demo/src/web/agent-icon.tsx";
-import { StartOver } from "../../../demo/src/web/start-over.tsx";
+import { AgentIcon } from "./agent-icon.tsx";
+import { StartOver } from "./start-over.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { canDrag, dragImageOf, dragTitle, startAgentDrag } from "./agent-drag.ts";
 import { AgentPage, call, host, RemoveAgent, type DockAgent, type DockState } from "./agent-page.tsx";

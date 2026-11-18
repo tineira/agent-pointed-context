@@ -9,7 +9,7 @@ import { declaresMcpUrl, describeMcpCoverage, endpointRule, mcpUrlCoverage, pars
  */
 interface Vector { file: string; url: string; profile: "direct" | "dock" | null; shared: boolean; covered: boolean; why: string }
 const { files, vectors } = JSON.parse(readFileSync(new URL("./mcp-endpoint-vectors.json", import.meta.url), "utf8")) as { files: Record<string, Record<string, unknown> & { origin: string }>; vectors: Vector[] };
-const SPEC = new URL("../../../apps/dock/src/docs/pages/spec.md", import.meta.url);
+const SPEC = new URL("../../../apps/site/src/docs/pages/spec.md", import.meta.url);
 
 const parsed = (raw: Record<string, unknown> & { origin: string }): ApcManifest => {
   const r = parseApcManifest(raw, raw.origin);

@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apc-site",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/media*"
+    ]
+  },
+  "routes": [
+    {
+      "pattern": "apc.tineira.com/docs*",
+      "zone_name": "tineira.com"
+    },
+    {
+      "pattern": "apc.tineira.com/build*",
+      "zone_name": "tineira.com"
+    },
+    {
+      "pattern": "apc.tineira.com/try*",
+      "zone_name": "tineira.com"
+    },
+    {
+      "pattern": "apc.tineira.com/llms.txt*",
+      "zone_name": "tineira.com"
+    },
+    {
+      "pattern": "apc.tineira.com/site-assets/*",
+      "zone_name": "tineira.com"
+    },
+    {
+      "pattern": "apc.tineira.com/media/*",
+      "zone_name": "tineira.com"
+    }
+  ],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "invocation_logs": false
+    }
+  }
+}

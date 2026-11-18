@@ -31,7 +31,7 @@ jobs:
       # Durable Objects, pairing through /apc/pair, the owner's code, initialize and /apc/confirm. `pnpm test` runs on Node,
       # which accepts fetch options Workers rejects (redirect: "error" broke Dock pairing in production from APC 0.9 to 0.11.0).
       - name: Dock pairing in workerd
-        run: node scripts/dock-pairing.mjs
+        run: node scripts/site-routes.mjs && node scripts/dock-pairing.mjs
         timeout-minutes: 3
 
   # The mobile rule (APC 0.6, TIN-608) in a real browser: Chrome at 375x812 with real touch events against Pulse and
@@ -104,7 +104,7 @@ jobs:
           files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
           echo "$files"
           echo "v1=$(echo "$files" | grep -qE '^apps/v1/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "standard=$(echo "$files" | grep -qE '^(apps/dock/|apps/signals/|apps/demo/|apps/extension/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "standard=$(echo "$files" | grep -qE '^(apps/site/|apps/dock/|apps/signals/|apps/demo/|apps/extension/|packages/|pnpm-lock\.yaml$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Every push to main that passes the checks and touches apps/v1 goes live at apc.tineira.com/v1 (Worker apc-demo,
   # through zone routes; the root is the dock's). It builds apps/v1 alone: nothing else in the repo
@@ -138,7 +138,7 @@ jobs:
           packageManager: pnpm
           command: deploy
 
-  # The APC standard: the dock and its hub (apps/dock, Worker apc-dock, apc.tineira.com), Pulse
+  # The APC standard: the site (apps/site, Worker apc-site, six zone routes) and the dock and its hub (apps/dock, Worker apc-dock, apc.tineira.com), Pulse
   # (apps/demo, Worker apc-pulse, pulse.apc.tineira.com) and Signals (apps/signals, Worker
   # apc-signals, signals.apc.tineira.com). The dock owns the host apc.tineira.com as a Custom Domain, which
   # V1's Worker (apc-demo) must have released first (it keeps only the routes apc.tineira.com/v1*), so when
@@ -182,6 +182,15 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/signals
+          packageManager: pnpm
+          command: deploy
+      # The SITE binding target and its zone routes must exist before Dock delegates /.
+      - run: pnpm --dir apps/site build
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/site
           packageManager: pnpm
           command: deploy
       - run: pnpm --dir apps/dock build

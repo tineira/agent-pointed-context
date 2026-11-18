@@ -44,7 +44,7 @@ test("the dock is never framed: every Worker response and every asset says frame
   framing(await app.request("https://example.com/v1"), "a redirect");
   framing(await app.request("https://example.com/apc/nothing", { method: "POST" }), "a 404");
   // Assets the Worker hands out: the landing at /, and anything else; their headers may be immutable, as a fetched response's are.
-  const env = { ASSETS: { fetch: async () => Response.redirect("https://example.com/dock", 302) } };
+  const env = { ASSETS: { fetch: async () => Response.redirect("https://example.com/dock", 302) }, SITE: { fetch: async () => new Response("site", { headers: { "content-security-policy": "frame-ancestors 'none'", "x-frame-options": "DENY" } }) } };
   framing(await app.request("https://example.com/", {}, env), "the landing");
   framing(await app.request("https://example.com/dock/agents/ag_1", {}, env), "the dock page through the Worker");
   // And the assets served without the Worker (/dock): public/_headers, for every path.
@@ -71,6 +71,7 @@ test("the root is always the landing; /api/dock/mine says whether the visitor ha
   const env = {
     HUB: { idFromName: (name: string) => name, get: (name: string) => ({ isOwner: async (secret: string) => name === "a".repeat(32) && secret === "b".repeat(32) }) },
     ASSETS: { fetch: async (req: Request) => new Response(`asset ${new URL(req.url).pathname}`, { headers: { "content-type": "text/html" } }) },
+    SITE: { fetch: async (req: Request) => new Response(`asset ${new URL(req.url).pathname}`, { headers: { "content-type": "text/html" } }) },
   };
   // The landing, for a visitor with a dock, an expired one and none: 200, never a redirect.
   for (const cookie of [live, expired, ""]) {
@@ -104,6 +105,42 @@ test("the root is always the landing; /api/dock/mine says whether the visitor ha
   // The frame protection holds for all of it.
   assert.equal(startOver.headers.get("x-frame-options"), "DENY");
   assert.equal((await app.request("https://example.com/api/dock/mine", {}, env)).headers.get("x-frame-options"), "DENY");
+});
+
+test("root forwarding strips credentials and preserves methods, conditional/Range headers and the site's response", async () => {
+  for (const method of ["GET", "HEAD", "POST"]) {
+    let called = false;
+    const response = await app.request("https://example.com/?utm=site", {
+      method,
+      body: method === "POST" ? "payload" : undefined,
+      headers: { cookie: "apc_dock=private", authorization: "Bearer private", "x-apc-owner": "private", range: "bytes=0-9", "if-none-match": '"current"', accept: "text/html" },
+    }, {
+      SITE: { fetch: async (request: Request) => {
+        called = true;
+        assert.equal(request.url, "https://example.com/?utm=site");
+        assert.equal(request.method, method);
+        for (const name of ["cookie", "authorization", "x-apc-owner"]) assert.equal(request.headers.get(name), null, name);
+        assert.equal(request.headers.get("range"), "bytes=0-9");
+        assert.equal(request.headers.get("if-none-match"), '"current"');
+        assert.equal(request.headers.get("accept"), "text/html");
+        assert.equal(await request.text(), method === "POST" ? "payload" : "");
+        return new Response(method === "HEAD" ? null : "site bytes", { status: 206, headers: { "content-range": "bytes 0-9/100", "cache-control": "public, max-age=0, must-revalidate", etag: '"site"', "content-security-policy": "site policy", "x-frame-options": "SAMEORIGIN" } });
+      } },
+    });
+    assert.ok(called, method);
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get("content-range"), "bytes 0-9/100");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+    assert.equal(response.headers.get("etag"), '"site"');
+    assert.equal(response.headers.get("content-security-policy"), "site policy");
+    assert.equal(response.headers.get("x-frame-options"), "SAMEORIGIN");
+    assert.equal(await response.text(), method === "HEAD" ? "" : "site bytes");
+  }
+  for (const status of [304, 405, 503]) {
+    const response = await app.request("https://example.com/", {}, { SITE: { fetch: async () => new Response(null, { status, headers: { "cache-control": "no-store" } }) } });
+    assert.equal(response.status, status);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
 });
 
 test("the dock cookie is sent again on every resume and state read, so it lasts 7 days after last use, not after creation (TIN-823)", async () => {

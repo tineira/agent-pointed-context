@@ -6,7 +6,7 @@
 import type { DockWake } from "./wake-on-pin.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Onboarding } from "../onboarding.ts";
-import { askToDisconnectPrompt } from "../../../demo/src/web/qr.tsx";
+import { askToDisconnectPrompt } from "./qr.tsx";
 import { AgentPet } from "./apc-pet.tsx";
 import { ConnectAgent, CopyRow, ReconnectAgent } from "./setup.tsx";
 import { agoLabel, READER_NOTICE, READING_TTL_MS, sizeLabel, type ReadingRow } from "../worker/reading.ts";

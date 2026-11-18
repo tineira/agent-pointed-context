@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { DockAgent } from "./agent-page.tsx";
 import { setupProgress, type Onboarding } from "../onboarding.ts";
-import { askYourAgentPrompt, Qr, SCAN_HINT } from "../../../demo/src/web/qr.tsx";
+import { askYourAgentPrompt, Qr, SCAN_HINT } from "./qr.tsx";
 import { InstallIcon } from "./icons.tsx";
 
 export interface SetupAgent {
