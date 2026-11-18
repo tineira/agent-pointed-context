@@ -125,12 +125,12 @@ The demo is the full worked example: [`apps/v1/src/worker`](apps/v1/src/worker) 
 
 ## Using the packages
 
-`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together at the standard's version (`APC_STANDARD_VERSION`). Publishing uses the `next` dist-tag; Tomas moves npm dist-tags by hand. Install all four at the same version. These commands select 1.2.0 explicitly, independently of dist-tags.
+`@tineira/apc-protocol`, `@tineira/apc-server`, `@tineira/apc-web` and `@tineira/apc-conformance` go to npm together at the standard's version (`APC_STANDARD_VERSION`). Publishing uses the `next` dist-tag; Tomas moves npm dist-tags by hand. Install all four at the same version. These commands select 1.3.0 explicitly, independently of dist-tags.
 
 ```sh
-npm i @tineira/apc-protocol@1.2.0 @tineira/apc-web@1.2.0                                 # the page
-npm i @tineira/apc-server@1.2.0 @modelcontextprotocol/sdk zod                      # the server (the SDK and zod are peers)
-npx @tineira/apc-conformance@1.2.0 https://your.app --grant <an agent's MCP URL>   # check a live app
+npm i @tineira/apc-protocol@1.3.0 @tineira/apc-web@1.3.0                                 # the page
+npm i @tineira/apc-server@1.3.0 @modelcontextprotocol/sdk zod                      # the server (the SDK and zod are peers)
+npx @tineira/apc-conformance@1.3.0 https://your.app --grant <an agent's MCP URL>   # check a live app
 ```
 
 They are ESM with type declarations. `@tineira/apc-protocol` and `@tineira/apc-web` have no Node imports (`@tineira/apc-web` is browser code for any bundler); `@tineira/apc-server` runs wherever there are `fetch` and Web Crypto (Workers, Node 20+); `@tineira/apc-conformance` needs Node 22.15+. Each package's README has a minimal example; the docs are at https://apc.tineira.com/docs.
