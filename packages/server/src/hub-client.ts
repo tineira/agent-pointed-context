@@ -56,7 +56,8 @@ export interface HubAgent {
 
 /**
  * `binding`: `"pairing_id"` when the acknowledgement declared it (APC 0.12), null from a hub that does not bind.
- * `ring`: where to ring the hub after a pin (TIN-962, `ring.ts`), only when the hub sent a well-formed one.
+ * `ring`: where to ring the hub after a pin (TIN-962, `ring.ts`), only when the hub sent a well-formed one
+ * (`@experimental`, not part of the APC standard; may change).
  */
 export type PairWithHubResult = { ok: true; pairing_id: string; status: "pending"; agent: HubAgent; binding: typeof PAIRING_BINDING | null; ring?: HubRing } | { ok: false; error: string };
 export type ConfirmWithHubResult = { ok: true; status: "pending" | "paired"; agent: HubAgent; ring?: HubRing } | { ok: false; error: string };
@@ -228,6 +229,9 @@ export async function confirmWithHub(hub: string | URL, body: { ticket: string; 
 }
 
 /**
+ * @experimental Not part of the APC standard: this export may change or go without a major version. The `ring` field
+ * on the `pairWithHub` and `confirmWithHub` results is experimental in the same way.
+ *
  * The doorbell (TIN-962, `ring.ts`): tell the hub a pin happened on this grant, signed with the grant's ring key. Fire
  * and forget: the answer says nothing, and a failure only means the agent hears of the pin the usual way (when it calls).
  * The same hardening as the other hub calls (M2 to M4, M9). Never throws.
