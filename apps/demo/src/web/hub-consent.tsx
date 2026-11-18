@@ -1,31 +1,11 @@
 /** Dock drop refusals and the waiting card for grants made on /connect/dock. */
 import { formatPairingCode } from "@tineira/apc-protocol";
 import { useEffect, useState } from "react";
-
-const ERRORS: Record<string, string> = {
-  not_found: "Your dock did not accept the connection request and may be too old for Connect. Update your dock, then drop the agent again.",
-  ticket_not_for_pairing: "Drop the agent again, then confirm in your dock.",
-  ticket_origin_mismatch: "This link is for another app. Drop the agent again.",
-  too_many_requests: "Your dock already has too many pending requests. Answer one, then drop the agent again.",
-  ticket_expired: "The drag is too old. Drag the agent from the dock again.",
-  consent_required: "This question is too old. Drag the agent from the dock again.",
-  consent_expired: "This question is too old. Drag the agent from the dock again.",
-  hub_not_allowed: "Pulse does not pair with that dock.",
-  hub_unreachable: "The dock did not answer. Try again in a moment.",
-  hub_refused: "The dock did not answer as a dock should, so Pulse didn't pair.",
-  hub_ignores_pairing_code: "This dock can't check pairing codes, so Pulse didn't pair.",
-  invalid_pairing_code: "The dock refused the pairing code. Drag the agent from the dock again.",
-  pairing_code_required: "The dock wants a pairing code. Drag the agent from the dock again.",
-  app_not_allowed: "The dock does not pair with this Pulse.",
-  pairing_in_progress: "Pulse is still pairing this agent with the dock. Try again in a moment.",
-  pairing_ended: "That pairing ended before the dock connected. Drag the agent from the dock again.",
-  not_cancellable: "The dock has connected already. To take its access back, revoke the agent.",
-  not_available: "This Pulse does not pair with docks.",
-};
+import { plainError, plainPinError } from "./plain-errors.ts";
 
 /** A refusal in words, for the page's notices. */
 export function hubError(error: string | undefined): string {
-  return ERRORS[error ?? ""] ?? error ?? "it did not go through";
+  return plainError("Pulse", error);
 }
 
 /** A drop that paired but could not pin its target (the server's `pin_error`): the waiting card says so. */
@@ -73,7 +53,7 @@ export function DockWaiting(props: { hub: string; pairing: { code: string; expir
         <button type="button" className="tour-skip" onClick={props.onCancel}>
           Cancel
         </button>
-        {props.pinError && <span className="basis-full text-muted">Not pinned where you dropped it ({props.pinError}). Once your dock connects, drop the agent there again.</span>}
+        {props.pinError && <span className="basis-full text-muted">Not pinned where you dropped it. {plainPinError("Pulse", props.pinError)} Once your dock connects, drop the agent there again.</span>}
       </div>
     </div>
   );

@@ -1025,7 +1025,7 @@ function DesktopFloat(props: FloatProps) {
       removeEventListener("apc-float", on);
     };
   }, []);
-  if (!marks) return props.children(<span className="muted" title="The APC dock for Windows keeps your agents on top of every window">{DESKTOP_SHORTCUT} floats your agents</span>, null);
+  if (!marks) return props.children(<span className="muted" title="Dock for Windows keeps your agents on top of every window">{DESKTOP_SHORTCUT} floats your agents</span>, null);
   const send = (change: Parameters<typeof floatApp.set>[0]) => void floatApp.set(change).then((m) => m && setMarksState(m));
   const choice: FloatChoice = {
     on: marks.on,

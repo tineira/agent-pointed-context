@@ -313,7 +313,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       <section className="card">
         <h2>Your agents</h2>
         <p>
-          Each agent gets its own URL and its own mark. Paste a URL as a remote MCP server (Streamable HTTP) in your agent, or scan its QR and paste that same URL into an agent on a phone. The secret in the URL is that agent's read access to this sandbox; it expires with the sandbox. Using several
+          Each agent gets its own URL and its own mark. Paste a URL as a remote MCP server (Streamable HTTP) in your agent, or scan its QR and paste that same URL into an agent on a phone. The secret in the URL is that agent's read access to this demo; it expires with the demo. Using several
           agents? Give each one its own URL, so you can see which one answered.
         </p>
         {state.grants.map((g) => (
@@ -342,7 +342,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       {!state.v2 && (
       <section className="card">
         <h2>What your agents did</h2>
-        <p className="hint">From this sandbox's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>
+        <p className="hint">From this demo's log: whether each agent connected, whether pins reached it, how it read them, and whether it made the call the pin named.</p>
         <CompatTable api={api} initials={props.initials} grants={props.state.grants} refreshKey={props.activity} />
       </section>
       )}
@@ -371,7 +371,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           Show agent activity on screen
         </label>
         <p>
-          Every tool call, pin and envelope is logged in this sandbox: <a href={api.eventsUrl}>events.jsonl</a>. The sandbox and its log are deleted {new Date(state.expires_at).toLocaleString()} unless you keep using it.
+          Every tool call, pin and envelope is logged in this demo: <a href={api.eventsUrl}>events.jsonl</a>. The demo and its log are deleted {new Date(state.expires_at).toLocaleString()} unless you keep using it.
         </p>
       </section>
       {state.v2 && (
@@ -379,7 +379,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           <h2>Start over</h2>
           <p className="hint">Delete this Pulse's demo data and start from zero. Your dock and Signals keep theirs until you start over there too.</p>
           <div>
-            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents you connected here or your dock paired here, and their pins", "your view and these settings", "this sandbox's event log"]} reset={() => api.reset()} />
+            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents you connected here or your dock paired here, and their pins", "your view and these settings", "this demo's event log"]} reset={() => api.reset()} />
           </div>
         </section>
       )}

@@ -108,7 +108,7 @@ fn dock(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     }
     window(app, "dock", page(None))
         .initialization_script(SHELL_SCRIPT)
-        .title("APC Dock")
+        .title("Dock for Windows")
         .inner_size(400.0, 760.0)
         .min_inner_size(320.0, 420.0)
         // Started by Windows at sign-in: the tray and the pets only, until the person opens the dock.
@@ -161,14 +161,14 @@ fn float_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
 }
 
 fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    // The build, greyed out at the top: "APC dock 0.2.N (abc1234)" (TIN-615).
+    // The build, greyed out at the top: "Dock for Windows 0.2.N (abc1234)" (TIN-615).
     let build = update::label(&app.package_info().version.to_string());
     let about = MenuItem::with_id(app, "build", &build, false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open dock", true, None::<&str>)?;
     let float = float_menu(app)?;
     let startup = CheckMenuItem::with_id(app, "autostart", "Start with Windows", cfg!(windows), autostart::enabled(), None::<&str>)?;
     let updates = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit APC Dock", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Dock for Windows", true, None::<&str>)?;
     Menu::with_items(
         app,
         &[&about, &PredefinedMenuItem::separator(app)?, &open, &float, &PredefinedMenuItem::separator(app)?, &startup, &updates, &quit],
@@ -296,7 +296,7 @@ fn main() {
             _ => {}
         })
         .run(tauri::generate_context!())
-        .expect("the APC dock could not start");
+        .expect("Dock for Windows could not start");
 }
 
 #[cfg(test)]

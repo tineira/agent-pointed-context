@@ -10,6 +10,7 @@ import { usePulseStrings } from "./apc-strings.ts";
 import { createApi, openSession, type Api, type SandboxState } from "./api.ts";
 import { activeConflict } from "./connect.tsx";
 import { DockWaiting, hubError, type PinError } from "./hub-consent.tsx";
+import { plainError, plainPinError } from "./plain-errors.ts";
 import { productName } from "../model/products.ts";
 import { DockHowTo } from "./dock-only.tsx";
 import { HowTo } from "./howto.tsx";
@@ -84,8 +85,8 @@ function SandboxGate() {
       live = false;
     };
   }, []);
-  if (error) return <p className="py-12 text-center text-sm text-muted">Could not open a sandbox: {error}</p>;
-  if (!sid) return <p className="py-12 text-center text-sm text-muted">Opening your sandbox…</p>;
+  if (error) return <p className="py-12 text-center text-sm text-muted">Could not open the demo. Reload the page to try again.</p>;
+  if (!sid) return <p className="py-12 text-center text-sm text-muted">Opening your demo…</p>;
   return <Sandbox sid={sid} />;
 }
 
@@ -125,7 +126,7 @@ function Sandbox({ sid }: { sid: string }) {
   const cancelHub = (grantId: string) =>
     api
       .hubCancel(grantId)
-      .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled: ${hubError(r.error)}`), (e: unknown) => `Not cancelled: ${e instanceof Error ? e.message : String(e)}`)
+      .then((r) => (r.ok ? "Cancelled: Pulse took that dock's access back." : `Not cancelled. ${hubError(r.error)}`), () => `Not cancelled. ${hubError(undefined)}`)
       .then((message) => {
         setNotice(message);
         setTimeout(() => setNotice(null), 8000);
@@ -240,7 +241,7 @@ function Sandbox({ sid }: { sid: string }) {
                 void refresh();
                 return;
               }
-              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned: ${hubError(r.error)}`);
+              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned. ${hubError(r.error)}`);
               setTimeout(() => setNotice(null), 4000);
               void refresh();
             }
@@ -268,7 +269,7 @@ function Sandbox({ sid }: { sid: string }) {
           const current = stateRef.current?.grants.find((g) => g.id === grantId)?.pin;
           if (current && canonicalTarget(current) === canonicalTarget(target)) return;
           const result = await api.pin(grantId, target);
-          setNotice(result.ok ? `Pinned ${namesRef.current.get(grantId) ?? "your agent"}. Now ask it about "this".` : `Not pinned: ${result.error}`);
+          setNotice(result.ok ? `Pinned ${namesRef.current.get(grantId) ?? "your agent"}. Now ask it about "this".` : `Not pinned. ${plainPinError("Pulse", result.error)}`);
           setTimeout(() => setNotice(null), 4000);
         },
       }),
@@ -382,8 +383,8 @@ function Sandbox({ sid }: { sid: string }) {
                 void api
                   .revoke(id)
                   .then(
-                    (r) => (r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, connect it again on the Agents screen, or drop it here again from your dock.` : `Not revoked: ${r.error}`),
-                    (e: unknown) => `Not revoked: ${e instanceof Error ? e.message : String(e)}`,
+                    (r) => (r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, connect it again on the Agents screen, or drop it here again from your dock.` : `Not revoked. ${plainError("Pulse", r.error)}`),
+                    () => `Not revoked. ${plainError("Pulse", undefined)}`,
                   )
                   .then((message) => {
                     setNotice(message);
