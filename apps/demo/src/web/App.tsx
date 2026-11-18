@@ -241,7 +241,7 @@ function Sandbox({ sid }: { sid: string }) {
                 void refresh();
                 return;
               }
-              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned. ${plainPinError("Pulse", r.error)}`);
+              setNotice(r.ok ? `Pinned ${namesRef.current.get(r.grant_id ?? "") ?? "your agent"}. Now ask it about "this".` : `Not pinned. ${hubError(r.error)}`);
               setTimeout(() => setNotice(null), 4000);
               void refresh();
             }
