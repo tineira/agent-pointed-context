@@ -113,7 +113,7 @@ export function WakeOnPin(props: {
           <label htmlFor={urlId}>Webhook URL (POST to)</label>
           <input id={urlId} type="url" value={url} onChange={(e) => setUrl(e.currentTarget.value)} placeholder="https://api2.cursor.sh/automations/webhook/…" autoComplete="off" spellCheck={false} />
           <label htmlFor={keyId}>Key</label>
-          <input id={keyId} type="password" value={key} onChange={(e) => setKey(e.currentTarget.value)} autoComplete="off" spellCheck={false} />
+          <input id={keyId} type="password" value={key} onChange={(e) => setKey(e.currentTarget.value)} autoComplete="new-password" spellCheck={false} />
           <div className="row">
             <button type="submit" disabled={busy || !url.trim() || !key.trim()}>
               Save

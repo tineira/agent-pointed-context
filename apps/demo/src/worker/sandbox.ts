@@ -7,12 +7,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APC_LINK_TOOL, PAIRING_CODE_TTL_MS, waitOpenLimitMs, type ApcProfile, type FocusRow, type FocusTarget, type PresenceWaitEvent } from "@tineira/apc-protocol";
-import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, ringHub, ringKey, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, type ToolResult } from "@tineira/apc-server";
+import { APC_INSTRUCTIONS, ApcLinks, attachApcLink, confirmWithHub, ringHub, ringKey, requestConnect, CONSENT_REQUIRED, DockConsent, directGrantGate, dockGrantGate, pairWithHub, parseDockDrop, InflightCalls, MemoryWaitSlots, attachAttention, attachThen, attentionFor, envelopeBytes, initializeOf, isUnread, linkClient, newDirectGrant, parseProfiles, presenceEvent, revokedResponse, revokedToolResult, secretHash, sqlKv, thenBytes, toolError, toolResult, kvWakeStore, WakeEngine, wakeAppPlace, wakeHint, wakeResultHint, wakeToolDescription, wakeToolShape, withKey, WAKE_TOOL_ANNOTATIONS, WAKE_TOOL_NAME, WAKE_TOOL_TITLE, type ToolResult, type WakeHost } from "@tineira/apc-server";
 import { DEMO_SEED, REGIONS, type Dataset, type Region } from "../model/seed.ts";
 import { demoDataset, demoMarket } from "../model/demo-world.ts";
 import { compatSummary, type CompatRow, type LoggedEvent } from "./compat.ts";
 import { anyPageOpen, attendance, loopHinted } from "./page.ts";
-import { bodyTooLarge, DOCK_TIMES, dockStateNow, hubAllowlist, readMcpBody, hubCallOptions, pairableProfiles, type DockAppEnv, type DockStored } from "./dock-app.ts";
+import { bodyTooLarge, DOCK_TIMES, dockStateNow, hubAllowlist, readMcpBody, hubCallOptions, pairableProfiles, publicOrigin, type DockAppEnv, type DockStored } from "./dock-app.ts";
 import { checkPin, resolveFocus, sanitizeView, trimView, type ClientConflict, type Grant, type StoredView } from "./domain.ts";
 import { pickClientIcon } from "./client-icon.ts";
 import { cleanName } from "./names.ts";
@@ -23,6 +23,15 @@ import { sessionPoint } from "./sessions.ts";
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
 /** The most Direct agents one sandbox holds, as in Signals (TIN-607). Dock-paired grants have their own cap in the hub. */
 export const MAX_DIRECT_GRANTS = 20;
+/** Wake on pin in Direct mode (TIN-973): Pulse's own routine and connector, never the dock's. */
+export const PULSE_WAKE = wakeAppPlace("Pulse");
+/** The budget every grant's wakes also count in: 200 a day per sandbox, so new grants give no fresh budget beyond it. */
+const WAKE_SANDBOX_SCOPE = "sandbox";
+/** A Direct grant's id (newDirectGrant): what the owner's wake routes take. */
+const GRANT_ID = /^g_[0-9a-f]{1,32}$/;
+
+/** Whether the code runs under `vite dev`, where alarms are not set (touch()). */
+const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
 
 /**
  * The profiles Pulse serves (APC 0.5): the one source for its apc.json, its page (state.profiles) and its
@@ -136,6 +145,14 @@ export class Sandbox extends DurableObject<Env> {
   private consent!: DockConsent;
   /** Dock drops being answered, by dock and agent (memory only): one at a time per agent. */
   private pairing = new Set<string>();
+  /**
+   * Wake on pin for the Direct grants of a Grok bot agent (TIN-973): the engine from @tineira/apc-server, one per
+   * sandbox, over this sandbox's apc_kv. Made once (migrate gives it the new store after a wipe), so a POST in flight
+   * can always be cut.
+   */
+  private wake!: WakeEngine;
+  /** Tool calls in flight per grant, waits included (memory only): a pin during one reaches the agent without a wake. */
+  private readonly callsInFlight = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -218,10 +235,13 @@ export class Sandbox extends DurableObject<Env> {
     this.sql.exec("update grants set dock = 1 where dock is null and id in (select grant_id from hub_links)");
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Pulse", grants: () => this.linkGrants() });
     this.consent = new DockConsent(sqlKv(this.sql));
+    if (this.wake) this.wake.useStore(kvWakeStore(sqlKv(this.sql)));
+    else this.wake = new WakeEngine(kvWakeStore(sqlKv(this.sql)), this.wakeHost(), { place: PULSE_WAKE, sharedScope: WAKE_SANDBOX_SCOPE });
     // A deploy without the Direct profile takes agents only from a dock (TIN-402): a grant with no
     // dock link is a leftover from before (the old default agent), and goes with its pins (TIN-410).
     // Not when APC_PROFILES is wrong and nothing is offered: a typo must not delete the person's agents.
     if (this.env.APC_V2 === "1" && servedProfiles(this.env).length > 0 && !this.offers("direct")) {
+      for (const { id } of this.sql.exec<{ id: string }>("select id from grants where id not in (select grant_id from hub_links)").toArray()) this.wake.purge(id);
       this.sql.exec("delete from agent_focus where grant_id in (select id from grants where id not in (select grant_id from hub_links))");
       this.sql.exec("delete from grants where id not in (select grant_id from hub_links)");
     }
@@ -237,6 +257,36 @@ export class Sandbox extends DurableObject<Env> {
   private linkGrants(): Array<{ id: string; path: ApcProfile }> {
     const dock = new Set(this.sql.exec<{ grant_id: string }>("select grant_id from hub_links").toArray().map((r) => r.grant_id));
     return this.sql.exec<{ id: string; dock: number | null }>("select id, dock from grants").toArray().map((r) => ({ id: r.id, path: dock.has(r.id) || r.dock === 1 ? "dock" : "direct" }));
+  }
+
+  /** A Direct grant (TIN-973): live, and by the path linkGrants gives it (not a dock's, not one whose link went missing). */
+  private isDirect(grantId: string): boolean {
+    return this.linkGrants().some((g) => g.id === grantId && g.path === "direct");
+  }
+  /** Wake on pin is offered for a Direct grant whose client declares Grok bot (a hint, never authentication). */
+  private wakeOffered(grantId: string): boolean {
+    if (!this.isDirect(grantId)) return false;
+    const g = this.sql.exec<{ client_name: string | null; client_ua: string | null }>("select client_name, client_ua from grants where id = ?", grantId).toArray()[0];
+    return !!g && productOf(g.client_name, g.client_ua)?.id === "grok-bot";
+  }
+  /** What only the sandbox knows, for the wake engine. Every answer is synchronous. */
+  private wakeHost(): WakeHost {
+    return {
+      // Not async alive(): that wipes. An expired sandbox wakes nobody.
+      alive: () => !!this.meta("owner") && Number(this.meta("expires_at") ?? 0) > Date.now(),
+      // A pin on this Direct grant, which still exists (a revoked or ended grant is gone) and is still Direct.
+      live: (id, source) => source === id && this.isDirect(id),
+      // Handed over strictly after the pin, or no pin left (unpinned): nothing to wake for.
+      covered: (id, _source, pendingAt) => {
+        const row = this.focusRow(id);
+        return !row || (!!row.seen_at && Date.parse(row.seen_at) > pendingAt);
+      },
+      offered: (id) => this.wakeOffered(id),
+      deferred: (id) => (this.callsInFlight.get(id) ?? 0) > 0,
+      arm: () => this.arm(),
+      changed: () => this.broadcast({ type: "grants" }),
+      later: (work) => (this.ctx as { waitUntil?: (promise: Promise<unknown>) => void }).waitUntil?.(work),
+    };
   }
 
   private meta(key: string): string | null {
@@ -319,16 +369,24 @@ export class Sandbox extends DurableObject<Env> {
    * runtime on Windows drops the request of a Durable Object that sets one.
    */
   private async touch(): Promise<void> {
-    const expiresAt = Date.now() + SANDBOX_TTL_MS;
-    this.setMeta("expires_at", String(expiresAt));
-    if (!(import.meta as { env?: { DEV?: boolean } }).env?.DEV) await this.ctx.storage.setAlarm(expiresAt);
+    this.setMeta("expires_at", String(Date.now() + SANDBOX_TTL_MS));
+    await this.arm();
+  }
+  /**
+   * The sandbox's one alarm (TIN-973): its expiry, or a pending wake on pin before it (the wake's backstop when the object
+   * was evicted before its timer). Not under `vite dev` (see touch), nor before the sandbox is opened.
+   */
+  private async arm(): Promise<void> {
+    if (dev() || !this.meta("owner")) return;
+    const expiresAt = Number(this.meta("expires_at") ?? 0);
+    await this.ctx.storage.setAlarm(Math.min(expiresAt, this.wake.nextDue() ?? Infinity));
   }
 
   /** An initialized sandbox that has not expired. An expired one is deleted on the spot. */
   private async alive(): Promise<boolean> {
     if (!this.meta("owner")) return false;
     if (Number(this.meta("expires_at") ?? 0) > Date.now()) return true;
-    await this.alarm();
+    await this.expire();
     return false;
   }
   /** A page of the person's is open: one of its WebSockets is open and answered a heartbeat lately (page.ts). */
@@ -375,14 +433,39 @@ export class Sandbox extends DurableObject<Env> {
   /** Start over (TIN-411, v2 deploy only): delete everything, as when the sandbox expires. */
   async reset(): Promise<boolean> {
     if (this.env.APC_V2 !== "1") return false;
-    await this.alarm();
+    await this.expire();
     return true;
   }
 
+  /**
+   * The alarm rings at the sandbox's end, or earlier for a wake on pin (TIN-973). Only an expired sandbox is deleted;
+   * otherwise the due wakes go and the alarm is set again (for the next wake or the expiry). It never extends the
+   * sandbox's life.
+   */
   async alarm(): Promise<void> {
-    for (const ws of this.ctx.getWebSockets()) ws.close(1001, "sandbox expired");
-    await this.ctx.storage.deleteAll();
-    this.migrate();
+    if (Number(this.meta("expires_at") ?? 0) <= Date.now()) return this.expire();
+    try {
+      this.wake.deliverDue();
+      // The POSTs it started finish within this alarm (10 s deadline each), so their outcome is written.
+      await this.wake.idle();
+    } finally {
+      await this.arm();
+    }
+  }
+
+  /** Delete everything, as at the end of the sandbox's life: no wake goes meanwhile, and nothing in memory outlives it. */
+  private async expire(): Promise<void> {
+    this.wake.beginReset();
+    try {
+      this.wake.stopAll(true);
+      this.wake.resetMemory();
+      this.callsInFlight.clear();
+      for (const ws of this.ctx.getWebSockets()) ws.close(1001, "sandbox expired");
+      await this.ctx.storage.deleteAll();
+      this.migrate();
+    } finally {
+      this.wake.endReset();
+    }
   }
 
   // ---- owner RPC (the worker checked the owner secret first) ----
@@ -426,7 +509,8 @@ export class Sandbox extends DurableObject<Env> {
       seed: DEMO_SEED,
       settings: { share_view: this.meta("share_view") !== "0", show_activity: this.meta("show_activity") !== "0" },
       // A dock grant's secret is its hub's alone (I4, APC 0.10): the page gets it only for a Direct agent, whose MCP URL it shows.
-      grants: this.grants().map((g) => ({ ...g, secret: dock.has(g.id) ? "" : g.secret, pin: this.focusRow(g.id) })),
+      // Wake on pin (TIN-973): offered for a Grok bot Direct grant; of a webhook, never the key, and of the URL only its end.
+      grants: this.grants().map((g) => ({ ...g, secret: dock.has(g.id) ? "" : g.secret, pin: this.focusRow(g.id), wake_offer: this.wakeOffered(g.id), wake: this.isDirect(g.id) ? this.wake.view(g.id) : null })),
       tour: this.tour(),
       // APC v2 (TIN-382): on Pulse's v2 deploy, which dock agents are which grants.
       v2: this.env.APC_V2 === "1",
@@ -509,6 +593,8 @@ export class Sandbox extends DurableObject<Env> {
     const pin = this.focusRow(grantId)!;
     this.broadcast({ type: "pin", grant_id: grantId, pin });
     this.ringDock(grantId);
+    // Wake on pin (TIN-973): a pin on a Direct grant is Pulse's to wake for, linked or not; a dock grant's is the dock's (the ring).
+    if (this.isDirect(grantId)) this.wake.demand(grantId, "pin", grantId);
     return { ok: true, pin };
   }
 
@@ -664,6 +750,7 @@ export class Sandbox extends DurableObject<Env> {
   /** A dock's grant ends: it goes with its pins and its link, and its MCP URL answers 404. Synchronous. */
   private endDockGrant(grantId: string, why: string): void {
     this.links.forget(grantId);
+    this.wake.purge(grantId);
     this.waitSlots.forget(grantId);
     this.sql.exec("delete from agent_focus where grant_id = ?", grantId);
     this.sql.exec("delete from hub_links where grant_id = ?", grantId);
@@ -703,6 +790,8 @@ export class Sandbox extends DurableObject<Env> {
     this.sql.exec("insert or replace into revoked_grants (secret_hash, grant_id, hub, agent, revoked_at) values (?, ?, ?, ?, ?)", hash, id, link?.hub ?? null, link?.agent ?? null, at);
     this.links.forget(id);
     this.waitSlots.forget(id);
+    // Its webhook, hint and decline go, and a POST in flight is cut (TIN-973): a later grant that takes the id starts clean.
+    this.wake.purge(id);
     this.sql.exec("delete from agent_focus where grant_id = ?", id);
     this.sql.exec("delete from hub_links where grant_id = ?", id);
     this.sql.exec("delete from grants where id = ?", id);
@@ -935,6 +1024,35 @@ export class Sandbox extends DurableObject<Env> {
     return { ok: true };
   }
 
+  // ---- Wake on pin in Direct mode (TIN-973, experimental): the owner's routes. Nothing here is logged: the events go to the page. ----
+
+  /** The grant the owner's wake routes name: a Direct grant of this sandbox, or null. */
+  private wakeGrant(grantId: unknown): string | null {
+    if (typeof grantId !== "string" || !GRANT_ID.test(grantId)) return null;
+    this.sweepDock();
+    return this.isDirect(grantId) ? grantId : null;
+  }
+  /** The person pastes the Grok Bot webhook's URL and key for a Grok bot Direct agent. A new one starts clean. */
+  async setWake(grantId: string, body: unknown): Promise<{ ok: boolean; error?: string }> {
+    const id = this.wakeGrant(grantId);
+    if (!id) return { ok: false, error: "unknown_grant" };
+    const r = this.wake.set(id, body);
+    return r.ok ? r : { ok: false, error: r.error === "unknown" ? "unknown_grant" : r.error };
+  }
+  /** Turn off: the webhook and its key go; the day's budget stays. */
+  async clearWake(grantId: string): Promise<{ ok: boolean; error?: string }> {
+    const id = this.wakeGrant(grantId);
+    if (!id) return { ok: false, error: "unknown_grant" };
+    this.wake.clear(id);
+    return { ok: true };
+  }
+  /** Send a test now: one per 10 s, counted in the day's budget. One POST, never retried. */
+  async testWake(grantId: string): Promise<{ ok: boolean; error?: string; status?: "ok" | "broken" | "error" }> {
+    const id = this.wakeGrant(grantId);
+    if (!id) return { ok: false, error: "unknown_grant" };
+    return this.wake.test(id);
+  }
+
   /** The person unlinks an agent in the bar (apc_link, APC 0.4): the link goes, both grants stay. */
   async unlinkGrant(grantId: string): Promise<{ ok: boolean }> {
     const partner = this.links.unlink(grantId);
@@ -1068,6 +1186,7 @@ export class Sandbox extends DurableObject<Env> {
     // Stateless: no server-to-client stream (GET) and no session to end (DELETE). 405 is what the spec allows.
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     if (extendsLife) await this.touch();
+    const requestSignal = request.signal;
     // A notifications/cancelled in this POST aborts the call it names, running in another POST (APC 0.8).
     this.calls.cancel(grant.id, rpcBody);
 
@@ -1136,18 +1255,21 @@ export class Sandbox extends DurableObject<Env> {
       import("./guide.ts"),
     ]);
     const data = this.data();
+    // Wake on pin (TIN-973): a Grok bot agent on a Direct grant, by what its client declares (as this request's initialize
+    // just stored it), gets the tool that sets it up and, while no webhook is set and it was not declined, a line offering it.
+    const wakeOffer = this.wakeOffered(grant.id);
     const server = new McpServer(
       { name: "pulse-apc-demo", version: SERVER_VERSION },
       {
-        instructions: `${APC_INSTRUCTIONS} If you have a name of your own (one your person gave you), call set_agent_name once when you start, so the page shows it on your mark. Pulse is product analytics for a SaaS: customers (external ids cus_NNNN, the same ids the person's billing uses), plans, regions, seats and monthly activity. It holds no revenue data.`,
+        instructions: `${APC_INSTRUCTIONS} If you have a name of your own (one your person gave you), call set_agent_name once when you start, so the page shows it on your mark. Pulse is product analytics for a SaaS: customers (external ids cus_NNNN, the same ids the person's billing uses), plans, regions, seats and monthly activity. It holds no revenue data.${wakeOffer && this.wake.offerInInstructions(grant.id) ? ` ${wakeHint(PULSE_WAKE)}` : ""}`,
         jsonSchemaValidator: new CfWorkerJsonSchemaValidator(),
       },
     );
     // Which tool this request runs, so a "seen" stamp records how the pin was read.
     const call = { tool: "" };
-    this.instrument(server, grant, hash, data, origin, call);
     // The calls this POST carries, so a later notifications/cancelled can end them; the client hanging up ends them too.
     const inflight = this.calls.track(grant.id, rpcBody);
+    this.instrument(server, grant, hash, data, origin, call, (extra) => !!(extra as { signal?: AbortSignal } | undefined)?.signal?.aborted || requestSignal.aborted || inflight.signal.aborted);
     registerApcTools(server, {
       readView: async () => trimView(this.storedView(), grant, data, origin),
       readFocus: async () => resolveFocus(this.focusRow(grant.id), grant, data, origin),
@@ -1204,6 +1326,16 @@ export class Sandbox extends DurableObject<Env> {
         },
       });
     }
+    if (wakeOffer) {
+      // Where the person pastes the webhook: Pulse's public origin, the Agents screen, this agent's Wake on pin.
+      const pasteAt = `${publicOrigin(this.env, request.url) ?? origin}/agents#wake-${grant.id}`;
+      server.registerTool(
+        WAKE_TOOL_NAME,
+        { title: WAKE_TOOL_TITLE, description: wakeToolDescription(PULSE_WAKE), inputSchema: wakeToolShape(PULSE_WAKE), annotations: WAKE_TOOL_ANNOTATIONS },
+        // Asked again at the call: a client that stopped declaring Grok bot (another product adopted) gets nothing.
+        async (args) => (this.wakeOffered(grant.id) ? this.wake.setup(grant.id, pasteAt, args) : toolError("not_offered", "Wake on pin is for Grok Bot only.")),
+      );
+    }
     // The manual, for the person to load on purpose (a slash command or a menu item in their client).
     registerApcPrompts(server, PULSE_GUIDE);
 
@@ -1225,7 +1357,7 @@ export class Sandbox extends DurableObject<Env> {
    * loop hint while a page is open and the view is shared, measure bytes and latency, and announce
    * the call on the presence channel.
    */
-  private instrument(server: McpServer, grant: Grant, hash: string, data: Dataset, origin: string, call: { tool: string }): void {
+  private instrument(server: McpServer, grant: Grant, hash: string, data: Dataset, origin: string, call: { tool: string }, cancelled: (extra: unknown) => boolean): void {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
     (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) =>
       register(name, config, async (args: Record<string, unknown>, extra: unknown) => {
@@ -1247,7 +1379,16 @@ export class Sandbox extends DurableObject<Env> {
         this.sql.exec("update grants set last_active_at = ? where id = ?", new Date().toISOString(), grant.id);
 
         // The page animates an agent's icon while it waits (TIN-350) from the wait events registerApcTools sends (APC 0.11).
-        let result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
+        // Counted while in flight, waits included (TIN-973): a pin meanwhile reaches the agent through it, with no wake.
+        this.callsInFlight.set(grant.id, (this.callsInFlight.get(grant.id) ?? 0) + 1);
+        let result: ToolResult;
+        try {
+          result = (await (cb as (a: unknown, e: unknown) => Promise<ToolResult>)(args, extra)) as ToolResult;
+        } finally {
+          const left = (this.callsInFlight.get(grant.id) ?? 1) - 1;
+          if (left > 0) this.callsInFlight.set(grant.id, left);
+          else this.callsInFlight.delete(grant.id);
+        }
         const after = cut();
         if (after) return after;
 
@@ -1268,6 +1409,12 @@ export class Sandbox extends DurableObject<Env> {
         if (offer) {
           result = attachApcLink(result, offer);
           this.log("link_offered", grant.id, { tool });
+        }
+        // Wake on pin, offered on the calls an agent makes anyway (TIN-973, as the dock does): Grok bot on a Direct grant only,
+        // while off and not declined, once a day; only on a real answer, never on an error, a refused wait or a hung-up call.
+        const answered = !result.isError && result.structuredContent?.retry_after_s === undefined;
+        if ((tool === "get_current_view" || tool === "wait_for_focus") && answered && !cancelled(extra) && this.wakeOffered(grant.id) && this.wake.hintDue(grant.id)) {
+          result = withKey(result, "wake", wakeResultHint(PULSE_WAKE));
         }
         if (row && focus && tool === focus.next && stable(args) === stable(focus.next_args)) {
           const already = this.sql.exec("select 1 from events where type = 'next_read' and grant_id = ? and data like ?", grant.id, `%"pinned_at":"${row.pinned_at}"%`).toArray().length;

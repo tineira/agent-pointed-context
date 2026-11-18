@@ -13,7 +13,8 @@ import { DurableObject } from "cloudflare:workers";
 import { advanceOnboarding, newOnboarding, type Onboarding, type OnboardingEvent } from "../onboarding.ts";
 import { APC_LINK_KEY, CONNECT_REQUEST_TTL_MS, encodeApcConnect, declaresMcpUrl, idleWaitForFocus, isIdleAnswer, isPairingAnswer, isRevokedAnswer, normalizePairingCode, PAIRING_BINDING, PAIRING_ENDED_ERROR, PAIRING_CODE_ACK, PAIRING_MISMATCH_ERROR, PAIRING_CODE_MAX_ATTEMPTS, pairingCodesMatch, parseApcManifest, REVOKED_ERROR, REVOKED_HTTP_STATUS, TICKET_TTL_MS, type ApcJsonRefusal, type ApcManifest, type FocusPayload, type PresenceWaitEvent, type ViewPayload } from "@tineira/apc-protocol";
 import { announceWaits, attachAttention, attachThen, InflightCalls, MemoryWaitSlots, ringKey, ringSignature, sameString, thenApplies, toolError, toolResult, WAIT_CANCELLED_NOTE, WAIT_PAGE_CLOSED_NOTE, WAIT_TAKEN_OVER_NOTE, WAIT_TIMED_OUT_NOTE, waitBusyNote, type ToolResult } from "@tineira/apc-server";
-import { isWakeProduct, parseRingBody, parseWake, WAKE_HINT, WAKE_HINT_EVERY_MS, WAKE_RESULT_HINT, WAKE_TOOL, wakeSetup, withKey, type WakeDelivery, RING_SEEN_MAX, RING_WINDOW_MS, WAKE_DAY_MAX, WAKE_DEADLINE_MS, WAKE_DEFER_MAX_MS, WAKE_DEFER_MS, WAKE_GAP_MS, WAKE_SETTLE_MS, WAKE_TEST_GAP_MS, wakeDay, wakeOutcome, type WakeKind, type WakeStatus } from "./wake.ts";
+import { WakeEngine, type WakeHost, type WakeRow, type WakeStore } from "@tineira/apc-server";
+import { isWakeProduct, parseRingBody, WAKE_HINT, WAKE_PLACE, WAKE_RESULT_HINT, WAKE_TOOL, withKey, RING_SEEN_MAX, RING_WINDOW_MS, type WakeKind } from "./wake.ts";
 import { anyPageOpen } from "../../../demo/src/worker/page.ts";
 import { pickClientIcon } from "../../../demo/src/worker/client-icon.ts";
 import { productName } from "../../../demo/src/model/products.ts";
@@ -252,28 +253,6 @@ class NotCallable extends Error {
   }
 }
 
-/** An agent's webhook (TIN-962): `gen` changes on every set, so a POST's outcome lands only on the webhook it was sent for. */
-interface WakeRow {
-  agent_id: string;
-  gen: string;
-  url: string;
-  key: string;
-  created_at: string;
-  sent_at: number | null;
-  status: WakeStatus | null;
-  status_at: string | null;
-  pending_at: number | null;
-  pending_kind: string | null;
-  /** The pairing (or the browser's reader) whose pin made the wake due: checked again before the POST. */
-  pending_source: string | null;
-  due: number | null;
-  /** The last POST to this webhook (TIN-967): when, a test or a wake, how it went, and the HTTP status (null: no answer). */
-  delivered_at: number | null;
-  delivered_event: string | null;
-  delivered_outcome: string | null;
-  delivered_code: number | null;
-}
-
 /** How long an agent shows as calling tools after its last call ended: long enough for the dock to see it (TIN-483). */
 const BUSY_TAIL_MS = 1500;
 
@@ -303,14 +282,12 @@ export class Hub extends DurableObject<Env> {
   private running = new Set<Promise<void>>();
   /** Wake on pin (TIN-962, memory only): app waits (waitApps) in flight per agent: a pin during one reaches the agent without a wake. */
   private readonly appWaits = new Map<string, number>();
-  /** The webhook POST in flight per agent, cut when its webhook is cleared, replaced or the agent goes. */
-  private readonly wakeAborts = new Map<string, AbortController>();
-  /** The timer that delivers each agent's pending wake. */
-  private readonly wakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** When each agent's last test was sent. */
-  private readonly wakeTests = new Map<string, number>();
-  /** Start over is under way: no webhook is set and no wake is made due until it ends (TIN-962). */
-  private resetting = false;
+  /**
+   * Wake on pin (TIN-962, TIN-973): the engine in @tineira/apc-server over the hub's own tables (wakes, wake_budget,
+   * agents.wake_hint_at and wake_declined_at). It holds the POST in flight per agent, the timers, the last test's time
+   * and whether Start over is under way.
+   */
+  private readonly wake: WakeEngine;
 
   /** True when a reading for the agent arrives within ms, false when ms pass. */
   private nextReading(agentId: string, ms: number): Promise<boolean> {
@@ -332,6 +309,7 @@ export class Hub extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.wake = new WakeEngine(this.wakeStore(), this.wakeHost(), { place: WAKE_PLACE });
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     ctx.blockConcurrencyWhile(async () => this.migrate());
   }
@@ -586,7 +564,7 @@ export class Hub extends DurableObject<Env> {
     const giveBackAt = this.sql.exec<{ at: number | null }>("select min(next_at) as at from givebacks").toArray()[0]?.at;
     const connectEnd = this.sql.exec<{ at: number | null }>("select min(expires_at) as at from (select expires_at from connect_requests union all select expires_at from connect_tickets)").toArray()[0]?.at;
     // A pending wake on pin (TIN-962): the alarm is its backstop when the object was evicted before its timer.
-    const wakeAt = this.sql.exec<{ at: number | null }>("select min(due) as at from wakes where pending_at is not null").toArray()[0]?.at;
+    const wakeAt = this.wake.nextDue();
     await this.ctx.storage.setAlarm(
       Math.min(wakeAt ?? Infinity, connectEnd ?? Infinity, expiresAt, oldest ? Date.parse(oldest) + READING_TTL_MS : Infinity, coded ? Date.parse(coded) : Infinity, pending ? Date.parse(pending) + LIMITS.pendingMs : Infinity, approving ? Date.parse(approving) + LIMITS.approvingMs : Infinity, intro, joinEnd ?? Infinity, giveBackAt ?? Infinity),
     );
@@ -791,13 +769,13 @@ export class Hub extends DurableObject<Env> {
   async reset(): Promise<void> {
     // No wake goes while the grants are given back (TIN-962): the webhooks and their key go first, before any await,
     // and none can be set again until the dock is wiped.
-    this.resetting = true;
+    this.wake.beginReset();
     this.stopWakes(true);
     try {
       await this.giveBackEverything();
       await this.wipe();
     } finally {
-      this.resetting = false;
+      this.wake.endReset();
     }
   }
 
@@ -813,20 +791,20 @@ export class Hub extends DurableObject<Env> {
     await this.giveBack(this.expirePending());
     await this.retryGiveBacks();
     await this.retryIntroductions();
-    // Wakes whose time came while no timer was left to deliver them (TIN-962).
-    for (const { agent_id } of this.sql.exec<{ agent_id: string }>("select agent_id from wakes where pending_at is not null and due <= ?", Date.now()).toArray()) this.later(this.deliverWake(agent_id));
+    // Wakes whose time came while no timer was left to deliver them (TIN-962), finished within this alarm.
+    this.wake.deliverDue();
+    await this.wake.idle();
     this.broadcast();
     await this.arm();
   }
 
   private async wipe(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(1001, "dock expired");
-    this.stopWakes();
+    this.wake.resetMemory();
     await this.ctx.storage.deleteAll();
     this.busy.clear();
     this.busyUntil.clear();
     this.appWaits.clear();
-    this.wakeTests.clear();
     this.migrate();
   }
 
@@ -1110,10 +1088,9 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec("delete from connect_requests where agent_id = ?", agentId);
     this.sql.exec("delete from connect_tickets where agent_id = ?", agentId);
     this.sql.exec("delete from calls where agent_id = ?", agentId);
-    this.stopWake(agentId, true);
-    this.sql.exec("delete from wake_budget where agent_id = ?", agentId);
+    // Its webhook, its budget and what memory held of it (the hub's purge deletes the budget too).
+    this.wake.purge(agentId);
     this.appWaits.delete(agentId);
-    this.wakeTests.delete(agentId);
     this.sql.exec("delete from agents where id = ?", agentId);
     this.busy.delete(agentId);
     this.busyUntil.delete(agentId);
@@ -1172,7 +1149,7 @@ export class Hub extends DurableObject<Env> {
           focus: row ? { app: row.app, label: focusLabel(row.focus), pinned_at: row.focus.pinned_at, seen: !!row.seen_at } : null,
           // Wake on pin (TIN-962): offered for Grok bot; never the key, and of the URL only its last characters.
           wake_offer: isWakeProduct(a.client_name, a.client_ua),
-          wake: this.wakeView(a.id),
+          wake: this.wake.view(a.id),
           calls: (this.sql.exec<{ n: number }>("select count(*) as n from calls where agent_id = ?", a.id).toArray()[0]?.n ?? 0),
           readings: this.readingRows(a.id),
           // What this agent's client does with a dock (TIN-384), for the compatibility matrix.
@@ -1981,14 +1958,65 @@ export class Hub extends DurableObject<Env> {
 
   // ---- wake on pin (TIN-962, experimental) ----
 
-  private wakeRow(agentId: string): WakeRow | null {
-    return (this.sql.exec<Record<string, string | number | null>>("select * from wakes where agent_id = ?", agentId).toArray()[0] as unknown as WakeRow | undefined) ?? null;
+  /** The engine's store over the hub's tables, so webhooks set before TIN-973 keep working. */
+  private wakeStore(): WakeStore {
+    const row = (r: Record<string, string | number | null> | undefined): WakeRow | null => {
+      if (!r) return null;
+      const { agent_id: _agent, ...rest } = r;
+      return rest as unknown as WakeRow;
+    };
+    const at = (column: "wake_hint_at" | "wake_declined_at", id: string): number | null =>
+      this.sql.exec<{ at: number | null }>(`select ${column} as at from agents where id = ?`, id).toArray()[0]?.at ?? null;
+    return {
+      get: (id) => row(this.sql.exec<Record<string, string | number | null>>("select * from wakes where agent_id = ?", id).toArray()[0]),
+      put: (id, w) =>
+        void this.sql.exec(
+          "insert into wakes (agent_id, gen, url, key, created_at, sent_at, status, status_at, pending_at, pending_kind, pending_source, due, delivered_at, delivered_event, delivered_outcome, delivered_code) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict(agent_id) do update set gen = excluded.gen, url = excluded.url, key = excluded.key, created_at = excluded.created_at, sent_at = excluded.sent_at, status = excluded.status, status_at = excluded.status_at, pending_at = excluded.pending_at, pending_kind = excluded.pending_kind, pending_source = excluded.pending_source, due = excluded.due, delivered_at = excluded.delivered_at, delivered_event = excluded.delivered_event, delivered_outcome = excluded.delivered_outcome, delivered_code = excluded.delivered_code",
+          id, w.gen, w.url, w.key, w.created_at, w.sent_at, w.status, w.status_at, w.pending_at, w.pending_kind, w.pending_source, w.due, w.delivered_at, w.delivered_event, w.delivered_outcome, w.delivered_code,
+        ),
+      remove: (id) => void this.sql.exec("delete from wakes where agent_id = ?", id),
+      removeAll: () => void this.sql.exec("delete from wakes"),
+      budget: (scope) => this.sql.exec<{ day: string; count: number }>("select day, count from wake_budget where agent_id = ?", scope).toArray()[0] ?? null,
+      setBudget: (scope, b) => void this.sql.exec("insert into wake_budget (agent_id, day, count) values (?, ?, ?) on conflict(agent_id) do update set day = excluded.day, count = excluded.count", scope, b.day, b.count),
+      hint: (id) => at("wake_hint_at", id),
+      setHint: (id, when) => void this.sql.exec("update agents set wake_hint_at = ? where id = ?", when, id),
+      declined: (id) => at("wake_declined_at", id),
+      setDeclined: (id, when) => void this.sql.exec("update agents set wake_declined_at = ? where id = ?", when, id),
+      pending: () => this.sql.exec<{ id: string; due: number }>("select agent_id as id, due from wakes where pending_at is not null and due is not null").toArray(),
+      // The agent goes: its webhook and its day's budget (removeAgent always deleted both); the hint and the decline go with its row.
+      purge: (id) => {
+        this.sql.exec("delete from wakes where agent_id = ?", id);
+        this.sql.exec("delete from wake_budget where agent_id = ?", id);
+      },
+    };
   }
 
-  /** What the dock page shows of an agent's webhook: never the key, and only the end of the trigger's id. */
-  private wakeView(agentId: string): { url_tail: string; status: WakeStatus | null; status_at: string | null; sent_at: string | null } | null {
-    const w = this.wakeRow(agentId);
-    return w ? { url_tail: w.url.slice(-6), status: w.status, status_at: w.status_at, sent_at: w.sent_at ? new Date(w.sent_at).toISOString() : null } : null;
+  /** What only the hub knows, for the engine. */
+  private wakeHost(): WakeHost {
+    return {
+      alive: (id) => !!this.agent(id) && !!this.meta("did") && Number(this.meta("expires_at") ?? 0) > Date.now(),
+      // The source must still be live: a pin from a pairing unpaired since, or a browser removed since, wakes nobody.
+      live: (id, source, kind) => (kind === "page_reading" ? this.readers(id, "paired").some((r) => r.id === source && r.reading) : this.pairings(id, "paired").some((p) => p.id === source)),
+      covered: (id, source, pendingAt, kind) => {
+        const pointer = this.pointer(id);
+        // A page reading's pin is the hub's own: once it is gone (cleared) or another source's pin replaced it, there is
+        // nothing to wake for (TIN-973). An app's pin lives in the app, which the ring only says happened: the hub cannot tell.
+        if (kind === "page_reading" && pointer?.pairing_id !== source) return true;
+        // Covered only when the agent was handed a pin of that same source after the newest pin came (get_current_view or
+        // a wait marked it seen): a call that merely looked, or a pin taken but not handed over, is no proof. Strictly
+        // after: a pin and a read in the same millisecond cannot be ordered, so the read does not cover it.
+        return !!pointer?.seen_at && pointer.pairing_id === source && Date.parse(pointer.seen_at) > pendingAt;
+      },
+      offered: (id) => {
+        const agent = this.agent(id);
+        return !!agent && isWakeProduct(agent.client_name, agent.client_ua);
+      },
+      // A pin during a call or an app wait (waitApps) reaches the agent without a wake.
+      deferred: (id) => (this.busy.get(id) ?? 0) > 0 || (this.appWaits.get(id) ?? 0) > 0,
+      arm: () => this.arm(),
+      changed: () => this.broadcast(),
+      later: (work) => this.later(work),
+    };
   }
 
   /**
@@ -1996,208 +2024,29 @@ export class Hub extends DurableObject<Env> {
    * webhook, a wake is due WAKE_SETTLE_MS from now, or when its WAKE_GAP_MS since the last one has passed. Synchronous.
    */
   private demand(agentId: string, kind: WakeKind, source: string): void {
-    if (this.resetting) return;
-    const w = this.wakeRow(agentId);
-    if (!w) return;
-    const now = Date.now();
-    const due = Math.max(now + WAKE_SETTLE_MS, (w.sent_at ?? 0) + WAKE_GAP_MS);
-    // The newest pin is the one to cover: its time and its source replace an older one's.
-    this.sql.exec("update wakes set pending_at = ?, pending_kind = ?, pending_source = ?, due = coalesce(due, ?) where agent_id = ?", now, kind, source, due, agentId);
-    this.scheduleWake(agentId);
-  }
-
-  /** A timer for the agent's pending wake, and the alarm as its backstop. */
-  private scheduleWake(agentId: string): void {
-    const w = this.wakeRow(agentId);
-    const old = this.wakeTimers.get(agentId);
-    if (old) clearTimeout(old);
-    this.wakeTimers.delete(agentId);
-    if (!w || w.pending_at === null || w.due === null) return;
-    const timer = setTimeout(() => {
-      if (this.wakeTimers.get(agentId) === timer) this.wakeTimers.delete(agentId);
-      this.later(this.deliverWake(agentId));
-    }, Math.max(0, w.due - Date.now()));
-    this.wakeTimers.set(agentId, timer);
-    this.later(this.arm());
-  }
-
-  /** wake_on_pin's answer (TIN-967): on, or off with the routine to create, and the dock page that opens this agent's Wake on pin. */
-  private wakeSetupResult(agentId: string, origin: string, args: Record<string, unknown> = {}): ToolResult {
-    const pasteAt = `${origin}/dock#wake-${agentId}`;
-    const w = this.wakeRow(agentId);
-    // The person said no (TIN-967): the dock stops suggesting it. They can still ask: this tool keeps answering.
-    if (args.declined === true && !w) {
-      this.sql.exec("update agents set wake_declined_at = ? where id = ?", Date.now(), agentId);
-      return toolResult({ wake: "off", declined: true, paste_at: pasteAt, note: "Noted: the dock will not suggest Wake on pin again. If the person asks for it later, call wake_on_pin again." });
-    }
-    const last: WakeDelivery | null = w && w.delivered_at !== null
-      ? { at: new Date(w.delivered_at).toISOString(), event: w.delivered_event === "test" ? "test" : "pin", outcome: w.delivered_outcome === "ok" ? "ok" : w.delivered_outcome === "broken" ? "broken" : "error", http_status: w.delivered_code ?? null }
-      : null;
-    return toolResult(wakeSetup(!!w, w?.status ?? null, pasteAt, last));
-  }
-
-  /** The person declined Wake on pin (TIN-967). */
-  private wakeDeclined(agentId: string): boolean {
-    return (this.sql.exec<{ at: number | null }>("select wake_declined_at as at from agents where id = ?", agentId).toArray()[0]?.at ?? null) !== null;
-  }
-
-  /** Whether this result may carry the Wake on pin hint (TIN-967): off, not declined, not in the last day. Marks it given. */
-  private wakeHintDue(agentId: string): boolean {
-    if (this.wakeRow(agentId) || this.wakeDeclined(agentId)) return false;
-    const now = Date.now();
-    const at = this.sql.exec<{ at: number | null }>("select wake_hint_at as at from agents where id = ?", agentId).toArray()[0]?.at ?? null;
-    if (at !== null && now - at < WAKE_HINT_EVERY_MS) return false;
-    this.sql.exec("update agents set wake_hint_at = ? where id = ?", now, agentId);
-    return true;
-  }
-
-  /** Drop the agent's pending wake. */
-  private dropDemand(agentId: string): void {
-    this.sql.exec("update wakes set pending_at = null, pending_kind = null, pending_source = null, due = null where agent_id = ?", agentId);
-  }
-
-  /** One more webhook POST for the agent today, if the day's budget allows it (counted before it is sent). */
-  private spendWake(agentId: string, now: number): boolean {
-    const day = wakeDay(now);
-    const b = this.sql.exec<{ day: string; count: number }>("select day, count from wake_budget where agent_id = ?", agentId).toArray()[0];
-    const count = b && b.day === day ? b.count : 0;
-    if (count >= WAKE_DAY_MAX) return false;
-    this.sql.exec("insert into wake_budget (agent_id, day, count) values (?, ?, ?) on conflict(agent_id) do update set day = excluded.day, count = excluded.count", agentId, day, count + 1);
-    return true;
-  }
-
-  /**
-   * The agent's pending wake, when due: dropped if a call of the agent's that reads the apps started after the pin, or the
-   * agent took or read its pin since; put off while a call or an app wait is in flight (up to WAKE_DEFER_MAX_MS);
-   * otherwise one POST. Every check and write happens before the POST.
-   */
-  private async deliverWake(agentId: string): Promise<void> {
-    const w = this.wakeRow(agentId);
-    if (!w || w.pending_at === null || w.due === null) return;
-    const now = Date.now();
-    if (w.due > now) return this.scheduleWake(agentId);
-    const agent = this.agent(agentId);
-    if (!agent || !this.meta("did") || Number(this.meta("expires_at") ?? 0) <= now) return this.dropDemand(agentId);
-    // The source must still be live: a pin from a pairing unpaired since, or a browser removed since, wakes nobody.
-    const kind: WakeKind = w.pending_kind === "page_reading" ? "page_reading" : "pin";
-    const live = kind === "page_reading" ? this.readers(agentId, "paired").some((r) => r.id === w.pending_source && r.reading) : this.pairings(agentId, "paired").some((p) => p.id === w.pending_source);
-    // Covered only when the agent was handed a pin of that same source after the newest pin came (get_current_view or
-    // a wait marked it seen): a call that merely looked, or a pin taken but not handed over, is no proof.
-    const pointer = this.pointer(agentId);
-    // Strictly after: a pin and a read in the same millisecond cannot be ordered, so the read does not cover it.
-    const covered = !!pointer?.seen_at && pointer.pairing_id === w.pending_source && Date.parse(pointer.seen_at) > w.pending_at;
-    if (!live || covered || w.status === "broken") return this.dropDemand(agentId);
-    if (!isWakeProduct(agent.client_name, agent.client_ua)) {
-      this.dropDemand(agentId);
-      this.setWakeStatus(agentId, w.gen, "paused");
-      return;
-    }
-    // A POST of this agent's still in flight (a test): this one waits for it, it is never cut.
-    if (this.wakeAborts.has(agentId) || (((this.busy.get(agentId) ?? 0) > 0 || (this.appWaits.get(agentId) ?? 0) > 0) && now - w.pending_at < WAKE_DEFER_MAX_MS)) {
-      this.sql.exec("update wakes set due = ? where agent_id = ?", now + WAKE_DEFER_MS, agentId);
-      return this.scheduleWake(agentId);
-    }
-    if (!this.spendWake(agentId, now)) {
-      this.dropDemand(agentId);
-      this.setWakeStatus(agentId, w.gen, "limit");
-      return;
-    }
-    this.sql.exec("update wakes set pending_at = null, pending_kind = null, pending_source = null, due = null, sent_at = ? where agent_id = ?", now, agentId);
-    await this.postWake(agentId, w, { v: 1, event: "pin", kind, at: new Date(now).toISOString() });
-  }
-
-  private setWakeStatus(agentId: string, gen: string, status: WakeStatus): void {
-    this.sql.exec("update wakes set status = ?, status_at = ? where agent_id = ? and gen = ?", status, new Date().toISOString(), agentId, gen);
-    this.broadcast();
-  }
-
-  /** One POST to the agent's webhook, no retry: a run may have started even when the answer was lost. */
-  private async postWake(agentId: string, w: WakeRow, body: Record<string, unknown>): Promise<"ok" | "broken" | "error"> {
-    // One POST per agent at a time (deliverWake waits, testWake refuses), so none cuts another.
-    const controller = new AbortController();
-    this.wakeAborts.set(agentId, controller);
-    const timer = setTimeout(() => controller.abort(), WAKE_DEADLINE_MS);
-    let outcome: "ok" | "broken" | "error";
-    let code: number | null = null;
-    try {
-      const response = await fetch(w.url, {
-        method: "POST",
-        headers: { authorization: `Bearer ${w.key}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
-        redirect: "manual",
-        signal: controller.signal,
-      });
-      void response.body?.cancel().catch(() => {});
-      outcome = wakeOutcome(response);
-      code = (response.type as string) === "opaqueredirect" ? null : response.status;
-    } catch {
-      // Never the URL or the key in a log: the error may carry them.
-      outcome = "error";
-    } finally {
-      clearTimeout(timer);
-      if (this.wakeAborts.get(agentId) === controller) this.wakeAborts.delete(agentId);
-    }
-    // Only for the webhook that was sent: one cleared or set again meanwhile keeps its own state.
-    this.sql.exec(
-      "update wakes set delivered_at = ?, delivered_event = ?, delivered_outcome = ?, delivered_code = ? where agent_id = ? and gen = ?",
-      Date.now(), body.event === "test" ? "test" : "pin", outcome, code, agentId, w.gen,
-    );
-    this.setWakeStatus(agentId, w.gen, outcome);
-    return outcome;
-  }
-
-  /** Stop one agent's wakes: its POST in flight is cut, its timer goes, and with `forget` its webhook too. */
-  private stopWake(agentId: string, forget = false): void {
-    this.wakeAborts.get(agentId)?.abort();
-    this.wakeAborts.delete(agentId);
-    const timer = this.wakeTimers.get(agentId);
-    if (timer) clearTimeout(timer);
-    this.wakeTimers.delete(agentId);
-    if (forget) this.sql.exec("delete from wakes where agent_id = ?", agentId);
+    this.wake.demand(agentId, kind, source);
   }
 
   /** Stop every agent's wakes (wipe, or no computer left); with `forget`, the webhooks go too. */
   private stopWakes(forget = false): void {
-    for (const id of new Set([...this.wakeAborts.keys(), ...this.wakeTimers.keys()])) this.stopWake(id);
-    if (forget) this.sql.exec("delete from wakes");
+    this.wake.stopAll(forget);
   }
 
   /** The owner sets the agent's webhook (only for Grok bot, only Grok Bot's trigger URL). A new one starts clean. */
   async setWake(agentId: string, body: unknown): Promise<{ ok: boolean; error?: string }> {
-    const agent = this.agent(agentId);
-    if (!agent || this.resetting) return { ok: false, error: "unknown_agent" };
-    if (!isWakeProduct(agent.client_name, agent.client_ua)) return { ok: false, error: "not_offered" };
-    const wake = parseWake(body);
-    if (!wake) return { ok: false, error: "invalid" };
-    this.stopWake(agentId);
-    this.sql.exec(
-      "insert into wakes (agent_id, gen, url, key, created_at) values (?, ?, ?, ?, ?) on conflict(agent_id) do update set gen = excluded.gen, url = excluded.url, key = excluded.key, created_at = excluded.created_at, sent_at = null, status = null, status_at = null, pending_at = null, pending_kind = null, pending_source = null, due = null, delivered_at = null, delivered_event = null, delivered_outcome = null, delivered_code = null",
-      agentId, randomHex(8), wake.url, wake.key, new Date().toISOString(),
-    );
-    this.broadcast();
-    return { ok: true };
+    const r = this.wake.set(agentId, body);
+    return r.ok ? r : { ok: false, error: r.error === "unknown" ? "unknown_agent" : r.error };
   }
 
   async clearWake(agentId: string): Promise<{ ok: boolean }> {
     if (!this.agent(agentId)) return { ok: false };
-    this.stopWake(agentId, true);
-    this.broadcast();
+    this.wake.clear(agentId);
     return { ok: true };
   }
 
   /** Send a test to the agent's webhook now: allowed when broken, one per WAKE_TEST_GAP_MS, counted in the day's budget. */
   async testWake(agentId: string): Promise<{ ok: boolean; error?: string; status?: "ok" | "broken" | "error" }> {
-    const w = this.wakeRow(agentId);
-    const agent = this.agent(agentId);
-    if (!w || !agent) return { ok: false, error: "no_webhook" };
-    // As a wake: only while the agent still declares Grok bot.
-    if (!isWakeProduct(agent.client_name, agent.client_ua)) return { ok: false, error: "paused" };
-    const now = Date.now();
-    if (this.wakeAborts.has(agentId) || now - (this.wakeTests.get(agentId) ?? 0) < WAKE_TEST_GAP_MS) return { ok: false, error: "too_soon" };
-    if (!this.spendWake(agentId, now)) return { ok: false, error: "limit" };
-    this.wakeTests.set(agentId, now);
-    const status = await this.postWake(agentId, w, { v: 1, event: "test", at: new Date(now).toISOString() });
-    return { ok: true, status };
+    return this.wake.test(agentId);
   }
 
   /**
@@ -2624,7 +2473,7 @@ export class Hub extends DurableObject<Env> {
       const now = this.agent(agent.id);
       return !!now && isWakeProduct(now.client_name, now.client_ua);
     };
-    const instructions = grok() && !this.wakeRow(agent.id) && !this.wakeDeclined(agent.id) ? `${HUB_INSTRUCTIONS} ${WAKE_HINT}` : HUB_INSTRUCTIONS;
+    const instructions = grok() && this.wake.offerInInstructions(agent.id) ? `${HUB_INSTRUCTIONS} ${WAKE_HINT}` : HUB_INSTRUCTIONS;
     const server = new Server({ name: "apc-agent-dock", version: "0.2.0" }, { capabilities: { tools: { listChanged: true } }, instructions });
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       this.sql.exec("update agents set listed_at = ? where id = ?", new Date().toISOString(), agent.id);
@@ -2650,7 +2499,7 @@ export class Hub extends DurableObject<Env> {
       }
       let result: ToolResult;
       try {
-        result = name === WAKE_TOOL.name && grok() ? this.wakeSetupResult(agent.id, new URL(request.url).origin, args) : await this.callTool(agent.id, name, args, cancelled, signal);
+        result = name === WAKE_TOOL.name && grok() ? this.wake.setup(agent.id, `${new URL(request.url).origin}/dock#wake-${agent.id}`, args) : await this.callTool(agent.id, name, args, cancelled, signal);
       } finally {
         if (counted) {
           const left = (this.busy.get(agent.id) ?? 1) - 1;
@@ -2673,7 +2522,7 @@ export class Hub extends DurableObject<Env> {
       // Wake on pin, offered on the calls an agent makes anyway (TIN-967): Grok bot only, while off and not declined, once a day.
       // Only on a real answer: never on an error or a refused wait (retry_after_s), which would spend the day's offer.
       const answered = !result.isError && result.structuredContent?.retry_after_s === undefined;
-      if ((name === "get_current_view" || name === "wait_for_focus") && answered && !cancelled() && grok() && this.wakeHintDue(agent.id)) result = withKey(result, "wake", WAKE_RESULT_HINT);
+      if ((name === "get_current_view" || name === "wait_for_focus") && answered && !cancelled() && grok() && this.wake.hintDue(agent.id)) result = withKey(result, "wake", WAKE_RESULT_HINT);
       this.broadcast();
       return result;
     });

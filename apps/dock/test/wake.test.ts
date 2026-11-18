@@ -427,6 +427,26 @@ test("a cleared reading wakes nobody", async (t) => {
   assert.equal(d.sent.length, 0);
 });
 
+test("a reading's pin cleared in the dock, or replaced by another source's, wakes nobody, though the reading stays (TIN-973)", async (t) => {
+  const d = await dock(t);
+  await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
+  const token = await d.allow();
+  // The person clears the agent's focus in the dock: the browser still holds its reading, but no pin is left to wake for.
+  await d.hub.reading(reading, token, BROWSER);
+  await d.hub.clearFocus(d.agent);
+  await d.pass(5_000);
+  assert.equal(d.sent.length, 0);
+  assert.equal(d.wake()!.pending_at, null);
+  // A newer pin from an app took the agent's focus (the hub read it): the reading's wake is not the one to send.
+  await d.pass(15_000);
+  await d.hub.reading(reading, token, BROWSER);
+  const app = d.pairApp();
+  const focus = { kind: "customer", id: "c1", part: null, params: null, pinned_at: new Date(Date.now() + 1).toISOString(), next: "get_customer", next_args: {} };
+  d.db.prepare("update pointer set pairing_id = ?, app = ?, focus = ? where agent_id = ?").run(app, JSON.stringify({ id: "pulse", name: "Pulse", origin: "https://pulse.test" }), JSON.stringify(focus), d.agent);
+  await d.pass(5_000);
+  assert.equal(d.sent.length, 0);
+});
+
 test("a test waits its turn: while a POST is in flight it is refused, and it cuts nothing", { timeout: 10_000 }, async (t) => {
   const d = await dock(t);
   await d.hub.setWake(d.agent, { url: WEBHOOK, key: KEY });
