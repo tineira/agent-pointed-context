@@ -3,10 +3,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const dock = new URL("../apps/dock/", import.meta.url);
-if (existsSync(dock)) {
+if (existsSync(new URL("../apps/dock/package.json", import.meta.url))) {
   for (const [app, args] of [
-    [dock, ["node_modules/vite/bin/vite.js", "build"]],
+    [new URL("../apps/dock/", import.meta.url), ["node_modules/vite/bin/vite.js", "build"]],
     [new URL("../apps/extension/", import.meta.url), ["build.mjs"]],
   ]) {
     const result = spawnSync(process.execPath, args, { cwd: fileURLToPath(app), stdio: "inherit" });

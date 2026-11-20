@@ -258,6 +258,22 @@ async function pairAppInWorkerd(t, { name, origin, target, linksOf, idOf }) {
   const url = new URL(opened.json.url);
   must(url.origin === origin && url.pathname === "/connect/dock" && !url.search && url.hash.startsWith("#apc_connect="),
     `${name}: the ticket uses the app's declared Connect page and fragment`);
+  const get = (path) => runtime.send(`${origin}${path}`, { redirect: "manual", signal: AbortSignal.timeout(STEP_MS) });
+  const page = await get(url.pathname);
+  must(page.status === 200 && page.headers.get("referrer-policy") === "no-referrer",
+    `${name}: GET /connect/dock returns 200 with Referrer-Policy: no-referrer`, `HTTP ${page.status}`);
+  const scripts = [...(await page.text()).matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)];
+  const scriptSource = (attrs) => /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs)?.slice(1).find((src) => src !== undefined);
+  const sources = scripts.map(([, attrs]) => scriptSource(attrs));
+  must(scripts.some(([, , body], i) => sources[i] === undefined && body.includes("history.replaceState")),
+    `${name}: GET /connect/dock clears the fragment with inline history.replaceState`);
+  const asset = "/assets/dock-connect.js";
+  must(sources.includes(asset) && sources.every((src) => src === undefined || new URL(src, origin).origin === origin),
+    `${name}: GET /connect/dock loads the Dock Connect module and uses only same-origin scripts`);
+  const connectJs = await get(asset);
+  must(connectJs.status === 200 && (await connectJs.text()).includes("apc_connect"),
+    `${name}: built /assets/dock-connect.js returns 200 and contains apc_connect`, `HTTP ${connectJs.status}`);
+
   const handoff = JSON.parse(Buffer.from(url.hash.slice("#apc_connect=".length), "base64url").toString("utf8"));
   must(handoff.agent === agent && handoff.hub === DOCK && typeof handoff.ticket === "string", `${name}: the handoff names this hub and agent`);
   const body = { ...drop, ticket: handoff.ticket };
@@ -283,8 +299,13 @@ async function pairAppInWorkerd(t, { name, origin, target, linksOf, idOf }) {
   must(approved.status === 200 && approved.json?.ok === true, `${name}: the owner approves with the code`, approved);
   must((await links()).find((link) => idOf(link) === grantId)?.state === "live", `${name}: the app committed the hub's MCP initialize`);
 
-  const read = await rpc(`${DOCK}/__test/mcp/${pending.id}`, "tools/call", { name: "get_current_view", arguments: {} });
-  must(read.result && !read.result.isError, `${name}: the hub reads the app via MCP`);
+  const mcp = `${DOCK}/__test/mcp/${pending.id}`;
+  const listed = await rpc(mcp, "tools/list", {});
+  const tools = listed.result?.tools;
+  must(Array.isArray(tools) && tools.length > 0, `${name}: tools/list returns a non-empty tool list`);
+  const read = await rpc(mcp, "tools/call", { name: "get_current_view", arguments: {} });
+  must(!read.result?.isError && read.result?.structuredContent?.focus?.id === target.id,
+    `${name}: get_current_view returns the dropped target as the current pin`);
   const before = (await state()).confirmations;
   const again = await call(`${base}/hub/pair`, { method: "POST", body: { ...drop, ticket: await mintTicket() } });
   must(again.status === 200 && again.json?.ok === true && again.json?.grant_id === grantId, `${name}: the second drop keeps the same grant`, again);

@@ -5,14 +5,14 @@ import { existsSync } from "node:fs";
 import { startWorkerd } from "./lib/dock-workerd.mjs";
 
 const ORIGIN = "https://apc.tineira.com";
-const dock = existsSync(new URL("../apps/dock/", import.meta.url));
+const dock = existsSync(new URL("../apps/dock/package.json", import.meta.url));
 // The landing uses Dock's root-level icons and PWA manifest on the shared origin.
 const dockAssets = new Set(["/icon.svg", "/favicon-32.png", "/manifest.webmanifest", "/icon-192.png"]);
 const runtime = await startWorkerd({ site: true, dock });
 const rows = [];
 const send = (path, init) => runtime.send(`${ORIGIN}${path}`, { signal: AbortSignal.timeout(20_000), ...init });
 async function check(path, { status = 200, type = /text\/html/, body = /Agent Pointed Context/, navigate = false, ...init } = {}) {
-  const response = await send(path, { redirect: "manual", ...init });
+  const response = await send(path, { redirect: "manual", ...init, headers: { ...init.headers, "x-workerd-report-fetch-mode": "1" } });
   assert.equal(response.status, status, path);
   assert.match(response.headers.get("content-type") ?? "", type, path);
   assert.equal(response.headers.get("content-security-policy"), "frame-ancestors 'none'", path);

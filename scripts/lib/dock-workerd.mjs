@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** Mount just the built Workers and fixtures a workerd check needs. */
 export async function startWorkerd({ pairing = false, site = false, dock = false, wakeBudget = false } = {}) {
+  if (pairing && dock) throw new Error("startWorkerd requires a choice between the stand-in hub and Dock");
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const siteRoutes = site ? JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8")).routes : [];
   const sitePrefixes = siteRoutes.map(({ pattern }) => {
@@ -77,7 +78,7 @@ export async function startWorkerd({ pairing = false, site = false, dock = false
           const service = site ? env.SITE : env.HUB ?? env.SITE;
           if (service) {
             const response = await service.fetch(request);
-            if (!env.SITE) return response;
+            if (!env.SITE || !request.headers.has("x-workerd-report-fetch-mode")) return response;
             // Record the mode workerd actually saw; asset routes can return the same HTML in both modes.
             const result = new Response(response.body, response);
             result.headers.set("x-workerd-fetch-mode", request.headers.get("sec-fetch-mode") ?? "absent");
