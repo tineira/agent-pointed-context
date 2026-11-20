@@ -7,9 +7,19 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": [
-      "/media*"
+      "/media*",
+      "/",
+      "/try*",
+      "/build*",
+      "/docs*"
     ]
   },
+  "analytics_engine_datasets": [
+    {
+      "binding": "SITE_VIEWS",
+      "dataset": "apc_site_views"
+    }
+  ],
   "routes": [
     {
       "pattern": "apc.tineira.com/docs*",

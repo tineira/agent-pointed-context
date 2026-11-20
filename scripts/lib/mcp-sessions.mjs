@@ -3,14 +3,18 @@
 // COUNT(DISTINCT) over sampled data. A session weighs its smallest sample interval: Analytics Engine
 // can sample some of a session's points even at low volume (seen at 2 on 2026-10-24 with one agent),
 // and one kept point at interval 1 means the session was seen whole, not that a second one was missed.
-// The source is blob8: "dock" for an APC v2 dock's hub (TIN-416), empty on Pulse v1's points.
+// The source is blob8: "dock" for the hub (TIN-416), "pulse" for an agent connected straight to Pulse for the
+// standard (apc-pulse, TIN-1039; its Dock grants are the hub's), and empty on V1's points (apc-demo, Pulse v1).
+// An agent linked by apc_link (the same agent straight to Pulse and through the dock) holds two connections and
+// counts as two sessions, one per source.
 
 export const DATASET = "apc_mcp_sessions";
 
 /**
  * MCP client names of our own checks, left out of every count (TIN-900): the deploy's pairing smoke
  * (scripts/dock-pairing.mjs --production) connects one dock agent per try under this name. Its other half, Pulse
- * for the standard (apc-pulse), writes no points: only V1 (apc-demo) and the dock have the dataset.
+ * for the standard (apc-pulse), writes no point for it: Pulse counts only its Direct grants, and the smoke pairs
+ * through the dock.
  */
 export const OWN_CHECKS = ["apc-deploy-smoke", "apc-workerd-pairing"];
 
@@ -26,8 +30,8 @@ export function sessionsSql(days) {
   ].join("\n");
 }
 
-/** A row's source: "dock", or "pulse" for Pulse v1's points, which carry none. */
-export const sourceOf = (r) => r.source || "pulse";
+/** A row's source: "dock", "pulse" (Pulse for the standard), or "v1" for V1's points, which carry none. */
+export const sourceOf = (r) => r.source || "v1";
 
 /** Rows from the SQL API -> [{ day, source, client_name, sessions }], by day, source, then by sessions descending. */
 export function countSessions(rows) {

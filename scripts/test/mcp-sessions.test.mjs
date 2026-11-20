@@ -26,10 +26,10 @@ test("sessions per day and client, weighted by sample interval, unnamed clients 
     row("2026-10-24", "claude-ai", "s1"),
   ];
   assert.deepEqual(countSessions(rows), [
-    { day: "2026-10-23", source: "pulse", client_name: "claude-ai", sessions: 2 },
-    { day: "2026-10-23", source: "pulse", client_name: "(unknown)", sessions: 1 },
-    { day: "2026-10-24", source: "pulse", client_name: "cursor", sessions: 4 },
-    { day: "2026-10-24", source: "pulse", client_name: "claude-ai", sessions: 1 },
+    { day: "2026-10-23", source: "v1", client_name: "claude-ai", sessions: 2 },
+    { day: "2026-10-23", source: "v1", client_name: "(unknown)", sessions: 1 },
+    { day: "2026-10-24", source: "v1", client_name: "cursor", sessions: 4 },
+    { day: "2026-10-24", source: "v1", client_name: "claude-ai", sessions: 1 },
   ]);
 });
 
@@ -43,12 +43,18 @@ test("a session weighs its smallest sample interval", () => {
   assert.match(sessionsSql(1), /min\(_sample_interval\) AS weight/);
 });
 
-test("dock sessions are told apart from Pulse v1's, and counted in the day's total (TIN-416)", () => {
+test("dock sessions are told apart from V1's, and counted in the day's total (TIN-416)", () => {
   const rows = [row("2026-10-25", "claude-ai", "s1"), row("2026-10-25", "claude-ai", "s1", 1, "dock"), row("2026-10-25", "zcode", "s2", 1, "dock")];
   assert.deepEqual(countSessions(rows), [
     { day: "2026-10-25", source: "dock", client_name: "claude-ai", sessions: 1 },
     { day: "2026-10-25", source: "dock", client_name: "zcode", sessions: 1 },
-    { day: "2026-10-25", source: "pulse", client_name: "claude-ai", sessions: 1 },
+    { day: "2026-10-25", source: "v1", client_name: "claude-ai", sessions: 1 },
   ]);
   assert.deepEqual(dailyTotals(rows), [{ day: "2026-10-25", sessions: 3 }]);
+});
+
+test("Pulse's own points are their own source, beside V1's and the dock's (TIN-1039)", () => {
+  const rows = [row("2026-11-20", "claude-ai", "a"), row("2026-11-20", "claude-ai", "b", 1, "pulse"), row("2026-11-20", "claude-ai", "c", 1, "dock")];
+  assert.deepEqual(countSessions(rows).map((c) => c.source), ["dock", "pulse", "v1"]);
+  assert.deepEqual(dailyTotals(rows), [{ day: "2026-11-20", sessions: 3 }]);
 });

@@ -341,13 +341,18 @@ export class Sandbox extends DurableObject<Env> {
     const r = this.sql.exec<{ data: string }>("select data from view_state where id = 1").toArray()[0];
     return r ? (JSON.parse(r.data) as StoredView) : null;
   }
-  /** One Analytics Engine point per initialize (TIN-347). A failure here never fails the call. */
+  /**
+   * One Analytics Engine point per initialize of a Direct grant (TIN-347, TIN-1039), with the source "pulse". An agent
+   * that came through a dock is counted by the hub (source "dock"), so Pulse does not count its Dock grants again.
+   * A failure here never fails the call.
+   */
   private async countSession(request: Request, sid: string, grant: Grant, name: unknown, version: unknown, protocol: unknown, userAgent: string): Promise<void> {
     const { MCP_SESSIONS, ANALYTICS_SALT } = this.env;
     if (!MCP_SESSIONS || !ANALYTICS_SALT) return;
     try {
       MCP_SESSIONS.writeDataPoint(
         await sessionPoint(ANALYTICS_SALT, {
+          source: "pulse",
           sid,
           grantId: grant.id,
           label: grant.label,
@@ -1213,7 +1218,7 @@ export class Sandbox extends DurableObject<Env> {
               icons: Array.isArray(icons) ? icons.length : 0,
               icon_kept: icon !== null,
             });
-            await this.countSession(request, sid, grant, name, version, protocol, userAgent);
+            if (!link) await this.countSession(request, sid, grant, name, version, protocol, userAgent);
             if (typeof name === "string" && name.length <= 100) {
               if (!this.meta("tour_grant")) this.setMeta("tour_grant", grant.id);
               // A grant from before TIN-364 may hold a generic name with no user agent (Gemini's "mcp") and a

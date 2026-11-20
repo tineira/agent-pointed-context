@@ -24,6 +24,9 @@
     { "name": "NEW_SANDBOX", "namespace_id": "1007", "simple": { "limit": 10, "period": 60 } },
     { "name": "SANDBOX_CALLS", "namespace_id": "1008", "simple": { "limit": 300, "period": 60 } }
   ],
+  // Distinct MCP agent sessions (TIN-347): Pulse writes one point per Direct initialize, source "pulse" (TIN-1039).
+  // ANALYTICS_SALT, the HMAC key, is a secret on apc-pulse; without it nothing is written.
+  "analytics_engine_datasets": [{ "binding": "MCP_SESSIONS", "dataset": "apc_mcp_sessions" }],
   "routes": [{ "pattern": "pulse.apc.tineira.com", "custom_domain": true }],
   "workers_dev": true,
   // No invocation logs (TIN-911): they record each request URL, and an agent's or a grant's MCP URL holds its secret.
