@@ -3,7 +3,7 @@
 //   node scripts/check-dock-freeze.mjs --push <before-sha>         diffs <before-sha>..HEAD (a push to main)
 // The diff is read with -z: paths arrive NUL-separated and verbatim, so quoting (core.quotePath escaping a
 // non-ASCII name) can never hide a frozen path. Exits 1 when the diff adds or modifies a file under the frozen
-// Dock paths (deletions pass, the removal PR deletes them). A push whose before SHA is missing (a created or
+// Dock paths (deletions pass; the removal PR deleted every one, so any other hit is a re-add). A push whose before SHA is missing (a created or
 // rewritten main) cannot prove the freeze: fail.
 import { execFileSync } from "node:child_process";
 import { checkDockFreeze, parseNameStatusZ } from "./lib/dock-freeze.mjs";

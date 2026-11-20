@@ -1,16 +1,17 @@
 // The Dock freeze rule (AGENTS.md "Freezes", TIN-1010): the Dock apps moved to tineira/agent-dock, which alone
-// deploys apc-dock, builds the extension zip and builds and signs Dock for Windows. A diff may only delete files
-// under the frozen paths (the removal PR does); adding or modifying one fails, a rename out of them included.
-// Pure logic; scripts/check-dock-freeze.mjs feeds it the git diff.
+// deploys apc-dock, builds the extension zip and builds and signs Dock for Windows; the removal PR deleted them
+// here. The guard stays so they never come back: a diff may only delete files under the frozen paths; adding or
+// modifying one fails, a rename into or out of them included. Pure logic; scripts/check-dock-freeze.mjs feeds it
+// the git diff.
 
 export const FROZEN_PATHS = [
   "apps/dock/",
   "apps/extension/",
   "apps/dock-desktop/",
-  // Both workflow files were deleted by the PR that introduced this guard (TIN-1010): a re-added dock-desktop.yml
-  // could again be dispatched to sign a Dock for Windows build with the old key, which every bridged install
-  // rejects, and a re-added extension.yml would publish the extension from here. They stay listed so adding
-  // either file back fails the freeze.
+  // The two workflow files were deleted by the PR that introduced this guard and the three folders by the removal
+  // PR (TIN-1010): a re-added dock-desktop.yml could again be dispatched to sign a Dock for Windows build with the
+  // old key, which every bridged install rejects, and a re-added extension.yml would publish the extension from
+  // here. Every path stays listed so adding any of them back fails the freeze.
   ".github/workflows/dock-desktop.yml",
   ".github/workflows/extension.yml",
 ];
@@ -74,7 +75,7 @@ export function checkDockFreeze({ entries }) {
     violations,
     reason:
       `the diff adds or modifies frozen Dock paths: ${violations.join(", ")}. ` +
-      `The Dock lives in ${DOCK_HOME} since TIN-1010; this repo only deletes these files (a later PR does), ` +
-      `and never builds or signs Dock for Windows here again.`,
+      `The Dock lives in ${DOCK_HOME} since TIN-1010 and was removed from this repo: these paths must not come back, ` +
+      `and this repo never builds or signs Dock for Windows again.`,
   };
 }

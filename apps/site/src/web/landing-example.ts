@@ -19,7 +19,7 @@ export const FOCUS_EXAMPLE = {
 
 /**
  * The same focus as the agent receives it through a dock (TIN-627): the hub adds the app it came from and
- * rewrites the call that reads it to its own `call_app_tool` (`hubFocus` in apps/dock/src/worker/logic.ts, for
+ * rewrites the call that reads it to its own `call_app_tool` (`hubFocus` in the reference hub, which left this repo for tineira/agent-dock, for
  * Pulse, a verified app, under its id "pulse"). scripts/test/site-focus.test.mjs and apps/site/test/landing.test.ts checks that it still is.
  */
 export const DOCK_FOCUS_EXAMPLE = {

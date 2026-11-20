@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { checkChangelog, isDocs } from "../lib/changelog.mjs";
 
-const code = ["apps/dock/src/web/hub.tsx", "apps/dock/test/hub.test.ts"];
+const code = ["apps/demo/src/web/charts.tsx", "apps/demo/test/charts.test.ts"];
 
 test("the root changelog keeps entries below the Unreleased heading and its intro intact", () => {
   const changelog = readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8");
@@ -16,7 +16,7 @@ test("the root changelog keeps entries below the Unreleased heading and its intr
 test("a PR that changes code and no changelog fails", () => {
   const result = checkChangelog({ files: code, labels: [] });
   assert.equal(result.ok, false);
-  assert.match(result.reason, /apps\/dock\/src\/web\/hub\.tsx/);
+  assert.match(result.reason, /apps\/demo\/src\/web\/charts\.tsx/);
   assert.match(result.reason, /no-changelog/);
 });
 

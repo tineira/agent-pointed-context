@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { DOCK_HOME, FROZEN_PATHS, checkDockFreeze, isFrozenDockPath, parseNameStatusZ } from "../lib/dock-freeze.mjs";
 
@@ -106,18 +107,16 @@ test("an empty diff passes and Windows separators are read as frozen paths", () 
   assert.deepEqual(parseNameStatusZ("M\0apps\\extension\\src\\drop.ts\0"), [{ status: "M", raw: "M", paths: ["apps/extension/src/drop.ts"] }]);
 });
 
-test("every frozen folder exists, and the two deleted workflows stay frozen while absent", () => {
-  // The folders must exist or the freeze would guard nothing. The two workflow files are the exception: the
-  // same PR that introduced this guard deleted them (TIN-1010) — a re-added one could again sign a Dock for
-  // Windows build with the old key — so they stay in FROZEN_PATHS and must not come back. The removal PR
-  // deletes the three folders together with the freeze itself (this guard, both test files, the AGENTS.md
-  // row and the CI step), so this test leaves with them; it must not be kept and re-pointed at nothing.
+test("no frozen path exists: the Dock apps and their workflows were removed and stay out", () => {
+  // The guard now protects against a re-add (TIN-1010): the PR that introduced it deleted the two workflow files
+  // (a re-added one could again sign a Dock for Windows build with the old key), and the removal PR deleted the
+  // three folders. If one is tracked again, it came back past the guard (or the guard's list is wrong): fail here
+  // too. Tracked files, not the disk: a checkout that predates the removal keeps untracked apps/dock/node_modules
+  // or dist folders, which git never carries and the freeze never sees.
+  assert.equal(FROZEN_PATHS.length, 5, "the three Dock folders and the two Dock workflows");
+  const root = fileURLToPath(new URL("../../", import.meta.url));
   for (const frozen of FROZEN_PATHS) {
-    const path = new URL(`../../${frozen}`, import.meta.url);
-    if (frozen.endsWith("/")) {
-      assert.equal(existsSync(path), true, `${frozen} is frozen but does not exist; the check would pass having read nothing`);
-    } else {
-      assert.equal(existsSync(path), false, `${frozen} is deleted (TIN-1010) and frozen: if it exists again, the freeze must fail on it`);
-    }
+    const tracked = execFileSync("git", ["ls-files", "-z", "--", frozen], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+    assert.deepEqual(tracked, [], `${frozen} was removed (TIN-1010) and is frozen, but git tracks it again`);
   }
 });

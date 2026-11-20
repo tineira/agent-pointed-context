@@ -12,10 +12,8 @@ const TICKET = /\bTIN-\d+/g;
 /** The source trees whose strings reach people or agents; apps/v1 is frozen (the paper describes it). */
 const CODE_ROOTS = [
   "apps/demo/src",
-  "apps/dock/src",
   "apps/site/src",
   "apps/signals/src",
-  "apps/extension/src",
   "apps/desktop",
   "packages/protocol/src",
   "packages/server/src",
