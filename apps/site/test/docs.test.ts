@@ -212,8 +212,11 @@ test("every page of the site (its top bar) links to the docs", () => {
 });
 
 test("the docs are static assets, and the assets keep their frame protection", () => {
-  const wrangler = read("apps/site/wrangler.jsonc");
-  assert.doesNotMatch(wrangler.match(/"run_worker_first":\s*\[[^\]]*\]/)![0], /\/docs/);
+  // The Worker runs first for the docs since TIN-1040, only to count a page view: it hands every path but /media
+  // straight to the built files (ASSETS), so a doc page is still the static HTML the build writes.
+  const worker = read("apps/site/src/worker/index.ts");
+  assert.match(worker, /^app\.all\("\*", \(c\) => c\.env\.ASSETS\.fetch\(c\.req\.raw\)\);$/m);
+  assert.deepEqual([...worker.matchAll(/^app\.(?:get|post|all|on)\(/gm)].length, 2, "the /media route and the pass-through, nothing else");
   const headers = read("apps/site/public/_headers");
   assert.match(headers, /^\/\*$/m);
   assert.match(headers, /Content-Security-Policy: [^\n]*\bframe-ancestors 'none'/);

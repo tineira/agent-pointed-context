@@ -2,6 +2,7 @@
 import { Hono } from "hono";
 import { SITE_CSP } from "./csp.ts";
 import { withByteRanges } from "./range.ts";
+import { viewPoint } from "./views.ts";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -14,6 +15,14 @@ app.use("*", async (c, next) => {
   c.res = new Response(c.res.body, c.res);
   c.res.headers.set("content-security-policy", SITE_CSP);
   c.res.headers.set("x-frame-options", "DENY");
+  // One Analytics Engine point per page view (views.ts, TIN-1040); the pages run through the Worker for it
+  // (run_worker_first in wrangler.jsonc). Counting never fails or delays the page.
+  try {
+    const point = viewPoint(c.req.raw, c.res);
+    if (point) c.env.SITE_VIEWS?.writeDataPoint(point);
+  } catch {
+    // analytics only
+  }
 });
 
 app.on(["GET", "HEAD"], "/media/*", async (c) => {
