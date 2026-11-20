@@ -91,7 +91,8 @@ test("every file of the page sits under v1/ (TIN-604): the HTML, the bundles and
   const { existsSync, readdirSync, readFileSync } = await import("node:fs");
   assert.ok(existsSync(new URL("../v1/index.html", import.meta.url)), "v1/index.html");
   assert.ok(!existsSync(new URL("../index.html", import.meta.url)), "no index.html at the root");
-  assert.deepEqual(readdirSync(new URL("../public", import.meta.url)), ["v1"]);
+  // _headers is the platform's header rules (TIN-1038), read at deploy and never served as a file.
+  assert.deepEqual(readdirSync(new URL("../public", import.meta.url)).sort(), ["_headers", "v1"]);
   const vite = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
   assert.match(vite, /assetsDir:\s*"v1\/assets"/);
   assert.match(vite, /input:\s*"v1\/index\.html"/);

@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { BASE } from "../base.ts";
 import { REGIONS, type Region } from "../model/seed.ts";
+import { withCsp } from "./csp.ts";
 import { SANDBOX_TTL_MS, type Env } from "./sandbox.ts";
 
 export { Sandbox } from "./sandbox.ts";
@@ -177,12 +178,13 @@ function isAppRoute(method: string, pathname: string): boolean {
  * The page. A file under /v1 is normally served before the Worker runs; this sees the rest. An app route gets
  * the page (v1/index.html, fetched as /v1/ since the assets' auto-trailing-slash redirects /v1/index.html),
  * and anything else keeps the assets' 404. There is no index.html at the assets' root, so nothing outside
- * /v1 can fall back to the page.
+ * /v1 can fall back to the page. Everything here carries V1's CSP (csp.ts): public/_headers covers only what the
+ * assets serve before the Worker runs.
  */
 app.all("*", async (c) => {
   const asset = await c.env.ASSETS.fetch(c.req.raw);
-  if (asset.status !== 404 || !isAppRoute(c.req.method, new URL(c.req.url).pathname)) return asset;
-  return c.env.ASSETS.fetch(new Request(new URL(`${BASE}/`, c.req.url), { method: c.req.method, headers: c.req.raw.headers }));
+  if (asset.status !== 404 || !isAppRoute(c.req.method, new URL(c.req.url).pathname)) return withCsp(asset);
+  return withCsp(await c.env.ASSETS.fetch(new Request(new URL(`${BASE}/`, c.req.url), { method: c.req.method, headers: c.req.raw.headers })));
 });
 
 /** Only /v1 is V1's (the zone routes in wrangler.jsonc send nothing else here). */

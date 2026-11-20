@@ -1,0 +1,6 @@
+# V1's Content-Security-Policy (TIN-1038): the same string as V1_CSP in src/worker/csp.ts, which explains it;
+# test/csp.test.ts fails if the two differ. The Worker sets the same headers on everything its catch-all returns.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-TEEpJvERoenA4/WV8tDuL8nB+tyeth7ZaMrIcBGqRV0='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
