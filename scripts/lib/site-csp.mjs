@@ -1,7 +1,7 @@
 // What a built site page carries that the site's CSP (apps/site/src/worker/csp.ts, TIN-1013) would block or must
 // never allow: an inline script without a matching 'sha256-…' in script-src, an inline event handler, a
 // javascript: URL, an inline <style> or style attribute (style-src has no 'unsafe-inline'), a <base> element, a form
-// that posts elsewhere, and a script, stylesheet, preload, icon or media file (srcset included) from another origin
+// that posts elsewhere, any <iframe>, <frame>, <object> or <embed>, an SVG image or use from elsewhere, and a script, stylesheet, preload, icon or media file (srcset included) from another origin
 // or scheme. Tags are read with a small tokenizer that follows the browser's rules (TIN-1036). Pure; scripts/site-routes.mjs runs it on every built page after
 // `pnpm build`, and scripts/test/site-csp.test.mjs checks it on fixtures.
 import { createHash } from "node:crypto";
@@ -19,19 +19,20 @@ export function scriptHashes(csp) {
   return new Set(sources.filter((source) => /^'sha256-[A-Za-z0-9+/]+=*'$/.test(source)).map((source) => source.slice(1, -1)));
 }
 
-/** The CSP source for an inline script's exact text, as a browser hashes it. */
-export const inlineHash = (text) => `sha256-${createHash("sha256").update(text, "utf8").digest("base64")}`;
+/** The CSP source for an inline script's exact text, as a browser hashes it: after the parser turns CRLF and CR into LF. */
+export const inlineHash = (text) => `sha256-${createHash("sha256").update(text.replace(/\r\n?/g, "\n"), "utf8").digest("base64")}`;
 
 const isSpace = (ch) => ch === " " || ch === "\t" || ch === "\n" || ch === "\f" || ch === "\r";
-// Elements whose content is text up to their own end tag, so a "<" inside never opens a tag (HTML's raw-text and
-// RCDATA elements). <plaintext> turns the rest of the page into text.
-const RAW_TEXT = new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript"]);
+// Only a <script>'s content is skipped as text. The other raw-text and RCDATA elements (style, textarea, title…)
+// are scanned for tags: inside <svg> or <math> a browser parses their content as markup (`<svg><title><img
+// onerror>`), so scanning errs on the strict side. <plaintext> turns the rest of the page into text.
 
 /**
  * Each start tag of the page with its attributes, in order, read the way a browser's tokenizer reads them (TIN-1036):
  * a tag name ends at whitespace, "/" or ">", and a "/" between attributes separates them as whitespace does, so
- * `<svg/onload=…>`, `<script/x>` and `<img src="x"/onclick=…>` are read as the browser reads them. Comments,
- * doctypes, end tags and the text of raw-text elements are skipped. Built pages only: escaped code (&lt;…) is text.
+ * `<svg/onload=…>`, `<script/x>` and `<img src="x"/onclick=…>` are read as the browser reads them. Comments
+ * (closed where a browser closes them: `<!-->`, `<!--->`, the first `-->` or `--!>`), doctypes, end tags and a
+ * script's text are skipped. Built pages only: escaped code (&lt;…) is text.
  */
 export function tags(html) {
   const out = [];
@@ -42,8 +43,12 @@ export function tags(html) {
     if (lt === -1) break;
     i = lt + 1;
     if (html.startsWith("!--", i)) {
-      const close = html.indexOf("-->", i + 3);
-      i = close === -1 ? n : close + 3;
+      if (html.startsWith(">", i + 3)) i += 4; // <!-->
+      else if (html.startsWith("->", i + 3)) i += 5; // <!--->
+      else {
+        const close = html.slice(i + 3).search(/--!?>/);
+        i = close === -1 ? n : html.indexOf(">", i + 3 + close) + 1;
+      }
       continue;
     }
     if (html[i] === "!" || html[i] === "?" || html[i] === "/") {
@@ -83,8 +88,8 @@ export function tags(html) {
     out.push(tag);
     i = tag.end;
     if (tag.name === "plaintext") break;
-    if (RAW_TEXT.has(tag.name)) {
-      const close = html.slice(i).search(new RegExp(`</${tag.name}[\\s/>]`, "i"));
+    if (tag.name === "script") {
+      const close = html.slice(i).search(/<\/script[\s/>]/i);
       i = close === -1 ? n : i + close;
     }
   }
@@ -153,6 +158,16 @@ export function cspViolations(html, csp) {
     }
     if (tag.name === "style") found.push("inline <style> element (style-src has no 'unsafe-inline')");
     if (tag.name === "base") found.push("<base> element (base-uri is 'none')");
+    if (tag.name === "object" || tag.name === "embed") found.push(`<${tag.name}> element (object-src is 'none')`);
+    if (tag.name === "iframe" || tag.name === "frame") found.push(`<${tag.name}> element (every page of this origin refuses framing, and frame-src allows no other)`);
+    if (["image", "use", "feimage"].includes(tag.name)) {
+      for (const name of ["href", "xlink:href"]) {
+        const value = attr(name)?.value;
+        if (value && offOrigin(value, { data: tag.name !== "use" })) found.push(`<${tag.name} ${name}> from another origin: ${value}`);
+      }
+    }
+    const background = attr("background")?.value;
+    if (background && offOrigin(background, { data: true })) found.push(`<${tag.name} background> from another origin: ${background}`);
     if (tag.name === "link") {
       const rels = (attr("rel")?.value ?? "").toLowerCase().split(/\s+/).filter(Boolean);
       const loads = rels.filter((rel) => LOADING_RELS.has(rel));
@@ -192,7 +207,8 @@ export function cspViolations(html, csp) {
 // canonical and the like only name a page.
 const LOADING_RELS = new Set(["stylesheet", "modulepreload", "preload", "prefetch", "icon", "apple-touch-icon", "mask-icon", "manifest"]);
 const IMAGE_RELS = new Set(["icon", "apple-touch-icon", "mask-icon"]);
-const MEDIA_TAGS = new Set(["img", "video", "audio", "source", "track", "iframe", "embed", "object", "input", "frame"]);
+// <iframe>, <frame>, <object> and <embed> are reported whole, above.
+const MEDIA_TAGS = new Set(["img", "video", "audio", "source", "track", "input"]);
 
 /** The Content-Security-Policy value _headers gives the rule `/*`, or null. */
 export function headersFileCsp(text) {

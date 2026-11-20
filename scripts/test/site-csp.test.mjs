@@ -67,6 +67,9 @@ test("an inline script fails without its hash in script-src, and passes with it"
   assert.deepEqual([...scriptHashes(hashed)], [inlineHash(code)]);
   assert.deepEqual(cspViolations(html, hashed), []);
   assert.equal(cspViolations(page(`<script>${code} </script>`), hashed).length, 1, "the hash covers the exact text only");
+  const lines = "a();\nb();";
+  const lf = SITE_CSP.replace("script-src 'self'", `script-src 'self' '${inlineHash(lines)}'`);
+  assert.deepEqual(cspViolations(page(`<script>${lines.replace("\n", "\r\n")}</script>`), lf), [], "a browser hashes after turning CRLF into LF");
   assert.equal(cspViolations(page(`<script type="module"></script>`), SITE_CSP).length, 1, "even an empty inline script needs its hash");
 });
 
@@ -85,7 +88,18 @@ test("handlers, javascript: URLs, inline styles and other origins fail", () => {
     [`<link rel="stylesheet" href="https://fonts.example/a.css">`, /<link rel="stylesheet"> from another origin/],
     [`<img src="https://img.example/a.png">`, /<img src> from another origin/],
     [`<video poster="https://img.example/a.jpg"></video>`, /<video poster> from another origin/],
-    [`<iframe src="https://pulse.apc.tineira.com/"></iframe>`, /<iframe src> from another origin/],
+    [`<iframe src="https://pulse.apc.tineira.com/"></iframe>`, /<iframe> element/],
+    // The review of #234: comments close where a browser closes them, and only a script's text is skipped.
+    [`<!--><script>go()</script>-->`, /inline <script> without a matching hash/],
+    [`<!---><script src="https://evil.example/x.js"></script>-->`, /script from another origin/],
+    [`<!-- x --!><img src=x onerror=go()>-->`, /inline event handler onerror/],
+    [`<svg><title><img src=x onerror=go()></title></svg>`, /inline event handler onerror on <img>/],
+    [`<object data="/x.swf"></object>`, /<object> element/],
+    [`<embed src="/x.pdf">`, /<embed> element/],
+    [`<iframe src="/docs"></iframe>`, /<iframe> element/],
+    [`<svg><image href="https://img.example/a.png"/></svg>`, /<image href> from another origin/],
+    [`<svg><use xlink:href="https://img.example/s.svg#i"/></svg>`, /<use xlink:href> from another origin/],
+    [`<table background="https://img.example/a.png"></table>`, /<table background> from another origin/],
     // TIN-1036: what the old regex missed. A "/" separates attributes as whitespace does.
     [`<svg/onload="go()"></svg>`, /inline event handler onload on <svg>/],
     [`<img src="/a.png"/onclick="go()">`, /inline event handler onclick on <img>/],
@@ -115,8 +129,8 @@ test("handlers, javascript: URLs, inline styles and other origins fail", () => {
 
 test("text that only looks like a tag is not one: comments, raw-text elements and escaped code", () => {
   const html = page(
-    `<!-- <script>go()</script> --><title>a <script>go()</script> b</title><script src="/x.js"></script>`,
-    `<textarea><img src=x onerror=go()></textarea><pre><code>&lt;svg/onload=go()&gt;</code></pre><p>a < b and a<3</p>` +
+    `<!-- <script>go()</script> --><title>Docs: a &lt; b</title><script src="/x.js"></script><script type="module" src="/y.js"></script>`,
+    `<pre><code>&lt;svg/onload=go()&gt;</code></pre><p>a < b and a<3</p>` +
       `<img src="data:image/png;base64,AAAA" srcset="/a.png 1x, /b.png 2x" alt=""><link rel="alternate" href="https://example.com/feed">` +
       `<link rel="icon" href="data:image/png;base64,AAAA"><form action="/search"></form>`,
   );

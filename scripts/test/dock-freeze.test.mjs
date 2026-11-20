@@ -72,6 +72,10 @@ test("the freeze ignores case: apps/Dock/ is apps/dock/ on a Windows or macOS ch
     assert.equal(checkDockFreeze({ entries: [entry("A", path)] }).ok, false, path);
   }
   assert.equal(isFrozenDockPath("apps/Desktop/MainWindow.cs"), false, "Pulse for Windows stays free in any case");
+  for (const path of ["apps/dock./x.ts", "apps/dock /x.ts", "apps/extension.. /m.json", ".github/workflows/extension.yml."]) {
+    assert.equal(isFrozenDockPath(path), true, `${path}: Windows drops trailing dots and spaces`);
+  }
+  assert.equal(isFrozenDockPath("apps/docks/x.ts"), false);
 });
 
 test("a rename fails from either side: Dock code neither leaves the frozen tree nor lands in it", () => {
