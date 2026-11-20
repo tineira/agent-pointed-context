@@ -3,8 +3,8 @@
 //   none             nothing the extension is built from changed (or git could not say)
 //   rebuild          rebuild apps/extension/dist (node build.mjs)
 //   install-rebuild  pnpm-lock.yaml changed too: pnpm install --frozen-lockfile first
-// The inputs are EXTENSION_INPUTS (scripts/lib/extension-version.mjs), the paths .github/workflows/extension.yml
-// rebuilds the published zip on.
+// The inputs are EXTENSION_INPUTS (scripts/lib/extension-version.mjs), the paths the local hooks rebuild the
+// dist on and tineira/agent-dock's build rebuilds the published zip on (TIN-1010).
 //   node scripts/extension-changed.mjs <old> <new> [repo root, default this repo]
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
