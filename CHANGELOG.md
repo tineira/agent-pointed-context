@@ -4,8 +4,9 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **Pulse and Signals can run their Workers pairing checks without Dock (TIN-1010, TIN-1013).** The workerd suite uses a stand-in hub, checks Pulse's wake budget on its own and tests browser navigation headers. The integration guide points to the local Dock page. (`scripts/`, `apps/demo/test/workerd/`, `apps/site/src/docs/pages/integrate.md`, `package.json`, `.github/workflows/ci.yml`)
 - **The docs install 1.3.0: `latest` now points at it (TIN-1005).** The pinned install commands in the README, the integrate page and the conformance page name 1.3.0, and the integrate page no longer says to use them for 1.1.1. (`README.md`, `apps/site/src/docs/pages/integrate.md`, `apps/site/src/docs/pages/conformance.md`)
-- **The standard’s site and docs run independently of Dock.** A new apc-site Worker serves the existing pages, docs and media URLs; Dock delegates the landing and keeps Start over, pairing and its offline page (`apps/site`, `apps/dock`, `scripts/lib/dock-workerd.mjs`, `.github/workflows/ci.yml`).
+- **The standard's site and docs run independently of Dock (TIN-1006).** A new apc-site Worker serves the existing pages, docs and media URLs; Dock delegates the landing and keeps Start over, pairing and its offline page (`apps/site`, `apps/dock`, `scripts/lib/dock-workerd.mjs`, `.github/workflows/ci.yml`).
 
 - **APC 1.3.0 adds profile-word recommendations; nothing is marked and no reader changes (TIN-1005).** Origins SHOULD use words that match `[a-z][a-z0-9_-]{0,31}` in full and list at most 8 words, with the reader's endpoint rejection stated and the reference parser's top-level refusal named as reference behaviour, not a rule of the page; the standard and four packages move to 1.3.0, an app on 1.2 changes only `standard`, and install pins stay at 1.2.0. (`apps/dock/src/docs/pages/spec.md`, `apps/dock/src/docs/pages/overview.md`, `packages/protocol/src/version.ts`, `packages/protocol/CHANGELOG.md`, `packages/*/package.json`)
 

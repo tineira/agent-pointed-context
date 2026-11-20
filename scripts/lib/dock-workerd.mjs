@@ -1,21 +1,21 @@
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-/** The site, Dock and Pulse Workers in workerd, and the fetch that reaches them. */
-export async function startWorkerd({ connectManifestFixture = false } = {}) {
+/** Mount just the built Workers and fixtures a workerd check needs. */
+export async function startWorkerd({ pairing = false, site = false, dock = false, wakeBudget = false } = {}) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const siteConfig = JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8"));
-  const sitePrefixes = siteConfig.routes.map(({ pattern }) => {
+  const siteRoutes = site ? JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8")).routes : [];
+  const sitePrefixes = siteRoutes.map(({ pattern }) => {
     if (!pattern.startsWith("apc.tineira.com/") || !pattern.endsWith("*") || pattern.slice(0, -1).includes("*")) throw new Error(`unsupported site route: ${pattern}`);
     return pattern.slice("apc.tineira.com".length, -1);
   });
-  // wrangler is the dock's devDependency, and Miniflare is wrangler's: the versions `vite dev` and `wrangler deploy` use.
-  const wranglerPath = createRequire(join(root, "apps/dock/package.json")).resolve("wrangler");
-  const fileUrl = (p) => new URL(`file:///${p.replaceAll("\\", "/")}`).href;
-  const { unstable_getMiniflareWorkerOptions } = await import(fileUrl(wranglerPath));
-  const { Miniflare, convertV4MiniflareOptions } = await import(fileUrl(createRequire(wranglerPath).resolve("miniflare")));
+  // Use Pulse's Wrangler and its Miniflare, the same versions as Pulse's build.
+  const wranglerPath = createRequire(join(root, "apps/demo/package.json")).resolve("wrangler");
+  const fromWrangler = createRequire(wranglerPath);
+  const { unstable_getMiniflareWorkerOptions } = await import(pathToFileURL(wranglerPath).href);
+  const { Miniflare, convertV4MiniflareOptions } = await import(pathToFileURL(fromWrangler.resolve("miniflare")).href);
   if (typeof unstable_getMiniflareWorkerOptions !== "function" || typeof convertV4MiniflareOptions !== "function" || typeof Miniflare !== "function") {
     throw new Error("wrangler no longer exports unstable_getMiniflareWorkerOptions, or Miniflare convertV4MiniflareOptions: update scripts/dock-pairing.mjs for the new wrangler");
   }
@@ -35,58 +35,84 @@ export async function startWorkerd({ connectManifestFixture = false } = {}) {
       .filter((f) => /\.m?js$/.test(f) && f !== entry);
     return { ...workerOptions, name, modules: [entry, ...chunks].map((p) => ({ type: "ESModule", path: p })), modulesRoot: dir, outboundService: "internet" };
   };
+  const workers = [];
+  const services = {};
+  const mount = (binding, worker) => {
+    workers.push(worker);
+    services[binding] = worker.name;
+  };
+  if (site) mount("SITE", builtWorker("apc-site", "apps/site/dist/apc_site/wrangler.json"));
+  if (pairing || wakeBudget) mount("PULSE", builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"));
+  if (pairing) {
+    mount("SIGNALS", builtWorker("apc-signals", "apps/signals/dist/apc_signals/wrangler.json"));
+    const { build } = fromWrangler("esbuild");
+    const { outputFiles: [bundle] } = await build({
+      entryPoints: [join(root, "apps/demo/test/workerd/stand-in-hub.mjs")],
+      bundle: true,
+      write: false,
+      format: "esm",
+      external: ["cloudflare:workers"],
+    });
+    mount("HUB", {
+      name: "stand-in-hub",
+      modules: true,
+      compatibilityDate: "2026-10-01",
+      script: bundle.text,
+      durableObjects: { HUB: { className: "Hub", useSQLite: true } },
+      outboundService: "internet",
+    });
+  }
+  if (dock) mount("HUB", builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"));
+
   const internet = {
     name: "internet",
     modules: true,
     compatibilityDate: "2026-10-01",
     script: `export default {
       async fetch(request, env) {
-        const host = new URL(request.url).hostname;
-        if (host === "apc.tineira.com") {
-          const path = new URL(request.url).pathname;
+        const { hostname, pathname } = new URL(request.url);
+        if (hostname === "apc.tineira.com") {
           // The six zone patterns precede the Dock Custom Domain, query strings included.
-          const site = ${JSON.stringify(sitePrefixes)}.some((prefix) => path.startsWith(prefix));
-          return site ? env.SITE.fetch(request) : env.DOCK.fetch(request);
-        }
-        if (host === "pulse.apc.tineira.com") {
-          const response = await env.PULSE.fetch(request);
-          // Hub-only 0.13 tests provide the app manifest declaration; app pages ship in the separate app branch.
-          if (${connectManifestFixture} && new URL(request.url).pathname === "/.well-known/apc.json" && response.ok) {
-            const manifest = await response.json();
-            return Response.json({ ...manifest, dock_connect: manifest.dock_connect ?? "https://pulse.apc.tineira.com/connect/dock" });
+          const site = ${JSON.stringify(sitePrefixes)}.some((prefix) => pathname.startsWith(prefix));
+          const service = site ? env.SITE : env.HUB ?? env.SITE;
+          if (service) {
+            const response = await service.fetch(request);
+            if (!env.SITE) return response;
+            // Record the mode workerd actually saw; asset routes can return the same HTML in both modes.
+            const result = new Response(response.body, response);
+            result.headers.set("x-workerd-fetch-mode", request.headers.get("sec-fetch-mode") ?? "absent");
+            return result;
           }
-          return response;
         }
-        return new Response("no network in this test: " + host, { status: 502 });
+        if (hostname === "pulse.apc.tineira.com" && env.PULSE) return env.PULSE.fetch(request);
+        if (hostname === "signals.apc.tineira.com" && env.SIGNALS) return env.SIGNALS.fetch(request);
+        return new Response("no network in this test: " + hostname, { status: 502 });
       },
     };`,
-    serviceBindings: { DOCK: "apc-dock", PULSE: "apc-pulse", SITE: "apc-site" },
+    serviceBindings: services,
   };
-  const mf = new Miniflare(
-    convertV4MiniflareOptions({
-      workers: [internet, builtWorker("apc-site", "apps/site/dist/apc_site/wrangler.json"), builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"), builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"), {
-        // Test-only access to the real exported class and binding; never a route in the shipped Worker.
-        name: "wake-budget-probe",
-        modules: true,
-        compatibilityDate: "2026-10-01",
-        durableObjects: { WAKE_BUDGET: { className: "WakeBudget", scriptName: "apc-pulse", useSQLite: true } },
-        script: `export default { async fetch(request, env) {
-          const { now, count } = await request.json();
-          const budget = env.WAKE_BUDGET.get(env.WAKE_BUDGET.idFromName("global"));
-          let granted = 0;
-          // Deliberately pass an obsolete caller timestamp: the real class must ignore it and use its own clock.
-          for (let i = 0; i < count; i++) if (await budget.take(now)) granted++;
-          return Response.json({ granted });
-        } };`,
-      }],
-    }),
-  );
+  if (wakeBudget) workers.push({
+    // Test-only access to the real exported class and binding; never a route in the shipped Worker.
+    name: "wake-budget-probe",
+    modules: true,
+    compatibilityDate: "2026-10-01",
+    durableObjects: { WAKE_BUDGET: { className: "WakeBudget", scriptName: "apc-pulse", useSQLite: true } },
+    script: `export default { async fetch(request, env) {
+      const { now, count } = await request.json();
+      const budget = env.WAKE_BUDGET.get(env.WAKE_BUDGET.idFromName("global"));
+      let granted = 0;
+      // Deliberately pass an obsolete caller timestamp: the real class must ignore it and use its own clock.
+      for (let i = 0; i < count; i++) if (await budget.take(now)) granted++;
+      return Response.json({ granted });
+    } };`,
+  });
+  const mf = new Miniflare(convertV4MiniflareOptions({ workers: [internet, ...workers] }));
   const runtime = {
     send: (url, init) => mf.dispatchFetch(url, init),
     stop: () => mf.dispose(),
     takeWakeSlots: async (now, count) => {
       const probe = await mf.getWorker("wake-budget-probe");
-      return (await probe.fetch("https://probe.test", { method: "POST", body: JSON.stringify({ now, count }) })).json();
+      return (await probe.fetch("https://probe.test", { method: "POST", body: JSON.stringify({ now, count }), signal: AbortSignal.timeout(20_000) })).json();
     },
   };
   try {

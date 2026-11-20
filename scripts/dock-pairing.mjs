@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * One real Dock pairing between the dock and Pulse (TIN-900), the way a person and an agent make one:
+ * Dock pairing through the app's consent, the owner's code, and the MCP introduction (TIN-900).
  *
  *   the dock opens → its agent connects → the owner requests Connect → opens Pulse with the connect ticket → Allow → Pulse calls the
  *   hub's /apc/pair (pairWithHub) → the dock owner approves with the pairing code → the hub's `initialize` to
@@ -9,12 +9,10 @@
  *
  * Two places to run it:
  *
- * - **In workerd** (the default; CI's `check` job, after `pnpm build`; `pnpm test:workerd`): the built dock (Worker
- *   apc-dock) and the built Pulse (apc-pulse) run in the Workers runtime through Miniflare, each from the
- *   wrangler.json `vite build` wrote (what `wrangler deploy` ships), with real Durable Objects (SQLite), their
- *   deploy's vars and their production origins. They reach each other by `fetch` to the other's public origin:
- *   their outbound fetches go to a third local Worker that stands in for the internet, which hands apc.tineira.com
- *   to the dock and pulse.apc.tineira.com to Pulse over service bindings, and refuses every other host.
+ * - **In workerd** (the default; CI's `check` job, after `pnpm build`; `pnpm test:workerd`): built Pulse and
+ *   Signals use their shipped Worker configs and SQLite Durable Objects. Their outbound fetches to the hub go
+ *   through workerd to a local Worker running the conformance suite's standInHub. It calls the apps back through
+ *   workerd on their public origins. A local router handles these hosts and refuses outside network calls.
  *   `pnpm test` runs this code on Node, which accepts options Workers rejects: `fetch(..., { redirect: "error" })`
  *   broke every Dock pairing in production from APC 0.9 to 0.11.0 while CI stayed green. This catches what the
  *   runtime's APIs reject. It does not cover the network or the edge (DNS, TLS, Cloudflare's own routing between
@@ -153,7 +151,7 @@ async function readDocs(t) {
   t.check(llms.status === 200 && llms.text.includes("(/docs/spec.md)") && llms.text.includes("(/docs/integrate.md)"), "/llms.txt names the docs' Markdown", `HTTP ${llms.status}`);
 }
 
-/** The pairing's steps, on one try. */
+/** The production smoke's steps, against the real hub. */
 async function pair(t) {
   const { call, rpc, check, must } = t;
 
@@ -227,30 +225,93 @@ async function pair(t) {
   const again = await call(`${t.made.pulse}/hub/pair`, { method: "POST", body: { ...drop, ticket: await ticket() } });
   check(again.status === 200 && again.json?.ok === true && again.json?.grant_id === grantId, `a second drop: the hub's /apc/confirm answered (confirmWithHub, in ${where})`, again);
 
-  // In workerd only (TIN-910, APC 0.12): a Direct agent of the same Pulse, handed to the hub's /apc/pair as Pulse with a
-  // code the sender chose, never goes live: Pulse refuses the hub's introduction on a grant it never handed to a dock.
-  if (!PRODUCTION) {
-    const direct = await call(`${t.made.pulse}/grants/agent`, { method: "POST" });
-    must(direct.status === 200 && typeof direct.json?.secret === "string", "Pulse makes a Direct agent", direct);
-    const posted = await call(`${DOCK}/apc/pair`, { method: "POST", body: { ticket: await connectTicket(), agent: agent.id, app: { name: "Pulse", origin: PULSE }, mcp_url: `${PULSE}/mcp/${pulse.json.sid}/${direct.json.secret}`, pairing_code: "K7M4P2" } });
-    must(posted.status === 200 && posted.json?.binding === "pairing_id" && /^pr_[0-9a-f]{32}$/.test(posted.json?.pairing_id ?? ""), "the hub takes a Direct URL it cannot tell apart, and declares the binding", posted);
-    const forced = await call(`${t.made.dock}/pairings/${posted.json.pairing_id}`, { method: "POST", body: { action: "approve", code: "K7M4P2" } });
-    check(forced.status === 400 && forced.json?.error === "pairing_ended", "the Direct grant never goes live: Pulse refuses the hub's introduction (pairing_ended)", forced);
-    const line = (await dockState())?.agents?.[0]?.pairings?.find((p) => p.id === posted.json.pairing_id);
-    check(line?.status === "ended" && line?.ended_reason === "pairing_mismatch", "the dock says Pulse refused it as not its pairing", line?.status);
-    check((await dockState())?.agents?.[0]?.pairings?.find((p) => p.id === pending.id)?.status === "paired", "the honest pairing is still paired");
-  }
-
   // The dock removes the agent and gives the grant back (/apc/revoke, dock → Pulse): Pulse ends it.
   const removed = await call(`${t.made.dock}/agents/${agent.id}/remove`, { method: "POST" });
   check(removed.status === 200 && removed.json?.ok === true, "the dock removes its agent", removed);
   check((await pulseLinks()).every((l) => l.grant_id !== grantId), "Pulse ended the grant the dock gave back");
 }
 
+/** Drive the app's public routes. The fixture controls model the owner's actions and the agent's tool call. */
+async function pairAppInWorkerd(t, { name, origin, target, linksOf, idOf }) {
+  const { call, rpc, must } = t;
+  const fixture = (path, body) => call(`${DOCK}/__test/${path}`, body === undefined ? {} : { method: "POST", body });
+  const agent = `ag_${name.toLowerCase()}`;
+  const mintTicket = async () => {
+    const answer = await fixture("ticket", { agent });
+    must(answer.status === 200 && typeof answer.json?.ticket === "string", `${name}: the fixture issues a drop ticket`, answer);
+    return answer.json.ticket;
+  };
+  const session = await call(`${origin}/api/session`, { method: "POST", body: {} });
+  must(session.status === 200 && typeof session.json?.sid === "string", `${name}: opens a demo in workerd`, session);
+  const base = `${origin}/api/s/${session.json.sid}`;
+  const links = async () => {
+    const state = await call(`${base}/state`);
+    const items = linksOf(state.json);
+    must(state.status === 200 && Array.isArray(items), `${name}: reads the app's grant state`, state);
+    return items;
+  };
+  const drop = { hub: DOCK, agent, ticket: await mintTicket(), target };
+  const dropped = await call(`${base}/hub/pair`, { method: "POST", body: drop });
+  must(dropped.status === 200 && dropped.json?.status === "connect_requested", `${name}: the first drop requests Connect (/apc/connect)`, dropped);
+  const opened = await fixture("approve-connect", { agent });
+  must(opened.status === 200 && typeof opened.json?.url === "string", `${name}: approving Connect yields a handoff`, opened);
+  const url = new URL(opened.json.url);
+  must(url.origin === origin && url.pathname === "/connect/dock" && !url.search && url.hash.startsWith("#apc_connect="),
+    `${name}: the ticket uses the app's declared Connect page and fragment`);
+  const handoff = JSON.parse(Buffer.from(url.hash.slice("#apc_connect=".length), "base64url").toString("utf8"));
+  must(handoff.agent === agent && handoff.hub === DOCK && typeof handoff.ticket === "string", `${name}: the handoff names this hub and agent`);
+  const body = { ...drop, ticket: handoff.ticket };
+  const asked = await call(`${base}/connect/dock`, { method: "POST", body });
+  must(asked.json?.error === "consent_required" && typeof asked.json?.consent === "string", `${name}: the app asks the person to Allow`, asked);
+  const allowed = await call(`${base}/connect/dock`, { method: "POST", body: { ...body, consent: asked.json.consent } });
+  must(allowed.status === 200 && allowed.json?.ok === true && allowed.json?.status === "pending",
+    `${name}: Allow called the hub's /apc/pair (pairWithHub, in workerd)`, allowed);
+  const grantId = allowed.json.grant_id;
+  const code = allowed.json.pairing?.code;
+  must(typeof grantId === "string" && typeof code === "string" && code.length > 0, `${name}: the app shows a pairing code`);
+
+  const state = async () => {
+    const result = await fixture("state");
+    must(result.status === 200 && Array.isArray(result.json?.pairings), `${name}: reads the fixture's pairing state`, result);
+    return result.json;
+  };
+  const pending = (await state()).pairings.find((p) => p.agent === agent);
+  must(pending?.status === "pending" && /^pr_[0-9a-f]{32}$/.test(pending.id), `${name}: the hub holds the pending pairing`);
+  const wrong = await fixture("decide", { id: pending.id, action: "approve", code: wrongCode(code) });
+  must(wrong.status === 400 && wrong.json?.error === "wrong_pairing_code", `${name}: the hub refuses a wrong owner code`, wrong);
+  const approved = await fixture("decide", { id: pending.id, action: "approve", code });
+  must(approved.status === 200 && approved.json?.ok === true, `${name}: the owner approves with the code`, approved);
+  must((await links()).find((link) => idOf(link) === grantId)?.state === "live", `${name}: the app committed the hub's MCP initialize`);
+
+  const read = await rpc(`${DOCK}/__test/mcp/${pending.id}`, "tools/call", { name: "get_current_view", arguments: {} });
+  must(read.result && !read.result.isError, `${name}: the hub reads the app via MCP`);
+  const before = (await state()).confirmations;
+  const again = await call(`${base}/hub/pair`, { method: "POST", body: { ...drop, ticket: await mintTicket() } });
+  must(again.status === 200 && again.json?.ok === true && again.json?.grant_id === grantId, `${name}: the second drop keeps the same grant`, again);
+  must((await state()).confirmations === before + 1, `${name}: the second drop reached the hub's /apc/confirm`);
+
+  const revoked = await fixture("decide", { id: pending.id, action: "deny" });
+  must(revoked.status === 200 && revoked.json?.ok === true, `${name}: the hub gives the grant back`, revoked);
+  must((await links()).every((link) => idOf(link) !== grantId), `${name}: the app ended the grant on /apc/revoke`);
+}
+
+async function pairInWorkerd(t) {
+  // The linked customer and post in the apps' shared demo world.
+  const { CROSS_APP } = await import("../apps/demo/src/model/demo-world.ts");
+  await pairAppInWorkerd(t, {
+    name: "Pulse", origin: PULSE, target: { kind: "customer", id: CROSS_APP.customer },
+    linksOf: (state) => state?.hub_links, idOf: (link) => link.grant_id,
+  });
+  await pairAppInWorkerd(t, {
+    name: "Signals", origin: "https://signals.apc.tineira.com", target: { kind: "post", id: CROSS_APP.post },
+    linksOf: (state) => state?.grants, idOf: (grant) => grant.id,
+  });
+}
+
 /** One try: the steps within TRY_MS, then its cleanup, whatever happened. */
 async function runTry(t) {
   try {
-    await withDeadline(pair(t), TRY_MS, `the pairing's steps (try ${t.n})`);
+    await withDeadline(PRODUCTION ? pair(t) : pairInWorkerd(t), TRY_MS, `the pairing's steps (try ${t.n})`);
   } catch (error) {
     if (!error?.counted) t.check(false, error instanceof Error ? error.message : String(error), error?.cause?.message);
   } finally {
@@ -270,7 +331,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 async function main() {
-  if (!PRODUCTION) runtime = await startWorkerd();
+  if (!PRODUCTION) runtime = await startWorkerd({ pairing: true, site: true });
   // The docs first, once: they make nothing, and a failure here never starts a pairing (no dock or sandbox is made).
   const docs = newTry(0, "");
   tries.push(docs);
