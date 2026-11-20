@@ -66,6 +66,14 @@ test("the frozen workflow files match exactly, not as a prefix", () => {
   assert.equal(isFrozenDockPath("apps/dockage/x.ts"), false);
 });
 
+test("the freeze ignores case: apps/Dock/ is apps/dock/ on a Windows or macOS checkout (TIN-1036)", () => {
+  for (const path of ["apps/Dock/src/worker/hub.ts", "APPS/EXTENSION/manifest.json", "apps/Dock-Desktop/src-tauri/x.rs", ".github/workflows/Extension.yml"]) {
+    assert.equal(isFrozenDockPath(path), true, path);
+    assert.equal(checkDockFreeze({ entries: [entry("A", path)] }).ok, false, path);
+  }
+  assert.equal(isFrozenDockPath("apps/Desktop/MainWindow.cs"), false, "Pulse for Windows stays free in any case");
+});
+
 test("a rename fails from either side: Dock code neither leaves the frozen tree nor lands in it", () => {
   const out = checkDockFreeze({ entries: [entry("R", "apps/dock/src/worker/hub.ts", "packages/server/src/hub.ts")] });
   assert.equal(out.ok, false, "renamed out of the frozen tree");

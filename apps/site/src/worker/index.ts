@@ -6,13 +6,14 @@ import { withByteRanges } from "./range.ts";
 const app = new Hono<{ Bindings: Env }>();
 
 // _headers covers asset-first responses; Worker responses (notably byte ranges, and assets fetched through the
-// Worker) need these too, and set them over whatever the asset answered.
+// Worker) need these too, and set them over whatever the asset answered. Assign first, then set (TIN-1036): Hono's
+// c.res setter copies the previous response's headers onto the new one, so a header set before the assignment
+// would lose to the asset's own.
 app.use("*", async (c, next) => {
   await next();
-  const response = new Response(c.res.body, c.res);
-  response.headers.set("content-security-policy", SITE_CSP);
-  response.headers.set("x-frame-options", "DENY");
-  c.res = response;
+  c.res = new Response(c.res.body, c.res);
+  c.res.headers.set("content-security-policy", SITE_CSP);
+  c.res.headers.set("x-frame-options", "DENY");
 });
 
 app.on(["GET", "HEAD"], "/media/*", async (c) => {

@@ -9,6 +9,11 @@
  * The built pages have no inline script; if one is ever needed, add its 'sha256-…' hash to script-src here and in
  * _headers: scripts/site-routes.mjs fails on any inline script of the build without a matching hash.
  *
+ * The landing at / reaches the browser through the hub's proxy (tineira/agent-dock), which keeps this policy whole
+ * because it forbids every framing (`frame-ancestors 'none'`; TIN-1036): drop that directive and the hub replaces
+ * the policy with `frame-ancestors 'none'` alone. `scripts/dock-pairing.mjs --production` reads it back on / and
+ * /docs/spec.
+ *
  * img-src allows data: for the agent logos (agent-logos.ts embeds them as data: PNGs). The landing's icons and
  * manifest come from the hub on the same origin, so 'self' covers them.
  */

@@ -20,9 +20,12 @@ export const DOCK_HOME = "tineira/agent-dock";
 
 const norm = (file) => file.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 
-/** A path under one of the frozen folders, or one of the frozen workflow files. */
+/**
+ * A path under one of the frozen folders, or one of the frozen workflow files. Case-insensitive (TIN-1036): on
+ * Windows and macOS checkouts `apps/Dock/` is the same folder as `apps/dock/`, so it must not slip past the freeze.
+ */
 export function isFrozenDockPath(file) {
-  const path = norm(file);
+  const path = norm(file).toLowerCase();
   if (!path) return false;
   return FROZEN_PATHS.some((frozen) => (frozen.endsWith("/") ? path.startsWith(frozen) : path === frozen));
 }
