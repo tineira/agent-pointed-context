@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "lib": ["es2023", "dom", "dom.iterable"], "types": ["node"] },
-  "include": ["test", "src/worker/range.ts"]
+  "include": ["test", "src/worker/range.ts", "src/worker/csp.ts"]
 }

@@ -1,21 +1,36 @@
 #!/usr/bin/env node
-// Read the split site's real assets and root dispatch in workerd. No production writes or credentials.
+// Read the split site's real assets in workerd, and check its CSP (TIN-1013) on every HTML response and every
+// built page. No production writes or credentials.
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { SITE_CSP } from "../apps/site/src/worker/csp.ts";
 import { startWorkerd } from "./lib/dock-workerd.mjs";
+import { cspViolations, headersFileCsp } from "./lib/site-csp.mjs";
 
 const ORIGIN = "https://apc.tineira.com";
-const dock = existsSync(new URL("../apps/dock/package.json", import.meta.url));
-// The landing uses Dock's root-level icons and PWA manifest on the shared origin.
+// The landing uses the hub's root-level icons and PWA manifest on the shared origin; the hub lives in
+// tineira/agent-dock (TIN-1010), so they are not served here.
 const dockAssets = new Set(["/icon.svg", "/favicon-32.png", "/manifest.webmanifest", "/icon-192.png"]);
-const runtime = await startWorkerd({ site: true, dock });
+
+// Every built page first: an inline script without its hash, a handler, a javascript: URL, an inline style or a
+// file from another origin would be blocked in production (or must never be allowed). Fails before workerd starts.
+const client = new URL("../apps/site/dist/client/", import.meta.url);
+const pages = readdirSync(client, { recursive: true }).map(String).filter((file) => file.endsWith(".html"));
+assert.ok(pages.length >= 8, `the build has its pages (index.html, docs.html, docs/*.html): ${pages.join(", ")}`);
+for (const file of pages) {
+  const found = cspViolations(readFileSync(new URL(file.replaceAll("\\", "/"), client), "utf8"), SITE_CSP);
+  assert.deepEqual(found, [], `apps/site/dist/client/${file} breaks the site's CSP:\n${found.join("\n")}`);
+}
+assert.equal(headersFileCsp(readFileSync(new URL("_headers", client), "utf8")), SITE_CSP, "the built _headers carries SITE_CSP");
+
+const runtime = await startWorkerd({ site: true });
 const rows = [];
 const send = (path, init) => runtime.send(`${ORIGIN}${path}`, { signal: AbortSignal.timeout(20_000), ...init });
 async function check(path, { status = 200, type = /text\/html/, body = /Agent Pointed Context/, navigate = false, ...init } = {}) {
   const response = await send(path, { redirect: "manual", ...init, headers: { ...init.headers, "x-workerd-report-fetch-mode": "1" } });
   assert.equal(response.status, status, path);
   assert.match(response.headers.get("content-type") ?? "", type, path);
-  assert.equal(response.headers.get("content-security-policy"), "frame-ancestors 'none'", path);
+  assert.equal(response.headers.get("content-security-policy"), SITE_CSP, path);
   assert.equal(response.headers.get("x-frame-options"), "DENY", path);
   const text = await response.text();
   assert.match(text, body, path);
@@ -43,10 +58,11 @@ try {
   const refs = [...landing.text.matchAll(/(?:src|href)="(\/[^"#]+)"/g)].map((m) => m[1]);
   assert.ok(refs.some((p) => p.startsWith("/site-assets/")), "landing names its own asset directory");
   for (const path of new Set(refs)) {
-    if (!dock && dockAssets.has(path)) continue;
+    if (dockAssets.has(path)) continue;
     const response = await send(path, { redirect: "manual" });
     assert.equal(response.status, 200, path);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);
+    assert.equal(response.headers.get("content-security-policy"), SITE_CSP, path);
     const type = response.headers.get("content-type") ?? "";
     assert.ok(!type.includes("text/html"), `${path} must be its own asset, never an SPA fallback`);
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -59,6 +75,7 @@ try {
   assert.equal(range.status, 206);
   assert.match(range.headers.get("content-range"), /^bytes 0-99\/\d+$/);
   assert.equal(range.headers.get("content-type"), "video/mp4");
+  assert.equal(range.headers.get("content-security-policy"), SITE_CSP, "the Worker's own responses carry the CSP");
   assert.equal((await range.arrayBuffer()).byteLength, 100);
   rows.push("| GET /media/apc-hero.mp4 (Range bytes=0-99) | 206 | video/mp4 | 100 bytes, Content-Range checked |");
   const head = await send("/media/apc-hero.mp4", { method: "HEAD", headers: { range: "bytes=0-99" } });
@@ -75,38 +92,9 @@ try {
   assert.equal(post.status, 405);
   await post.body?.cancel();
 
-  if (dock) await checkDock();
-  else console.log("Dock route checks skipped: apps/dock not in this repo");
   console.log("| Request | Status | Content type | Body/result |\n| --- | --- | --- | --- |\n" + rows.join("\n"));
-  console.log("Site routes in workerd: passed (pages, referenced assets, ranges, HEAD/304/405, M2)");
+  console.log(`Site routes in workerd: passed (pages, referenced assets, ranges, HEAD/304/405, M2; CSP on every response and ${pages.length} built pages)`);
 } finally {
   await runtime.stop();
 }
 
-async function checkDock() {
-  await check("/dock", { body: /<title>Agent dock<\/title>/ });
-  await check("/.well-known/apc.json", { type: /application\/json/, body: /"profiles":\["hub"\]/ });
-  await check("/sw.js", { type: /javascript/, body: /path === "\/dock" \|\| path.startsWith\("\/dock\/"\)/ });
-  const unknown = await send("/apc/not-a-route", { redirect: "manual" });
-  assert.equal(unknown.status, 404);
-  assert.equal(unknown.headers.get("location"), null);
-  await unknown.body?.cancel();
-
-  // A real synthetic dock in SQLite; its cookie never reaches logs or the site Worker.
-  const created = await send("/api/dock/new", { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
-  assert.equal(created.status, 200);
-  const cookie = created.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-  const { did } = await created.json();
-  assert.equal(typeof did, "string");
-  try {
-    const owned = await check("/?start_over=1", { headers: { cookie }, status: 302, type: /.*/, body: /.*/ });
-    assert.equal(owned.response.headers.get("location"), "/dock?start_over=1");
-    assert.equal(owned.response.headers.get("cache-control"), "no-store");
-    assert.equal(owned.response.headers.get("vary"), "Cookie");
-    await check("/", { headers: { cookie } });
-  } finally {
-    const reset = await send(`/api/d/${did}/reset`, { method: "POST", headers: { cookie, origin: ORIGIN } });
-    assert.equal(reset.status, 200);
-    await reset.body?.cancel();
-  }
-}

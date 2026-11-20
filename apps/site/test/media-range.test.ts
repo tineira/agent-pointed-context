@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Hono } from "hono";
+import { SITE_CSP } from "../src/worker/csp.ts";
 import { ifRangeMatches, MAX_COUNTED, parseRange, sliceStream, withByteRanges } from "../src/worker/range.ts";
 
 const ETAG = '"124963edbe64372348f02f396f07e851"';
@@ -255,7 +256,7 @@ test("the Worker answers /media/apc-hero.mp4 with byte ranges, and the clip runs
     assert.equal(r.headers.get("content-length"), String(end - start + 1), range);
     assert.equal(r.headers.get("content-type"), "video/mp4", range);
     assert.equal(r.headers.get("etag"), ETAG, range);
-    assert.equal(r.headers.get("content-security-policy"), "frame-ancestors 'none'", "still never framed");
+    assert.equal(r.headers.get("content-security-policy"), SITE_CSP, "the site's CSP, frame-ancestors 'none' included");
     assert.equal(r.headers.get("x-frame-options"), "DENY");
     assert.deepEqual(new Uint8Array(await r.arrayBuffer()), mp4.slice(start, end + 1), range);
   }

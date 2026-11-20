@@ -216,7 +216,7 @@ test("the docs are static assets, and the assets keep their frame protection", (
   assert.doesNotMatch(wrangler.match(/"run_worker_first":\s*\[[^\]]*\]/)![0], /\/docs/);
   const headers = read("apps/site/public/_headers");
   assert.match(headers, /^\/\*$/m);
-  assert.match(headers, /Content-Security-Policy: frame-ancestors 'none'/);
+  assert.match(headers, /Content-Security-Policy: [^\n]*\bframe-ancestors 'none'/);
   assert.match(headers, /X-Frame-Options: DENY/);
 });
 

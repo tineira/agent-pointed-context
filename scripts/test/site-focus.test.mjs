@@ -1,18 +1,20 @@
-// The site examples match the real app and hub output, without coupling the apps.
+// The site examples match the real app output and the hub's documented rewrite, without coupling the apps.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { generateDataset } from "../../apps/demo/src/model/seed.ts";
 import { resolveFocus } from "../../apps/demo/src/worker/domain.ts";
-import { hubFocus } from "../../apps/dock/src/worker/logic.ts";
 import { FOCUS_EXAMPLE, DOCK_FOCUS_EXAMPLE } from "../../apps/site/src/web/landing-example.ts";
-const read = (p) => readFileSync(new URL("../../" + p, import.meta.url), "utf8");
-test("the payloads are Pulse's real output for the March bar, and the hub's real rewrite of it", () => {
+test("the payloads are Pulse's real output for the March bar, and the hub's rewrite of it", () => {
   const grant = { id: "g", secret: "s", label: "Your agent", client_name: "Claude", regions: null, created_at: "", last_active_at: null };
   const pin = { grant_id: "g", kind: "figure", id: null, part: null, params: { key: "active_customers", month: "2026-03" }, pinned_at: FOCUS_EXAMPLE.pinned_at, seen_at: null };
   assert.deepEqual(resolveFocus(pin, grant, generateDataset(7), "https://pulse.apc.tineira.com"), FOCUS_EXAMPLE);
-  // Pulse is verified on apc.tineira.com (APP_ORIGINS), so nothing marks it untrusted; its id is "pulse".
-  assert.deepEqual(hubFocus(FOCUS_EXAMPLE, { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" }), DOCK_FOCUS_EXAMPLE);
-  assert.equal(hubFocus(FOCUS_EXAMPLE, { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" }, true).next, "pulse__get_figure", "the prefixed name the page mentions");
-  assert.match(read("apps/dock/wrangler.jsonc"), /"APP_ORIGINS": "https:\/\/pulse\.apc\.tineira\.com\/#id=pulse&name=Pulse,/);
+  // The hub's real rewrite (hubFocus) lives with the hub in tineira/agent-dock since TIN-1010, which checks it
+  // there. Here: the example is the app's focus with the app added and the read wrapped in call_app_tool, as
+  // the spec's hub section describes, for Pulse, a verified app under its id "pulse".
+  const { app, next, next_args, ...rest } = DOCK_FOCUS_EXAMPLE;
+  const { next: appNext, next_args: appArgs, ...appRest } = FOCUS_EXAMPLE;
+  assert.deepEqual(rest, appRest);
+  assert.deepEqual(app, { id: "pulse", name: "Pulse", origin: "https://pulse.apc.tineira.com" });
+  assert.equal(next, "call_app_tool");
+  assert.deepEqual(next_args, { app: "pulse", tool: appNext, args: appArgs });
 });

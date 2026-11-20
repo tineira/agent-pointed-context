@@ -14,7 +14,7 @@
  * themes it through --apc-* custom properties (--apc-chip, --apc-line, --apc-ink, --apc-muted, --apc-accent, --apc-ok, and --apc-pin-font for
  * the check). Framework-agnostic: set `agent`, listen for apc-unpin.
  *
- * The browser extension keeps a copy of this badge's look (apps/extension/src/content.ts): a content
+ * The browser extension keeps a copy of this badge's look (its src/content.ts, in tineira/agent-dock): a content
  * script has no customElements, and it moves the badge with its own drag, since a moved reading is
  * sent again from the page. Keep the two in step.
  */

@@ -4,8 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** Mount just the built Workers and fixtures a workerd check needs. */
-export async function startWorkerd({ pairing = false, site = false, dock = false, wakeBudget = false } = {}) {
-  if (pairing && dock) throw new Error("startWorkerd requires a choice between the stand-in hub and Dock");
+export async function startWorkerd({ pairing = false, site = false, wakeBudget = false } = {}) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const siteRoutes = site ? JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8")).routes : [];
   const sitePrefixes = siteRoutes.map(({ pattern }) => {
@@ -63,7 +62,6 @@ export async function startWorkerd({ pairing = false, site = false, dock = false
       outboundService: "internet",
     });
   }
-  if (dock) mount("HUB", builtWorker("apc-dock", "apps/dock/dist/apc_dock/wrangler.json"));
 
   const internet = {
     name: "internet",
@@ -73,7 +71,9 @@ export async function startWorkerd({ pairing = false, site = false, dock = false
       async fetch(request, env) {
         const { hostname, pathname } = new URL(request.url);
         if (hostname === "apc.tineira.com") {
-          // The six zone patterns precede the Dock Custom Domain, query strings included.
+          // The six zone patterns precede the hub's Custom Domain, query strings included. The hub (apc-dock)
+          // lives in tineira/agent-dock: without the stand-in, the rest of the origin goes to the site, as the
+          // hub delegates its root to it.
           const site = ${JSON.stringify(sitePrefixes)}.some((prefix) => pathname.startsWith(prefix));
           const service = site ? env.SITE : env.HUB ?? env.SITE;
           if (service) {

@@ -16,18 +16,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The full history: the dock and extension builds count commits for the extension's version
-          # (scripts/lib/extension-version.mjs), a shallow clone stops them, and the Dock freeze below
-          # diffs against the fetched base.
+          # The full history: the Dock freeze below diffs against the fetched base (a push's before SHA, a PR's
+          # base branch).
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: corepack enable
       # The Dock freeze (TIN-1010): the Dock apps live in tineira/agent-dock now, which alone deploys apc-dock,
-      # builds the extension zip and builds and signs Dock for Windows. A diff may only delete files under the
-      # frozen paths (the removal PR does); scripts/check-dock-freeze.mjs fails on anything else, so this job and
-      # every deploy behind it stop before a frozen tree changes.
+      # builds the extension zip and builds and signs Dock for Windows, and they were removed from this repo.
+      # scripts/check-dock-freeze.mjs fails a diff that adds or modifies anything under the frozen paths, so this
+      # job and every deploy behind it stop before Dock code comes back.
       - name: Dock freeze
         env:
           EVENT: ${{ github.event_name }}
@@ -95,8 +94,8 @@ jobs:
   # Which app a push to main touches. V1 is frozen in apps/v1 with its own copy of the APC code (TIN-604): only a
   # change under apps/v1/ deploys it. The standard is the site (apps/site, TIN-1006), Pulse for the standard (apps/demo,
   # TIN-382), Signals (apps/signals), the packages they share and the lockfile. The Dock apps (apps/dock,
-  # apps/extension, apps/dock-desktop) moved to tineira/agent-dock and are frozen here (TIN-1010): they deploy
-  # nothing, and only their deletion may touch them. Pulse for desktop (apps/desktop*, TIN-396) deploys nothing
+  # apps/extension, apps/dock-desktop) moved to tineira/agent-dock and were removed here (TIN-1010); the Dock
+  # freeze keeps them out. Pulse for desktop (apps/desktop*, TIN-396) deploys nothing
   # here either; a change to .github/ alone redeploys nothing (the next app change runs the new deploy steps).
   changes:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -155,7 +154,7 @@ jobs:
   # The APC standard: the site (apps/site, Worker apc-site, six zone routes), Pulse (apps/demo, Worker apc-pulse,
   # pulse.apc.tineira.com) and Signals (apps/signals, Worker apc-signals, signals.apc.tineira.com). The hub
   # (Worker apc-dock, apc.tineira.com) is no longer deployed here: it moved to tineira/agent-dock (TIN-1010),
-  # whose deploy job is the only one that may build and deploy apps/dock; the smoke below checks that the apps
+  # whose deploy job is the only one that builds and deploys the hub; the smoke below checks that the apps
   # this job deploys still pair with the production hub it deploys. Both this job and V1 put Workers on the host
   # apc.tineira.com, so when V1 deploys in the same push this job waits for it and runs only if it succeeded or
   # was skipped.

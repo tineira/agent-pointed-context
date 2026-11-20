@@ -14,7 +14,7 @@ export interface DockAppEnv {
   HUB_ORIGINS?: string;
 }
 
-/** The docks a local `pnpm dev` may pair with, besides HUB_ORIGINS: the dock's own dev server (apps/dock/vite.config.ts, port 5200). */
+/** The docks a local `pnpm dev` may pair with, besides HUB_ORIGINS: the dock's own dev server (port 5200; the dock lives in tineira/agent-dock). */
 export const LOCAL_DEV_HUBS: readonly string[] = ["http://localhost:5200", "http://127.0.0.1:5200"];
 
 const LOOPBACK = /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1|\[::1\])$/;

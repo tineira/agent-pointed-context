@@ -3,7 +3,7 @@
  *
  * Wake on pin (TIN-962, TIN-967, TIN-973; experimental, not part of the APC standard): a server POSTs to a Grok Bot
  * webhook trigger when the person points an agent that is not calling, so the bot starts a run and reads the pin with
- * get_current_view. The agent dock's hub does it for its agents (apps/dock); an app does it for the agents that reach
+ * get_current_view. The agent dock's hub does it for its agents (in tineira/agent-dock); an app does it for the agents that reach
  * it directly (the Direct profile; Pulse first). DESIGN.md § 30.
  *
  * The pure parts (limits, checks, copy) and `WakeEngine`, the state machine both run: one per Durable Object, over a
