@@ -4,6 +4,7 @@ This is the changelog of the software. The APC standard (the contract an app and
 
 ## Unreleased
 
+- **This is the bridge build that moves installed copies to agent-dock's new updater key.** This last build from this repo carries the new key so installed copies can update; from here `apps/dock-desktop` is frozen in this repo and builds come from tineira/agent-dock. (`apps/dock-desktop/tauri.conf.json`) (TIN-1010)
 - **Pulse and Signals can run their Workers pairing checks without Dock (TIN-1010, TIN-1013).** The workerd suite uses a stand-in hub, checks Pulse's wake budget on its own and tests browser navigation headers. The integration guide points to the local Dock page. (`scripts/`, `apps/demo/test/workerd/`, `apps/site/src/docs/pages/integrate.md`, `package.json`, `.github/workflows/ci.yml`)
 - **The docs install 1.3.0: `latest` now points at it (TIN-1005).** The pinned install commands in the README, the integrate page and the conformance page name 1.3.0, and the integrate page no longer says to use them for 1.1.1. (`README.md`, `apps/site/src/docs/pages/integrate.md`, `apps/site/src/docs/pages/conformance.md`)
 - **The standard's site and docs run independently of Dock (TIN-1006).** A new apc-site Worker serves the existing pages, docs and media URLs; Dock delegates the landing and keeps Start over, pairing and its offline page (`apps/site`, `apps/dock`, `scripts/lib/dock-workerd.mjs`, `.github/workflows/ci.yml`).
