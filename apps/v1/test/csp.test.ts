@@ -22,7 +22,7 @@ const directives = new Map(V1_CSP.split("; ").map((d) => [d.split(" ")[0]!, d.sp
 
 test("public/_headers carries V1_CSP and DENY for every path", () => {
   const lines = read("../public/_headers").split(/\r?\n/).filter((l) => l.trim() && !l.startsWith("#"));
-  assert.deepEqual(lines.map((l) => l.trim()), ["/*", `Content-Security-Policy: ${V1_CSP}`, "X-Frame-Options: DENY"]);
+  assert.deepEqual(lines.map((l) => l.trim()), ["/*", `Content-Security-Policy: ${V1_CSP}`, "X-Frame-Options: DENY", "X-Content-Type-Options: nosniff"]);
 });
 
 test("the policy blocks scripts from anywhere but V1's files, and framing", () => {
@@ -34,9 +34,9 @@ test("the policy blocks scripts from anywhere but V1's files, and framing", () =
     for (const bad of ["'unsafe-eval'", "*", "https:", "http:", "blob:"]) assert.ok(!values.includes(bad), `${name} must not allow ${bad}`);
     if (name !== "style-src") assert.ok(!values.includes("'unsafe-inline'"), `${name} must not allow 'unsafe-inline'`);
   }
-  assert.deepEqual(directives.get("object-src"), ["'none'"]);
-  assert.deepEqual(directives.get("base-uri"), ["'none'"]);
-  assert.deepEqual(directives.get("frame-ancestors"), ["'none'"]);
+  for (const name of ["object-src", "frame-src", "worker-src", "base-uri", "frame-ancestors", "form-action"]) {
+    assert.deepEqual(directives.get(name), ["'none'"], name);
+  }
   assert.deepEqual(directives.get("connect-src"), ["'self'"]);
 });
 
@@ -69,6 +69,7 @@ test("the page the Worker serves for an app route, and what it passes through, c
     const response = await app.request(`https://apc.tineira.com${path}`, {}, { ASSETS: assets });
     assert.equal(response.headers.get("content-security-policy"), V1_CSP, path);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
   }
   const page = await app.request("https://apc.tineira.com/v1/how-to", {}, { ASSETS: assets });
   assert.equal(page.status, 200);

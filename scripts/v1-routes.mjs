@@ -30,11 +30,13 @@ async function check(path, type) {
   assert.match(response.headers.get("content-type") ?? "", type, path);
   assert.equal(response.headers.get("content-security-policy"), V1_CSP, `${path}: CSP`);
   assert.equal(response.headers.get("x-frame-options"), "DENY", `${path}: X-Frame-Options`);
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff", `${path}: X-Content-Type-Options`);
   rows.push(`| GET ${path} | ${response.status} | ${response.headers.get("content-type")} |`);
   return response.text();
 }
 try {
-  // /v1/ is an asset served before the Worker runs (public/_headers); /v1/how-to is the page from the Worker (csp.ts).
+  // /v1/ is an asset served before the Worker runs; /v1/how-to is the page the Worker serves. Local workerd applies
+  // public/_headers to both, so this proves the _headers half; apps/v1/test/csp.test.ts proves the Worker's (csp.ts).
   for (const path of ["/v1/", "/v1/how-to", "/v1/customers/cus_0001"]) assert.match(await check(path, /text\/html/), /<div id="root"><\/div>/, path);
   const bundle = /src="(\/v1\/assets\/[^"]+\.js)"/.exec(html)?.[1];
   assert.ok(bundle, "the page names its bundle");

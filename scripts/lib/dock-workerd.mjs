@@ -42,7 +42,8 @@ export async function startWorkerd({ pairing = false, site = false, v1 = false, 
     services[binding] = worker.name;
   };
   if (site) mount("SITE", builtWorker("apc-site", "apps/site/dist/apc_site/wrangler.json"));
-  // V1 (frozen) only to read its responses back (TIN-1038): nothing else here depends on it.
+  // V1 (frozen) only to read its responses back (TIN-1038): nothing else here depends on it. It runs under Pulse's
+  // wrangler and Miniflare (above), so a wrangler bump in apps/demo can turn scripts/v1-routes.mjs red.
   if (v1) mount("V1", builtWorker("apc-demo", "apps/v1/dist/apc_demo/wrangler.json"));
   if (pairing || wakeBudget) mount("PULSE", builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"));
   if (pairing) {
