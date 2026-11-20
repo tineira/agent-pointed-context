@@ -34,7 +34,6 @@ test("assets, media, Markdown, HEAD, errors and redirects are not page views", a
     ["/docs/spec.md", {}, () => new Response("# x", { headers: { "content-type": "text/markdown" } })],
     ["/llms.txt", {}, () => new Response("x", { headers: { "content-type": "text/plain" } })],
     ["/docs/spec", { method: "HEAD" }, () => html()],
-    ["/docs/spec", {}, () => html(304)],
     ["/docs/x", {}, () => html(404)],
     ["/try", {}, () => Response.redirect(`${ORIGIN}/try/`, 307)],
     ["/site-assets/page.html", {}, () => html()],
@@ -44,6 +43,18 @@ test("assets, media, Markdown, HEAD, errors and redirects are not page views", a
     assert.notEqual(response.status, 500, `${path}: the stub answered`);
     assert.deepEqual(points, [], `${init.method ?? "GET"} ${path}`);
   }
+});
+
+test("only the site's own pages are named; any other path is (other), never the visitor's text (review of #235)", async () => {
+  for (const [path, page] of [["/docs/zzz-not-a-page", "(other)"], ["/tryXYZ-secret", "(other)"], ["/build/x/y/z", "(other)"], ["/docs/%E2%9C%93", "(other)"], ["/docs/" + "a".repeat(5000), "(other)"], ["/try/", "/try"], ["/docs/spec/", "/docs/spec"], ["/", "/"], ["/build/dock", "/build/dock"], ["/docs/changelog", "/docs/changelog"]]) {
+    const { points } = await visit(path, { headers: { "user-agent": CHROME } });
+    assert.deepEqual(points.map((p) => [p.indexes[0], p.blobs[0]]), [[page, page]], path.slice(0, 40));
+  }
+});
+
+test("a returning browser's 304 on a page is a view; a 304 elsewhere is not", async () => {
+  assert.equal((await visit("/docs/spec", { headers: { "if-none-match": '"x"' } }, () => html(304))).points.length, 1);
+  assert.equal((await visit("/docs/nope", { headers: { "if-none-match": '"x"' } }, () => html(304))).points.length, 0);
 });
 
 test("a page still loads when the dataset is missing or writing fails", async () => {
@@ -64,7 +75,7 @@ test("device classes: bots (our own checks included), phones, tablets, desktops"
 
 test("the referrer is its host only, and nothing for non-web schemes", () => {
   assert.equal(referrerHost("https://GitHub.com/tineira/agent-pointed-context?tab=readme"), "github.com");
-  assert.equal(referrerHost("http://localhost:5173/x"), "localhost:5173");
+  assert.equal(referrerHost("http://localhost:5173/x"), "localhost", "no port");
   assert.equal(referrerHost("android-app://com.google.android.gm/"), "");
   assert.equal(referrerHost("not a url"), "");
   assert.equal(referrerHost(null), "");
@@ -73,6 +84,8 @@ test("the referrer is its host only, and nothing for non-web schemes", () => {
 test("a prefetch is told apart from a page load, and the country falls back to cf-ipcountry", () => {
   const request = new Request(`${ORIGIN}/build`, { headers: { "sec-purpose": "prefetch;prerender", "sec-fetch-dest": "document", "cf-ipcountry": "AR" } });
   assert.deepEqual(viewPoint(request, html()).blobs.slice(2), ["AR", "bot", "prefetch"]);
+  const odd = new Request(`${ORIGIN}/build`, { headers: { "sec-fetch-dest": "anything-the-client-says" } });
+  assert.equal(viewPoint(odd, html()).blobs[4], "other", "a client-chosen value is not stored as sent");
 });
 
 test("wrangler.jsonc runs the Worker first for every page path and binds SITE_VIEWS", () => {

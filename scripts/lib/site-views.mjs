@@ -1,8 +1,10 @@
 // The site's page views from the apc_site_views Analytics Engine dataset (TIN-1040; apps/site/src/worker/views.ts).
 // The SQL returns one row per (day, path, referrer, device, fetch) with its weighted count, sum(_sample_interval),
 // so a sampled point still counts for the views it stands for; the summary is done here.
-// blob1 path, blob2 referrer host, blob3 country, blob4 device class ("bot" for crawlers and our own checks),
-// blob5 how the browser fetched it ("prefetch" is not a view).
+// blob1 the page (one of the site's own, or "(other)"), blob2 the referrer's host name, blob3 the country, blob4 the
+// device class ("bot" for crawlers and our own checks), blob5 how the browser fetched it. A prefetch is not counted
+// as a view; a page the person then opens from that prefetch makes no second request, so it is missed (it shows
+// under bots). A returning browser's 304 counts as a view. Views, not people: there is no visitor id.
 
 export const DATASET = "apc_site_views";
 

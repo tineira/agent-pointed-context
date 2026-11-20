@@ -5,6 +5,8 @@
 // and one kept point at interval 1 means the session was seen whole, not that a second one was missed.
 // The source is blob8: "dock" for the hub (TIN-416), "pulse" for an agent connected straight to Pulse for the
 // standard (apc-pulse, TIN-1039; its Dock grants are the hub's), and empty on V1's points (apc-demo, Pulse v1).
+// An agent linked by apc_link (the same agent straight to Pulse and through the dock) holds two connections and
+// counts as two sessions, one per source.
 
 export const DATASET = "apc_mcp_sessions";
 

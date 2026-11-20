@@ -26,6 +26,8 @@ if (!r.ok) {
 }
 const rows = JSON.parse(text).data ?? [];
 const byClient = countSessions(rows);
+// A client name is whatever the agent sent: print it without control characters (a terminal escape among them).
+const printable = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
 const totals = dailyTotals(rows);
 
 if (json) {
@@ -33,7 +35,7 @@ if (json) {
 } else {
   for (const t of totals) {
     console.log(`${t.day}  ${String(t.sessions).padStart(5)}  total`);
-    for (const c of byClient.filter((c) => c.day === t.day)) console.log(`            ${String(c.sessions).padStart(5)}  ${c.client_name}  [${c.source}]`);
+    for (const c of byClient.filter((c) => c.day === t.day)) console.log(`            ${String(c.sessions).padStart(5)}  ${printable(c.client_name)}  [${c.source}]`);
   }
   if (!totals.length) console.log(`no sessions in the last ${days} days`);
 }
