@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { EXTENSION_INPUTS, UNKNOWN_EXTENSION_VERSION, extensionRebuildPlan, extensionVersionFor, isExtensionInput, readExtensionVersion } from "../lib/extension-version.mjs";
+import { isFrozenDockPath } from "../lib/dock-freeze.mjs";
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
 const node = (script, args, cwd) => execFileSync(process.execPath, [repo(script), ...args], { cwd, encoding: "utf8" }).trim();
@@ -40,16 +41,24 @@ test("the extension's inputs are the paths extension.yml rebuilds the zip on", (
   for (const list of lists) assert.deepEqual([...list].sort(), expected, "a new input must be both a zip trigger and a version input");
 });
 
-test("a change to the extension redeploys the dock, which bakes in the latest version", () => {
+test("a change to the extension redeploys nothing here once frozen; the packages it shares with the apps still do (TIN-1010)", () => {
   const ci = readFileSync(repo(".github/workflows/ci.yml"), "utf8");
   const pattern = new RegExp(/echo "standard=\$\(echo "\$files" \| grep -qE '([^']+)'/.exec(ci)[1]);
-  for (const input of EXTENSION_INPUTS) assert.ok(pattern.test(input.includes(".") ? input : `${input}/src/x.ts`), `${input} redeploys the standard`);
-  for (const [file, job] of [[".github/workflows/ci.yml", "check:"], [".github/workflows/ci.yml", "deploy-standard:"], [".github/workflows/extension.yml", "build:"], [".github/workflows/publish.yml", "dry-run:"], [".github/workflows/publish.yml", "publish:"]]) {
+  for (const input of EXTENSION_INPUTS) {
+    const path = input.includes(".") ? input : `${input}/src/x.ts`;
+    const frozen = isFrozenDockPath(path);
+    assert.equal(pattern.test(path), !frozen, `${input}: ${frozen ? "frozen with the Dock, it redeploys nothing here" : "still redeploys the standard"}`);
+  }
+  for (const [file, job] of [[".github/workflows/ci.yml", "check:"], [".github/workflows/extension.yml", "build:"], [".github/workflows/publish.yml", "dry-run:"], [".github/workflows/publish.yml", "publish:"]]) {
     const text = readFileSync(repo(file), "utf8");
     const start = text.indexOf(`\n  ${job}`);
     assert.ok(start > 0, `${file} has ${job}`);
     assert.match(text.slice(start, text.indexOf("- run:", start)), /fetch-depth: 0/, `${file} ${job} checks out the full history: a shallow clone has no commit count`);
   }
+  // deploy-standard builds no dock and no extension any more (TIN-1010): its checkout needs no commit count.
+  const standard = ci.indexOf("\n  deploy-standard:");
+  assert.ok(standard > 0, "ci.yml has deploy-standard:");
+  assert.doesNotMatch(ci.slice(standard, ci.indexOf("- run:", standard)), /fetch-depth: 0/, "deploy-standard checks out no full history since the dock left");
 });
 
 test("which changed files are the extension's inputs, and when the hooks install first", () => {
