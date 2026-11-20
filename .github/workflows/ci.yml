@@ -17,7 +17,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # The full history: the dock and extension builds count commits for the extension's version
-          # (scripts/lib/extension-version.mjs), and a shallow clone stops them.
+          # (scripts/lib/extension-version.mjs), a shallow clone stops them, and the Dock freeze below
+          # diffs against the fetched base.
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -215,8 +216,8 @@ jobs:
       # step's 6.
       # The deploy has ALREADY SHIPPED when this runs. Red here rolls nothing back: it marks this job failed so someone
       # looks (README.md, "Run it": what to check, and how to roll back by hand if pairing is really broken). Nothing
-      # waits on this job: V1 deployed before it, and the desktop build is another workflow (the extension's is frozen
-      # with its app, TIN-1010).
+      # waits on this job: V1 deployed before it, and the desktop build is another workflow (the extension's moved
+      # to tineira/agent-dock with its app, TIN-1010).
       - name: Smoke after deploy (already live; red = look, no rollback) - one real pairing through the production hub
         timeout-minutes: 6
         run: node scripts/dock-pairing.mjs --production

@@ -7,6 +7,10 @@ export const FROZEN_PATHS = [
   "apps/dock/",
   "apps/extension/",
   "apps/dock-desktop/",
+  // Both workflow files were deleted by the PR that introduced this guard (TIN-1010): a re-added dock-desktop.yml
+  // could again be dispatched to sign a Dock for Windows build with the old key, which every bridged install
+  // rejects, and a re-added extension.yml would publish the extension from here. They stay listed so adding
+  // either file back fails the freeze.
   ".github/workflows/dock-desktop.yml",
   ".github/workflows/extension.yml",
 ];
@@ -23,21 +27,32 @@ export function isFrozenDockPath(file) {
 }
 
 /**
- * One line of `git diff --name-status`: the status (A, D, M, R100, C75, T…) and the paths it names — two for a
- * rename or copy. Returns null for a line it cannot read.
- * @param {string} line
- * @returns {{ status: string; paths: string[] } | null}
+ * One record of `git diff -z --name-status`: the whole NUL-separated stream, each record a status field
+ * (A, D, M, R100, C75, T…) followed by one path, two for a rename, copy or broken pair. With -z git writes
+ * paths verbatim — never the core.quotePath quoting of the tab-separated format — so a non-ASCII, tabbed or
+ * quoted name arrives whole; that is why the freeze reads -z output only. Throws on a field that is not a
+ * status or a record without its path(s): the stream is desynced and the freeze can prove nothing.
+ * @param {string | Buffer} input
+ * @returns {Array<{ status: string; raw: string; paths: string[] }>}
  */
-export function parseNameStatus(line) {
-  const fields = String(line).split("\t").map((field) => field.trim()).filter(Boolean);
-  if (fields.length < 2) return null;
-  const [raw, ...paths] = fields;
-  if (!/^[ADCMRTUXB]\d*$/.test(raw)) return null;
-  return { status: raw[0], paths: paths.map(norm) };
+export function parseNameStatusZ(input) {
+  const fields = (Buffer.isBuffer(input) ? input.toString("utf8") : String(input)).split("\0");
+  const entries = [];
+  for (let i = 0; i < fields.length; i++) {
+    const raw = fields[i];
+    if (!raw) continue; // the trailing NUL after the last record; nothing real is ever empty
+    if (!/^[ADCMRTUXB]\d*$/.test(raw)) throw new Error(`cannot read a diff record at field ${i}: ${JSON.stringify(raw)}`);
+    const two = /^[RCBX]/.test(raw) ? 2 : 1; // a rename, copy or broken pair carries two paths
+    const paths = fields.slice(i + 1, i + 1 + two).map(norm);
+    if (paths.length < two || paths.some((path) => !path)) throw new Error(`diff record ${raw} is missing its path(s)`);
+    entries.push({ status: raw[0], raw, paths });
+    i += two;
+  }
+  return entries;
 }
 
 /**
- * The freeze: diff entries from parseNameStatus. A deletion passes; every other change that touches a frozen
+ * The freeze: diff entries from parseNameStatusZ. A deletion passes; every other change that touches a frozen
  * path fails, including a rename whose old or new path is frozen (moving Dock code into this repo's live tree is
  * a change here, not a deletion).
  * @param {{ entries: Array<{ status: string; paths: string[] }> }} input

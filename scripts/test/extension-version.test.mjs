@@ -2,7 +2,7 @@
 // and the prepare script that turns them on.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -33,12 +33,17 @@ function scratchRepo() {
   return { dir, git, commit, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("the extension's inputs are the paths extension.yml rebuilds the zip on", () => {
-  const workflow = readFileSync(repo(".github/workflows/extension.yml"), "utf8");
-  const lists = [...workflow.matchAll(/paths: \[([^\]]*)\]/g)].map((m) => JSON.parse(`[${m[1]}]`));
-  assert.equal(lists.length, 2, "push and pull_request");
-  const expected = [...EXTENSION_INPUTS.map((p) => (p.includes(".") ? p : `${p}/**`)), ".github/workflows/extension.yml"].sort();
-  for (const list of lists) assert.deepEqual([...list].sort(), expected, "a new input must be both a zip trigger and a version input");
+test("the extension's inputs feed the local hooks' rebuild and the version count; its CI left with the Dock (TIN-1010)", () => {
+  // extension.yml, which rebuilt the published zip on exactly these paths, is deleted: tineira/agent-dock
+  // builds and serves the zip now. The inputs still decide when the local hooks rebuild apps/extension/dist
+  // and which commits count into the version, so the list stays; a change under every input still rebuilds.
+  assert.equal(existsSync(repo(".github/workflows/extension.yml")), false, "the extension's workflow moved to tineira/agent-dock");
+  assert.equal(existsSync(repo(".github/workflows/dock-desktop.yml")), false, "and Dock for Windows' with it");
+  for (const input of EXTENSION_INPUTS) {
+    const path = input.includes(".") ? input : `${input}/src/x.ts`;
+    assert.equal(extensionRebuildPlan([path]).rebuild, true, `${input} rebuilds the local dist`);
+  }
+  assert.equal(extensionRebuildPlan(["apps/dock/src/web/hub.tsx"]).rebuild, false, "the dock's own code is not an input");
 });
 
 test("a change to the extension redeploys nothing here once frozen; the packages it shares with the apps still do (TIN-1010)", () => {
@@ -49,7 +54,7 @@ test("a change to the extension redeploys nothing here once frozen; the packages
     const frozen = isFrozenDockPath(path);
     assert.equal(pattern.test(path), !frozen, `${input}: ${frozen ? "frozen with the Dock, it redeploys nothing here" : "still redeploys the standard"}`);
   }
-  for (const [file, job] of [[".github/workflows/ci.yml", "check:"], [".github/workflows/extension.yml", "build:"], [".github/workflows/publish.yml", "dry-run:"], [".github/workflows/publish.yml", "publish:"]]) {
+  for (const [file, job] of [[".github/workflows/ci.yml", "check:"], [".github/workflows/publish.yml", "dry-run:"], [".github/workflows/publish.yml", "publish:"]]) {
     const text = readFileSync(repo(file), "utf8");
     const start = text.indexOf(`\n  ${job}`);
     assert.ok(start > 0, `${file} has ${job}`);

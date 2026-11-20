@@ -4,7 +4,8 @@
 // (apps/dock/vite.config.ts), so /dock and /extension can tell a person their extension is out of date.
 //
 // The version is `0.2.<n>`, where n counts the commits up to and including the last one that changed the
-// extension's inputs (EXTENSION_INPUTS: the paths .github/workflows/extension.yml rebuilds the zip on). On main
+// extension's inputs (EXTENSION_INPUTS: the paths the local git hooks rebuild apps/extension/dist on and
+// tineira/agent-dock's build rebuilds the published zip on, TIN-1010). On main
 // (linear, squash merges) n only grows, and a commit that leaves the extension alone keeps the version, so the
 // dock built at a later commit names the same version as the zip on the release. Chrome takes 1 to 4 integers
 // of 0 to 65535; builds before this one said 0.1.0 and report no version at all.

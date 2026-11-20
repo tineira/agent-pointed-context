@@ -1,10 +1,12 @@
 // CI check for the Dock freeze (AGENTS.md "Freezes", TIN-1010). Usage:
 //   node scripts/check-dock-freeze.mjs --pull-request <base-ref>   diffs origin/<base-ref>...HEAD (a pull request)
 //   node scripts/check-dock-freeze.mjs --push <before-sha>         diffs <before-sha>..HEAD (a push to main)
-// Exits 1 when the diff adds or modifies a file under the frozen Dock paths (deletions pass, the removal PR
-// deletes them). A push whose before SHA is missing (a created or rewritten main) cannot prove the freeze: fail.
+// The diff is read with -z: paths arrive NUL-separated and verbatim, so quoting (core.quotePath escaping a
+// non-ASCII name) can never hide a frozen path. Exits 1 when the diff adds or modifies a file under the frozen
+// Dock paths (deletions pass, the removal PR deletes them). A push whose before SHA is missing (a created or
+// rewritten main) cannot prove the freeze: fail.
 import { execFileSync } from "node:child_process";
-import { checkDockFreeze, parseNameStatus } from "./lib/dock-freeze.mjs";
+import { checkDockFreeze, parseNameStatusZ } from "./lib/dock-freeze.mjs";
 
 const [mode, ref] = process.argv.slice(2);
 if (!((mode === "--pull-request" || mode === "--push") && ref)) {
@@ -31,15 +33,23 @@ if (mode === "--pull-request") {
 
 let diff;
 try {
-  diff = execFileSync("git", ["diff", "--name-status", ...range, "--"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  diff = execFileSync("git", ["diff", "-z", "--name-status", ...range, "--"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 } catch (error) {
   const detail = String(error.stderr ?? error.message).trim();
   console.error(`could not diff ${range.join(" ")} (is the base fetched? checkout needs fetch-depth: 0): ${detail}`);
   process.exit(2);
 }
 
-const entries = diff.split("\n").filter(Boolean).map(parseNameStatus).filter(Boolean);
+let entries;
+try {
+  entries = parseNameStatusZ(diff);
+} catch (error) {
+  // Fail closed: a stream the parser cannot read might hide a frozen path behind quoting or a desync.
+  console.error(`could not parse the -z name-status diff of ${range.join(" ")}: ${error.message}`);
+  process.exit(2);
+}
+
 const result = checkDockFreeze({ entries });
-if (diff.trim()) console.log(diff.trim());
+if (entries.length) console.log(entries.map(({ raw, paths }) => [raw, ...paths].join("\t")).join("\n"));
 console.log(result.ok ? `ok: ${result.reason}` : `FAIL: ${result.reason}`);
 process.exit(result.ok ? 0 : 1);
