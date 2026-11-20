@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** Mount just the built Workers and fixtures a workerd check needs. */
-export async function startWorkerd({ pairing = false, site = false, wakeBudget = false } = {}) {
+export async function startWorkerd({ pairing = false, site = false, v1 = false, wakeBudget = false } = {}) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const siteRoutes = site ? JSON.parse(readFileSync(join(root, "apps/site/wrangler.jsonc"), "utf8")).routes : [];
   const sitePrefixes = siteRoutes.map(({ pattern }) => {
@@ -42,6 +42,8 @@ export async function startWorkerd({ pairing = false, site = false, wakeBudget =
     services[binding] = worker.name;
   };
   if (site) mount("SITE", builtWorker("apc-site", "apps/site/dist/apc_site/wrangler.json"));
+  // V1 (frozen) only to read its responses back (TIN-1038): nothing else here depends on it.
+  if (v1) mount("V1", builtWorker("apc-demo", "apps/v1/dist/apc_demo/wrangler.json"));
   if (pairing || wakeBudget) mount("PULSE", builtWorker("apc-pulse", "apps/demo/dist/apc_pulse/wrangler.json"));
   if (pairing) {
     mount("SIGNALS", builtWorker("apc-signals", "apps/signals/dist/apc_signals/wrangler.json"));
@@ -70,6 +72,8 @@ export async function startWorkerd({ pairing = false, site = false, wakeBudget =
     script: `export default {
       async fetch(request, env) {
         const { hostname, pathname } = new URL(request.url);
+        // V1's zone route, apc.tineira.com/v1*, runs before everything else on the host.
+        if (hostname === "apc.tineira.com" && env.V1 && pathname.startsWith("/v1")) return env.V1.fetch(request);
         if (hostname === "apc.tineira.com") {
           // The six zone patterns precede the hub's Custom Domain, query strings included. The hub (apc-dock)
           // lives in tineira/agent-dock: without the stand-in, the rest of the origin goes to the site, as the
