@@ -30,6 +30,7 @@
  * failing step is also an `::error::` annotation.
  */
 
+import { SITE_CSP } from "../apps/site/src/worker/csp.ts";
 import { startWorkerd } from "./lib/dock-workerd.mjs";
 
 const PRODUCTION = process.argv.includes("--production");
@@ -141,10 +142,17 @@ const wrongCode = (code) => (code[0] === "0" ? "1" : "0") + code.slice(1);
 async function readDocs(t) {
   const get = async (path) => {
     const response = await withDeadline(runtime.send(`${DOCK}${path}`, { headers: { "user-agent": USER_AGENT }, redirect: "manual" }), STEP_MS, `GET ${path}`);
-    return { status: response.status, type: response.headers.get("content-type") ?? "", text: await response.text() };
+    return { status: response.status, type: response.headers.get("content-type") ?? "", csp: response.headers.get("content-security-policy"), frame: response.headers.get("x-frame-options"), text: await response.text() };
   };
   const html = await get("/docs/spec");
   t.check(html.status === 200 && /<article class="docs-body"><h1 id="[^"]+">[^<]/.test(html.text) && html.text.includes('<link rel="alternate" type="text/markdown" href="/docs/spec.md"'), "a plain GET of /docs/spec has the spec's text, and names its Markdown", `HTTP ${html.status}`);
+  // The site's strict CSP (TIN-1013, TIN-1036) as served: a site page runs as the dock's owner on this origin.
+  t.check(html.csp === SITE_CSP && html.frame === "DENY", "/docs/spec carries the site's CSP and X-Frame-Options: DENY", `CSP ${html.csp}; X-Frame-Options ${html.frame}`);
+  if (PRODUCTION) {
+    // The landing reaches the site through the hub's / proxy, which tineira/agent-dock deploys; it keeps the site's CSP.
+    const landing = await get("/");
+    t.check(landing.status === 200 && landing.csp === SITE_CSP && landing.frame === "DENY", "the landing (/) carries the site's CSP through the hub", `HTTP ${landing.status}; CSP ${landing.csp}`);
+  }
   const md = await get("/docs/spec.md");
   t.check(md.status === 200 && /^# \S/.test(md.text) && !md.text.includes("<div id=") && /markdown|text\/plain/.test(md.type), "/docs/spec.md is the spec as Markdown", `HTTP ${md.status} ${md.type}`);
   const llms = await get("/llms.txt");
