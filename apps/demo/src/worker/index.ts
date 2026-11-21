@@ -301,8 +301,9 @@ app.post("/api/s/:sid/grants/agent", async (c) => {
  */
 app.post("/api/s/:sid/grants/embed", async (c) => {
   if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
-  // Idempotent, so a retry after a lost connection is safe (it returns the grant the first try made).
-  const result = await rpc(c.env, c.var.sid, (s) => s.ensureEmbedGrant());
+  // One attempt, as the former mint route (fix round 2): a retry after a lost reply could land after the owner revoked
+  // the grant the first try made, and mint a replacement nobody opened the hero for. The next open recovers a survivor.
+  const result = await rpc(c.env, c.var.sid, (s) => s.ensureEmbedGrant(), 1);
   return result.ok && result.grant ? c.json({ ...result.grant, made: result.made === true }) : c.json({ ok: false, error: result.error }, 400);
 });
 /** apc_link (APC 0.4): the person unlinks an agent shown as one; both grants stay. */

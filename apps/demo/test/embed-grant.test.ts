@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
 import * as tabA from "../src/web/embed/grant.ts";
+import { latestOnly } from "../src/web/embed/latest.ts";
+import { agentConnected } from "../src/web/embed/messages.ts";
 
 installWorkersStandIn();
 const { Sandbox, MAX_DIRECT_GRANTS } = await import(new URL("../src/worker/sandbox.ts", import.meta.url).href);
@@ -19,15 +21,15 @@ const ORIGIN = "https://pulse.test";
 const SID = "7".repeat(32);
 const DEPLOY = { APC_V2: "1", HUB_ORIGINS: "https://dock.test", PUBLIC_ORIGIN: ORIGIN, APC_PROFILES: "direct,dock" };
 
-type Grant = { id: string; secret: string; regions: unknown };
+type Grant = { id: string; secret: string; regions: unknown; client_name?: string | null };
 
 /** One visitor's browser on one sandbox: the page's POST, as the hero's api.ts sends it, through the real Worker. */
-async function browser(env: Record<string, string> = DEPLOY) {
+async function browser(env: Record<string, string> = DEPLOY, stub?: (sandbox: InstanceType<typeof Sandbox>) => unknown) {
   const room = durableObjectRoom();
   const sandbox = new Sandbox(room.ctx, env);
   const { owner } = await sandbox.init();
   const before = ((await sandbox.state()) as { grants: Grant[] }).grants.map((g) => g.id);
-  const workerEnv = { ...env, SANDBOX: { idFromName: (name: string) => name, get: () => sandbox } };
+  const workerEnv = { ...env, SANDBOX: { idFromName: (name: string) => name, get: () => (stub ? stub(sandbox) : sandbox) } };
   const headers = { "content-type": "application/json", cookie: `apc_session=${SID}.${owner}`, origin: ORIGIN, "sec-fetch-site": "same-origin" };
   const send = async () => {
     const response = (await worker.fetch(new Request(`${ORIGIN}/api/s/${SID}/grants/embed`, { method: "POST", headers, body: "{}" }), workerEnv)) as Response;
@@ -134,4 +136,108 @@ test("the hero's route is the owner's only (M6): another site, no cookie, not JS
   assert.equal(await post({ ...page, cookie: "" }), 403);
   assert.equal(await post({ ...page, "content-type": "text/plain" }), 415);
   assert.equal(((await sandbox.state()) as { grants: Grant[] }).grants.length, before, "no refused call made a grant");
+});
+
+/** An agent on the hero's address, as its MCP client calls it: initialize (it is connected), then tools. */
+async function agentOn(sandbox: InstanceType<typeof Sandbox>, grantId: string) {
+  const grant = ((await sandbox.state()) as { grants: Grant[] }).grants.find((g) => g.id === grantId)!;
+  const mcp = async (body: unknown) =>
+    (await (sandbox.fetch(new Request(`${ORIGIN}/mcp/${SID}/${grant.secret}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) })) as Promise<Response>)).json();
+  await mcp({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-code", version: "1.0.0" } } });
+  return { callTool: async (name: string, args: Record<string, unknown> = {}) => (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })).result };
+}
+
+test("a lost first answer still leaves the agent's view on the overview; a reload never overwrites a later view (fix round 2, B-2)", async () => {
+  const { sandbox, send, committed } = await browser();
+  // The first mint commits, its answer never reaches the page; the reload reuses the grant (made: false), and the page
+  // reports no view of its own.
+  const lost = async () => {
+    await send();
+    throw new TypeError("Failed to fetch");
+  };
+  assert.deepEqual(await tabA.ensureEmbedGrant(SID, lost), { ok: false, error: "failed" });
+  const after = await reloaded.ensureEmbedGrant(SID, send);
+  assert.ok(after.ok);
+  assert.equal(after.made, false);
+  assert.equal((await committed()).length, 1);
+  const agent = await agentOn(sandbox, after.grantId);
+  const view = (await agent.callTool("get_current_view")).structuredContent.view;
+  assert.equal(view?.screen, "overview", "a real get_current_view names the hero's screen, not null");
+  // The person moves on (Pulse's full app, same sandbox); the hero's next open reuses its grant and leaves that view.
+  assert.deepEqual(await sandbox.reportView({ screen: "customers", params: { plan: "pro" }, selection: null }), { ok: true });
+  assert.equal((await send()).json?.made, false);
+  assert.equal((await agent.callTool("get_current_view")).structuredContent.view?.screen, "customers", "passive reuse keeps the later view");
+  // Sharing off: making a grant sets no view.
+  const off = await browser();
+  await off.sandbox.setSetting("share_view", false);
+  const id = (await off.send()).json!.id!;
+  assert.equal((await (await agentOn(off.sandbox, id)).callTool("get_current_view")).structuredContent.view, null);
+});
+
+test("the hero's route asks the sandbox once: a lost reply is not retried into a replacement after a revoke (fix round 2)", async () => {
+  let asked = 0;
+  const { committed, send } = await browser(DEPLOY, (sandbox) =>
+    new Proxy(sandbox, {
+      get(target, key) {
+        if (key === "ensureEmbedGrant") {
+          // The attempt commits, then its reply is lost on the way back to the Worker (a retryable RPC failure).
+          return async () => {
+            asked++;
+            await target.ensureEmbedGrant();
+            throw Object.assign(new Error("Network connection lost."), { retryable: true });
+          };
+        }
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+  );
+  const answer = await send();
+  assert.notEqual(answer.status, 200, "the request fails; the page shows its inline message");
+  assert.equal(asked, 1, "one RPC attempt, as the former mint route (a retry would have run ensureEmbedGrant twice)");
+  assert.equal((await committed()).length, 1);
+});
+
+test("a read a newer one superseded is dropped: a slow reconnect read cannot undo a revoke (fix round 2, B-3)", async () => {
+  const { sandbox, send } = await browser();
+  const grantId = (await send()).json!.id!;
+  await agentOn(sandbox, grantId);
+  // The hero's reads, as Live makes them (api.state through latestOnly); while `holding`, a read's answer waits.
+  let holding = false;
+  let release: () => void = () => undefined;
+  const read = async () => {
+    const state = await sandbox.state();
+    if (holding) await new Promise<void>((resolve) => (release = resolve));
+    return state;
+  };
+  const readState = latestOnly(read);
+  const posted: boolean[] = [];
+  const apply = (outcome: Awaited<ReturnType<typeof readState>>) => {
+    if (outcome.current && outcome.ok) posted.push(agentConnected(tabA.qualifyingGrant(outcome.value as never, grantId)));
+    return outcome;
+  };
+  apply(await readState());
+  assert.deepEqual(posted, [true], "connected");
+  // The socket reopens: a read starts, reads the state before the revoke, and its answer is delayed.
+  holding = true;
+  const slow = readState().then(apply);
+  await new Promise((r) => setTimeout(r, 5));
+  holding = false;
+  // The owner revokes in the full app; the grants message makes the hero read again.
+  assert.deepEqual(await sandbox.revokeGrant(grantId), { ok: true });
+  apply(await readState());
+  assert.deepEqual(posted, [true, false], "revoked: not connected");
+  // The delayed answer arrives, unchanged (it says connected), and is dropped.
+  release();
+  assert.deepEqual(await slow, { current: false });
+  assert.deepEqual(posted, [true, false], "never false -> true after the revoke");
+  // A superseded read's error is dropped too (no failure line, no retry timer).
+  const failing = latestOnly(async () => {
+    await new Promise((r) => setTimeout(r, 10));
+    throw Object.assign(new Error("state: 503"), { status: 503 });
+  });
+  const old = failing();
+  const newer = failing();
+  assert.deepEqual(await old, { current: false });
+  assert.equal((await newer).current, true);
 });

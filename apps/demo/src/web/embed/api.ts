@@ -88,5 +88,5 @@ export function createEmbedApi(sid: string) {
 }
 export type EmbedApi = ReturnType<typeof createEmbedApi>;
 
-/** The view the hero reports when it makes its agent and on a pin, so get_current_view names a screen, not null. */
+/** The view the hero reports on a pin (the sandbox sets the same when it makes the hero's agent), so get_current_view names a screen. */
 export const EMBED_VIEW = { screen: "overview", params: {}, selection: null } as const;

@@ -21,6 +21,7 @@ import { EmbedAgentBar, type EmbedBarAgent } from "./agent-bar.tsx";
 import { createEmbedApi, EMBED_VIEW, type EmbedApi, type GrantState, type SandboxState } from "./api.ts";
 import { HeroChart, heroSeries, monthName, monthShort } from "./chart.tsx";
 import { activeConflict, ensureEmbedGrant, qualifyingGrant, type EmbedGrantError } from "./grant.ts";
+import { latestOnly } from "./latest.ts";
 import { agentConnected, NOT_CONNECTED, pulseStatus, type createPoster } from "./messages.ts";
 
 type Poster = ReturnType<typeof createPoster>;
@@ -66,8 +67,7 @@ export function EmbedHero(props: { poster: Poster }) {
       const result = await ensureEmbedGrant(sid, api.embedAgent);
       if (!live) return;
       if (!result.ok) return setOpened({ error: ERRORS[result.error] });
-      // A new agent: say what the hero shows, so the agent's get_current_view names a screen (§ 4).
-      if (result.made) void api.reportView(EMBED_VIEW).catch(() => undefined);
+      // A new agent's view (the overview, § 4) is set by the sandbox when it makes the grant, so a lost answer keeps it.
       setOpened({ sid, grantId: result.grantId });
     })();
     return () => {
@@ -148,17 +148,19 @@ function Live(props: { sid: string; grantId: string; poster: Poster }) {
   const alive = useRef(true);
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
   const refresh = useCallback(() => refreshRef.current(), []);
+  // Only the newest read counts (fix round 2, B-3): one a later read superseded is dropped, error and retry included.
+  const readState = useMemo(() => latestOnly(() => api.state()), [api]);
   refreshRef.current = async () => {
-    try {
-      const next = await api.state();
-      if (!alive.current) return;
+    const outcome = await readState();
+    if (!alive.current || !outcome.current) return;
+    if (outcome.ok) {
+      const next = outcome.value;
       if (retry.current.timer) clearTimeout(retry.current.timer);
       retry.current = { timer: null, delay: RETRY_FIRST_MS };
       setFailure(null);
       setState(next);
-    } catch (error) {
-      if (!alive.current) return;
-      const status = (error as { status?: number })?.status;
+    } else {
+      const status = (outcome.error as { status?: number })?.status;
       if (status === 404 || status === 403) {
         setEnded(true);
         setState(null);
