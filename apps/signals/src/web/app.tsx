@@ -17,6 +17,8 @@ import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
 import { openSession } from "./session.ts";
+import { cameToConnect, connectMint, ensureConnectGrant } from "./connect-grant.ts";
+import { latestOnly } from "../../../demo/src/web/embed/latest.ts";
 import { plainError, plainPinError } from "../../../demo/src/web/plain-errors.ts";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { DirectAgents } from "../../../demo/src/web/direct-agents.tsx";
@@ -142,8 +144,11 @@ function Feed({ sid }: { sid: string }) {
   // The post a link opened on (?post=), or the one whose time the person clicked: highlighted, in the address.
   const [selected, setSelected] = useState<string | null>(initial.post);
   const [notice, setNotice] = useState<string | null>(null);
-  // The Connect panel (Direct): open when the visitor came to connect (?connect, from the dock's landing page).
-  const [connectOpen, setConnectOpen] = useState(() => new URLSearchParams(location.search).has("connect") || location.hash === "#connect");
+  // The Connect panel (Direct): open when the visitor came to connect (?connect or #connect: /try, apc.json's connect).
+  const [arrivedToConnect] = useState(() => cameToConnect(location.search, location.hash));
+  const [connectOpen, setConnectOpen] = useState(arrivedToConnect);
+  // Arriving to connect, the agent is already made (TIN-1093): the feed's one connect grant, asked for once per page load.
+  const [making, setMaking] = useState(arrivedToConnect);
   const stateRef = useRef<FeedState | null>(null);
   stateRef.current = state;
   // The agents with a wait_for_focus open (APC 0.11), from the wait events on the presence channel.
@@ -156,7 +161,10 @@ function Feed({ sid }: { sid: string }) {
     return () => clearTimeout(id);
   }, [openWaits]);
 
-  const refresh = useCallback(() => void call<FeedState>(`${base}/state`).then(setState), [base]);
+  // Only the newest state read counts (as Pulse's hero, TIN-1070): reads on a message, a reconnect or an action can answer
+  // out of order, and a slow one from before a revoke must not draw the revoked agent again.
+  const readState = useMemo(() => latestOnly(() => call<FeedState>(`${base}/state`)), [base]);
+  const refresh = useCallback(() => void readState().then((r) => r.current && r.ok && setState(r.value)), [readState]);
   useEffect(() => {
     refresh();
     let ws: WebSocket | null = null;
@@ -194,6 +202,20 @@ function Feed({ sid }: { sid: string }) {
     setNotice(text);
     setTimeout(() => setNotice(null), 8000);
   };
+
+  useEffect(() => {
+    if (!arrivedToConnect) return;
+    let live = true;
+    void ensureConnectGrant(sid, connectMint(base)).then((r) => {
+      if (!live) return;
+      setMaking(false);
+      if (!r.ok && r.error !== "dock_only") say(`No agent made. ${plainError("Signals", r.error === "failed" ? undefined : r.error)}`);
+      refresh();
+    });
+    return () => {
+      live = false;
+    };
+  }, [arrivedToConnect, sid, base, refresh]);
 
   // The view, as identifiers.
   const report = useMemo(() => createViewReporter((view) => void call(`${base}/view`, view)), [base]);
@@ -289,6 +311,11 @@ function Feed({ sid }: { sid: string }) {
       <p className="muted small">
         Your agent reads Signals on its own URL, and the feed goes straight to it. Once it is connected, drag its mark from the top onto any post.
       </p>
+      {making && !directAgents.length ? (
+        <p className="muted small" role="status">
+          Making your agent…
+        </p>
+      ) : (
       <DirectAgents
         appName="Signals"
         agents={directAgents}
@@ -300,6 +327,7 @@ function Feed({ sid }: { sid: string }) {
         }
         onRename={(id, name) => void call(`${base}/grants/${id}/name`, { name }).then(refresh)}
       />
+      )}
     </section>
   );
   const connectButton = offersDirect && !connectOpen && (

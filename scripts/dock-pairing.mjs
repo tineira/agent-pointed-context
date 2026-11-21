@@ -24,7 +24,7 @@
  *   failed Start over after a pairing that passed is a warning, not a failure. No secret.
  *
  * Before the pairing, once and before any try: the docs read with a plain GET, no JavaScript (TIN-914), and Pulse's
- * framing headers (TIN-1070). A failure there fails the run without making a dock or a sandbox.
+ * and Signals' framing headers (TIN-1070, TIN-1093). A failure there fails the run without making a dock or a sandbox.
  *
  * Exit code 0 only when the pairing passed; the last line is the summary. On a failure in GitHub Actions the first
  * failing step is also an `::error::` annotation.
@@ -37,6 +37,7 @@ import { startWorkerd } from "./lib/dock-workerd.mjs";
 const PRODUCTION = process.argv.includes("--production");
 const DOCK = "https://apc.tineira.com";
 const PULSE = "https://pulse.apc.tineira.com";
+const SIGNALS = "https://signals.apc.tineira.com";
 /** One request; the pairing steps of one try; the whole run, cleanup included (the CI step allows 6 minutes). */
 const STEP_MS = 15_000;
 const TRY_MS = PRODUCTION ? 75_000 : 60_000;
@@ -191,6 +192,57 @@ async function readFraming(t) {
   // full app's entry (an SPA fallback would carry the hero's policy otherwise).
   const isHero = hero.body.includes(EMBED_HERO_MARKER) && hero.body.includes(`<meta name="apc-embed-parent" content="${DOCK}" />`) && /src="\/assets\/embedHero-[A-Za-z0-9_-]+\.js"/.test(hero.body) && !/src="\/assets\/main-[A-Za-z0-9_-]+\.js"/.test(hero.body);
   t.check(hero.status === 200 && isHero, "Pulse /embed/hero serves the hero's own page (its marker, its parent and its entry; not the full app's)", `HTTP ${hero.status}; ${hero.body.length} bytes`);
+}
+
+/**
+ * Signals' framing headers as served (TIN-1093, closing TIN-1074): no Signals answer can be framed by any site, and
+ * Signals has no exception (the assets' answers through public/_headers, the Worker's through its middleware). Plain
+ * GETs: nothing is made (a feed opens only on the page's POST /api/session, a connect grant only on its POST).
+ */
+async function readSignalsFraming(t) {
+  const get = async (path) => {
+    const response = await withDeadline(runtime.send(`${SIGNALS}${path}`, { headers: { "user-agent": USER_AGENT }, redirect: "manual" }), STEP_MS, `GET ${SIGNALS}${path}`);
+    await response.text();
+    const h = (name) => response.headers.get(name);
+    return { status: response.status, csp: h("content-security-policy"), frame: h("x-frame-options"), sniff: h("x-content-type-options"), referrer: h("referrer-policy") };
+  };
+  const deny = (r) => effectiveFrameAncestors(r.csp) === "'none'" && r.frame === "DENY" && r.sniff === "nosniff" && r.referrer === "no-referrer";
+  const shown = (r) => `HTTP ${r.status}; CSP ${r.csp}; X-Frame-Options ${r.frame}; nosniff ${r.sniff}; Referrer-Policy ${r.referrer}`;
+  // The page, the page arrived to connect, the SPA fallback, an asset, the dock's connect page, apc.json, and the Worker's 404s.
+  for (const [path, status] of [["/", 200], ["/?connect", 200], ["/zzz-probe", 200], ["/favicon.svg", 200], ["/connect/dock", 200], ["/.well-known/apc.json", 200], ["/api/zzz-probe", 404], ["/connect/zzz-probe", 200], ["/mcp/zz/zz", 404]]) {
+    const r = await get(path);
+    t.check(r.status === status && deny(r), `Signals ${path} cannot be framed (frame-ancestors 'none', DENY, nosniff, no-referrer; HTTP ${status})`, shown(r));
+  }
+}
+
+/**
+ * Signals' `?connect` in workerd (TIN-1093): the page's calls, as a browser sends them. The feed's one connect grant is
+ * made on the first POST and returned on the next; a real MCP initialize on its address shows the agent connected; after
+ * a revoke the next visit makes a new one. Not on production: it would make a feed and grants there.
+ */
+async function signalsConnectInWorkerd(t) {
+  const { call, rpc, must } = t;
+  const session = await call(`${SIGNALS}/api/session`, { method: "POST" });
+  must(session.status === 200 && /^[0-9a-f]{32}$/.test(session.json?.sid ?? ""), "Signals: the page opens a feed", session);
+  const base = `${SIGNALS}/api/s/${session.json.sid}`;
+  const direct = async () => (await call(`${base}/state`)).json?.grants?.filter((g) => g.path === "direct") ?? [];
+  must((await direct()).length === 0, "Signals: opening the feed makes no agent (a plain visit)");
+  const first = await call(`${base}/grants/connect`, { method: "POST" });
+  must(first.status === 200 && first.json?.made === true && typeof first.json?.grant_id === "string", "Signals: ?connect makes the feed's connect grant", first);
+  const again = await call(`${base}/grants/connect`, { method: "POST" });
+  must(again.status === 200 && again.json?.made === false && again.json?.grant_id === first.json.grant_id, "Signals: a reload returns the same connect grant", again);
+  const grants = await direct();
+  must(grants.length === 1 && grants[0].id === first.json.grant_id && /^[0-9a-f]{32}$/.test(grants[0].secret ?? ""), "Signals: still one Direct agent, with its MCP address");
+  const init = await rpc(`${SIGNALS}/mcp/${session.json.sid}/${grants[0].secret}`, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: CLIENT.name, version: CLIENT.version } });
+  must(!!init.result?.serverInfo, "Signals: an MCP initialize on the connect grant's address answers");
+  must((await direct())[0]?.connected === true, "Signals: the agent shows connected");
+  const revoked = await call(`${base}/grants/${first.json.grant_id}/revoke`, { method: "POST" });
+  must(revoked.status === 200 && revoked.json?.ok === true, "Signals: the person revokes it", revoked);
+  const next = await call(`${base}/grants/connect`, { method: "POST" });
+  must(next.status === 200 && next.json?.made === true && next.json?.grant_id !== first.json.grant_id, "Signals: the next ?connect visit makes a new one", next);
+  must((await direct()).length === 1, "Signals: one connect grant again");
+  // Start over, so the dock pairing below opens a feed of its own.
+  must((await call(`${base}/reset`, { method: "POST" })).status === 200, "Signals: the feed starts over");
 }
 
 /** The production smoke's steps, against the real hub. */
@@ -359,6 +411,7 @@ async function pairAppInWorkerd(t, { name, origin, target, linksOf, idOf }) {
 }
 
 async function pairInWorkerd(t) {
+  await signalsConnectInWorkerd(t);
   // The linked customer and post in the apps' shared demo world.
   const { CROSS_APP } = await import("../apps/demo/src/model/demo-world.ts");
   await pairAppInWorkerd(t, {
@@ -401,6 +454,7 @@ async function main() {
   try {
     await withDeadline(readDocs(docs), 3 * STEP_MS, "the docs");
     await withDeadline(readFraming(docs), 3 * STEP_MS, "Pulse's framing headers");
+    await withDeadline(readSignalsFraming(docs), 3 * STEP_MS, "Signals' framing headers");
   } catch (error) {
     docs.check(false, error instanceof Error ? error.message : String(error));
   }

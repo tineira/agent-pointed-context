@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { apcJsonResponse, apcManifest, handleDockGiveBack, profilesRefusal } from "@tineira/apc-server";
 import { givenBack, isOwnerStateRequest, ownerRequestRefusal, publicOrigin } from "../../../demo/src/worker/dock-app.ts";
+import { applyFramingHeaders } from "../../../demo/src/worker/embed.ts";
 import { FEED_TTL_MS, servedProfiles, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";
@@ -14,6 +15,19 @@ export { Feed } from "./feed.ts";
 const COOKIE = "apc_signals";
 type Vars = { sid: string; owner: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+// Framing (TIN-1093, closing TIN-1074): no Signals answer may be framed by any site, as Pulse (TIN-1070), and Signals has
+// no exception: frame-ancestors 'none' (or the fuller policy /connect/dock already sends, which forbids framing too),
+// X-Frame-Options: DENY, nosniff and no-referrer. Registered first, so the early answers of the middleware below
+// (profilesRefusal, the M6 refusals, a 403 or 404, a rate limit) and an error Hono turns into a 500 carry them too.
+// What the assets answer before the Worker runs (the page, its files, the SPA fallback) gets the same headers from
+// public/_headers. A WebSocket upgrade (101) is left as it is.
+app.use("*", async (c, next) => {
+  await next();
+  if (c.res.status === 101) return;
+  c.res = new Response(c.res.body, c.res);
+  applyFramingHeaders(c.res.headers, null);
+});
 
 // A typo in APC_PROFILES serves no agent path at all, with the reason in the log and in the answer
 // (never both profiles by default). Registered first: Hono runs middleware in registration order.
@@ -110,6 +124,16 @@ app.post("/api/s/:sid/grants/:id/revoke", async (c) => {
 /** The Direct profile (TIN-578): the person makes an agent with its own MCP URL, names it, unlinks it. */
 app.post("/api/s/:sid/grants/agent", async (c) => {
   const result = await stub(c).addDirectGrant();
+  return c.json(result, result.ok ? 200 : 400);
+});
+/**
+ * The agent `?connect` arrives with (TIN-1093): the feed's one connect grant, made on the first call and returned on every
+ * later one, so a reload, a second tab or a lost answer never makes a second. Owner only, like every /api/s/:sid route
+ * (M6). One call to the feed, never retried here: a retry after a lost answer could land after the person revoked the
+ * grant the first try made, and make a replacement nobody arrived for. The page's next `?connect` visit recovers.
+ */
+app.post("/api/s/:sid/grants/connect", async (c) => {
+  const result = await stub(c).ensureConnectGrant();
   return c.json(result, result.ok ? 200 : 400);
 });
 app.post("/api/s/:sid/grants/:id/name", async (c) => {

@@ -18,6 +18,8 @@ import { bodyTooLarge, DOCK_TIMES, dockStateNow, hubAllowlist, readMcpBody, hubC
 import { checkPin, focusPayload, samePin, KINDS, listPosts, postAnswer, sanitizeView, viewPayload, type StoredView } from "./logic.ts";
 
 export const FEED_TTL_MS = 6 * 60 * 60_000;
+/** The most Direct agents one feed holds (TIN-607), the connect grant included. Dock grants have their own cap in the hub. */
+export const MAX_DIRECT_GRANTS = 20;
 const WAIT_CEILING_S = 50;
 
 export interface Env {
@@ -104,6 +106,11 @@ interface Grant {
   /** The code the dock owner types, while the grant waits in handoff (APC 0.9), and until when the page shows it. */
   pairing_code: string | null;
   pairing_expires_at: string | null;
+  /**
+   * 1 on the feed's one connect grant (TIN-1093): the Direct agent `?connect` made, written in the statement that
+   * makes it, so `ensureConnectGrant` finds it again on a reload, a second tab or after a lost answer.
+   */
+  connect: number | null;
 }
 
 export class Feed extends DurableObject<Env> {
@@ -167,7 +174,7 @@ export class Feed extends DurableObject<Env> {
     `);
     // client_icon since TIN-388, the names since TIN-578; a dock grant's lifecycle, its secret's hash and the code it
     // waits on since APC 0.10 (TIN-892). The two times are ms since the epoch.
-    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text", "pairing_id text", "declared integer", "ring_url text", "ring_id text", "ring_key text"]) {
+    for (const column of ["client_icon text", "client_name text", "owner_name text", "state text", "secret_hash text", "allowed_at integer", "acked_at integer", "pairing_code text", "pairing_expires_at text", "pairing_id text", "declared integer", "ring_url text", "ring_id text", "ring_key text", "connect integer"]) {
       try {
         this.sql.exec(`alter table grants add column ${column}`);
       } catch {
@@ -313,11 +320,39 @@ export class Feed extends DurableObject<Env> {
   /** A new agent connected directly (the Direct profile): its own grant and MCP URL, made by the person. */
   async addDirectGrant(): Promise<{ ok: boolean; error?: string; grant_id?: string }> {
     if (!this.offers("direct")) return { ok: false, error: "dock_only" };
-    if (this.grants().filter((g) => !g.hub).length >= 20) return { ok: false, error: "too_many" };
+    if (this.directFull()) return { ok: false, error: "too_many" };
+    return { ok: true, grant_id: this.insertDirectGrant(false) };
+  }
+
+  /**
+   * The agent `?connect` arrives with (TIN-1093, Pulse's hero model, TIN-1070): the feed's one connect grant, made on
+   * the first call and returned as it is on every later one, so a reload, a second tab or an answer lost on the way never
+   * makes a second one. Only a grant that still qualifies is returned: Direct (no hub) and not linked to a dock grant
+   * (apc_link). Revoked, it is gone, and the next call makes a new one; this call never revokes or replaces anything.
+   * A new one counts against MAX_DIRECT_GRANTS like any Direct agent. Synchronous from the lookup to the insert (no
+   * await), so two calls cannot interleave in the Durable Object; the flag is written in the statement that makes the grant.
+   */
+  async ensureConnectGrant(): Promise<{ ok: boolean; error?: string; grant_id?: string; made?: boolean }> {
+    if (!this.offers("direct")) return { ok: false, error: "dock_only" };
+    const found = this.sql
+      .exec<{ id: string }>("select id from grants where connect = 1 and hub is null and agent is null order by created_at, id")
+      .toArray()
+      .find((g) => !this.links.partnerOf(g.id));
+    if (found) return { ok: true, grant_id: found.id, made: false };
+    if (this.directFull()) return { ok: false, error: "too_many" };
+    return { ok: true, grant_id: this.insertDirectGrant(true), made: true };
+  }
+
+  private directFull(): boolean {
+    return this.grants().filter((g) => !g.hub).length >= MAX_DIRECT_GRANTS;
+  }
+
+  /** One Direct grant, with or without the connect flag, in one statement. */
+  private insertDirectGrant(connect: boolean): string {
     const g = newDirectGrant();
-    this.sql.exec("insert into grants (id, secret, hub, agent, created_at) values (?, ?, null, null, ?)", g.id, g.secret, g.created_at);
+    this.sql.exec("insert into grants (id, secret, hub, agent, created_at, connect) values (?, ?, null, null, ?, ?)", g.id, g.secret, g.created_at, connect ? 1 : null);
     this.broadcast();
-    return { ok: true, grant_id: g.id };
+    return g.id;
   }
 
   /** The person's own name for an agent; empty gives it back its own. */

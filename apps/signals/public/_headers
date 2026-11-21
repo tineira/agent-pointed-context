@@ -1,0 +1,7 @@
+# Signals' framing rules for what the assets answer before the Worker runs (TIN-1093, closing TIN-1074): no site may
+# frame any Signals page. The Worker sets the same headers on everything it answers (src/worker/index.ts).
+/*
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
