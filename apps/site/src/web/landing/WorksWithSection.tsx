@@ -1,11 +1,14 @@
 import { AgentIcon } from "../agent-icon.tsx";
 
-/** The agents named under the hero, by their logos (agent-logos.ts, through model/products.ts). */
+/**
+ * The agents named under the hero, by their logos (agent-logos.ts, through model/products.ts). The Grok
+ * bot's is the one raster logo of the row (GROK_BOT_PNG, TIN-365): the others are one-tone vector marks.
+ */
 const AGENTS = [
   { brand: "claude", name: "Claude" },
   { brand: "openai", name: "ChatGPT" },
-  { brand: "cursor", name: "Cursor" },
   { brand: "grok", name: "Grok" },
+  { brand: "grok-bot", name: "Grok bot" },
 ];
 
 export function WorksWithSection() {

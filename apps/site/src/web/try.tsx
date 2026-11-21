@@ -31,7 +31,7 @@ const host = (url: string) => new URL(url).host;
 
 const TRY_STEPS = [
   { title: "Open Pulse", text: "A demo app: product analytics for a made-up SaaS. It opens a private copy for you." },
-  { title: "Connect your agent", text: "In Pulse's Agents page, make an agent and copy its MCP address, or the prompt that asks your agent to add it. Add it to Claude, ChatGPT, Cursor or Grok as a remote MCP server." },
+  { title: "Connect your agent", text: "In Pulse's Agents page, make an agent and copy its MCP address, or the prompt that asks your agent to add it. Add it to Claude, ChatGPT or Grok as a remote MCP server." },
   { title: "Point and ask", text: "Drag your agent's mark from Pulse's agent bar onto a bar, a customer or a step, and ask about \"this\". On a phone, tap the mark, then the thing." },
   { title: "Add a second app", text: "Connect the same agent to Signals, with Signals' own address. Point at something in each and ask how they connect: your agent does the joining, and the two apps share nothing." },
 ];
