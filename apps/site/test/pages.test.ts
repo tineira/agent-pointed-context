@@ -5,12 +5,13 @@
  * docs link names a page and a heading that exist; no footer repeats its page.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { headingIds, parseMarkdown } from "../src/docs/markdown.ts";
 import { DOC_PAGES } from "../src/docs/pages.ts";
+import { DOT_FIELD_SPECS } from "../src/web/dot-field.ts";
 import { FOCUS_EXAMPLE } from "../src/web/landing-example.ts";
-import { DOCK_PRODUCT, FOOTER_LINKS, footerLinks, MOVED_PAGES, SITE_PAGES, sitePageAt } from "../src/web/site-pages.ts";
+import { DOCK_PRODUCT, FOOTER_LINKS, footerLinks, MOVED_PAGES, SITE_PAGES, sitePageAt, V1 } from "../src/web/site-pages.ts";
 
 const root = new URL("../../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
@@ -19,6 +20,14 @@ const build = read("apps/site/src/web/build.tsx");
 const sitePages = read("apps/site/src/web/site-pages.ts");
 const pagesCss = read("apps/site/src/web/styles/pages.css");
 const worker = read("apps/site/src/worker/index.ts");
+const shellCss = read("apps/site/src/web/styles/shell.css");
+/** The landing, whole: its root and every section file, so a section added later is covered without a test edit. */
+const landingSources = [
+  read("apps/site/src/web/landing.tsx"),
+  ...readdirSync(new URL("apps/site/src/web/landing/", root))
+    .filter((f) => f.endsWith(".tsx"))
+    .map((f) => read(`apps/site/src/web/landing/${f}`)),
+];
 
 /** One page component's source, from its `export function` to the end of the file. */
 const pageOf = (source: string, name: string) => {
@@ -111,8 +120,19 @@ test("/build's guide row names every reference, and nothing repeats in the foote
   assert.match(pageOf(build, "BuildPage"), /<SiteFooter onPage=\{BUILD_LINKS\} \/>/);
   assert.match(build, /const BUILD_LINKS = GUIDES\.map\(\(g\) => g\.href\);/);
   assert.match(sitePages, /label: "Version 1, as described in the paper →"/);
-  // /try links none of the footer's: it gets it whole.
-  assert.doesNotMatch(tryPage, /\{PAPER\}|\{RECORDS\}|href=\{`\$\{DOCS\}\/spec`\}|href="\/v1/, "TryPage links a footer link itself");
+  assert.match(sitePages, /export const V1 = "\/v1\/";/);
+  assert.match(sitePages, /href: V1 \}/);
+});
+
+test("no page links an href the footer also carries: the landing, /try and /build", () => {
+  // The footer keeps Spec, the payload specification, the paper and Version 1. A page that links one leaves it out of
+  // its footer (/build does, through BUILD_LINKS); a page that passes nothing must link none of them.
+  assert.deepEqual(FOOTER_LINKS.map((l) => l.href), ["/docs/spec", "https://doi.org/10.5281/zenodo.23383101", "https://doi.org/10.5281/zenodo.23382909", V1]);
+  const footerLink = /\{PAPER\}|\{RECORDS\}|\{V1\}|href=\{`\$\{DOCS\}\/spec`\}|href="(?:\/docs\/spec|\/v1\/?)"|10\.5281\/zenodo/;
+  assert.ok(landingSources.length >= 2, "the landing's root and its sections");
+  landingSources.forEach((source, i) => assert.doesNotMatch(source, footerLink, `landing source #${i} links a footer link itself`));
+  assert.doesNotMatch(tryPage, footerLink, "TryPage links a footer link itself");
+  for (const source of [...landingSources, tryPage]) assert.doesNotMatch(source, /<SiteFooter onPage/, "a page that links none of the footer's passes none to its footer");
 });
 
 test("neither the Dock nor Autio is named on /try or /build", () => {
@@ -146,4 +166,128 @@ test("the old /build pages still answer a permanent redirect to /build, keeping 
   assert.equal(SITE_PAGES.build.path, "/build");
   assert.ok(worker.includes('const to = MOVED_PAGES[url.pathname.replace(/\\/+$/, "")];'));
   assert.ok(worker.includes("c.redirect(`${to}${url.search}`, 301)"));
+});
+
+type Rgb = [number, number, number];
+
+/** The declarations of every rule of a stylesheet whose selector list names `selector` exactly. */
+function declarationsOf(css: string, selector: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [, list, body] of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!list!.split(",").some((s) => s.trim() === selector)) continue;
+    for (const [, prop, value] of body!.matchAll(/([a-z-]+):\s*([^;]+);/g)) out[prop!] = value!.trim();
+  }
+  return out;
+}
+
+test("the ink, chip and reserved connected-walk pairings pass 4.5:1 (3:1 for the check) in both themes", () => {
+  const blockOf = (selector: string) => {
+    const open = shellCss.indexOf("{", shellCss.indexOf(selector));
+    return Object.fromEntries([...shellCss.slice(open + 1, shellCss.indexOf("}", open)).matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]));
+  };
+  const over = (c: { r: number; g: number; b: number; a: number }, under: Rgb): Rgb => [c.r, c.g, c.b].map((v, i) => Math.round(v * c.a + under[i]! * (1 - c.a))) as Rgb;
+  const parse = (raw: string, under: Rgb): Rgb => {
+    if (raw.startsWith("#")) return [1, 3, 5].map((i) => parseInt(raw.slice(i, i + 2), 16)) as Rgb;
+    const m = raw.match(/^rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*([0-9.]+)\s*\)$/);
+    assert.ok(m, `unsupported color: ${raw}`);
+    return over({ r: Number(m[1]), g: Number(m[2]), b: Number(m[3]), a: Number(m[4]) }, under);
+  };
+  const lum = (rgb: Rgb) => {
+    const [r, g, b] = rgb.map((v) => v / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const contrast = (a: Rgb, b: Rgb) => {
+    const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+
+  const light = blockOf(':root[data-theme="light"] {');
+  assert.deepEqual(blockOf(':root:not([data-theme="dark"]) {'), light, "no-JS light tokens stay in sync with [data-theme=light]");
+
+  // The "Pulse already connected" walk (TIN-1072 turns it on): what each part paints, read from pages.css itself.
+  const doneAll = [".try-step.done b", ".try-step.done p", ".try-step.done b::after", ".try-step.done .n", ".try-step.done .n::after"];
+  for (const selector of doneAll) {
+    assert.ok(Object.keys(declarationsOf(pagesCss, selector)).length > 0, `pages.css styles ${selector}`);
+    assert.ok(!("opacity" in declarationsOf(pagesCss, selector)), `${selector} fades nothing: opacity is not composited by the contrast checks`);
+  }
+  const tokenOf = (value: string | undefined) => {
+    const m = value?.match(/var\(--([a-z0-9-]+)\)/);
+    assert.ok(m, `a solid token, got ${value}`);
+    return m[1]!;
+  };
+  const colorOf = (selector: string) => tokenOf(declarationsOf(pagesCss, selector)["color"]);
+  const bgOf = (selector: string) => tokenOf(declarationsOf(pagesCss, selector)["background"]);
+  const titleToken = colorOf(".try-step.done b");
+  const bodyToken = colorOf(".try-step.done p");
+  const pillToken = colorOf(".try-step.done b::after");
+  const checkToken = tokenOf(declarationsOf(pagesCss, ".try-step.done .n::after")["border"]);
+  const discToken = bgOf(".try-step.done .n");
+  const connCheckToken = tokenOf(declarationsOf(pagesCss, ".try-conn i::after")["border"]);
+  const connDiscToken = bgOf(".try-conn i");
+  const connTextToken = colorOf(".try-conn");
+  const nextPillToken = colorOf(".try-step.next b::after");
+  const nextPillBgToken = bgOf(".try-step.next b::after");
+  const nextNumberToken = colorOf(".try-step.next .n");
+  const nextNumberBgToken = bgOf(".try-step.next .n");
+  const askToken = colorOf(".try-ask");
+  const askBgToken = bgOf(".try-ask");
+  const codeToken = colorOf(".build-code");
+  const codeBgToken = bgOf(".build-code");
+  const codeTitleToken = colorOf(".build-code h3");
+  const codeBodyToken = colorOf(".build-code p");
+  const codeIdxToken = colorOf(".build-code-idx");
+
+  for (const [name, t] of [["dark", blockOf(":root {")], ["light", light]] as const) {
+    const spec = DOT_FIELD_SPECS[name];
+    const bg = parse(t["bg"]!, [0, 0, 0]);
+    // The worst pixel the dot field can leave under text, built as landing.test.ts builds it.
+    const onGlowMax = over(spec.glowMax, bg);
+    const canvas: Rgb[] = [
+      over(spec.dot, bg),
+      over(spec.glowMin, bg),
+      onGlowMax,
+      over({ r: spec.ringRgb[0], g: spec.ringRgb[1], b: spec.ringRgb[2], a: spec.ringAlphaMax }, bg),
+      over({ r: spec.ringRgb[0], g: spec.ringRgb[1], b: spec.ringRgb[2], a: spec.ringDotAlphaMax }, bg),
+      over({ r: spec.tagRgb[0], g: spec.tagRgb[1], b: spec.tagRgb[2], a: spec.tagAlphaMax }, bg),
+      over({ r: spec.tagRgb[0], g: spec.tagRgb[1], b: spec.tagRgb[2], a: spec.tagAlphaMax }, onGlowMax),
+      over({ r: spec.ringRgb[0], g: spec.ringRgb[1], b: spec.ringRgb[2], a: spec.ringAlphaMax }, onGlowMax),
+    ];
+    const worstCanvas = canvas.sort((a, b) => (name === "dark" ? lum(b) - lum(a) : lum(a) - lum(b)))[0]!;
+    const field = parse(t["haze-b"]!, parse(t["haze-a"]!, worstCanvas));
+    const card = parse(t["card"]!, field);
+    const c = (token: string, under: Rgb = bg) => parse(t[token]!, under);
+
+    const text: [string, Rgb, Rgb][] = [
+      ["--ink-fg on --ink", c("ink-fg"), c("ink")],
+      ["--ink-fg on --ink-bubble", c("ink-fg"), c("ink-bubble")],
+      ["--paper on --ink", c("paper"), c("ink")],
+      ["--ink-muted on --ink", c("ink-muted"), c("ink")],
+      ["--ink-accent on --ink", c("ink-accent"), c("ink")],
+      ["--muted on --chip", c("muted"), c("chip")],
+      [`the ask bubble (${askToken} on ${askBgToken})`, c(askToken), c(askBgToken)],
+      [`the payload card (${codeToken} on ${codeBgToken})`, c(codeToken), c(codeBgToken)],
+      [`the payload card title (${codeTitleToken} on ${codeBgToken})`, c(codeTitleToken), c(codeBgToken)],
+      [`the payload card text (${codeBodyToken} on ${codeBgToken})`, c(codeBodyToken), c(codeBgToken)],
+      [`the payload card index (${codeIdxToken} on ${codeBgToken})`, c(codeIdxToken), c(codeBgToken)],
+      // The done state, over the page and over the worst the dot field can paint.
+      [`done step title (${titleToken}) on --bg`, c(titleToken), bg],
+      [`done step title (${titleToken}) on the worst field`, c(titleToken), field],
+      [`done step text (${bodyToken}) on --bg`, c(bodyToken), bg],
+      [`done step text (${bodyToken}) on the worst field`, c(bodyToken), field],
+      [`"done in the hero" pill (${pillToken}) on --bg`, c(pillToken), bg],
+      [`"done in the hero" pill (${pillToken}) on the worst field`, c(pillToken), field],
+      [`connected label (${connTextToken}) on --bg`, c(connTextToken), bg],
+      [`connected label (${connTextToken}) on --card over the worst field`, c(connTextToken), card],
+      [`"start here" pill (${nextPillToken}) on ${nextPillBgToken} over the worst field`, c(nextPillToken), c(nextPillBgToken, field)],
+      [`next step number (${nextNumberToken} on ${nextNumberBgToken})`, c(nextNumberToken), c(nextNumberBgToken)],
+    ];
+    for (const [label, a, b] of text) assert.ok(contrast(a, b) >= 4.5, `${name}: ${label} is ${contrast(a, b).toFixed(2)}:1 (below 4.5:1)`);
+
+    const graphics: [string, Rgb, Rgb][] = [
+      [`done check (${checkToken} on ${discToken})`, c(checkToken), c(discToken)],
+      [`connected check (${connCheckToken} on ${connDiscToken})`, c(connCheckToken), c(connDiscToken)],
+      [`done disc (${discToken}) on --bg`, c(discToken), bg],
+    ];
+    for (const [label, a, b] of graphics) assert.ok(contrast(a, b) >= 3, `${name}: ${label} is ${contrast(a, b).toFixed(2)}:1 (below 3:1)`);
+  }
 });

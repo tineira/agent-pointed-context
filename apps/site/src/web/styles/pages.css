@@ -118,7 +118,8 @@
 }
 
 /* Room for the "Pulse already connected" walk (TIN-1072 fills it from Pulse; nothing here renders it yet):
-   steps done in the hero get a checked disc and dim, the first open one is marked "start here". */
+   steps done in the hero get a checked disc and quieter (solid --muted, never opacity) titles, the first open one is
+   marked "start here". The check is --btn-fg on --ok; apps/site/test/pages.test.ts holds every pair to 4.5:1 (text) and 3:1 (check). */
 
 .try-step.done .n {
   font-size: 0;
@@ -131,14 +132,14 @@
   width: 6px;
   height: 13px;
   margin-top: -3px;
-  border: solid var(--paper);
+  border: solid var(--btn-fg);
   border-width: 0 2.4px 2.4px 0;
   transform: rotate(45deg);
 }
 
 .try-step.done b,
 .try-step.done p {
-  opacity: 0.55;
+  color: var(--muted);
 }
 
 .try-step.next .n {
@@ -164,7 +165,7 @@
 
 .try-step.next b::after {
   content: "start here";
-  background: var(--accent-soft);
+  background: var(--chip);
   color: var(--accent-text);
   border: 1px solid var(--accent-line);
 }
@@ -254,7 +255,7 @@
   top: 3px;
   width: 3px;
   height: 7px;
-  border: solid var(--paper);
+  border: solid var(--btn-fg);
   border-width: 0 1.8px 1.8px 0;
   transform: rotate(45deg);
 }
