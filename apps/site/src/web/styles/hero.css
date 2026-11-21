@@ -717,7 +717,8 @@ html.apc-bar-fixed:has(.hero-stage) body {
   gap: 6px;
   padding: 0 4px 10px;
   font: 12px var(--mono);
-  color: var(--muted);
+  /* --fg, not --muted: like .hero-note, it sits on the stage over the dot field, where --muted drops under 4.5:1. */
+  color: var(--fg);
 }
 
 .hero-live-bar i {

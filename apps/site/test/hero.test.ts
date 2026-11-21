@@ -219,6 +219,12 @@ test("the stage's text passes 4.5:1 in both themes, the caption over the worst c
     fields.push(over({ r: spec.tagRgb[0], g: spec.tagRgb[1], b: spec.tagRgb[2], a: spec.tagAlphaMax }, glow));
     const stageTop = name === "dark" ? "rgb(255 255 255 / 0.05)" : "rgb(255 255 255 / 0.4)";
     for (const f of fields) pairs.push(["--fg caption on the stage", v("fg"), color(stageTop, v("haze-b", v("haze-a", f)))]);
+    // The live hero's bar and the note sit on the same stage, so they must use the --fg checked above, never --muted.
+    for (const sel of [".hero-note {", ".hero-live-bar {"]) {
+      const open = css.indexOf(sel);
+      assert.ok(open >= 0, sel);
+      assert.match(css.slice(open, css.indexOf("}", open)), /\n\s*color: var\(--fg\);/, `${sel} uses --fg`);
+    }
     for (const [label, a, b] of pairs) {
       const r = ratio(a, b);
       assert.ok(r >= 4.5, `${name}: ${label} is ${r.toFixed(2)}:1`);

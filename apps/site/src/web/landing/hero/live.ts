@@ -11,7 +11,7 @@
  * - `apc:pulse-status` keeps or drops the hint /try reads (pulse-status.ts); the hint is cleared when the frame mounts.
  * - The links to Pulse live here, outside the frame: a link inside the sandboxed frame could not open.
  *
- * Plain createElement, not JSX, so apps/site/test/hero-live.test.ts renders it under node --test.
+ * Plain createElement, not JSX, so apps/site/test/pulse-status.test.ts renders it under node --test.
  */
 import { createElement as h, Fragment, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { PULSE_ORIGIN } from "../../../pulse-origin.ts";
