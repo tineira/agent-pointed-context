@@ -1,5 +1,6 @@
 import { APC_AGENT_TYPE, APC_JSON_MAX_BYTES, APC_JSON_PATH, parseAgentDrag, parseApcManifest, parseFocusAttrs, urlOnOrigin, type AgentDrag, type ApcRole, type FocusTarget } from "@tineira/apc-protocol";
 import { DEFAULT_PINNING_STRINGS, resolveStrings, type PinningStrings } from "./strings.ts";
+import { adoptStyle } from "./styles.ts";
 import { syncArmedMarks } from "./armed.ts";
 
 const profileLoads = new Map<string, Promise<ApcRole[] | null>>();
@@ -369,12 +370,7 @@ export function enablePinning(options: PinningOptions): () => void {
         document.documentElement.removeAttribute("data-apc-armed");
         syncArmedMarks(markSelector);
       } else {
-        if (!document.getElementById(ARMED_STYLE_ID)) {
-          const style = document.createElement("style");
-          style.id = ARMED_STYLE_ID;
-          style.textContent = ARMED_CSS;
-          document.head.append(style);
-        }
+        adoptStyle(ARMED_STYLE_ID, ARMED_CSS, document);
         const mark = [...document.querySelectorAll(markSelector)].find((m) => m.getAttribute("data-grant") === armed && !m.closest("apc-pin"));
         const name = mark?.getAttribute("aria-label") || mark?.getAttribute("title") || words.yourAgent;
         note = armedNote(name, () => tapPin.cancel(), words);

@@ -26,7 +26,26 @@ export class El {
   href = "";
   maxLength = 0;
   dataset: Record<string, string> = {};
-  style: Record<string, string> & { setProperty?: (k: string, v: string) => void; removeProperty?: (k: string) => void } = {};
+  private styleProps = new Map<string, string>();
+  style: Record<string, string> & {
+    setProperty: (k: string, v: string) => void;
+    removeProperty: (k: string) => void;
+    getPropertyValue: (k: string) => string;
+  } = Object.assign({} as Record<string, string>, {
+    setProperty: (k: string, v: string) => {
+      this.styleProps.set(k, v);
+      this.syncStyleAttr();
+    },
+    removeProperty: (k: string) => {
+      this.styleProps.delete(k);
+      this.syncStyleAttr();
+    },
+    getPropertyValue: (k: string) => this.styleProps.get(k) ?? "",
+  });
+  private syncStyleAttr() {
+    if (this.styleProps.size === 0) this.attrs.delete("style");
+    else this.attrs.set("style", [...this.styleProps.entries()].map(([k, v]) => `${k}: ${v}`).join("; "));
+  }
   listeners = new Map<string, Array<(e: unknown) => void>>();
   classes = new Set<string>();
   classList = {

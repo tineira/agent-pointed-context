@@ -18,6 +18,7 @@ import { GEOM, PetSim, type Frame } from "./pet-pose.ts";
 import { petFill, petPalette, resolvePetScheme, type PetPalette, type PetScheme, type PetTint } from "./pet-scheme.ts";
 import type { PetState } from "./pet-state.ts";
 import { DEFAULT_PETS_STRINGS } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -237,11 +238,13 @@ export function createPet(options: PetOptions, doc: Document = document): PetHan
     if (opts.size) {
       svg.setAttribute("width", String(opts.size));
       svg.setAttribute("height", String(opts.size));
-      svg.removeAttribute("style");
+      svg.style.removeProperty("width");
+      svg.style.removeProperty("height");
     } else {
       svg.removeAttribute("width");
       svg.removeAttribute("height");
-      svg.setAttribute("style", "width: var(--apc-pet-size, 100%); height: var(--apc-pet-size, 100%)");
+      svg.style.setProperty("width", "var(--apc-pet-size, 100%)");
+      svg.style.setProperty("height", "var(--apc-pet-size, 100%)");
     }
     if (opts.decorative) {
       svg.setAttribute("aria-hidden", "true");
@@ -350,13 +353,12 @@ export function definePet(tag = "apc-pet"): void {
       if (name === "label") this.set({ label: value ?? "" });
     }
     connectedCallback() {
-      if (!document.getElementById("apc-pet-style")) {
-        const style = document.createElement("style");
-        style.id = "apc-pet-style";
-        // A bare <apc-pet> is 2.5rem square unless the app sets --apc-pet-size.
-        style.textContent = `${tag} { display: inline-block; width: var(--apc-pet-size, 2.5rem); height: var(--apc-pet-size, 2.5rem); vertical-align: middle; } ${tag} > .apc-pet { display: block; overflow: visible; }`;
-        document.head.append(style);
-      }
+      // A bare <apc-pet> is 2.5rem square unless the app sets --apc-pet-size.
+      adoptStyle(
+        tag === "apc-pet" ? "apc-pet-style" : `apc-pet-style-${tag}`,
+        `${tag} { display: inline-block; width: var(--apc-pet-size, 2.5rem); height: var(--apc-pet-size, 2.5rem); vertical-align: middle; } ${tag} > .apc-pet { display: block; overflow: visible; }`,
+        styleRootOf(this),
+      );
       if (this.pet) return;
       this.pet = createPet(this.opts, this.ownerDocument);
       this.append(this.pet.element);

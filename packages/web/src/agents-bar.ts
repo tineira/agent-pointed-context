@@ -32,6 +32,7 @@
 import { APC_MOBILE_MEDIA, type ApcProfile } from "@tineira/apc-protocol";
 import { APC_ARMED_EVENT } from "./pinning.ts";
 import { DEFAULT_BAR_STRINGS, resolveStrings, type BarStrings } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 export type AgentState = "off" | "idle" | "waiting" | "busy" | "seen";
 
@@ -305,12 +306,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
         this.resizer = new ResizeObserver(() => this.reserve());
         this.resizer.observe(this);
       }
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = CSS;
-        document.head.append(style);
-      }
+      adoptStyle(STYLE_ID, CSS, styleRootOf(this));
       if (!this.hasAttribute("role")) this.setAttribute("role", "toolbar");
       if (!this.hasAttribute("aria-label")) {
         this.setAttribute("aria-label", this.words.toolbar);

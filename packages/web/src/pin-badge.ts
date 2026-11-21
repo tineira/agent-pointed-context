@@ -23,6 +23,7 @@ import { markArmed } from "./armed.ts";
 import type { PetBadge } from "./brands.ts";
 import { drawBadge } from "./pet.ts";
 import { DEFAULT_PIN_STRINGS, resolveStrings, type PinStrings } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 export interface PinAgent {
   /** The app's id for the agent (its grant): what the mark drags as. */
@@ -210,12 +211,7 @@ export function definePinBadge(tag = "apc-pin"): void {
         delete own[key];
         own[key] = value;
       }
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = PIN_BADGE_CSS;
-        document.head.append(style);
-      }
+      adoptStyle(STYLE_ID, PIN_BADGE_CSS, styleRootOf(this));
       if (!this.parts) {
         const mark = document.createElement("span");
         mark.className = "apc-pin__mark";
