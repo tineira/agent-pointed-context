@@ -1,0 +1,932 @@
+/* Landing page styles. Shared with /try and /build (they use main.landing too): main.landing, .landing-eyebrow,
+   .landing-who, .landing-cta and .landing-title. The hero's stage is HeroStage's, styled in hero.css;
+   everything under .landing-home is the landing's sections (TIN-1067). */
+
+main.landing {
+  width: min(1100px, 100% - 80px);
+  margin: 0 auto;
+  padding: 40px 0 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+  font-size: 16px;
+}
+
+.landing p {
+  line-height: 1.6;
+}
+
+.landing-who,
+.landing-eyebrow {
+  margin: 0;
+  font: 500 12px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.landing-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 1px solid var(--btn);
+  border-radius: 10px;
+  background: var(--btn);
+  color: var(--btn-fg);
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s, border-color 0.2s, background-color 0.2s;
+}
+
+.landing-cta.big {
+  padding: 12px 22px;
+  font-size: 16px;
+}
+
+.landing-cta.ghost {
+  background: var(--tint);
+  color: var(--fg);
+  border-color: var(--line2);
+}
+
+.landing-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 26px -6px var(--btn-glow);
+}
+
+.landing-cta.ghost:hover {
+  border-color: var(--line3);
+  background: var(--tint2);
+  box-shadow: none;
+}
+
+.landing section[id] {
+  scroll-margin-top: 80px;
+}
+
+.landing .landing-title {
+  margin: 6px 0 10px;
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: var(--hw);
+  line-height: 1.15;
+  color: var(--fg);
+  letter-spacing: var(--track);
+}
+
+/* ───────── the landing itself: full-width sections, each with its own .wrap ───────── */
+main.landing.landing-home {
+  width: 100%;
+  padding: 0;
+  display: block;
+  font-size: 17px;
+}
+
+.landing-home h2 {
+  letter-spacing: var(--track);
+}
+
+.landing-home .landing-idx {
+  font: 500 12.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.landing-home .landing-dotc {
+  color: var(--accent-text);
+}
+
+.landing-home .landing-arr {
+  transition: transform 0.2s var(--ease);
+}
+
+.landing-home .btn:hover .landing-arr {
+  transform: translateX(3px);
+}
+
+.landing-home .landing-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 30px;
+}
+
+/* hero copy (the stage beside it is HeroStage's) */
+.landing-home .landing-hero {
+  padding: 52px 0 44px;
+}
+
+.landing-home .landing-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 430px) minmax(0, 1fr);
+  gap: 56px;
+  align-items: center;
+}
+
+.landing-home .landing-hero-stage {
+  min-width: 0;
+}
+
+.landing-home .landing-hero-copy .landing-eyebrow {
+  font-size: 12.5px;
+}
+
+.landing-home .landing-dot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.landing-home .landing-dot::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.landing-home .landing-hero h1 {
+  margin: 22px 0;
+  font-size: clamp(40px, 5.2vw, 66px);
+  line-height: 0.98;
+  letter-spacing: var(--track);
+}
+
+.landing-home .landing-lede {
+  max-width: 30em;
+  font-size: 19px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.landing-home .landing-lede b {
+  color: var(--fg);
+  font-weight: 560;
+}
+
+.landing-home .landing-watch {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 18px;
+  font-size: 14.5px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.landing-home .landing-watch:hover {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.landing-home .landing-watch span {
+  color: var(--accent-text);
+  font-size: 11px;
+}
+
+/* works with */
+.landing-home .landing-works {
+  display: flex;
+  align-items: center;
+  gap: 36px;
+  padding: 22px 0;
+  border-block: 1px solid var(--line);
+}
+
+.landing-home .landing-works-lab {
+  font: 500 11.5px var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: auto;
+}
+
+.landing-home .landing-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 56px;
+}
+
+.landing-home .landing-agents li {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  color: var(--fg);
+}
+
+.landing-home .landing-agents li > span {
+  display: inline-flex;
+}
+
+/* The logos are marks in the text color, as in the prototype: one tone, no brand colours. */
+.landing-home .landing-agents .agent-icon path {
+  fill: currentColor;
+}
+
+.landing-home .landing-compat {
+  margin-left: auto;
+  padding-left: 26px;
+  border-left: 1px solid var(--line2);
+  max-width: 15em;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* the two paths */
+.landing-home .landing-paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  padding: 56px 0 10px;
+}
+
+.landing-home .landing-path {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 310px;
+  padding: 34px 36px 32px;
+  border: 1px solid var(--line2);
+  border-radius: 22px;
+  background: var(--card);
+  overflow: hidden;
+  isolation: isolate;
+  transition: transform 0.35s var(--ease), border-color 0.3s;
+}
+
+.landing-home .landing-path::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.landing-home .landing-path-try::before {
+  background: radial-gradient(520px 300px at 85% 110%, var(--accent-soft), transparent 70%);
+}
+
+.landing-home .landing-path-build::before {
+  background: radial-gradient(520px 300px at 85% 110%, var(--cool), transparent 70%);
+}
+
+.landing-home .landing-path:hover,
+.landing-home .landing-path:focus-within {
+  transform: translateY(-4px);
+  border-color: var(--line3);
+}
+
+.landing-home .landing-path:hover::before,
+.landing-home .landing-path:focus-within::before {
+  opacity: 1;
+}
+
+.landing-home .landing-path .landing-who {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.landing-home .landing-path h2 {
+  margin: 12px 0;
+  font-size: 44px;
+}
+
+.landing-home .landing-path > p:not(.landing-who) {
+  max-width: 25em;
+  color: var(--muted);
+}
+
+/* The chips sit in a row under the paragraph; only a card wide enough to keep the paragraph near 20em beside them
+   (from 1340 px, where the cards reach their full 610 px even beside a scrollbar) moves them to the top right, as in the prototype. */
+.landing-home .landing-path-art {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.landing-home .landing-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px;
+  border: 1px solid var(--line2);
+  border-radius: 99px;
+  background: var(--chip);
+  font: 12px var(--mono);
+  color: var(--muted);
+  transition: transform 0.45s var(--ease), color 0.3s;
+}
+
+.landing-home .landing-chip-glyph {
+  display: inline-flex;
+  color: var(--fg);
+}
+
+.landing-home .landing-chip-glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+.landing-home .landing-path:hover .landing-chip {
+  color: var(--fg);
+}
+
+@media (min-width: 1340px) {
+  .landing-home .landing-path > p:not(.landing-who) {
+    max-width: min(25em, 100% - 210px);
+  }
+
+  .landing-home .landing-path-art {
+    position: absolute;
+    right: 30px;
+    top: 30px;
+    margin: 0;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+  }
+
+  .landing-home .landing-path:hover .landing-chip:nth-child(1) {
+    transform: translateX(-10px);
+  }
+
+  .landing-home .landing-path:hover .landing-chip:nth-child(2) {
+    transform: translateX(-22px);
+  }
+
+  .landing-home .landing-path:hover .landing-chip:nth-child(3) {
+    transform: translateX(-6px);
+  }
+
+  .landing-home .landing-path:hover .landing-chip:nth-child(4) {
+    transform: translateX(-16px);
+  }
+}
+
+.landing-home .landing-go {
+  margin-top: auto;
+  padding-top: 26px;
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 9px;
+  font-weight: 600;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+/* The whole card is the link's target; the link keeps a short name. */
+.landing-home .landing-go::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.landing-home .landing-go:focus-visible {
+  outline: none;
+}
+
+.landing-home .landing-path:has(.landing-go:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.landing-home .landing-path-try .landing-go {
+  color: var(--accent-text);
+}
+
+.landing-home .landing-go span {
+  transition: transform 0.25s var(--ease);
+}
+
+.landing-home .landing-path:hover .landing-go span {
+  transform: translateX(5px);
+}
+
+/* sections with a head */
+.landing-home .landing-block {
+  padding: 96px 0 0;
+}
+
+.landing-home .landing-head {
+  max-width: 760px;
+  margin-bottom: 40px;
+}
+
+.landing-home .landing-head h2 {
+  margin: 14px 0;
+  font-size: clamp(34px, 4.4vw, 50px);
+  line-height: 1.04;
+}
+
+.landing-home .landing-head p:not(.landing-idx) {
+  max-width: 34em;
+  font-size: 19px;
+  color: var(--muted);
+}
+
+.landing-home .landing-head-split {
+  max-width: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 40px;
+}
+
+.landing-home .landing-head-split h2 {
+  margin-bottom: 0;
+}
+
+.landing-home .landing-head-split p:not(.landing-idx) {
+  max-width: 21em;
+  font-size: 17px;
+}
+
+/* inside a point: three channels */
+.landing-home .landing-channels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--line2);
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.landing-home .landing-channels article {
+  position: relative;
+  padding: 26px 30px 32px;
+  min-width: 0;
+}
+
+.landing-home .landing-channels article + article {
+  border-left: 1px solid var(--line);
+}
+
+/* A line draws across each channel once it scrolls in; it is simply there without the reveal or with less motion. */
+.landing-home .landing-channels article::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left;
+}
+
+.landing-home .landing-channels.rv-wait article::before {
+  transform: scaleX(0);
+}
+
+.landing-home .landing-channels.rv-in article::before {
+  transition: transform 0.7s var(--ease) 0.15s;
+}
+
+.landing-home .landing-channels.rv-in article:nth-child(2)::before {
+  transition-delay: 0.3s;
+}
+
+.landing-home .landing-channels.rv-in article:nth-child(3)::before {
+  transition-delay: 0.45s;
+}
+
+.landing-home .landing-dg {
+  display: block;
+  width: 150px;
+  height: 90px;
+  margin: 2px 0 18px -6px;
+  overflow: visible;
+}
+
+.landing-home .landing-channels h3 {
+  font-size: 26px;
+  letter-spacing: -0.035em;
+}
+
+.landing-home .landing-channels p {
+  max-width: 21em;
+  margin-top: 9px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.landing-home .landing-dg .d-win {
+  fill: var(--paper);
+  stroke: var(--line3);
+  stroke-width: 1.2;
+}
+
+.landing-home .landing-dg .d-ln {
+  fill: none;
+  stroke: var(--line3);
+  stroke-width: 1.2;
+}
+
+.landing-home .landing-dg .d-bar {
+  fill: var(--bar-b);
+}
+
+.landing-home .landing-dg .d-hot {
+  fill: var(--accent);
+}
+
+.landing-home .landing-dg .d-dash {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.3;
+  stroke-dasharray: 3.5 3;
+}
+
+.landing-home .landing-dg .d-row {
+  fill: var(--tint2);
+  stroke: var(--line2);
+  stroke-width: 1;
+}
+
+.landing-home .landing-dg .d-lit {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.3;
+}
+
+.landing-home .landing-dg .d-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: landing-ring 2.4s ease-out infinite;
+}
+
+@keyframes landing-ring {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.14, 1.9);
+  }
+}
+
+.landing-home .landing-dg .d-chip {
+  fill: var(--bg);
+  stroke: var(--accent-line);
+  stroke-width: 1;
+}
+
+.landing-home .landing-dg .d-txt {
+  font: 8.5px var(--mono);
+  fill: var(--accent-text);
+}
+
+.landing-home .landing-dg .d-wire {
+  fill: none;
+  stroke: var(--accent-line);
+  stroke-width: 1.2;
+  stroke-dasharray: 2.5 3;
+}
+
+/* your agent, your permission: a band */
+.landing-home .landing-access {
+  margin: 96px 0 0;
+  border-block: 1px solid var(--line);
+  background: var(--band);
+  color: var(--band-fg);
+}
+
+.landing-home .landing-access-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9%;
+  padding: 72px 0;
+  align-items: start;
+}
+
+.landing-home .landing-access .landing-idx {
+  color: var(--band-accent);
+}
+
+.landing-home .landing-access h2,
+.landing-home .landing-access h3 {
+  color: var(--band-fg);
+}
+
+.landing-home .landing-access h2 {
+  margin-top: 14px;
+  font-size: clamp(38px, 4.8vw, 56px);
+  line-height: 1.02;
+}
+
+.landing-home .landing-access h2 em {
+  color: var(--band-accent);
+}
+
+.landing-home .landing-access-rows article {
+  padding: 20px 0;
+  border-top: 1px solid var(--band-line);
+}
+
+.landing-home .landing-access-rows article:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.landing-home .landing-access-rows article:last-child {
+  padding-bottom: 0;
+}
+
+.landing-home .landing-access h3 {
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+
+.landing-home .landing-access p {
+  max-width: 32em;
+  margin-top: 7px;
+  font-size: 16px;
+  color: var(--band-muted);
+}
+
+/* free, open and versioned */
+.landing-home .landing-head p.landing-version {
+  margin-top: 12px;
+  font: 12.5px var(--mono);
+  color: var(--muted);
+}
+
+.landing-home .landing-std {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line2);
+  border-radius: 20px;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.landing-home .landing-std li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 26px 26px 28px;
+  border-right: 1px solid var(--line);
+  transition: background-color 0.25s;
+}
+
+.landing-home .landing-std li:last-child {
+  border-right: 0;
+}
+
+.landing-home .landing-std li:hover,
+.landing-home .landing-std li:focus-within {
+  background: var(--tint);
+}
+
+.landing-home .landing-std h3 {
+  font-size: 21px;
+  letter-spacing: -0.02em;
+}
+
+.landing-home .landing-std a {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.landing-home .landing-std a span {
+  color: var(--accent-text);
+}
+
+.landing-home .landing-std a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.landing-home .landing-std p {
+  font-size: 14.5px;
+  color: var(--muted);
+}
+
+.landing-home .landing-std small {
+  margin-top: auto;
+  padding-top: 8px;
+  font: 11.5px var(--mono);
+  color: var(--accent-text);
+  overflow-wrap: anywhere;
+}
+
+/* the closing call */
+.landing-home .landing-closing {
+  padding: 110px 0 120px;
+  text-align: center;
+}
+
+.landing-home .landing-closing-mark {
+  margin: 0 auto;
+}
+
+.landing-home .landing-closing h2 {
+  max-width: 14em;
+  margin: 22px auto 16px;
+  font-size: clamp(40px, 5vw, 64px);
+  line-height: 1;
+}
+
+.landing-home .landing-closing p {
+  font-size: 19px;
+  color: var(--muted);
+}
+
+.landing-home .landing-closing .landing-cta-row {
+  justify-content: center;
+}
+
+/* ───────── narrower screens ───────── */
+@media (max-width: 1020px) {
+  .landing-home .landing-hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 36px;
+  }
+
+  .landing-home .landing-hero-copy {
+    max-width: 640px;
+  }
+
+  .landing-home .landing-works {
+    flex-wrap: wrap;
+    gap: 16px 36px;
+  }
+
+  .landing-home .landing-works-lab {
+    flex: 1 0 100%;
+  }
+
+  .landing-home .landing-compat {
+    margin-left: 0;
+  }
+
+  .landing-home .landing-std {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .landing-home .landing-std li:nth-child(2) {
+    border-right: 0;
+  }
+
+  .landing-home .landing-std li:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 860px) {
+  .landing-home .landing-paths,
+  .landing-home .landing-access-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .landing-home .landing-access-grid {
+    gap: 32px;
+  }
+
+  .landing-home .landing-channels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .landing-home .landing-channels article + article {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .landing-home .landing-head-split {
+    display: block;
+  }
+
+  .landing-home .landing-head-split p:not(.landing-idx) {
+    margin-top: 14px;
+  }
+}
+
+@media (max-width: 760px) {
+  main.landing {
+    width: calc(100% - 32px);
+    padding: 24px 0 48px;
+    gap: 40px;
+  }
+
+  main.landing.landing-home {
+    width: 100%;
+    padding: 0;
+  }
+
+  .landing-home .landing-hero {
+    padding: 28px 0 36px;
+  }
+
+  .landing-home .landing-lede,
+  .landing-home .landing-head p:not(.landing-idx),
+  .landing-home .landing-closing p {
+    font-size: 17px;
+  }
+
+  .landing-home .landing-agents {
+    gap: 12px 28px;
+  }
+
+  .landing-home .landing-agents li {
+    font-size: 17px;
+  }
+
+  .landing-home .landing-compat {
+    padding-left: 0;
+    border-left: 0;
+    max-width: none;
+  }
+
+  .landing-home .landing-path {
+    min-height: 0;
+    padding: 24px 22px;
+  }
+
+  .landing-home .landing-path h2 {
+    font-size: 36px;
+  }
+
+  .landing-home .landing-path > p:not(.landing-who) {
+    max-width: none;
+  }
+
+  .landing-home .landing-block {
+    padding-top: 64px;
+  }
+
+  .landing-home .landing-channels article {
+    padding: 22px 22px 26px;
+  }
+
+  .landing-home .landing-access {
+    margin-top: 64px;
+  }
+
+  .landing-home .landing-access-grid {
+    padding: 48px 0;
+  }
+
+  .landing-home .landing-std {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .landing-home .landing-std li {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .landing-home .landing-std li:last-child {
+    border-bottom: 0;
+  }
+
+  .landing-home .landing-closing {
+    padding: 72px 0 80px;
+  }
+}
+
+/* Less motion: the ring stands still, half lit; the channel lines and the cards do not move. */
+@media (prefers-reduced-motion: reduce) {
+  .landing-home .landing-dg .d-ring {
+    opacity: 0.5;
+  }
+
+  .landing-home .landing-channels article::before {
+    transform: none;
+  }
+
+  .landing-home .landing-path:hover,
+  .landing-home .landing-path:focus-within,
+  .landing-home .landing-path:hover .landing-chip,
+  .landing-home .landing-path:hover .landing-go span,
+  .landing-home .btn:hover .landing-arr {
+    transform: none;
+  }
+}
