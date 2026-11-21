@@ -24,6 +24,8 @@ import type { WakeBudget } from "./wake-budget.ts";
 export const SANDBOX_TTL_MS = 6 * 60 * 60_000;
 /** The most Direct agents one sandbox holds, as in Signals (TIN-607). Dock-paired grants have their own cap in the hub. */
 export const MAX_DIRECT_GRANTS = 20;
+/** The view the landing hero shows (TIN-1070): its chart is Pulse's overview. The hero reports the same on a pin. */
+const EMBED_VIEW = { screen: "overview", params: {}, selection: null } as const;
 /** Wake on pin in Direct mode (TIN-973): Pulse's own routine and connector, never the dock's. */
 export const PULSE_WAKE = wakeAppPlace("Pulse");
 /** The budget every grant's wakes also count in: 200 a day per sandbox, so new grants give no fresh budget beyond it. */
@@ -235,6 +237,13 @@ export class Sandbox extends DurableObject<Env> {
       // already there
     }
     this.sql.exec("update grants set dock = 1 where dock is null and id in (select grant_id from hub_links)");
+    // The landing hero's own grant (TIN-1070) says so itself, in the statement that makes it: one per sandbox, found
+    // again by the hero on every open, so a lost answer or a reload never makes a second one.
+    try {
+      this.sql.exec("alter table grants add column embed integer");
+    } catch {
+      // already there
+    }
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Pulse", grants: () => this.linkGrants() });
     this.consent = new DockConsent(sqlKv(this.sql));
     if (this.wake) this.wake.useStore(kvWakeStore(sqlKv(this.sql)));
@@ -573,11 +582,16 @@ export class Sandbox extends DurableObject<Env> {
   }
 
   async reportView(raw: unknown): Promise<{ ok: boolean }> {
-    if (this.meta("share_view") === "0") return { ok: false };
+    return { ok: this.storeView(raw) };
+  }
+
+  /** What the page shows, kept for get_current_view while the person shares it. Synchronous storage work. */
+  private storeView(raw: unknown): boolean {
+    if (this.meta("share_view") === "0") return false;
     const view = sanitizeView(raw, this.data());
-    if (!view) return { ok: false };
+    if (!view) return false;
     this.sql.exec("insert into view_state (id, data) values (1, ?) on conflict(id) do update set data = excluded.data", JSON.stringify(view));
-    return { ok: true };
+    return true;
   }
 
   async setSetting(name: "share_view" | "show_activity", on: boolean): Promise<void> {
@@ -668,12 +682,33 @@ export class Sandbox extends DurableObject<Env> {
     return !exists && this.directFull() ? { ok: false, error: "too_many" } : { ok: true, grant: await this.addRestrictedGrant(region) };
   }
 
+  /**
+   * The landing hero's agent (TIN-1070, design TIN-1063 § 4 rule 3): the sandbox's one hero grant, made on the hero's
+   * first open and returned as it is on every later one, so the hero's call is idempotent. Only a grant that still
+   * qualifies is returned: unrestricted, Direct (no dock link, not made for a dock). Revoked, it is gone, and the next
+   * open makes a new one. A new one counts against MAX_DIRECT_GRANTS like any Direct agent. The flag is written in the
+   * statement that makes the grant, so no failure between two writes can leave a hero grant the hero does not find.
+   * Making it also sets the view to the hero's overview (while the person shares the view), in the same synchronous
+   * work: an answer lost on the way still leaves get_current_view naming the screen (fix round 2, B-2). Returning an
+   * existing one never touches the view, so a reload does not undo a view reported since.
+   */
+  async ensureEmbedGrant(): Promise<{ ok: boolean; error?: "too_many"; grant?: Grant; made?: boolean }> {
+    const found = this.sql
+      .exec<{ id: string }>("select id from grants where embed = 1 and regions is null and (dock is null or dock = 0) and id not in (select grant_id from hub_links) order by created_at limit 1")
+      .toArray()[0];
+    const existing = found ? this.grants().find((g) => g.id === found.id) : undefined;
+    if (existing) return { ok: true, grant: existing, made: false };
+    if (this.directFull()) return { ok: false, error: "too_many" };
+    return { ok: true, grant: await this.addAgentGrant(true), made: true };
+  }
+
   /** Another agent with full access: one URL and one mark per client, so each client's behaviour is measured apart. */
-  async addAgentGrant(): Promise<Grant> {
+  async addAgentGrant(embed = false): Promise<Grant> {
     const g = newDirectGrant();
     const direct = this.linkGrants().filter((x) => x.path === "direct").map((x) => x.id);
     const n = this.grants().filter((x) => !x.regions && direct.includes(x.id)).length + 1;
-    this.sql.exec("insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, null, ?)", g.id, g.secret, `Agent ${n}`, g.created_at);
+    this.sql.exec("insert into grants (id, secret, label, regions, created_at, embed) values (?, ?, ?, null, ?, ?)", g.id, g.secret, `Agent ${n}`, g.created_at, embed ? 1 : null);
+    if (embed) this.storeView(EMBED_VIEW);
     this.broadcast({ type: "grants" });
     return this.grants().find((x) => x.id === g.id)!;
   }

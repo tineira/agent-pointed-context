@@ -1,0 +1,8 @@
+# Pulse's framing rules for what the assets answer before the Worker runs (TIN-1070): no site may frame any Pulse page.
+# The Worker sets the same headers on everything it answers (src/worker/embed.ts), and the one view that
+# https://apc.tineira.com may frame, /embed/hero, is served by the Worker with its own policy.
+/*
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer

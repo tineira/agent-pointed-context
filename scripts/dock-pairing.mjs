@@ -23,14 +23,15 @@
  *   whole run has its own deadline (TOTAL_MS), shorter than the CI step's, so that cleanup always gets to run. A
  *   failed Start over after a pairing that passed is a warning, not a failure. No secret.
  *
- * Before the pairing, once and before any try: the docs read with a plain GET, no JavaScript (TIN-914). A failure there
- * fails the run without making a dock or a sandbox.
+ * Before the pairing, once and before any try: the docs read with a plain GET, no JavaScript (TIN-914), and Pulse's
+ * framing headers (TIN-1070). A failure there fails the run without making a dock or a sandbox.
  *
  * Exit code 0 only when the pairing passed; the last line is the summary. On a failure in GitHub Actions the first
  * failing step is also an `::error::` annotation.
  */
 
 import { SITE_CSP } from "../apps/site/src/worker/csp.ts";
+import { EMBED_HERO_MARKER, effectiveFrameAncestors, embedHeroCsp } from "../apps/demo/src/worker/embed.ts";
 import { startWorkerd } from "./lib/dock-workerd.mjs";
 
 const PRODUCTION = process.argv.includes("--production");
@@ -157,6 +158,39 @@ async function readDocs(t) {
   t.check(md.status === 200 && /^# \S/.test(md.text) && !md.text.includes("<div id=") && /markdown|text\/plain/.test(md.type), "/docs/spec.md is the spec as Markdown", `HTTP ${md.status} ${md.type}`);
   const llms = await get("/llms.txt");
   t.check(llms.status === 200 && llms.text.includes("(/docs/spec.md)") && llms.text.includes("(/docs/integrate.md)"), "/llms.txt names the docs' Markdown", `HTTP ${llms.status}`);
+}
+
+/**
+ * Pulse's framing headers as served (TIN-1070, design TIN-1063 § 6.3 item 5): no Pulse page can be framed by any site
+ * (the assets' answers through public/_headers, the Worker's through its middleware), and the one view the landing may
+ * frame, /embed/hero, is framed only by https://apc.tineira.com. Plain GETs: nothing is made (no sandbox, no grant).
+ * The TIN-1071 landing frames the hero only once this passes on production.
+ */
+async function readFraming(t) {
+  const get = async (path, headers = {}) => {
+    const response = await withDeadline(runtime.send(`${PULSE}${path}`, { headers: { "user-agent": USER_AGENT, ...headers }, redirect: "manual" }), STEP_MS, `GET ${PULSE}${path}`);
+    const body = await response.text();
+    const h = (name) => response.headers.get(name);
+    return { status: response.status, body, csp: h("content-security-policy"), frame: h("x-frame-options"), sniff: h("x-content-type-options"), referrer: h("referrer-policy"), location: h("location") };
+  };
+  // The effective directive, the first one, as a browser reads it (CSP3): a later 'none' would not forbid anything.
+  const deny = (r) => effectiveFrameAncestors(r.csp) === "'none'" && r.frame === "DENY" && r.sniff === "nosniff";
+  const shown = (r) => `HTTP ${r.status}; CSP ${r.csp}; X-Frame-Options ${r.frame}; nosniff ${r.sniff}`;
+  for (const path of ["/", "/agents", "/connect/dock", "/api/health", "/zzz-probe"]) {
+    const r = await get(path);
+    t.check(r.status === 200 && deny(r), `Pulse ${path} cannot be framed (frame-ancestors 'none', DENY, nosniff)`, shown(r));
+  }
+  const other = await get("/embed/other", { "sec-fetch-dest": "iframe" });
+  t.check(other.status === 404 && deny(other), "Pulse /embed/other is a 404 that cannot be framed", shown(other));
+  const top = await get("/embed/hero", { "sec-fetch-dest": "document" });
+  t.check(top.status === 302 && new URL(top.location ?? "x:", PULSE).href === `${PULSE}/` && deny(top), "Pulse /embed/hero opened top level redirects to / (302)", `${shown(top)}; Location ${top.location}`);
+  const hero = await get("/embed/hero", { "sec-fetch-dest": "iframe" });
+  t.check(hero.status === 200 && hero.csp === embedHeroCsp([DOCK]) && hero.frame === "DENY" && hero.sniff === "nosniff" && hero.referrer === "no-referrer",
+    "Pulse /embed/hero in a frame carries its policy (frame-ancestors https://apc.tineira.com only), DENY, nosniff, no-referrer", shown(hero));
+  // The body proves it is the hero (B-1 of PR #245's review): its marker, its parent filled in, its own entry, and not the
+  // full app's entry (an SPA fallback would carry the hero's policy otherwise).
+  const isHero = hero.body.includes(EMBED_HERO_MARKER) && hero.body.includes(`<meta name="apc-embed-parent" content="${DOCK}" />`) && /src="\/assets\/embedHero-[A-Za-z0-9_-]+\.js"/.test(hero.body) && !/src="\/assets\/main-[A-Za-z0-9_-]+\.js"/.test(hero.body);
+  t.check(hero.status === 200 && isHero, "Pulse /embed/hero serves the hero's own page (its marker, its parent and its entry; not the full app's)", `HTTP ${hero.status}; ${hero.body.length} bytes`);
 }
 
 /** The production smoke's steps, against the real hub. */
@@ -366,6 +400,7 @@ async function main() {
   tries.push(docs);
   try {
     await withDeadline(readDocs(docs), 3 * STEP_MS, "the docs");
+    await withDeadline(readFraming(docs), 3 * STEP_MS, "Pulse's framing headers");
   } catch (error) {
     docs.check(false, error instanceof Error ? error.message : String(error));
   }
