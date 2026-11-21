@@ -51,7 +51,14 @@ export function adoptStyle(id: string, css: string, root: StyleRoot = document):
     try {
       const sheet = new SheetCtor();
       sheet.replaceSync(css);
-      (root as { adoptedStyleSheets: CSSStyleSheet[] }).adoptedStyleSheets = [...adopted, sheet];
+      try {
+        // Prefer in-place ObservableArray mutation (Chrome 99+, Firefox 101+, Safari 16.4+)
+        // to avoid WebKit bug 254844 (Safari 16.4-17.0 dropping earlier sheets on reassignment).
+        // Fall back to array replacement for older Chromium (73-98) where adoptedStyleSheets was frozen.
+        adopted.push(sheet);
+      } catch {
+        (root as { adoptedStyleSheets: CSSStyleSheet[] }).adoptedStyleSheets = [...adopted, sheet];
+      }
       if (!sheets) {
         sheets = new Map();
         adoptedByRoot.set(root, sheets);
