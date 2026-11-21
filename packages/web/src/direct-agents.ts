@@ -10,6 +10,7 @@
  */
 
 import { DEFAULT_DIRECT_STRINGS, resolveStrings, type DirectStrings } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 export interface DirectAgent {
   /** The app's id for the agent's grant. */
@@ -123,12 +124,7 @@ export function defineDirectAgents(tag = "apc-direct-agents"): void {
     }
 
     connectedCallback(): void {
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = CSS;
-        document.head.append(style);
-      }
+      adoptStyle(STYLE_ID, CSS, styleRootOf(this));
       this.render();
     }
 

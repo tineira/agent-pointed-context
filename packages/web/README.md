@@ -59,6 +59,10 @@ const mobile = {
 
 It exercises the package's rules on a model of your bar, not your real page: a browser with touch emulation at 375 x 812 is the real check. The docs' complete Direct app (https://apc.tineira.com/docs/integrate#a-complete-direct-app-with-a-bearer-token) shows it in a whole adapter.
 
+## Content-Security-Policy (CSP)
+
+Each component attaches its CSS with constructable stylesheets (`new CSSStyleSheet()`, `replaceSync`, `adoptedStyleSheets`) and updates dynamic element dimensions through CSSOM (`style.setProperty`), so the package runs under a strict CSP such as `style-src 'self'` without `'unsafe-inline'`. Where `adoptedStyleSheets` is unavailable (older browsers or minimal DOM environments), it falls back to injecting a `<style>` element into the document or shadow root; that fallback path needs a page whose CSP allows inline style.
+
 ## Localize
 
 Every string it draws can be passed by your app (`strings` on each component; see "Localize the page" in the docs), with the English as default.

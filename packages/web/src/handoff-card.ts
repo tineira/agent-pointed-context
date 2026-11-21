@@ -14,6 +14,7 @@
  */
 import { formatPairingCode } from "@tineira/apc-protocol";
 import { DEFAULT_HANDOFF_STRINGS, resolveStrings, type HandoffStrings } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 /**
  * The code and the app's stored expiry (an ISO time, as the app's state carries it). `null` is for a code the page holds
@@ -211,12 +212,7 @@ export function defineHandoff(tag = "apc-handoff"): void {
     }
 
     connectedCallback(): void {
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = CSS;
-        document.head.append(style);
-      }
+      adoptStyle(STYLE_ID, CSS, styleRootOf(this));
       this.timer ??= setInterval(() => this.render(), 1000);
       this.render();
     }

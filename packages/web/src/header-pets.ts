@@ -27,6 +27,7 @@ import { createPet, petPhase, type PetHandle } from "./pet.ts";
 import type { PetScheme, PetTint } from "./pet-scheme.ts";
 import type { PetState } from "./pet-state.ts";
 import { DEFAULT_PETS_STRINGS, resolveStrings, type PetsStrings } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 /** At most this many pets show; the rest are "+N". */
 export const PET_MAX = 3;
@@ -205,12 +206,7 @@ export function defineHeaderPets(tag = "apc-pets"): void {
         delete own[key];
         own[key] = value;
       }
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = HEADER_PETS_CSS;
-        document.head.append(style);
-      }
+      adoptStyle(STYLE_ID, HEADER_PETS_CSS, styleRootOf(this));
       if (!this.parts) {
         const row = document.createElement("div");
         row.className = "apc-pets__row";

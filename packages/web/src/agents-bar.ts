@@ -32,6 +32,7 @@
 import { APC_MOBILE_MEDIA, type ApcProfile } from "@tineira/apc-protocol";
 import { APC_ARMED_EVENT } from "./pinning.ts";
 import { DEFAULT_BAR_STRINGS, resolveStrings, type BarStrings } from "./strings.ts";
+import { adoptStyle, styleRootOf } from "./styles.ts";
 
 export type AgentState = "off" | "idle" | "waiting" | "busy" | "seen";
 
@@ -125,6 +126,8 @@ function store(key: string, value: string | null): void {
 }
 
 const STYLE_ID = "apc-agents-style";
+const DOC_STYLE_ID = "apc-agents-doc-style";
+const DOC_CSS = `html.apc-bar-fixed body { padding-bottom: var(--apc-bar-height, 0px); }\n`;
 const CSS = `
 apc-agents { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .apc-agents__agent { position: relative; display: inline-flex; align-items: center; gap: 6px; }
@@ -161,7 +164,6 @@ apc-agents { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6p
 .apc-agents__hint a { color: inherit; }
 .apc-agents__hint a:hover { color: var(--apc-ink, #141a24); }
 .apc-agents__mark[aria-pressed="true"] { outline: 3px solid var(--apc-accent, #b85209); outline-offset: 2px; }
-html.apc-bar-fixed body { padding-bottom: var(--apc-bar-height, 0px); }
 @media ${APC_MOBILE_MEDIA} {
   apc-agents { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2147483000; box-sizing: border-box; display: flex; justify-content: center; gap: 4px 14px; width: auto; max-height: 40vh; overflow-y: auto; margin: 0; padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
     background: var(--apc-bar-bg, var(--apc-chip, #ffffff)); border-top: 1px solid var(--apc-line, #d6dce5); box-shadow: 0 -2px 10px rgb(0 0 0 / 0.08); }
@@ -199,13 +201,23 @@ export function agentLabels(a: BarAgent, given?: Partial<BarStrings> | null): { 
   return { mark, dot: strings.pinTitle(a.pin.label, a.pin.seen, a.pin.here), revoke, revokeArmed };
 }
 
-/** The room each fixed bar takes at the bottom of the page: the page keeps the largest, as --apc-bar-height and padding on <body>. */
-const reserved = new Map<HTMLElement, number>();
-function reserveBottom(el: HTMLElement, height: number): void {
-  if (height > 0) reserved.set(el, height);
-  else reserved.delete(el);
-  const max = Math.max(0, ...reserved.values());
-  const html = document.documentElement;
+/** The room each fixed bar takes at the bottom of its document: each document keeps the largest, as --apc-bar-height and padding on <body>. */
+const reservedByDoc = new WeakMap<Document, Map<HTMLElement, number>>();
+function reserveBottom(el: HTMLElement, height: number, doc: Document | null = el.ownerDocument ?? document): void {
+  if (!doc) return;
+  let reserved = reservedByDoc.get(doc);
+  if (height > 0) {
+    if (!reserved) {
+      reserved = new Map();
+      reservedByDoc.set(doc, reserved);
+    }
+    reserved.set(el, height);
+  } else {
+    reserved?.delete(el);
+  }
+  const max = reserved ? Math.max(0, ...reserved.values()) : 0;
+  const html = doc.documentElement;
+  if (!html) return;
   if (max > 0) {
     html.style.setProperty("--apc-bar-height", `${max}px`);
     html.classList.add("apc-bar-fixed");
@@ -266,6 +278,8 @@ export function defineAgentBar(tag = "apc-agents"): void {
     /** Mobile (APC 0.6): the viewport is a phone's or a touch one's; the bar then never collapses. */
     private media: MediaQueryList | null = null;
     private resizer: ResizeObserver | null = null;
+    private boundDoc: Document | null = null;
+    private boundWin: Window | null = null;
     private mobile(): boolean {
       return !!this.media?.matches;
     }
@@ -277,9 +291,9 @@ export function defineAgentBar(tag = "apc-agents"): void {
       for (const node of this.nodes.values()) node.key = "";
       this.render();
     };
-    /** Tell the page how much room the fixed bar takes at the bottom, or that it takes none. */
+    /** Tell the document how much room the fixed bar takes at the bottom, or that it takes none. */
     private reserve(): void {
-      reserveBottom(this, this.mobile() ? this.offsetHeight : 0);
+      reserveBottom(this, this.mobile() ? this.offsetHeight : 0, this.boundDoc ?? this.ownerDocument ?? document);
     }
 
     private collapsed(): boolean {
@@ -291,32 +305,35 @@ export function defineAgentBar(tag = "apc-agents"): void {
       this.media = null;
       this.resizer?.disconnect();
       this.resizer = null;
-      window.removeEventListener(APC_ARMED_EVENT, this.onArmed);
-      reserveBottom(this, 0);
+      this.boundWin?.removeEventListener(APC_ARMED_EVENT, this.onArmed);
+      reserveBottom(this, 0, this.boundDoc ?? this.ownerDocument ?? document);
+      this.boundDoc = null;
+      this.boundWin = null;
     }
 
     connectedCallback(): void {
-      if (typeof matchMedia === "function") {
-        this.media = matchMedia(APC_MOBILE_MEDIA);
+      const doc = this.ownerDocument ?? document;
+      const win = doc.defaultView ?? (typeof window !== "undefined" ? window : null);
+      this.boundDoc = doc;
+      this.boundWin = win;
+      if (typeof win?.matchMedia === "function") {
+        this.media = win.matchMedia(APC_MOBILE_MEDIA);
         this.media.addEventListener("change", this.onMedia);
       }
-      window.addEventListener(APC_ARMED_EVENT, this.onArmed);
+      win?.addEventListener(APC_ARMED_EVENT, this.onArmed);
       if (typeof ResizeObserver === "function") {
         this.resizer = new ResizeObserver(() => this.reserve());
         this.resizer.observe(this);
       }
-      if (!document.getElementById(STYLE_ID)) {
-        const style = document.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = CSS;
-        document.head.append(style);
-      }
+      adoptStyle(STYLE_ID, CSS, styleRootOf(this));
+      adoptStyle(DOC_STYLE_ID, DOC_CSS, doc);
       if (!this.hasAttribute("role")) this.setAttribute("role", "toolbar");
       if (!this.hasAttribute("aria-label")) {
         this.setAttribute("aria-label", this.words.toolbar);
         this.setAttribute("data-apc-label", "default");
       }
       this.render();
+      this.reserve();
     }
 
     private emit(type: AgentBarEvent, id: string): void {
@@ -469,7 +486,7 @@ export function defineAgentBar(tag = "apc-agents"): void {
       mark.dataset.grant = a.id;
       mark.title = labels.mark;
       mark.setAttribute("aria-label", a.name);
-      if (document.documentElement.getAttribute("data-apc-armed") === a.id) mark.setAttribute("aria-pressed", "true");
+      if ((this.ownerDocument ?? document).documentElement?.getAttribute("data-apc-armed") === a.id) mark.setAttribute("aria-pressed", "true");
       // The icon element moves into the new mark, so what the app drew in it stays.
       mark.append(node.icon);
       const parts: HTMLElement[] = [mark];
