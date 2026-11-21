@@ -50,7 +50,6 @@ function pairError(error: string | undefined): string {
   return plainError("Signals", error);
 }
 
-const DOCK_URL = import.meta.env.DEV ? "http://localhost:5200/dock" : "https://apc.tineira.com/dock";
 /** Pulse, the other demo app, at its own site (TIN-621). */
 const PULSE_URL = import.meta.env.DEV ? "http://localhost:5199" : "https://pulse.apc.tineira.com";
 /** The demo's one world: the same posts on every visit, for everyone. */
@@ -288,7 +287,7 @@ function Feed({ sid }: { sid: string }) {
         </button>
       </div>
       <p className="muted small">
-        Your agent reads Signals on its own URL, and the feed goes straight to it. Once it is connected, drag its mark from the top onto any post. To use one agent across apps instead, connect it once to your <a href={DOCK_URL}>agent dock</a>.
+        Your agent reads Signals on its own URL, and the feed goes straight to it. Once it is connected, drag its mark from the top onto any post.
       </p>
       <DirectAgents
         appName="Signals"
@@ -324,7 +323,7 @@ function Feed({ sid }: { sid: string }) {
     const name = state.grants.find((g) => g.id === id)?.name ?? "Your agent";
     void call<{ ok: boolean; error?: string }>(`${base}/grants/${id}/revoke`, {})
       .then(
-        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, connect it again here, or drop it here again from your dock.` : `Not revoked. ${plainError("Signals", r.error)}`),
+        (r) => (r.ok ? `Revoked ${name}: it can no longer read Signals. To let it back, connect it again here.` : `Not revoked. ${plainError("Signals", r.error)}`),
         () => `Not revoked. ${plainError("Signals", undefined)}`,
       )
       .then((message) => {
@@ -445,9 +444,9 @@ function Feed({ sid }: { sid: string }) {
               , which shows the same company.
             </p>
           </section>
-          <section className="panel muted small">Drag an agent onto a post, or onto its offer, targeting, code or text: from the dock, or its mark at the top. Your agent reads it with this feed's own tools.</section>
+          <section className="panel muted small">Drag an agent onto a post, or onto its offer, targeting, code or text: its mark at the top. Your agent reads it with this feed's own tools.</section>
           <section className="panel muted small">
-            <StartOver site="Signals" wipes={["the agents you connected here or your dock paired here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
+            <StartOver site="Signals" wipes={["the agents you connected here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
           </section>
         </>
       }
