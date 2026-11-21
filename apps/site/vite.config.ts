@@ -30,9 +30,42 @@ function staticDocs(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [staticDocs(), react(), cloudflare({ inspectorPort: false })],
-  build: { assetsDir: "site-assets" },
-  // The site asks nothing of a hub any more (TIN-1061): it serves every URL it links.
-  server: { origin: "http://localhost:5202", port: 5202, strictPort: true },
+/**
+ * The local Pulse (TIN-1071): under `vite dev`, and in a build made with `--mode local-pulse` (for `vite preview`, which
+ * applies the site's CSP), the site frames and links the Pulse of `pnpm dev` (src/pulse-origin.local.ts). The Worker's
+ * policy follows through the same module; this plugin gives the local build's _headers the same frame-src. A
+ * production build never sees the local origin (scripts/site-routes.mjs checks dist).
+ */
+const PRODUCTION_FRAMES = "frame-src https://pulse.apc.tineira.com/embed/";
+function localPulseHeaders(): Plugin {
+  return {
+    name: "apc-local-pulse-headers",
+    applyToEnvironment: (environment) => environment.name === "client",
+    writeBundle(options) {
+      const file = join(options.dir!, "_headers");
+      const text = readFileSync(file, "utf8");
+      if (!text.includes(PRODUCTION_FRAMES)) throw new Error("_headers has no frame-src for Pulse to make local");
+      writeFileSync(file, text.replace(PRODUCTION_FRAMES, "frame-src http://localhost:5173/embed/"));
+    },
+  };
+}
+
+/** Every import of src/pulse-origin.ts, from the page or the Worker, gets src/pulse-origin.local.ts instead. */
+function localPulseOrigin(): Plugin {
+  const local = fileURLToPath(new URL("./src/pulse-origin.local.ts", import.meta.url));
+  return {
+    name: "apc-local-pulse-origin",
+    enforce: "pre",
+    resolveId: (source) => (/(^|\/)pulse-origin\.ts$/.test(source) ? local : null),
+  };
+}
+
+export default defineConfig(({ command, mode, isPreview }) => {
+  const localPulse = (command === "serve" && !isPreview) || mode === "local-pulse";
+  return {
+    plugins: [staticDocs(), ...(localPulse ? [localPulseOrigin()] : []), ...(localPulse && command === "build" ? [localPulseHeaders()] : []), react(), cloudflare({ inspectorPort: false })],
+    build: { assetsDir: "site-assets" },
+    // The site asks nothing of a hub any more (TIN-1061): it serves every URL it links.
+    server: { origin: "http://localhost:5202", port: 5202, strictPort: true },
+  };
 });

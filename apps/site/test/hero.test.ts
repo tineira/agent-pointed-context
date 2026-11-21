@@ -139,11 +139,16 @@ test("the message travels and fades in transforms and opacity only, and stands s
   for (const animated of [".hero-chat > *", ".hero-offer", ".hero-tool-dot", '.hero-bar[data-apc-presence="read"]']) assert.ok(reduced.includes(animated), animated);
 });
 
-test("Now use your own agent leads to Pulse's Agents page, and a shortcut in the title bar opens it", () => {
-  assert.match(stage, /export const PULSE_AGENTS = "https:\/\/pulse\.apc\.tineira\.com\/agents";/);
-  assert.match(stage, /<a className="btn primary" href=\{PULSE_AGENTS\}>/);
-  assert.match(stage, /make an agent there, copy its MCP address into your agent, then drop your agent on a bar in Pulse\./);
-  assert.match(stage, /<button type="button" className="hero-own" onClick=\{openOffer\}>\s*Use your own agent\s*<\/button>/);
+test("Now use your own agent opens Pulse in the stage, from the panel or the title bar, with the cookie said beside it", () => {
+  assert.match(read("apps/site/src/web/pulse-status.ts"), /export const PULSE_AGENTS = `\$\{PULSE_ORIGIN\}\/agents`;/);
+  assert.match(stage, /<button type="button" className="btn primary" onClick=\{useOwnAgent\} aria-describedby="hero-offer-cookie">\s*Use your own agent/);
+  assert.match(stage, /<a className="hero-offer-open" href=\{PULSE_AGENTS\} target="_blank" rel="noopener">\s*or open Pulse/);
+  assert.match(stage, /copy its MCP address into your agent, then drop your agent on a bar\./);
+  assert.match(stage, /<button type="button" className="hero-own" onClick=\{useOwnAgent\} aria-describedby="hero-cookie">\s*Use your own agent\s*<\/button>/);
+  assert.match(stage, /const COOKIE_NOTE = "“Use your own agent” connects to Pulse \(pulse\.apc\.tineira\.com\) in this page, and Pulse sets its one sandbox cookie\.";/);
+  assert.match(stage, /<p id="hero-offer-cookie" className="hero-offer-cookie">\s*\{COOKIE_NOTE\}/);
+  assert.match(stage, /<span id="hero-cookie">\{COOKIE_NOTE\}<\/span>/);
+  assert.match(stage, /onUseOwnAgent=\{\(\) => setLive\(true\)\}/);
   assert.match(stage, /className="hero-offer" role="region"/);
   assert.match(css, /\.hero-offer \{\s*position: absolute;\s*inset: 0;/, "inside the stage, over it, not in a corner");
 });

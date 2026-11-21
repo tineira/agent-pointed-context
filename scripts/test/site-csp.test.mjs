@@ -3,13 +3,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { SITE_CSP } from "../../apps/site/src/worker/csp.ts";
+import { PULSE_EMBED_FRAMES, SITE_CSP } from "../../apps/site/src/worker/csp.ts";
 import { cspViolations, headersFileCsp, inlineHash, scriptHashes } from "../lib/site-csp.mjs";
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const page = (head, body = "") => `<!doctype html><html><head>${head}</head><body>${body}</body></html>`;
 
-test("the policy allows no inline or eval'd script, and frames, bases and plugins not at all", () => {
+test("the policy allows no inline or eval'd script, no base or plugin, and frames only Pulse's /embed/ views", () => {
   const directives = Object.fromEntries(SITE_CSP.split("; ").map((d) => [d.split(" ")[0], d.split(" ").slice(1).join(" ")]));
   assert.deepEqual(directives, {
     "default-src": "'self'",
@@ -19,12 +19,16 @@ test("the policy allows no inline or eval'd script, and frames, bases and plugin
     "media-src": "'self'",
     "font-src": "'self'",
     "connect-src": "'self'",
+    "frame-src": "https://pulse.apc.tineira.com/embed/",
     "object-src": "'none'",
     "base-uri": "'none'",
     "frame-ancestors": "'none'",
     "form-action": "'self'",
   });
-  assert.doesNotMatch(SITE_CSP, /unsafe-inline|unsafe-eval|unsafe-hashes|\*|https?:/);
+  assert.doesNotMatch(SITE_CSP, /unsafe-inline|unsafe-eval|unsafe-hashes|\*/);
+  // Another origin appears in frame-src only (TIN-1071): connect-src stays 'self', and nothing else names one.
+  for (const [name, sources] of Object.entries(directives)) if (name !== "frame-src") assert.doesNotMatch(sources, /https?:/, name);
+  assert.equal(PULSE_EMBED_FRAMES, "https://pulse.apc.tineira.com/embed/", "a path, not the whole of Pulse");
 });
 
 test("_headers gives every asset the same policy as the Worker, and keeps X-Frame-Options", () => {

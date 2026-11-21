@@ -19,6 +19,19 @@ for (const file of pages) {
   assert.deepEqual(found, [], `apps/site/dist/client/${file} breaks the site's CSP:\n${found.join("\n")}`);
 }
 assert.equal(headersFileCsp(readFileSync(new URL("_headers", client), "utf8")), SITE_CSP, "the built _headers carries SITE_CSP");
+// The one frame the site may hold (TIN-1071): Pulse's /embed/ views, and this origin still refuses every framing.
+assert.ok(SITE_CSP.split("; ").includes("frame-src https://pulse.apc.tineira.com/embed/"), "SITE_CSP frames Pulse's /embed/ views only");
+assert.ok(SITE_CSP.split("; ").includes("frame-ancestors 'none'"), "SITE_CSP keeps frame-ancestors 'none'");
+// A production build holds the production origins only: the local Pulse of `vite dev` and `--mode local-pulse`
+// (src/pulse-origin.local.ts) never reaches dist, and the landing frames the real hero.
+const built = (dir) => readdirSync(dir, { recursive: true }).map(String).filter((f) => /\.(js|mjs|html|json|txt|md)$|_headers$/.test(f)).map((f) => readFileSync(new URL(f.replaceAll("\\", "/"), dir), "utf8"));
+const clientFiles = built(client);
+const workerFiles = built(new URL("../apps/site/dist/apc_site/", import.meta.url));
+for (const text of [...clientFiles, ...workerFiles]) assert.doesNotMatch(text, /localhost:5173/, "a production build names the local Pulse");
+// (The client bundle keeps the template literals, so Pulse's origin and the paths built from it sit apart there.)
+const builds = (files, ...parts) => files.some((t) => parts.every((p) => t.includes(p)));
+assert.ok(builds(clientFiles, "`https://pulse.apc.tineira.com`", "/embed/hero`"), "the built landing frames Pulse's production hero");
+assert.ok(builds(workerFiles, "frame-src https://pulse.apc.tineira.com/embed/"), "the built Worker carries the production frame-src");
 
 const runtime = await startWorkerd({ site: true });
 const rows = [];

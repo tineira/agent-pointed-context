@@ -9,6 +9,10 @@
  * underneath, unseen); the agent window shows the exchange and the answer, which says what the chart does not show.
  * The stage plays one pin by itself on load (not under reduced motion), which does not count; after the visitor's second
  * own pin and its answer, "Now use your own agent" opens inside the stage.
+ *
+ * "Use your own agent" (the panel's action, and the title bar's shortcut) puts Pulse's real hero view in place of the
+ * stage (hero/live.ts, TIN-1071): only then does the page frame Pulse, and Pulse set its sandbox cookie, as the copy
+ * beside each says. "Back to the demo" brings the simulated stage back.
  */
 import { focusAttrs } from "@tineira/apc-protocol";
 import { enablePinning, initials, pinBadgeX, pinTouch, type AgentState, type BarAgent } from "@tineira/apc-web";
@@ -20,11 +24,13 @@ import { createClock } from "./hero/clock.ts";
 import { CHART_TOP, loadHeroData, monthName, monthShort, type HeroData } from "./hero/data.ts";
 import { HERO_AGENT, HeroAgentBar, HeroPin } from "./hero/elements.tsx";
 import { FocusCard, Json } from "./hero/json.tsx";
+import { HeroSwitch } from "./hero/live.ts";
 import { carryMark, sendMessage } from "./hero/motion.ts";
 import { createHeroSequence, type ChatItem } from "./hero/sequence.ts";
+import { PULSE_AGENTS } from "../pulse-status.ts";
 
-/** Pulse's Agents page: where the visitor makes an agent and copies its MCP address. */
-export const PULSE_AGENTS = "https://pulse.apc.tineira.com/agents";
+/** What "Use your own agent" does, said beside it (invariant 5 of TIN-1063: no request to Pulse before the click). */
+const COOKIE_NOTE = "“Use your own agent” connects to Pulse (pulse.apc.tineira.com) in this page, and Pulse sets its one sandbox cookie.";
 /** The bar the stage pins by itself: March, whose focus the build page shows. */
 const SELF_PLAY_MONTH = "2026-03";
 /** How long what the agent read stays lit (the package's FLASH_MS). */
@@ -45,6 +51,8 @@ function useReducedMotion(): boolean {
 
 export function HeroStage() {
   const [data, setData] = useState<HeroData | null>(null);
+  // The simulated demo first, always: the frame mounts on the click only, whatever /try's hint says.
+  const [live, setLive] = useState(false);
   useEffect(() => {
     let live = true;
     void loadHeroData().then((d) => live && setData(d));
@@ -52,11 +60,11 @@ export function HeroStage() {
       live = false;
     };
   }, []);
-  if (!data) return <figure className="hero-stage hero-stage-loading" aria-busy="true" aria-label="A demo of pointing an agent at a chart, loading" />;
-  return <Stage data={data} />;
+  const demo = data ? <Stage data={data} onUseOwnAgent={() => setLive(true)} /> : <figure className="hero-stage hero-stage-loading" aria-busy="true" aria-label="A demo of pointing an agent at a chart, loading" />;
+  return <HeroSwitch live={live} demo={demo} onBack={() => setLive(false)} />;
 }
 
-function Stage(props: { data: HeroData }) {
+function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
   const { months } = props.data;
   const reduce = useReducedMotion();
   const stageRef = useRef<HTMLElement | null>(null);
@@ -229,9 +237,9 @@ function Stage(props: { data: HeroData }) {
     if (body) body.scrollTop = body.scrollHeight;
   }, [chat]);
 
-  const openOffer = () => {
+  const useOwnAgent = () => {
     stopSelfPlay();
-    sequence.openOffer();
+    props.onUseOwnAgent();
   };
   useEffect(() => {
     if (offer) offerRef.current?.focus({ preventScroll: true });
@@ -300,7 +308,7 @@ function Stage(props: { data: HeroData }) {
             <i />
             <i />
             <span>your agent</span>
-            <button type="button" className="hero-own" onClick={openOffer}>
+            <button type="button" className="hero-own" onClick={useOwnAgent} aria-describedby="hero-cookie">
               Use your own agent
             </button>
           </div>
@@ -322,23 +330,31 @@ function Stage(props: { data: HeroData }) {
               Now use <em>your own agent</em>
             </h3>
             <p>
-              This agent was simulated. Pulse is a real demo app: <b>make an agent there, copy its MCP address into your agent, then drop your agent on a bar in Pulse.</b> It reads the same data you saw here.
+              This agent was simulated. Pulse is a real demo app, and it opens right here: <b>copy its MCP address into your agent, then drop your agent on a bar.</b> It reads the same data you saw here.
             </p>
             <div className="hero-offer-actions">
-              <a className="btn primary" href={PULSE_AGENTS}>
-                Open Pulse's Agents page <span aria-hidden="true">→</span>
+              <button type="button" className="btn primary" onClick={useOwnAgent} aria-describedby="hero-offer-cookie">
+                Use your own agent <span aria-hidden="true">→</span>
+              </button>
+              <a className="hero-offer-open" href={PULSE_AGENTS} target="_blank" rel="noopener">
+                or open Pulse <span aria-hidden="true">↗</span>
               </a>
               <button type="button" className="hero-offer-back" onClick={() => setOffer(false)}>
                 Back to the demo
               </button>
             </div>
+            <p id="hero-offer-cookie" className="hero-offer-cookie">
+              {COOKIE_NOTE}
+            </p>
           </div>
         </div>
       )}
       <p className="hero-said" role="status">
         {said}
       </p>
-      <figcaption className="hero-note">Simulated with Pulse's demo data, one made-up world. Nothing leaves this page.</figcaption>
+      <figcaption className="hero-note">
+        Simulated with Pulse's demo data, one made-up world. Nothing leaves this page. <span id="hero-cookie">{COOKIE_NOTE}</span>
+      </figcaption>
     </figure>
   );
 }
