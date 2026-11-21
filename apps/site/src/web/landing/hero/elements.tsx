@@ -43,9 +43,10 @@ export function HeroAgentBar(props: { agent: BarAgent; onUnpin: () => void }) {
     if (ref.current) ref.current.agents = [props.agent];
   }, [props.agent]);
 
-  // The bar's hint off from its first render (an attribute, there when it connects): it then never reads that hint's
-  // dismissal from this origin's localStorage, which is the hub's key on apc.tineira.com.
-  return createElement("apc-agents", { ref, class: "hero-agents", "dock-hint": "off" });
+  // The bar's hint off before it connects: React sets a custom element's known property (dockHint) on creation, before
+  // the element is in the page, so its first render never reads that hint's dismissal from this origin's localStorage,
+  // which is the hub's key on apc.tineira.com.
+  return createElement("apc-agents", { ref, class: "hero-agents", dockHint: null });
 }
 
 /** The pin badge on the pinned bar: a dashed, breathing ring until the agent reads the pin, then a check, and ×. */
