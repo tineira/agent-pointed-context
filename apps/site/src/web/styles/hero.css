@@ -697,16 +697,106 @@ html.apc-bar-fixed:has(.hero-stage) body {
   color: var(--fg);
 }
 
+/* The stage sizes itself by its own width, not the viewport's: beside the hero copy it gets a column of about 520 to
+   750 px; alone (one column, or a phone) up to the page's width. */
+.hero-stage {
+  container: hero-stage / inline-size;
+}
+
+.hero-months span {
+  min-width: 0;
+  overflow: hidden;
+}
+
 @media (max-width: 760px) {
   .hero-stage {
     padding: 10px;
     border-radius: 18px;
   }
+}
 
+/* A narrow column: the two windows stay side by side, tighter. */
+@container hero-stage (max-width: 679px) {
+  .hero-grid {
+    gap: 10px;
+    height: 480px;
+  }
+
+  .hero-win-bar {
+    padding: 0 6px 0 10px;
+  }
+
+  /* The shortcut says it: the title and the dots go. */
+  .hero-agent .hero-win-bar i,
+  .hero-agent .hero-win-bar span {
+    display: none;
+  }
+
+  .hero-own {
+    padding: 2px 8px;
+    font-size: 10.5px;
+  }
+
+  .hero-app-body {
+    padding: 12px 12px 0;
+  }
+
+  .hero-app .hero-chart-title {
+    font-size: 16px;
+  }
+
+  .hero-chart-title small {
+    margin-left: 6px;
+    font-size: 11px;
+  }
+
+  .hero-chart,
+  .hero-months {
+    gap: 4px;
+    padding-left: 24px;
+  }
+
+  .hero-months {
+    font-size: 10px;
+  }
+
+  .hero-agentbar {
+    margin: 10px -12px 0;
+    padding: 6px 10px;
+  }
+
+  .hero-chat {
+    padding: 11px;
+    font-size: 12.5px;
+  }
+
+  .hero-tool {
+    font-size: 10.5px;
+  }
+
+  .hero-focus pre {
+    font-size: 10.5px;
+  }
+
+  .hero-chat-foot {
+    margin: 0 9px 9px;
+    font-size: 12px;
+  }
+
+  .hero-offer {
+    padding: 12px;
+  }
+
+  .hero-offer-card {
+    padding: 22px 20px;
+  }
+}
+
+/* Too narrow for two windows (a phone): the app above, the agent below. */
+@container hero-stage (max-width: 479px) {
   .hero-grid {
     grid-template-columns: 1fr;
     height: auto;
-    gap: 10px;
   }
 
   .hero-app {
@@ -717,32 +807,13 @@ html.apc-bar-fixed:has(.hero-stage) body {
     height: 420px;
   }
 
-  .hero-app-body {
-    padding: 12px 12px 0;
-  }
-
-  .hero-chart,
-  .hero-months {
-    gap: 5px;
-    padding-left: 24px;
-  }
-
-  .hero-months {
-    font-size: 10.5px;
-  }
-
-  .hero-agentbar {
-    margin: 10px -12px 0;
-    padding: 6px 10px;
+  .hero-agent .hero-win-bar i,
+  .hero-agent .hero-win-bar span {
+    display: block;
   }
 
   .hero-offer {
     padding: 10px;
-    align-items: center;
-  }
-
-  .hero-offer-card {
-    padding: 22px 20px;
   }
 }
 

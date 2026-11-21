@@ -153,7 +153,7 @@ test("the stage shows no figure the file does not hold, and stacks on a phone", 
   assert.match(css, /\.hero-grid-100 \{\s*bottom: calc\(\(100% - 48px\) \* 100 \/ 140\);/);
   assert.equal(CHART_TOP, 140);
   for (const [file, source] of [["HeroStage.tsx", stage], ...modules] as const) assert.doesNotMatch(source, /\$\d|revenue|USD|€/i, file);
-  const phone = css.slice(css.indexOf("@media (max-width: 760px)"));
+  const phone = css.slice(css.indexOf("@container hero-stage (max-width: 479px)"));
   assert.match(phone, /\.hero-grid \{\s*grid-template-columns: 1fr;/);
 });
 
