@@ -8,12 +8,11 @@
  * leaves out what it links; both themes pass 4.5:1 for text, links and buttons.
  */
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { headingIds, parseMarkdown } from "../src/docs/markdown.ts";
 import { DOC_PAGES } from "../src/docs/pages.ts";
-import { clipFallback } from "../src/web/clip-fallback.ts";
 import { DOT_FIELD_SPECS, type RgbaColor } from "../src/web/dot-field.ts";
 import { DOCK_PRODUCT, DOCS, footerLinks, legacyAnchor, PAPER, RECORDS, REPO, SITE_PAGES, sitePageAt, VIDEO } from "../src/web/site-pages.ts";
 
@@ -22,7 +21,6 @@ const read = (path: string) => readFileSync(new URL(path, root), "utf8");
 const landingRoot = read("apps/site/src/web/landing.tsx");
 const sectionOf = (name: string) => read(`apps/site/src/web/landing/${name}.tsx`);
 const heroSection = sectionOf("HeroSection");
-const heroStage = sectionOf("HeroStage");
 const worksWith = sectionOf("WorksWithSection");
 const pathsSection = sectionOf("PathsSection");
 const howSection = sectionOf("HowItWorksSection");
@@ -48,7 +46,6 @@ const docsCss = read("apps/site/src/web/styles/docs.css");
 
 /** JSX text with its line breaks and indentation folded to single spaces. */
 const flat = (source: string) => source.replace(/\s+/g, " ");
-const video = heroStage.slice(heroStage.indexOf("<video"), heroStage.indexOf("</video>"));
 
 test("the landing runs its sections in order, then the footer", () => {
   const order = [...landingRoot.slice(landingRoot.indexOf("<main"), landingRoot.indexOf("</main>")).matchAll(/<([A-Z][A-Za-z]+) \/>/g)].map((m) => m[1]);
@@ -179,10 +176,9 @@ test("the landing's styles stay under .landing-home: /try and /build pick up non
   );
   assert.ok(pageClasses.has("landing") && pageClasses.has("landing-who"), "the class scan reads /try's and /build's markup");
   assert.ok(!pageClasses.has("landing-home"), "/try and /build never carry the landing's scope");
-  // What landing.css shares with the other pages on purpose (their main, the "who" line) and the stage's own rules (TIN-1066).
+  // What landing.css shares with the other pages on purpose (their main, the "who" line). The stage's rules are in hero.css (TIN-1066).
   const shared = [
-    "main.landing", ".landing p", ".landing-stage", ".landing-stage video", ".landing-stage img", ".landing-stage-toggle",
-    ".landing-stage:hover .landing-stage-toggle", ".landing-stage-toggle:focus-visible", ".landing-who", ".landing-eyebrow",
+    "main.landing", ".landing p", ".landing-who", ".landing-eyebrow",
     ".landing-cta", ".landing-cta.big", ".landing-cta.ghost", ".landing-cta:hover", ".landing-cta.ghost:hover",
     ".landing section[id]", ".landing .landing-title",
   ];
@@ -257,47 +253,6 @@ test("every link on the landing goes somewhere that exists", () => {
   assert.match(standardSection, /\{\.\.\.\(c\.external \? \{ target: "_blank", rel: "noopener" \} : \{\}\)\}/);
   // The strict CSP allows no inline style: nothing on the landing sets one.
   assert.doesNotMatch(landing, /\sstyle=\{|\sstyle="/);
-});
-
-test("the clip is small, silent where it can be checked, and its poster stands in under reduced motion", () => {
-  const sizes = ["apc-hero.webm", "apc-hero.mp4", "apc-hero-poster.jpg"].map((f) => statSync(new URL(`apps/site/public/media/${f}`, root)).size);
-  for (const size of sizes.slice(0, 2)) assert.ok(size < 1.5 * 1024 * 1024, `a clip is ${size} bytes, over 1.5 MB`);
-  assert.ok(sizes[2]! < 200 * 1024, "the poster stays small");
-  for (const path of ["/media/apc-hero.webm", "/media/apc-hero.mp4", "/media/apc-hero-poster.jpg"]) assert.ok(heroStage.includes(path), path);
-  // The MP4 has one track, the video: no audio from the promo's licensed music or voice.
-  const mp4 = readFileSync(new URL("apps/site/public/media/apc-hero.mp4", root));
-  assert.equal(mp4.toString("latin1").split("trak").length - 1, 1, "the MP4 has exactly one track");
-  assert.ok(!mp4.includes("soun"), "the MP4 has no sound track");
-  assert.match(heroStage, /prefers-reduced-motion: reduce/);
-  assert.match(heroStage, /reduce \|\| failed \? \(\s*<img src=\{CLIP\.poster\}/, "under reduced motion (or with no playable clip) the poster replaces the video");
-  assert.match(video, /^<video\s[^]*?\sautoPlay\s+muted\s+loop\s+playsInline\s/, "a muted loop, inline");
-  assert.doesNotMatch(video, /\bcontrols\b/, "no player controls");
-});
-
-test("a clip that fails falls back: a failed WebM to the MP4, and no playable clip to the poster", () => {
-  // <source> errors do not bubble to the video: the browser moves on to the next source, and only the last one failing means no clip.
-  assert.equal(clipFallback({ on: "source", last: false }), "wait");
-  assert.equal(clipFallback({ on: "source", last: true }), "poster");
-  // A file that loads but cannot be decoded fires on the video.
-  assert.equal(clipFallback({ on: "video", currentSrc: "https://apc.tineira.com/media/apc-hero.webm" }), "mp4");
-  assert.equal(clipFallback({ on: "video", currentSrc: "https://apc.tineira.com/media/apc-hero.webm?v=2" }), "mp4");
-  assert.equal(clipFallback({ on: "video", currentSrc: "https://apc.tineira.com/media/apc-hero.mp4" }), "poster");
-  assert.equal(clipFallback({ on: "video", currentSrc: "" }), "poster");
-  // And the page wires every one of them: both sources and the video.
-  assert.match(video, /<source src=\{CLIP\.webm\} type="video\/webm" onError=\{\(\) => fallBack\(\{ on: "source", last: false \}\)\} \/>/);
-  assert.match(video, /<source src=\{CLIP\.mp4\} type="video\/mp4" onError=\{\(\) => fallBack\(\{ on: "source", last: true \}\)\} \/>/);
-  // React bubbles a source's error to the video's onError: the video acts on its own errors only.
-  assert.match(video, /onError=\{\(e\) => e\.target === e\.currentTarget && fallBack\(\{ on: "video", currentSrc: e\.currentTarget\.currentSrc \}\)\}/);
-});
-
-test("the clip's button follows the video and says what it does", () => {
-  assert.match(video, /onPlay=\{\(\) => setPaused\(false\)\}/);
-  assert.match(video, /onPause=\{\(\) => setPaused\(true\)\}/);
-  assert.match(heroStage, /\{paused \? "Play animation" : "Pause animation"\}/);
-  assert.doesNotMatch(heroStage, /aria-pressed/, "a label that changes, so no pressed state");
-  const toggleRule = landingCss.match(/^\.landing-stage-toggle \{[^}]*\}/m);
-  assert.ok(toggleRule, "landing-stage-toggle rule exists");
-  assert.doesNotMatch(toggleRule[0], /opacity:\s*0[;}]/, "the button is always visible");
 });
 
 test("every animation on the landing's sections has a still state under reduced motion", () => {

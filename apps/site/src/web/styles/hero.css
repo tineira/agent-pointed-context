@@ -1,0 +1,762 @@
+/* The landing's hero stage (TIN-1066): a mock Pulse window beside a "your agent" window. Colours come from the shell's
+   tokens (--paper-*, --ink-*, --bar-*); apps/site/test/hero.test.ts checks the text pairs used here for 4.5:1 in both themes.
+   No inline style anywhere: positions and bar heights are custom properties set through the CSSOM. */
+
+.hero-stage {
+  /* The standard APC elements (<apc-agents>, <apc-pin>) take the app window's colours. */
+  --apc-chip: var(--paper);
+  --apc-line: var(--paper-line);
+  --apc-ink: var(--paper-fg);
+  --apc-muted: var(--paper-muted);
+  --apc-accent: var(--paper-accent);
+  --apc-ok: #1f7a4d;
+  --apc-pin-unpin-bg: var(--paper);
+  position: relative;
+  width: 100%;
+  max-width: 1040px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line2);
+  border-radius: 22px;
+  background: var(--stage);
+  box-shadow: var(--stage-shadow);
+  text-align: left;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.hero-stage-loading {
+  height: 550px;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.14fr 1fr;
+  gap: 14px;
+  height: 500px;
+}
+
+.hero-win {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 13px;
+  overflow: hidden;
+}
+
+.hero-win-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px 0 13px;
+  flex: none;
+  font: 12px var(--mono);
+}
+
+.hero-win-bar i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0.45;
+}
+
+.hero-win-bar span {
+  margin-left: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The app: Pulse's chart and its agent bar. */
+.hero-app {
+  background: var(--paper);
+  color: var(--paper-fg);
+  border: 1px solid var(--paper-line);
+}
+
+.hero-app .hero-win-bar {
+  color: var(--paper-muted);
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.hero-app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 18px 0;
+}
+
+.hero-app .hero-chart-title {
+  margin: 0;
+  color: var(--paper-fg);
+  font-size: 19px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+}
+
+.hero-chart-title small {
+  margin-left: 8px;
+  font: 12px var(--mono);
+  color: var(--paper-muted);
+  letter-spacing: 0;
+}
+
+.hero-chart {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  padding: 48px 2px 0 30px;
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.hero-grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--paper-line);
+  font: 10.5px var(--mono);
+  color: var(--paper-muted);
+  pointer-events: none;
+}
+
+.hero-grid-line b {
+  position: absolute;
+  left: 0;
+  top: -15px;
+  font-weight: 400;
+}
+
+/* The chart's top is 140 customers (CHART_TOP in hero/data.ts). */
+.hero-grid-50 {
+  bottom: calc((100% - 48px) * 50 / 140);
+}
+
+.hero-grid-100 {
+  bottom: calc((100% - 48px) * 100 / 140);
+}
+
+.hero-bar {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: var(--hero-bar, 0%);
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(180deg, var(--bar-a), var(--bar-b));
+  transition: background 0.25s;
+}
+
+.hero-bar::after {
+  content: "";
+  position: absolute;
+  inset: -5px -5px 0;
+  border: 1.5px dashed transparent;
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+  transition: border-color 0.15s;
+  pointer-events: none;
+}
+
+.hero-bar:hover {
+  background: linear-gradient(180deg, var(--bar-ha), var(--bar-hb));
+}
+
+/* While an agent is dragged or armed (enablePinning's classes): every bar is a target, the one under it lit. */
+body.apc-dragging .hero-bar::after {
+  border-color: var(--paper-line);
+}
+
+body.apc-dragging .hero-bar.apc-target::after,
+.hero-bar.apc-target::after {
+  border-color: var(--paper-accent);
+  border-style: solid;
+}
+
+.hero-bar.is-pinned {
+  background: linear-gradient(180deg, #ffcb7a, #ff9f1c);
+}
+
+.hero-bar:focus-visible {
+  outline: 2px solid var(--paper-accent);
+  outline-offset: 3px;
+}
+
+/* Presence: what the agent reads lights up. */
+.hero-bar[data-apc-presence="read"] {
+  outline: 2px dotted var(--paper-accent);
+  outline-offset: 3px;
+  animation: hero-read 2s ease-out infinite;
+}
+
+@keyframes hero-read {
+  0% { box-shadow: 0 0 0 0 rgb(255 140 20 / 0.55); }
+  100% { box-shadow: 0 0 0 14px rgb(255 140 20 / 0); }
+}
+
+.hero-months {
+  display: flex;
+  gap: 9px;
+  padding: 7px 2px 0 30px;
+  font: 11.5px var(--mono);
+  color: var(--paper-muted);
+}
+
+.hero-months span {
+  flex: 1;
+  text-align: center;
+}
+
+.hero-months .is-on {
+  color: var(--paper-accent);
+  font-weight: 600;
+}
+
+.hero-agentbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  margin: 12px -18px 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--paper-line);
+  background: var(--paper-bar);
+}
+
+/* The bar stays in the app window: the package fixes it to the foot of the viewport on phones, which is a whole app's place, not a demo's. */
+.hero-stage apc-agents.hero-agents {
+  position: static;
+  display: inline-flex;
+  justify-content: flex-start;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  z-index: auto;
+}
+
+html.apc-bar-fixed:has(.hero-stage) {
+  --apc-bar-height: 0px !important;
+}
+
+html.apc-bar-fixed:has(.hero-stage) body {
+  padding-bottom: 0;
+}
+
+/* A simulated agent has no access to take back. */
+.hero-stage .apc-agents__revoke {
+  display: none;
+}
+
+.hero-agentbar-hint {
+  margin-left: auto;
+  font: 11.5px var(--mono);
+  color: var(--paper-muted);
+  text-align: right;
+}
+
+.hero-hint-touch {
+  display: none;
+}
+
+@media (hover: none) {
+  .hero-hint-pointer {
+    display: none;
+  }
+
+  .hero-hint-touch {
+    display: inline;
+  }
+}
+
+/* The pin badge the pinned bar wears (<apc-pin>), placed as Pulse places it. */
+.hero-stage apc-pin.hero-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 4;
+  transform: translate(calc(var(--hero-pin-x, 0px) - 50%), calc(var(--hero-pin-y, 0px) - 50%));
+  pointer-events: none;
+}
+
+.hero-pin .apc-pin__mark,
+.hero-pin .apc-pin__unpin {
+  pointer-events: auto;
+}
+
+/* The agent window. */
+.hero-agent {
+  background: var(--ink);
+  color: var(--ink-fg);
+  border: 1px solid var(--ink-line);
+}
+
+.hero-agent .hero-win-bar {
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--ink-line);
+}
+
+.hero-own {
+  margin-left: auto;
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--ink-line2);
+  border-radius: 99px;
+  background: none;
+  font: 11px var(--mono);
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.hero-own:hover,
+.hero-own:focus-visible {
+  color: var(--ink-fg);
+  border-color: var(--ink-accent);
+}
+
+.hero-chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  scrollbar-width: thin;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.hero-chat > :first-child {
+  margin-top: auto;
+}
+
+.hero-chat > * {
+  flex: none;
+  margin: 0;
+  animation: hero-in 0.35s var(--ease) both;
+}
+
+@keyframes hero-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+
+.hero-chat > .hero-chat-empty {
+  margin: auto;
+  max-width: 19em;
+  text-align: center;
+  color: var(--ink-muted);
+  animation: none;
+}
+
+.hero-q {
+  align-self: flex-end;
+  max-width: 90%;
+  padding: 8px 13px;
+  border-radius: 13px 13px 4px 13px;
+  background: var(--ink-bubble);
+}
+
+.hero-tool {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font: 11.5px/1.5 var(--mono);
+  color: var(--ink-muted);
+}
+
+.hero-tool > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hero-tool b {
+  color: var(--ink-fg);
+  font-weight: 500;
+}
+
+.hero-tool-result {
+  display: block;
+}
+
+.hero-tool-dot {
+  position: relative;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-accent);
+  border-top-color: transparent;
+  animation: hero-spin 0.7s linear infinite;
+}
+
+.hero-tool.is-done .hero-tool-dot {
+  border: 0;
+  background: var(--ok);
+  animation: none;
+}
+
+.hero-tool.is-done .hero-tool-dot::after {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 2px;
+  width: 3px;
+  height: 6px;
+  border: solid #0b1a12;
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+
+@keyframes hero-spin {
+  to { transform: rotate(360deg); }
+}
+
+.hero-json-key {
+  color: #a3c4ff;
+}
+
+.hero-json-str {
+  color: #ffd9a3;
+}
+
+.hero-json-lit {
+  color: #d6b6ff;
+}
+
+.hero-focus {
+  overflow: hidden;
+  border: 1px solid rgb(255 159 28 / 0.38);
+  border-radius: 10px;
+  background: rgb(255 159 28 / 0.07);
+}
+
+.hero-focus-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgb(255 159 28 / 0.2);
+  font: 11px var(--mono);
+  color: var(--ink-accent);
+}
+
+.hero-focus-head button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.hero-focus pre {
+  margin: 0;
+  padding: 8px 10px;
+  font: 11.2px/1.55 var(--mono);
+  color: var(--ink-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hero-focus-call {
+  border-radius: 3px;
+  background: rgb(255 159 28 / 0.16);
+  box-shadow: 0 0 0 2px rgb(255 159 28 / 0.16);
+}
+
+.hero-answer {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.hero-answer > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.hero-answer > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.hero-answer p {
+  margin: 0;
+}
+
+.hero-answer b {
+  font-weight: 640;
+}
+
+.hero-answer small {
+  font: 10.5px var(--mono);
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+}
+
+.hero-turn {
+  padding: 9px 11px;
+  border: 1px solid var(--ink-line2);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.hero-turn b {
+  color: var(--ink-accent);
+  font-weight: 600;
+}
+
+.hero-chat-foot {
+  display: flex;
+  justify-content: space-between;
+  flex: none;
+  margin: 0 12px 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--ink-line2);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.hero-chat-foot kbd {
+  font: 11px var(--mono);
+}
+
+/* The focus message, on its way to the agent (hero/motion.ts). */
+.hero-msg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 7;
+  width: max-content;
+  padding: 7px 10px 8px;
+  border: 1px solid rgb(255 159 28 / 0.6);
+  border-radius: 10px;
+  background: #171b24;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.35);
+  font: 10.5px/1.5 var(--mono);
+  color: #dfe4ec;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.hero-msg b {
+  display: block;
+  margin-bottom: 2px;
+  color: #ff9f1c;
+  font-weight: 500;
+}
+
+.hero-msg-veil {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+}
+
+/* The stage's own drag on load: a copy of the agent's mark, carried by a pointer. */
+.hero-stage .hero-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 8;
+  margin: 0;
+  pointer-events: none;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 0.3);
+}
+
+.hero-ghost .hero-ghost-pointer {
+  position: absolute;
+  left: 22px;
+  top: 22px;
+  width: 18px;
+  height: 18px;
+  fill: #fff;
+  stroke: #141a24;
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+/* "Now use your own agent": a large panel inside the stage. */
+.hero-offer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  backdrop-filter: blur(3px);
+  user-select: text;
+  -webkit-user-select: text;
+  animation: hero-offer-in 0.5s var(--ease) both;
+}
+
+@keyframes hero-offer-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+}
+
+.hero-offer-card {
+  max-width: 620px;
+  padding: 30px 32px;
+  border: 1.5px solid var(--accent-line);
+  border-radius: 18px;
+  background: var(--card-solid);
+  box-shadow: 0 0 0 6px var(--accent-soft), var(--stage-shadow);
+  color: var(--fg);
+}
+
+.hero-offer-eyebrow {
+  font: 500 12px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.hero-offer h3 {
+  margin: 10px 0 12px;
+  font-size: clamp(26px, 3.4vw, 38px);
+  line-height: 1.05;
+  letter-spacing: var(--track);
+  outline: none;
+}
+
+.hero-offer h3 em {
+  font-family: var(--em-font);
+  font-style: var(--em-style);
+  font-weight: var(--em-weight);
+  color: var(--accent-text);
+}
+
+.hero-offer p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.hero-offer p b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.hero-offer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  margin-top: 22px;
+}
+
+.hero-offer-back {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.hero-said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* --fg, not --muted: the stage's own tint over the brightest dot of the field leaves --muted under 4.5:1. */
+.hero-note {
+  margin: 12px 2px 0;
+  font: 12px var(--mono);
+  color: var(--fg);
+}
+
+@media (max-width: 760px) {
+  .hero-stage {
+    padding: 10px;
+    border-radius: 18px;
+  }
+
+  .hero-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+    gap: 10px;
+  }
+
+  .hero-app {
+    height: 360px;
+  }
+
+  .hero-agent {
+    height: 420px;
+  }
+
+  .hero-app-body {
+    padding: 12px 12px 0;
+  }
+
+  .hero-chart,
+  .hero-months {
+    gap: 5px;
+    padding-left: 24px;
+  }
+
+  .hero-months {
+    font-size: 10.5px;
+  }
+
+  .hero-agentbar {
+    margin: 10px -12px 0;
+    padding: 6px 10px;
+  }
+
+  .hero-offer {
+    padding: 10px;
+    align-items: center;
+  }
+
+  .hero-offer-card {
+    padding: 22px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-chat > *,
+  .hero-offer,
+  .hero-tool-dot,
+  .hero-bar[data-apc-presence="read"] {
+    animation: none;
+  }
+
+  .hero-bar,
+  .hero-bar::after,
+  .hero-own {
+    transition: none;
+  }
+}
