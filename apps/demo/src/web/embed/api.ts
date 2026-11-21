@@ -1,0 +1,82 @@
+/**
+ * The hero view's own API (TIN-1070): only what the hero may do with its sandbox. It reads the state, makes its one
+ * agent (POST /grants/agent), pins and unpins that agent, says what it shows (POST /view), and listens on the
+ * sandbox's WebSocket. Nothing else of Pulse's API is in this bundle (the build checks it: capability.ts), so a frame
+ * on another site cannot reach Revoke, Start over, Allow, Wake or Settings through it.
+ */
+import type { FocusTarget } from "@tineira/apc-protocol";
+import { HEARTBEAT_MS } from "../../worker/page.ts";
+import type { GrantState, SandboxState, ServerMessage } from "../api.ts";
+
+export type { GrantState, SandboxState, ServerMessage };
+
+/** An answer as the hero reads it: the HTTP status and the JSON body, if any. */
+export interface Answer<T> {
+  status: number;
+  json: T | null;
+}
+
+async function call<T>(path: string, init?: RequestInit): Promise<Answer<T>> {
+  const response = await fetch(path, { credentials: "same-origin", ...init, headers: { "content-type": "application/json", ...init?.headers } });
+  const json = (await response.json().catch(() => null)) as T | null;
+  return { status: response.status, json };
+}
+
+export function createEmbedApi(sid: string) {
+  const base = `/api/s/${sid}`;
+  const post = <T>(path: string, body: unknown) => call<T>(`${base}${path}`, { method: "POST", body: JSON.stringify(body) });
+  return {
+    async state(): Promise<SandboxState> {
+      const answer = await call<SandboxState>(`${base}/state`);
+      if (answer.status !== 200 || !answer.json) throw Object.assign(new Error(`state: ${answer.status}`), { status: answer.status });
+      return answer.json;
+    },
+    /** A new Direct agent for the hero (its own grant): 200 with the grant, 400 `too_many` at the cap, 429 rate limited. */
+    addAgent: () => post<GrantState & { ok?: boolean; error?: string }>("/grants/agent", {}),
+    reportView: (view: unknown) => post<{ ok: boolean }>("/view", view),
+    pin: (grantId: string, target: FocusTarget) => post<{ ok: boolean; error?: string }>("/pin", { grant_id: grantId, target }),
+    unpin: (grantId: string) => post<{ ok: boolean }>("/unpin", { grant_id: grantId }),
+    /** The sandbox's messages (presence, pins, grants), with the page's heartbeat; reconnects with backoff, as Pulse does. */
+    connect(onMessage: (message: ServerMessage) => void): () => void {
+      let socket: WebSocket | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      let closed = false;
+      let delay = 2000;
+      const open = () => {
+        socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
+        socket.onopen = () => {
+          delay = 2000;
+          const ws = socket;
+          ws?.send("ping");
+          heartbeat = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send("ping"), HEARTBEAT_MS);
+        };
+        socket.onmessage = (event) => {
+          if (event.data === "pong") return;
+          try {
+            onMessage(JSON.parse(String(event.data)) as ServerMessage);
+          } catch {
+            // a message the hero cannot read is skipped
+          }
+        };
+        socket.onclose = () => {
+          clearInterval(heartbeat);
+          if (closed) return;
+          retry = setTimeout(open, delay);
+          delay = Math.min(60_000, delay * 2);
+        };
+      };
+      open();
+      return () => {
+        closed = true;
+        clearInterval(heartbeat);
+        clearTimeout(retry);
+        socket?.close();
+      };
+    },
+  };
+}
+export type EmbedApi = ReturnType<typeof createEmbedApi>;
+
+/** The view the hero reports when it makes its agent and on a pin, so get_current_view names a screen, not null. */
+export const EMBED_VIEW = { screen: "overview", params: {}, selection: null } as const;

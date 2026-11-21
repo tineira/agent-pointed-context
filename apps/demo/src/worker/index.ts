@@ -11,6 +11,7 @@ import type { ApcProfile } from "@tineira/apc-protocol";
 import { apcJsonResponse, apcManifest, handleDockGiveBack, profilesRefusal } from "@tineira/apc-server";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { givenBack, isOwnerStateRequest, ownerRequestRefusal, publicOrigin } from "./dock-app.ts";
+import { applyFramingHeaders, EMBED_HERO_PATH, embedAncestors, embedHeroCsp, embedMessageOrigin, embedParentOrigin, type EmbedEnv } from "./embed.ts";
 import { SANDBOX_TTL_MS, servedProfiles, type Env } from "./sandbox.ts";
 
 export { Sandbox } from "./sandbox.ts";
@@ -20,7 +21,19 @@ const COOKIE = "apc_session";
 type Stub = DurableObjectStub<import("./sandbox.ts").Sandbox>;
 type Vars = { sid: string; owner: string };
 
-const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+const app = new Hono<{ Bindings: Env & EmbedEnv; Variables: Vars }>();
+
+// Framing (TIN-1070): no Pulse answer may be framed by any site (frame-ancestors 'none', X-Frame-Options: DENY), with
+// nosniff and no-referrer, except the hero view's own 200, which only EMBED_PARENT_ORIGIN may frame. Registered first, so
+// the early answers of the middleware below (profilesRefusal, the M6 refusals, a 404) carry them too. What the assets
+// answer before the Worker runs gets the same headers from public/_headers. A WebSocket upgrade (101) is left as it is.
+app.use("*", async (c, next) => {
+  await next();
+  if (c.res.status === 101) return;
+  const hero = c.req.method === "GET" && new URL(c.req.url).pathname === EMBED_HERO_PATH && c.res.status === 200 ? embedParentOrigin(c.env) : null;
+  c.res = new Response(c.res.body, c.res);
+  applyFramingHeaders(c.res.headers, hero ? { csp: embedHeroCsp(embedAncestors(hero)) } : null);
+});
 
 // A typo in APC_PROFILES serves no agent path at all, with the reason in the log and in the answer
 // (never both profiles by default). Registered first: Hono runs middleware in registration order.
@@ -329,6 +342,28 @@ app.get("/.well-known/apc.json", (c) => {
   const profiles = servedProfiles(c.env);
   return apcJsonResponse(apcManifest({ name: "Pulse", origin: new URL(c.req.url).origin, profiles, connect: "/agents", ...(profiles.includes("dock") ? { dockConnect: "/connect/dock" } : {}) }));
 });
+
+/**
+ * The landing's hero (TIN-1070): one view, its own bundle (embed-hero.html), for a frame on EMBED_PARENT_ORIGIN only. A
+ * top-level visit (any Sec-Fetch-Dest but iframe) opens Pulse instead. The page learns which origin to talk to from its
+ * <meta name="apc-embed-parent">, filled in here. The asset is fetched extensionless, as Workers Assets serves an HTML
+ * file under `auto-trailing-slash` (a 200, not a 307 to that path), and without the visitor's conditional headers, so
+ * the answer is always the 200 that carries the hero's policy (a 304 would carry frame-ancestors 'none').
+ */
+app.get(EMBED_HERO_PATH, async (c) => {
+  const dest = c.req.header("sec-fetch-dest");
+  if (dest && dest !== "iframe") return c.redirect("/", 302);
+  const parent = embedParentOrigin(c.env);
+  if (!parent) return c.json({ error: "not_found" }, 404);
+  const headers = new Headers(c.req.raw.headers);
+  for (const h of ["if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range", "range"]) headers.delete(h);
+  const asset = await c.env.ASSETS.fetch(new Request(new URL("/embed-hero", c.req.url), { method: "GET", headers }));
+  if (asset.status !== 200) return asset;
+  const messageOrigin = embedMessageOrigin(parent, c.req.header("referer"));
+  const html = (await asset.text()).replace(/<meta name="apc-embed-parent" content=""\s*\/?>/, `<meta name="apc-embed-parent" content="${messageOrigin.replace(/[&"<>]/g, "")}" />`);
+  return c.body(html, 200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+});
+app.all("/embed/*", (c) => c.json({ error: "not_found" }, 404));
 
 /** No OAuth: the secret in the MCP URL is the grant. A 404 here tells a client to connect directly. */
 app.all("/.well-known/*", (c) => c.json({ error: "not_found" }, 404));

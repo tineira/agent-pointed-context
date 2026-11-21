@@ -1,0 +1,712 @@
+/* The hero view (TIN-1070): the landing's stage, for real. Colours are the site's tokens (apps/site/src/web/styles/shell.css,
+   hero.css) in both themes, so the frame blends into the stage it replaces: dark by default, light when the system is
+   light, and whatever the landing says once it sends apc:theme (html[data-scheme]). No inline style, no web font. */
+
+:root {
+  color-scheme: dark;
+  --bg: #080a0f;
+  --stage: linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0.015));
+  --line2: rgb(255 255 255 / 0.18);
+  --paper: #f5f6f8;
+  --paper-fg: #141a24;
+  --paper-muted: #56627a;
+  --paper-line: #d6dce5;
+  --paper-accent: #b85209;
+  --paper-bar: #eceff3;
+  --bar-a: #cdd3de;
+  --bar-b: #aeb6c4;
+  --bar-ha: #bfc6d3;
+  --bar-hb: #9fa8b8;
+  --ink: #12151c;
+  --ink-fg: #dfe4ec;
+  --ink-muted: #a3adbf;
+  --ink-line: rgb(255 255 255 / 0.1);
+  --ink-line2: rgb(255 255 255 / 0.18);
+  --ink-bubble: #262b36;
+  --ink-accent: #ff9f1c;
+  --btn: #ff9f1c;
+  --btn-fg: #1b1000;
+  --ok: #4cc38a;
+  --danger: #f47a72;
+  --sans: ui-sans-serif, system-ui, "Segoe UI Variable Display", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-scheme="dark"]) {
+    color-scheme: light;
+    --bg: #faf9f5;
+    --stage: linear-gradient(180deg, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0.4));
+    --line2: rgb(36 37 31 / 0.22);
+    --paper: #fffefa;
+    --paper-fg: #24251f;
+    --paper-muted: #5e5f55;
+    --paper-line: #d9d8d0;
+    --paper-accent: #a9451c;
+    --paper-bar: #f1f0e8;
+    --bar-a: #d0cfc3;
+    --bar-b: #b6b6a8;
+    --bar-ha: #c3c2b5;
+    --bar-hb: #a6a698;
+    --ink: #292c24;
+    --ink-fg: #f5f2e8;
+    --ink-muted: #d0d1c4;
+    --ink-line: rgb(255 255 240 / 0.14);
+    --ink-line2: rgb(255 255 240 / 0.24);
+    --ink-bubble: #3d4136;
+    --ink-accent: #ffa64a;
+    --btn: #272821;
+    --btn-fg: #fffdf5;
+    --ok: #1f7a4d;
+    --danger: #b42318;
+  }
+}
+
+:root[data-scheme="light"] {
+  color-scheme: light;
+  --bg: #faf9f5;
+  --stage: linear-gradient(180deg, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0.4));
+  --line2: rgb(36 37 31 / 0.22);
+  --paper: #fffefa;
+  --paper-fg: #24251f;
+  --paper-muted: #5e5f55;
+  --paper-line: #d9d8d0;
+  --paper-accent: #a9451c;
+  --paper-bar: #f1f0e8;
+  --bar-a: #d0cfc3;
+  --bar-b: #b6b6a8;
+  --bar-ha: #c3c2b5;
+  --bar-hb: #a6a698;
+  --ink: #292c24;
+  --ink-fg: #f5f2e8;
+  --ink-muted: #d0d1c4;
+  --ink-line: rgb(255 255 240 / 0.14);
+  --ink-line2: rgb(255 255 240 / 0.24);
+  --ink-bubble: #3d4136;
+  --ink-accent: #ffa64a;
+  --btn: #272821;
+  --btn-fg: #fffdf5;
+  --ok: #1f7a4d;
+  --danger: #b42318;
+}
+
+/* The standard APC elements (<apc-agents>, <apc-pin>) take the Pulse window's colours, as on the landing. */
+:root {
+  --apc-chip: var(--paper);
+  --apc-line: var(--paper-line);
+  --apc-ink: var(--paper-fg);
+  --apc-muted: var(--paper-muted);
+  --apc-accent: var(--paper-accent);
+  --apc-ok: #1f7a4d;
+  --apc-pin-unpin-bg: var(--paper);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  background: var(--stage), var(--bg);
+  color: var(--ink-fg);
+  font: 14px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 1.14fr 1fr;
+  gap: 14px;
+  height: 500px;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.win {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 13px;
+  overflow: hidden;
+}
+
+.win-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px 0 13px;
+  flex: none;
+  font: 12px var(--mono);
+}
+
+.win-bar i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0.45;
+}
+
+.win-bar span {
+  margin-left: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.win-bar .live {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--paper-line);
+  border-radius: 99px;
+  font-size: 10.5px;
+  color: var(--paper-accent);
+}
+
+/* The Pulse window. */
+.app {
+  background: var(--paper);
+  color: var(--paper-fg);
+  border: 1px solid var(--paper-line);
+}
+
+.app .win-bar {
+  color: var(--paper-muted);
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 18px 0;
+}
+
+.chart-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+}
+
+.chart-title small {
+  margin-left: 8px;
+  font: 12px var(--mono);
+  color: var(--paper-muted);
+  letter-spacing: 0;
+}
+
+.chart {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  padding: 40px 2px 0 30px;
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--paper-line);
+  font: 10.5px var(--mono);
+  color: var(--paper-muted);
+  pointer-events: none;
+}
+
+.grid-line b {
+  position: absolute;
+  left: 0;
+  top: -15px;
+  font-weight: 400;
+}
+
+.bar {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(180deg, var(--bar-a), var(--bar-b));
+  transition: background 0.25s, height 0.4s var(--ease);
+  cursor: grab;
+}
+
+.bar::after {
+  content: "";
+  position: absolute;
+  inset: -5px -5px 0;
+  border: 1.5px dashed transparent;
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+  transition: border-color 0.15s;
+  pointer-events: none;
+}
+
+.bar:hover {
+  background: linear-gradient(180deg, var(--bar-ha), var(--bar-hb));
+}
+
+/* While an agent is dragged or armed (enablePinning's classes): every bar is a target, the one under it lit. */
+body.apc-dragging .bar::after,
+body.apc-armed .bar::after {
+  border-color: var(--paper-line);
+}
+
+body.apc-dragging .bar.apc-target::after,
+.bar.apc-target::after {
+  border-color: var(--paper-accent);
+  border-style: solid;
+}
+
+.bar.is-pinned {
+  background: linear-gradient(180deg, #ffcb7a, #ff9f1c);
+}
+
+.bar:focus-visible {
+  outline: 2px solid var(--paper-accent);
+  outline-offset: 3px;
+}
+
+/* What the agent reads lights up. */
+.bar[data-apc-presence="read"] {
+  outline: 2px dotted var(--paper-accent);
+  outline-offset: 3px;
+  animation: read 2s ease-out infinite;
+}
+
+@keyframes read {
+  0% { box-shadow: 0 0 0 0 rgb(255 140 20 / 0.55); }
+  100% { box-shadow: 0 0 0 14px rgb(255 140 20 / 0); }
+}
+
+.months {
+  display: flex;
+  gap: 9px;
+  padding: 7px 2px 0 30px;
+  font: 11.5px var(--mono);
+  color: var(--paper-muted);
+}
+
+.months span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.months .is-on {
+  color: var(--paper-accent);
+  font-weight: 600;
+}
+
+.agentbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  margin: 12px -18px 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--paper-line);
+  background: var(--paper-bar);
+}
+
+/* The bar stays in the Pulse window: the package fixes it to the foot of the viewport on phones, a whole app's place. */
+apc-agents.embed-agents {
+  position: static;
+  display: inline-flex;
+  justify-content: flex-start;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  z-index: auto;
+}
+
+html.apc-bar-fixed {
+  --apc-bar-height: 0px !important;
+}
+
+html.apc-bar-fixed body {
+  padding-bottom: 0;
+}
+
+/* The hero cannot revoke: the full app does that, where no site can frame it. */
+.embed-agents .apc-agents__revoke {
+  display: none !important;
+}
+
+.agentbar-hint {
+  margin-left: auto;
+  font: 11.5px var(--mono);
+  color: var(--paper-muted);
+  text-align: right;
+}
+
+.hint-touch {
+  display: none;
+}
+
+@media (hover: none) {
+  .hint-pointer {
+    display: none;
+  }
+
+  .hint-touch {
+    display: inline;
+  }
+}
+
+/* The pin badge on the pinned bar (pin-badges.tsx places it, as in Pulse). */
+.pin-badge {
+  position: fixed;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.pin-badge .apc-pin__mark,
+.pin-badge .apc-pin__unpin {
+  pointer-events: auto;
+}
+
+.agent-icon {
+  display: block;
+  flex: none;
+  pointer-events: none;
+}
+
+.agent-icon-off {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.agent-icon-waiting {
+  animation: float 3s ease-in-out infinite;
+}
+
+.agent-icon-busy {
+  animation: pulse 0.6s ease-in-out infinite;
+}
+
+.agent-icon-seen {
+  animation: bounce 0.9s ease-out 1;
+}
+
+@keyframes float {
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes pulse {
+  50% { transform: scale(1.12); }
+}
+
+@keyframes bounce {
+  30% { transform: translateY(-4px); }
+  60% { transform: translateY(0); }
+}
+
+/* The "your agent" window. */
+.agent {
+  background: var(--ink);
+  color: var(--ink-fg);
+  border: 1px solid var(--ink-line);
+}
+
+.agent .win-bar {
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--ink-line);
+}
+
+.agent-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  font-size: 13.5px;
+  scrollbar-width: thin;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.note {
+  margin: auto 0;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+.note-error {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  border-radius: 10px;
+  color: var(--ink-fg);
+  text-align: left;
+}
+
+.connect,
+.connected {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connect h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+
+.connect p,
+.connected p {
+  margin: 0;
+}
+
+.copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-field {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.copy-field input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--ink-line2);
+  border-radius: 9px;
+  background: var(--ink-bubble);
+  color: var(--ink-fg);
+  font: 12px/1.4 var(--mono);
+  text-overflow: ellipsis;
+}
+
+.copy-field input:focus-visible {
+  outline: 2px solid var(--ink-accent);
+  outline-offset: 1px;
+}
+
+.copy-label {
+  color: var(--ink-muted);
+  font-size: 12.5px;
+}
+
+.btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--ink-line2);
+  border-radius: 9px;
+  background: none;
+  color: var(--ink-fg);
+  font: 500 13px var(--sans);
+  cursor: pointer;
+}
+
+.btn:hover,
+.btn:focus-visible {
+  border-color: var(--ink-accent);
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--btn);
+  color: var(--btn-fg);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ink-accent);
+  outline-offset: 2px;
+}
+
+.copied {
+  font: 11.5px var(--mono);
+  color: var(--ink-muted);
+}
+
+.fine {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.waiting,
+.ok-line,
+.presence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.waiting {
+  font: 12px var(--mono);
+  color: var(--ink-muted);
+}
+
+.dot,
+.ok-dot,
+.call-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.dot {
+  border: 1.5px solid var(--ink-accent);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+.ok-dot,
+.call-dot {
+  background: var(--ok);
+}
+
+@keyframes breathe {
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+.next {
+  padding: 10px 12px;
+  border-radius: 12px 12px 12px 4px;
+  background: var(--ink-bubble);
+}
+
+.next q {
+  color: var(--ink-accent);
+}
+
+.presence {
+  min-height: 20px;
+  font: 12px var(--mono);
+  color: var(--ink-accent);
+}
+
+.spin {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-accent);
+  border-top-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.calls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: 12px var(--mono);
+  color: var(--ink-muted);
+}
+
+.calls li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: in 0.35s var(--ease) both;
+}
+
+.calls code {
+  color: var(--ink-fg);
+  font: inherit;
+}
+
+@keyframes in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+.again summary {
+  font: 12px var(--mono);
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.again[open] summary {
+  margin-bottom: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* A narrow frame (a phone): the two windows stack, Pulse first, with no sideways scroll. */
+@media (max-width: 560px) {
+  .stage {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    gap: 10px;
+  }
+
+  .app {
+    height: 340px;
+  }
+
+  .agent-body {
+    overflow: visible;
+  }
+
+  .app-body {
+    padding: 12px 12px 0;
+  }
+
+  .chart,
+  .months {
+    gap: 5px;
+    padding-left: 24px;
+  }
+
+  .agentbar {
+    margin: 10px -12px 0;
+    padding: 6px 10px;
+  }
+
+  .copy-field input {
+    font-size: 11px;
+  }
+}

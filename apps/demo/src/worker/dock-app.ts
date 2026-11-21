@@ -21,7 +21,7 @@ const LOOPBACK = /^(localhost|[a-z0-9-]+\.localhost|127\.0\.0\.1|\[::1\])$/;
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
 
 /** A string that is exactly one http(s) origin, as `URL.origin` writes it; null otherwise. */
-function originOf(raw: string, schemes: readonly string[]): string | null {
+export function originOf(raw: string, schemes: readonly string[]): string | null {
   try {
     const url = new URL(raw);
     return schemes.includes(url.protocol) && raw === url.origin ? url.origin : null;
