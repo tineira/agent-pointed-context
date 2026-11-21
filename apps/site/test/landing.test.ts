@@ -321,7 +321,7 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
   }
   // The landing's text uses only tokens this test checks: no new colour, no opacity that thins text.
   const tokens = new Set([...landingCss.matchAll(/var\(--([a-z0-9-]+)\)/g)].map((m) => m[1]));
-  const checked = ["fg", "muted", "accent-text", "btn", "btn-fg", "band", "band-fg", "band-muted", "band-accent", "band-line", "card", "chip", "tint", "tint2", "bg", "ink"];
+  const checked = ["fg", "muted", "accent-text", "btn", "btn-fg", "band", "band-fg", "band-muted", "band-accent", "band-line", "card", "chip", "tint", "tint2", "bg", "ink", "ok", "card-solid"];
   const decorative = ["line", "line2", "line3", "accent", "accent-soft", "accent-line", "cool", "btn-glow", "stage-shadow", "paper", "bar-b", "ease", "track", "hw", "mono"];
   for (const token of tokens) assert.ok(checked.includes(token!) || decorative.includes(token!), `landing.css uses --${token}: add it to this test`);
   // No text of the sections is thinned by opacity: the only partial opacities are the presence ring's (a shape).
@@ -379,6 +379,8 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
     const tintOnCard = parseColor(t["tint"]!, card);
 
     const fg = parseColor(t["fg"]!, bg);
+    const cardSolid = parseColor(t["card-solid"]!, bg);
+    const ok = parseColor(t["ok"]!, cardSolid);
     const muted = parseColor(t["muted"]!, bg);
     const dim = parseColor(t["dim"]!, bg);
     const accentText = parseColor(t["accent-text"]!, bg);
@@ -431,6 +433,9 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
       ["standard card hover (--muted on --tint over --card)", muted, tintOnCard],
       ["standard card hover (--accent-text on --tint over --card)", accentText, tintOnCard],
       ["diagram label (--accent-text on --bg)", accentText, bg],
+      // The connected Try it card (TIN-1089): its pill is solid, so no dot-field pixel shows through it.
+      ["connected pill (--ok on --card-solid)", ok, cardSolid],
+      ["connected pill, the check (--btn-fg on --ok)", btnFg, ok],
     ];
     for (const [label, a, b] of pairs) {
       const ratio = contrast(a, b);

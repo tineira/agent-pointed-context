@@ -11,11 +11,13 @@
  * "Connected directly") and links Pulse's overview, the steps up to pointing are done in the hero, and Signals'
  * step is "start here" (the `.try-step.done`, `.try-step.next`, `.try-app.on` and `.try-conn` rules in pages.css).
  * Without a valid hint, the unconnected walk, unchanged. The hint is never a secret and never an auth check.
+ *
+ * Every "Open Pulse" on the site goes where the shared connection state says (TIN-1087, pulse-status.ts): Overview when
+ * connected, Agents otherwise; the main button reads "Open Pulse" once there is nothing left to connect.
  */
-import { useState } from "react";
 import { AgentMark } from "./agent-mark.tsx";
 import { APPS } from "./demo-apps.tsx";
-import { PULSE_OVERVIEW, readPulseStatus } from "./pulse-status.ts";
+import { usePulseView } from "./pulse-status.ts";
 import { useScrollReveals } from "./reveal.ts";
 import { SiteBackdrop, SiteFooter, SiteHeader } from "./site.tsx";
 
@@ -42,8 +44,8 @@ const stepClass = (i: number, connected: boolean) => (!connected ? "try-step rv"
 
 export function TryPage() {
   useScrollReveals();
-  // Read once, on load: a hint for this tab, not live state (the landing writes it, this page only reads it).
-  const [pulse] = useState(() => readPulseStatus());
+  // The shared connection state (pulse-status.ts): the hint for this tab, and where "Open Pulse" goes (TIN-1087).
+  const pulse = usePulseView();
   return (
     <div className="site-shell">
       <SiteBackdrop />
@@ -59,8 +61,8 @@ export function TryPage() {
             </h1>
             <p className="page-lede">You need an agent that can add a remote MCP server. The demo is free and its data is made up. No account, nothing to install.</p>
             <div className="page-cta-row">
-              <a className="btn primary" href={PULSE_CONNECT}>
-                Open Pulse and connect your agent <span aria-hidden="true">↗</span>
+              <a className="btn primary" href={pulse.openHref}>
+                {pulse.connected ? "Open Pulse" : "Open Pulse and connect your agent"} <span aria-hidden="true">↗</span>
               </a>
             </div>
           </section>
@@ -68,7 +70,7 @@ export function TryPage() {
           <section className="try-grid">
             <ol className="try-steps">
               {TRY_STEPS.map((s, i) => (
-                <li className={stepClass(i, pulse !== null)} key={s.title}>
+                <li className={stepClass(i, pulse.connected)} key={s.title}>
                   <span className="n">{i + 1}</span>
                   <div>
                     <b>{s.title}</b>
@@ -78,11 +80,11 @@ export function TryPage() {
               ))}
             </ol>
             <div className="try-side">
-              <div className={pulse ? "try-app on rv" : "try-app rv"}>
+              <div className={pulse.connected ? "try-app on rv" : "try-app rv"}>
                 <div className="row">
                   {PULSE.glyph}
                   <b>Pulse</b>
-                  {pulse ? (
+                  {pulse.connected ? (
                     <span className="try-conn">
                       <i aria-hidden="true" />
                       {pulse.agentName ? `${pulse.agentName} connected` : "Connected directly"}
@@ -93,8 +95,8 @@ export function TryPage() {
                 </div>
                 <p>Product analytics for a SaaS: customers, plans, seats, monthly activity.</p>
                 <div className="try-links">
-                  {pulse ? (
-                    <a href={PULSE_OVERVIEW}>
+                  {pulse.connected ? (
+                    <a href={pulse.openHref}>
                       Open Pulse <span aria-hidden="true">↗</span>
                     </a>
                   ) : (

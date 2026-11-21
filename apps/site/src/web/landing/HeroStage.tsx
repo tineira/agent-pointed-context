@@ -24,10 +24,10 @@ import { createClock } from "./hero/clock.ts";
 import { CHART_TOP, loadHeroData, monthName, monthShort, type HeroData } from "./hero/data.ts";
 import { HERO_AGENT, HeroAgentBar, HeroPin } from "./hero/elements.tsx";
 import { FocusCard, Json } from "./hero/json.tsx";
-import { HeroSwitch } from "./hero/live.ts";
+import { HeroStageHost } from "./hero/live.ts";
 import { carryMark, sendMessage } from "./hero/motion.ts";
 import { createHeroSequence, type ChatItem } from "./hero/sequence.ts";
-import { PULSE_AGENTS } from "../pulse-status.ts";
+import { usePulseView } from "../pulse-status.ts";
 
 /** What "Use your own agent" does, said beside it (invariant 5 of TIN-1063: no request to Pulse before the click). */
 const COOKIE_NOTE = "“Use your own agent” connects to Pulse (pulse.apc.tineira.com) in this page, and Pulse sets its one sandbox cookie.";
@@ -51,8 +51,7 @@ function useReducedMotion(): boolean {
 
 export function HeroStage() {
   const [data, setData] = useState<HeroData | null>(null);
-  // The simulated demo first, always: the frame mounts on the click only, whatever /try's hint says.
-  const [live, setLive] = useState(false);
+  // The simulated demo first, always: HeroStageHost mounts the frame on the click only, whatever the stored hint says.
   useEffect(() => {
     let live = true;
     void loadHeroData().then((d) => live && setData(d));
@@ -60,13 +59,20 @@ export function HeroStage() {
       live = false;
     };
   }, []);
-  const demo = data ? <Stage data={data} onUseOwnAgent={() => setLive(true)} /> : <figure className="hero-stage hero-stage-loading" aria-busy="true" aria-label="A demo of pointing an agent at a chart, loading" />;
-  return <HeroSwitch live={live} demo={demo} onBack={() => setLive(false)} />;
+  return (
+    <HeroStageHost
+      demo={(useOwnAgent) =>
+        data ? <Stage data={data} onUseOwnAgent={useOwnAgent} /> : <figure className="hero-stage hero-stage-loading" aria-busy="true" aria-label="A demo of pointing an agent at a chart, loading" />
+      }
+    />
+  );
 }
 
 function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
   const { months } = props.data;
   const reduce = useReducedMotion();
+  // "or open Pulse" follows the connection (TIN-1087): Overview once the hero's frame says it is connected.
+  const { openHref } = usePulseView();
   const stageRef = useRef<HTMLElement | null>(null);
   const agentWinRef = useRef<HTMLDivElement | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
@@ -336,7 +342,7 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
               <button type="button" className="btn primary" onClick={useOwnAgent} aria-describedby="hero-offer-cookie">
                 Use your own agent <span aria-hidden="true">→</span>
               </button>
-              <a className="hero-offer-open" href={PULSE_AGENTS} target="_blank" rel="noopener">
+              <a className="hero-offer-open" href={openHref} target="_blank" rel="noopener">
                 or open Pulse <span aria-hidden="true">↗</span>
               </a>
               <button type="button" className="hero-offer-back" onClick={() => setOffer(false)}>

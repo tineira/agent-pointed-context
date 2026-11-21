@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanName as pulseCleanName } from "../../demo/src/worker/names.ts";
-import { HeroSwitch } from "../src/web/landing/hero/live.ts";
+import { HeroStageHost, HeroSwitch } from "../src/web/landing/hero/live.ts";
 import { PULSE_ORIGIN } from "../src/pulse-origin.ts";
 import {
   cleanName,
@@ -44,8 +44,9 @@ test("the landing renders no frame before the click, even with the hint stored, 
   const previous = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
   Object.defineProperty(globalThis, "sessionStorage", { value: stored({ connected: true, agentName: "Claude", updatedAt: Date.now() }), configurable: true });
   try {
-    // Initial state: HeroStage starts with live = false (landing.test.ts checks the source), whatever is stored.
-    const before = renderToStaticMarkup(createElement(HeroSwitch, { live: false, demo, onBack: () => {} }));
+    // Initial state: the component that can mount the frame (HeroStage renders HeroStageHost) starts on the demo,
+    // whatever is stored. Rendered here, not assumed (Grok's P3 on #246).
+    const before = renderToStaticMarkup(createElement(HeroStageHost, { demo: () => demo }));
     assert.deepEqual(iframes(before), []);
     assert.match(before, /simulated/);
     // After "Use your own agent" (setLive(true)): one frame, Pulse's hero, sandboxed, hidden behind its loading state.
@@ -58,7 +59,9 @@ test("the landing renders no frame before the click, even with the hint stored, 
     assert.doesNotMatch(after, /simulated/, "in place of the simulated stage");
     assert.match(after, /data-phase="loading"/);
     assert.match(after, /Opening Pulse…/);
-    assert.match(after, /<a href="https:\/\/pulse\.apc\.tineira\.com\/agents" target="_blank" rel="noopener">or open Pulse/, "the site owns the way out");
+    // The frame clears the stored hint when it mounts, so once effects run its links start on Agents; a static render
+    // reads the hint as stored. connected.test.ts drives the live change.
+    assert.match(after, /<a href="https:\/\/pulse\.apc\.tineira\.com\/overview" target="_blank" rel="noopener">or open Pulse/, "the site owns the way out");
     assert.match(after, /Back to the demo/);
   } finally {
     if (previous) Object.defineProperty(globalThis, "sessionStorage", previous);

@@ -38,7 +38,7 @@ const pageOf = (source: string, name: string) => {
 };
 
 test("Try it walks Connect, Point, then Join, with each app on its own address and nothing to install", () => {
-  assert.match(tryPage, /className="btn primary" href=\{PULSE_CONNECT\}>\s*Open Pulse and connect your agent/);
+  assert.match(tryPage, /className="btn primary" href=\{pulse\.openHref\}>\s*\{pulse\.connected \? "Open Pulse" : "Open Pulse and connect your agent"\}/);
   assert.ok(tryPage.includes('const PULSE_CONNECT = PULSE.url.replace(/overview$/, "agents");'), "Pulse's Agents page");
   assert.ok(tryPage.includes("const SIGNALS_CONNECT = `${SIGNALS.url}?connect`;"), "Signals' Connect panel");
   // Each card opens its app and connects an agent on that app's own page, and names the origin it lives on.
@@ -78,10 +78,10 @@ test("Try it's steps do not overlap, and only the starter question stands out", 
 test("/try shows Pulse connected from the hero's hint only, and the name as text", () => {
   // TIN-1072: the hint is read through pulse-status.ts (TTL, schema, cleanName; pulse-status.test.ts), never fetched.
   assert.doesNotMatch(tryPage, /sessionStorage|localStorage|fetch\(|useEffect|dangerouslySetInnerHTML|innerHTML/, "no storage of its own, no request, no HTML");
-  assert.match(tryPage, /const \[pulse\] = useState\(\(\) => readPulseStatus\(\)\);/);
+  assert.match(tryPage, /const pulse = usePulseView\(\);/);
   assert.match(tryPage, /\{pulse\.agentName \? `\$\{pulse\.agentName\} connected` : "Connected directly"\}/, "a text node, or Connected directly");
-  assert.match(tryPage, /<a href=\{PULSE_OVERVIEW\}>\s*Open Pulse/);
-  assert.match(tryPage, /className=\{pulse \? "try-app on rv" : "try-app rv"\}/);
+  assert.match(tryPage, /<a href=\{pulse\.openHref\}>\s*Open Pulse/);
+  assert.match(tryPage, /className=\{pulse\.connected \? "try-app on rv" : "try-app rv"\}/);
   assert.match(tryPage, /const DONE_IN_HERO = 3;/);
   for (const room of [".try-step.done", ".try-step.next", ".try-app.on", ".try-conn"]) {
     assert.ok(pagesCss.includes(room), `pages.css keeps room for ${room}`);

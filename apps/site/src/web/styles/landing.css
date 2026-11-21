@@ -349,6 +349,74 @@ main.landing.landing-home {
   color: var(--fg);
 }
 
+/* The visitor's agent is connected (TIN-1089): a check beside Pulse's chip, and "<agent> connected" under the chips on
+   a solid surface (--ok is 3.36:1 as text over the bare dot field in light; on --card-solid it passes, landing.test.ts).
+   The "Open Pulse" link sits above the card's stretched "go" link. */
+.landing-home .landing-chip.on {
+  border-color: var(--ok);
+}
+
+.landing-home .landing-tick {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ok);
+  position: relative;
+}
+
+.landing-home .landing-tick::after {
+  content: "";
+  position: absolute;
+  left: 5.5px;
+  top: 3px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--btn-fg);
+  border-width: 0 1.8px 1.8px 0;
+  transform: rotate(45deg);
+}
+
+.landing-home .landing-conn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 14px;
+}
+
+.landing-home .landing-conn-row:empty {
+  display: none;
+}
+
+.landing-home .landing-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 5px 12px 5px 8px;
+  border: 1px solid var(--ok);
+  border-radius: 99px;
+  background: var(--card-solid);
+  font: 500 12px var(--mono);
+  color: var(--ok);
+  overflow-wrap: anywhere;
+}
+
+.landing-home .landing-conn-open {
+  position: relative;
+  z-index: 1;
+  font-weight: 600;
+  color: var(--accent-text);
+  text-underline-offset: 4px;
+}
+
+.landing-home .landing-conn-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
 @media (min-width: 1340px) {
   .landing-home .landing-path > p:not(.landing-who) {
     max-width: min(25em, 100% - 210px);
