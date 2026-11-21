@@ -49,8 +49,8 @@ test("modules copied for the extraction stay in sync between Pulse and the site"
 });
 
 test("the extraction preserves the docs heading weight", () => {
-  const site = readFileSync(resolve(root, "apps/site/src/web/site.css"), "utf8");
-  assert.match(site, /\.docs-body h2\s*\{[^}]*font-weight:\s*600[;}]/);
+  const docs = readFileSync(resolve(root, "apps/site/src/web/styles/docs.css"), "utf8");
+  assert.match(docs, /\.docs-body h2\s*\{[^}]*font-weight:\s*600[;}]/);
 });
 
 test("rollback instructions remove the site routes before retiring the binding target", () => {

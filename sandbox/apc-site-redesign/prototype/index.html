@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280">
+<meta name="color-scheme" content="dark light">
+<title>Agent Pointed Context: point your AI agent at what you see</title>
+<script>
+/* the theme follows the system unless the visitor uses the toggle (set before first paint) */
+document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+</script>
+<style>
+/* ───────── values (straight in the CSS, no token file) ───────── */
+:root {
+  /* dark: lane A's ink and field */
+  color-scheme: dark;
+  --bg: #080a0f; --fg: #eef1f6; --muted: #a3adbf; --dim: #7c8799;
+  --line: rgb(255 255 255 / 0.09); --line2: rgb(255 255 255 / 0.16); --line3: rgb(255 255 255 / 0.32);
+  --card: rgb(17 21 30 / 0.78); --tint: rgb(255 255 255 / 0.04); --tint2: rgb(255 255 255 / 0.07);
+  --nav: rgb(8 10 15 / 0.72); --foot: rgb(8 10 15 / 0.7); --chip: rgb(8 10 15 / 0.6);
+  --accent: #ff9f1c; --accent-text: #ff9f1c; --accent-soft: rgb(255 159 28 / 0.14); --accent-line: rgb(255 159 28 / 0.5);
+  --btn: #ff9f1c; --btn-fg: #1b1000; --btn-glow: rgb(255 159 28 / 0.55);
+  --code-bg: rgb(255 255 255 / 0.07); --code-fg: #ffd9a3;
+  --cool: rgb(110 120 255 / 0.22);
+  --stage: linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0.015));
+  --stage-shadow: 0 40px 120px -40px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(0 0 0 / 0.4);
+  --haze-a: rgb(255 140 20 / 0.13); --haze-b: rgb(96 78 220 / 0.20);
+  /* the app is paper */
+  --paper: #f5f6f8; --paper-fg: #141a24; --paper-muted: #56627a; --paper-line: #d6dce5; --paper-accent: #b85209; --paper-bar: #eceff3;
+  --bar-a: #cdd3de; --bar-b: #aeb6c4; --bar-ha: #bfc6d3; --bar-hb: #9fa8b8;
+  /* the agent is ink, in both themes */
+  --ink: #12151c; --ink-fg: #dfe4ec; --ink-muted: #a3adbf; --ink-dim: #7c8799; --ink-line: rgb(255 255 255 / 0.1); --ink-line2: rgb(255 255 255 / 0.18); --ink-bubble: #262b36; --ink-accent: #ff9f1c;
+  /* the access band */
+  --band: rgb(17 21 30 / 0.62); --band-fg: #eef1f6; --band-muted: #a3adbf; --band-line: rgb(255 255 255 / 0.12); --band-accent: #ff9f1c;
+  --ok: #4cc38a;
+  --hw: 640; --track: -0.045em; --em-font: inherit; --em-style: normal; --em-weight: inherit;
+  --sans: ui-sans-serif, system-ui, "Segoe UI Variable Display", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-theme="light"] {
+  /* light: lane D's warm paper, graphite and burnt orange */
+  color-scheme: light;
+  --bg: #faf9f5; --fg: #24251f; --muted: #5c5e53; --dim: #6c6e62;
+  --line: rgb(36 37 31 / 0.13); --line2: rgb(36 37 31 / 0.22); --line3: rgb(36 37 31 / 0.45);
+  --card: rgb(255 254 250 / 0.84); --tint: rgb(36 37 31 / 0.04); --tint2: rgb(36 37 31 / 0.07);
+  --nav: rgb(250 249 245 / 0.8); --foot: rgb(238 238 230 / 0.86); --chip: rgb(255 254 250 / 0.75);
+  --accent: #c4501d; --accent-text: #a9451c; --accent-soft: rgb(196 80 29 / 0.1); --accent-line: rgb(196 80 29 / 0.5);
+  --btn: #272821; --btn-fg: #fffdf5; --btn-glow: rgb(39 40 33 / 0.4);
+  --code-bg: rgb(36 37 31 / 0.07); --code-fg: #7d3512;
+  --cool: rgb(21 112 127 / 0.14);
+  --stage: linear-gradient(180deg, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0.4));
+  --stage-shadow: 0 40px 100px -50px rgb(110 70 20 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.6);
+  --haze-a: rgb(240 110 50 / 0.17); --haze-b: rgb(245 190 110 / 0.3);
+  --paper: #fffefa; --paper-fg: #24251f; --paper-muted: #5e5f55; --paper-line: #d9d8d0; --paper-accent: #a9451c; --paper-bar: #f1f0e8;
+  --bar-a: #d0cfc3; --bar-b: #b6b6a8; --bar-ha: #c3c2b5; --bar-hb: #a6a698;
+  --ink: #292c24; --ink-fg: #f5f2e8; --ink-muted: #d0d1c4; --ink-dim: #a9ab9c; --ink-line: rgb(255 255 240 / 0.14); --ink-line2: rgb(255 255 240 / 0.24); --ink-bubble: #3d4136; --ink-accent: #ffa64a;
+  --band: #292c24; --band-fg: #f5f2e8; --band-muted: #d0d1c4; --band-line: #565a4b; --band-accent: #f5b68b;
+  --ok: #4cc38a;
+  --hw: 580; --track: -0.055em; --em-font: var(--serif); --em-style: italic; --em-weight: 400;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 1200px; background: var(--bg); color: var(--fg); font: 17px/1.55 var(--sans); -webkit-font-smoothing: antialiased; overflow-x: hidden; transition: background-color .3s, color .3s; }
+a { color: inherit; }
+p { margin: 0; }
+h1, h2, h3 { margin: 0; font-weight: var(--hw); letter-spacing: -0.03em; text-wrap: balance; }
+h1 em, h2 em { font-family: var(--em-font); font-style: var(--em-style); font-weight: var(--em-weight); color: var(--accent-text); }
+code, .mono { font-family: var(--mono); }
+code { font-size: 0.86em; padding: 1px 6px; border-radius: 6px; background: var(--code-bg); color: var(--code-fg); }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+.wrap { width: min(1240px, 100vw - 80px); margin: 0 auto; }
+[hidden] { display: none !important; }
+
+/* ───────── the field behind everything ───────── */
+#field { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; }
+.haze { position: fixed; z-index: 0; pointer-events: none; border-radius: 50%; will-change: transform; }
+.haze.a { width: 1100px; height: 1100px; left: -420px; top: 38vh; background: radial-gradient(closest-side, var(--haze-a), transparent 70%); animation: drift-a 46s ease-in-out infinite alternate; }
+.haze.b { width: 1300px; height: 1300px; right: -480px; top: -520px; background: radial-gradient(closest-side, var(--haze-b), transparent 70%); animation: drift-b 58s ease-in-out infinite alternate; }
+@keyframes drift-a { to { transform: translate3d(260px, -160px, 0) scale(1.12); } }
+@keyframes drift-b { to { transform: translate3d(-240px, 200px, 0) scale(0.92); } }
+.page { position: relative; z-index: 1; }
+
+/* ───────── nav ───────── */
+.nav { position: sticky; top: 0; z-index: 30; backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3); background: var(--nav); border-bottom: 1px solid var(--line); }
+.nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 640; letter-spacing: -0.02em; text-decoration: none; font-size: 16px; }
+.brand small { font: 500 11px var(--mono); color: var(--dim); letter-spacing: 0.04em; padding: 2px 7px; border: 1px solid var(--line2); border-radius: 99px; }
+.nav nav { display: flex; gap: 4px; margin-left: 12px; }
+.nav nav a { padding: 7px 12px; border-radius: 8px; font-size: 14.5px; color: var(--muted); text-decoration: none; transition: color .2s, background .2s; }
+.nav nav a:hover { color: var(--fg); background: var(--tint); }
+.nav nav a[aria-current="page"] { color: var(--fg); background: var(--tint2); }
+.nav .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.theme { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px; border: 1px solid var(--line2); background: var(--tint); color: var(--muted); padding: 0; transition: color .2s, border-color .2s; }
+.theme:hover { color: var(--fg); border-color: var(--line3); }
+.theme svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.theme .sun { display: none; }
+:root[data-theme="light"] .theme .sun { display: block; }
+:root[data-theme="light"] .theme .moon { display: none; }
+.btn { display: inline-flex; align-items: center; gap: 9px; padding: 11px 18px; border-radius: 11px; border: 1px solid transparent; font-weight: 600; font-size: 15.5px; text-decoration: none; transition: transform .2s var(--ease), background .2s, border-color .2s, box-shadow .2s; }
+.btn.primary { background: var(--btn); color: var(--btn-fg); }
+.btn.primary:hover { transform: translateY(-1px); box-shadow: 0 8px 30px -6px var(--btn-glow); }
+.btn.ghost { border-color: var(--line2); background: var(--tint); }
+.btn.ghost:hover { border-color: var(--line3); background: var(--tint2); }
+.btn.sm { padding: 8px 13px; font-size: 14px; border-radius: 9px; }
+.btn .arr { transition: transform .2s var(--ease); }
+.btn:hover .arr { transform: translateX(3px); }
+
+/* ───────── the agent mark ───────── */
+.mark { display: block; overflow: visible; }
+.pupils { transform: translate(calc(var(--ex, 0) * 1px), calc(var(--ey, 0) * 1px)); transition: transform .12s linear; }
+.lid { transform-origin: 24px 24px; animation: blink 5.6s infinite; }
+@keyframes blink { 0%, 46%, 50%, 100% { transform: scaleY(1); } 48% { transform: scaleY(0.1); } }
+
+/* ───────── hero ───────── */
+.hero { padding: 52px 0 44px; }
+.hero .wrap { display: grid; grid-template-columns: 430px 1fr; gap: 56px; align-items: center; }
+.eyebrow { font: 500 12.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-text); display: flex; align-items: center; gap: 10px; }
+.eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.hero h1 { font-size: 66px; line-height: 0.98; letter-spacing: var(--track); margin: 22px 0 22px; }
+.lede { font-size: 19px; line-height: 1.5; color: var(--muted); max-width: 30em; }
+.lede b { color: var(--fg); font-weight: 560; }
+.cta-row { display: flex; gap: 12px; margin-top: 30px; flex-wrap: wrap; }
+.watch { display: inline-flex; align-items: center; gap: 8px; margin-top: 18px; font-size: 14.5px; color: var(--muted); text-decoration: none; }
+.watch:hover { color: var(--fg); }
+.watch span { color: var(--accent-text); font-size: 11px; }
+
+/* the stage: an app (paper) and an agent (ink) */
+.stage { position: relative; border: 1px solid var(--line2); border-radius: 22px; padding: 16px; background: var(--stage); box-shadow: var(--stage-shadow); user-select: none; -webkit-user-select: none; }
+.stage-grid { display: grid; grid-template-columns: 1.14fr 1fr; gap: 14px; height: 520px; }
+.win { border-radius: 13px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.win-bar { display: flex; align-items: center; gap: 6px; padding: 0 13px; height: 36px; flex: none; font: 12px var(--mono); }
+.win-bar i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid currentColor; opacity: 0.45; }
+.win-bar span { margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app { background: var(--paper); color: var(--paper-fg); border: 1px solid var(--paper-line); }
+.app .win-bar { color: var(--paper-muted); border-bottom: 1px solid var(--paper-line); }
+.app-body { flex: 1; display: flex; flex-direction: column; padding: 16px 18px 0; min-height: 0; }
+.app-body h4 { margin: 0; font-size: 19px; letter-spacing: -0.02em; font-weight: 640; }
+.app-body h4 small { font: 12px var(--mono); color: var(--paper-muted); font-weight: 400; margin-left: 8px; letter-spacing: 0; }
+.chart { flex: 1; position: relative; display: flex; align-items: flex-end; gap: 9px; padding: 56px 2px 0 30px; min-height: 0; border-bottom: 1px solid var(--paper-line); }
+.grid-ln { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--paper-line); font: 10.5px var(--mono); color: var(--paper-muted); pointer-events: none; }
+.grid-ln b { position: absolute; left: 0; top: -15px; font-weight: 400; }
+.grid-ln.g50 { bottom: calc((100% - 56px) * 50 / 140); }
+.grid-ln.g100 { bottom: calc((100% - 56px) * 100 / 140); }
+.bar { flex: 1; position: relative; z-index: 1; border: 0; padding: 0; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--bar-a), var(--bar-b)); transition: background .25s, box-shadow .3s, transform .25s var(--ease); }
+.bar::after { content: ""; position: absolute; inset: -5px -5px 0; border: 1.5px dashed transparent; border-bottom: 0; border-radius: 9px 9px 0 0; transition: border-color .15s; }
+.bar:hover { background: linear-gradient(180deg, var(--bar-ha), var(--bar-hb)); }
+.bar.over::after, .bar.pinned::after { border-color: var(--paper-accent); }
+.bar.over { transform: scaleY(1.02); transform-origin: bottom; }
+.bar.pinned { background: linear-gradient(180deg, #ffcb7a, #ff9f1c); }
+.bar.read { animation: read 2.2s ease-out infinite; }
+@keyframes read { 0% { box-shadow: 0 0 0 0 rgb(255 140 20 / 0.6); } 100% { box-shadow: 0 0 0 16px rgb(255 140 20 / 0); } }
+.months { display: flex; gap: 9px; padding: 7px 2px 0 30px; font: 11.5px var(--mono); color: var(--paper-muted); }
+.months span { flex: 1; text-align: center; }
+.months span.on { color: var(--paper-accent); font-weight: 600; }
+.agentbar { display: flex; align-items: center; gap: 10px; margin: 12px -18px 0; padding: 9px 14px; border-top: 1px solid var(--paper-line); background: var(--paper-bar); font-size: 12.5px; line-height: 1.35; color: var(--paper-muted); }
+.slot { width: 40px; height: 40px; border-radius: 50%; border: 1.5px dashed var(--bar-b); flex: none; }
+.agentbar b { color: var(--paper-fg); font-weight: 600; }
+.agentbar .hint { margin-left: auto; font: 11.5px var(--mono); text-align: right; white-space: nowrap; }
+#who { white-space: nowrap; }
+.chat { background: var(--ink); color: var(--ink-fg); border: 1px solid var(--ink-line); }
+.chat.recv { animation: recv 1.3s ease-out; }
+@keyframes recv { 0% { box-shadow: 0 0 0 0 rgb(255 159 28 / 0.75); border-color: var(--ink-accent); } 100% { box-shadow: 0 0 0 14px rgb(255 159 28 / 0); } }
+.chat .win-bar { color: var(--ink-dim); border-bottom: 1px solid var(--ink-line); }
+.own { margin-left: auto; flex: none; border: 1px solid var(--ink-line2); background: none; padding: 3px 9px; border-radius: 99px; font: 11px var(--mono); color: var(--ink-muted); transition: color .2s, border-color .2s; }
+.own:hover { color: var(--ink-fg); border-color: var(--ink-accent); }
+.chat-body { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #3a4050 transparent; display: flex; flex-direction: column; gap: 9px; padding: 14px; font-size: 13.5px; line-height: 1.45; min-height: 0; }
+.chat-body > :first-child { margin-top: auto; }
+.chat-body > * { flex: none; animation: msg .35s var(--ease) both; }
+@keyframes msg { from { opacity: 0; transform: translateY(8px); } }
+.empty { margin: auto !important; text-align: center; color: var(--ink-dim); font-size: 13.5px; max-width: 19em; animation: none; }
+.q { align-self: flex-end; background: var(--ink-bubble); padding: 8px 13px; border-radius: 13px 13px 4px 13px; max-width: 90%; }
+.tool { display: flex; align-items: flex-start; gap: 8px; font: 11.5px/1.5 var(--mono); color: var(--ink-muted); }
+.tool .dot { width: 13px; height: 13px; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--ink-accent); border-top-color: transparent; animation: spin .7s linear infinite; flex: none; }
+.tool.done .dot { animation: none; border: 0; background: var(--ok); position: relative; }
+.tool.done .dot::after { content: ""; position: absolute; left: 4px; top: 2px; width: 3px; height: 6px; border: solid #0b1a12; border-width: 0 1.6px 1.6px 0; transform: rotate(45deg); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tool b { color: var(--ink-fg); font-weight: 500; }
+.tool span { word-break: break-word; }
+.focus { border: 1px solid rgb(255 159 28 / 0.38); border-radius: 10px; background: rgb(255 159 28 / 0.07); overflow: hidden; }
+.focus header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; font: 11px var(--mono); color: var(--ink-accent); border-bottom: 1px solid rgb(255 159 28 / 0.2); }
+.focus header button { border: 0; background: none; padding: 0; color: var(--ink-muted); font: 11px var(--mono); text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+.focus pre { margin: 0; padding: 8px 10px; font: 11.2px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; color: #c9d1de; }
+.focus .minor { display: none; }
+.focus.open .minor { display: inline; }
+.k { color: #8fb4ff; } .s { color: #ffd9a3; } .n { color: #c9a0ff; } .hl { background: rgb(255 159 28 / 0.16); border-radius: 3px; box-shadow: 0 0 0 2px rgb(255 159 28 / 0.16); }
+.a { display: flex; gap: 9px; align-items: flex-start; }
+.a svg { flex: none; margin-top: 1px; }
+.a div { display: flex; flex-direction: column; gap: 7px; }
+.a b { font-weight: 640; color: #fff; }
+.a small { font: 10.5px var(--mono); color: var(--ink-dim); letter-spacing: 0.02em; }
+.chat-foot { margin: 0 12px 12px; padding: 9px 12px; border: 1px solid var(--ink-line2); border-radius: 10px; color: var(--ink-dim); font-size: 13px; display: flex; justify-content: space-between; flex: none; }
+.chat-foot kbd { font: 11px var(--mono); }
+.stage:not([data-mode="demo"]) .chat-foot { display: none; }
+
+/* the pet lives in the agent bar; a drop leaves a pin badge on the target and the pet goes back */
+#mk { position: absolute; left: 0; top: 0; width: 44px; height: 44px; z-index: 6; cursor: grab; touch-action: none; will-change: transform; border: 0; padding: 0; background: none; border-radius: 50%; }
+#mk.snap, #badge.snap { transition: transform .5s cubic-bezier(0.25, 1.3, 0.4, 1); }
+#mk.drag, #badge.drag { cursor: grabbing; }
+.mk-in { display: block; width: 44px; height: 44px; filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.35)); transition: transform .25s var(--ease); }
+#mk.drag .mk-in { transform: scale(1.14) rotate(-5deg); }
+#mk.nudge .mk-in { animation: nudge 2.4s ease-in-out infinite; }
+@keyframes nudge { 0%, 70%, 100% { transform: translateY(0); } 80% { transform: translateY(-7px); } 90% { transform: translateY(0); } 95% { transform: translateY(-3px); } }
+#mk .cursor { position: absolute; left: 26px; top: 26px; width: 18px; height: 18px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+#mk.auto .cursor { opacity: 1; }
+.mk-own { display: none; width: 44px; height: 44px; border-radius: 50%; background: #fafaf8; border: 1px solid rgb(20 20 19 / 0.18); place-items: center; }
+.mk-own svg { width: 25px; height: 25px; fill: #d97757; }
+.stage[data-mode="connected"] .mk-blob, .stage[data-mode="connected"] .bd-blob { display: none; }
+.stage[data-mode="connected"] .mk-own { display: grid; }
+.stage[data-mode="connected"] .bd-own { display: block; }
+
+/* the pin badge: the agent's logo in a disc; a dashed, breathing ring until the agent reads the pin, then a check */
+#badge { position: absolute; left: 0; top: 0; width: 34px; height: 34px; z-index: 5; cursor: grab; touch-action: none; will-change: transform; }
+.bd-in { position: relative; display: block; width: 34px; height: 34px; border-radius: 50%; }
+.bd-in.pop { animation: pop .4s cubic-bezier(0.25, 1.4, 0.4, 1) both; }
+@keyframes pop { from { transform: scale(0.3); opacity: 0; } }
+#badge.drag .bd-in { transform: scale(1.12); }
+.bd-disc { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #fafaf8; border: 1px solid rgb(20 20 19 / 0.2); box-shadow: 0 4px 12px rgb(0 0 0 / 0.3); }
+.bd-own { display: none; width: 20px; height: 20px; fill: #d97757; }
+.bd-ring { position: absolute; inset: -6px; border-radius: 50%; border: 1.6px dashed var(--paper-accent); animation: breathe 2.2s ease-in-out infinite; pointer-events: none; }
+@keyframes breathe { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.14); opacity: 0.4; } }
+#badge.read .bd-ring { display: none; }
+.bd-check { display: none; position: absolute; right: -6px; bottom: -5px; width: 17px; height: 17px; border-radius: 50%; background: #1f9d68; border: 2px solid var(--paper); }
+.bd-check::after { content: ""; position: absolute; left: 4px; top: 1.5px; width: 3px; height: 6.5px; border: solid #fff; border-width: 0 1.8px 1.8px 0; transform: rotate(45deg); }
+#badge.read .bd-check { display: block; animation: pop .35s cubic-bezier(0.25, 1.4, 0.4, 1) both; }
+.bd-x { position: absolute; right: -11px; top: -11px; width: 18px; height: 18px; border-radius: 50%; border: 0; padding: 0; background: var(--paper-fg); color: var(--paper); font: 600 12px/18px var(--sans); text-align: center; opacity: 0; transition: opacity .15s; cursor: pointer; }
+#badge:hover .bd-x, #badge:focus-within .bd-x { opacity: 1; }
+#badge.drag .bd-x { opacity: 0; }
+
+/* the focus message: it lifts off the bar, floats to the agent and fades to black on the way in */
+.msg { position: absolute; left: 0; top: 0; z-index: 7; pointer-events: none; width: 196px; padding: 7px 10px 8px; border-radius: 10px; background: #171b24; border: 1px solid rgb(255 159 28 / 0.6); box-shadow: 0 12px 30px rgb(0 0 0 / 0.35); font: 10.5px/1.5 var(--mono); color: #c9d1de; white-space: pre; overflow: hidden; will-change: transform, opacity, filter; }
+.msg b { display: block; color: #ff9f1c; font-weight: 500; margin-bottom: 2px; }
+
+/* after two pins: now use your own agent (a mock) */
+.offer { margin-top: 14px; border: 1.5px solid var(--accent-line); border-radius: 15px; background: linear-gradient(180deg, var(--accent-soft), transparent 150%), var(--card); padding: 16px 20px; display: grid; grid-template-columns: 1fr 1.05fr; gap: 24px; align-items: center; user-select: text; -webkit-user-select: text; animation: offer .7s var(--ease) both; box-shadow: 0 0 0 5px var(--accent-soft); }
+@keyframes offer { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
+.stage.offered .stage-grid { height: 440px; }
+.offer h3 { font-size: 30px; line-height: 1; letter-spacing: var(--track); margin-top: 8px; }
+.offer h3 em { font-family: var(--em-font); font-style: var(--em-style); font-weight: var(--em-weight); color: var(--accent-text); }
+.offer p { color: var(--muted); font-size: 14px; line-height: 1.45; margin-top: 8px; }
+.offer p b { color: var(--fg); font-weight: 600; }
+.offer .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.offer label { font: 500 10.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+.addr { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 11px; border: 1px solid var(--line2); border-radius: 10px; background: var(--tint); }
+.addr code { flex: 1; min-width: 0; background: none; padding: 0; color: var(--code-fg); font-size: 12px; line-height: 1.4; word-break: break-all; }
+.addr button { flex: none; border: 0; border-radius: 7px; padding: 6px 13px; background: var(--btn); color: var(--btn-fg); font-size: 13px; font-weight: 600; }
+.offer small { font: 10.5px/1.5 var(--mono); color: var(--dim); }
+.linkish { align-self: flex-start; border: 0; background: none; padding: 0; color: var(--fg); font-size: 13.5px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line3); text-align: left; }
+.linkish:hover { text-decoration-color: var(--accent); }
+.offer .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
+.waiting { display: flex; align-items: center; gap: 8px; font: 11.5px var(--mono); color: var(--muted); }
+.waiting i { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--accent); border-top-color: transparent; animation: spin .9s linear infinite; }
+.sim { border: 1.5px dashed var(--line3); border-radius: 8px; background: none; padding: 6px 10px; font: 11.5px var(--mono); color: var(--fg); }
+.sim b { color: var(--accent-text); font-weight: 500; margin-right: 6px; }
+.sim:hover { border-color: var(--accent); }
+.offer.done { grid-template-columns: 1fr auto; }
+.offer.done h3 { display: flex; align-items: center; gap: 12px; margin-top: 0; font-size: 28px; }
+.offer.done h3 i { width: 26px; height: 26px; border-radius: 50%; background: #1f9d68; position: relative; flex: none; }
+.offer.done h3 i::after { content: ""; position: absolute; left: 9px; top: 5px; width: 5px; height: 11px; border: solid #fff; border-width: 0 2.4px 2.4px 0; transform: rotate(45deg); }
+.offer.done .col { align-items: flex-end; }
+.offer.done .linkish { align-self: flex-end; }
+.who { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--ink-line2); border-radius: 10px; font-size: 13px; animation: none; margin-top: 0 !important; }
+.who svg { width: 18px; height: 18px; fill: #d97757; flex: none; }
+.who b { font-weight: 600; }
+.who span { font: 11px var(--mono); color: var(--ok); }
+.sent { position: sticky; top: 0; z-index: 2; background: var(--ink); padding: 2px 0 8px; margin-top: 0 !important; }
+.sent b { display: block; font: 640 19px/1.15 var(--sans); letter-spacing: -0.02em; color: #fff; }
+.sent span { display: flex; align-items: center; gap: 9px; margin-top: 7px; color: var(--ink-muted); }
+.sent q { quotes: none; background: var(--ink-bubble); color: var(--ink-fg); padding: 6px 12px; border-radius: 13px 13px 13px 4px; }
+.logh { font: 500 10.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-dim); }
+.there { border: 1px solid var(--ink-line2); border-radius: 10px; padding: 9px 11px; color: var(--ink-fg); font-size: 13px; }
+.there b { color: #fff; }
+
+.rail { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+.rail div { display: flex; gap: 10px; align-items: baseline; padding: 10px 13px; border: 1px solid var(--line); border-radius: 11px; font-size: 13px; color: var(--dim); background: var(--tint); transition: border-color .35s, color .35s, background .35s; }
+.rail b { font: 600 11.5px var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); transition: color .35s; }
+.rail div.on { border-color: var(--accent-line); background: var(--accent-soft); color: var(--fg); }
+.rail div.on b { color: var(--accent-text); }
+.stage-note { display: flex; justify-content: space-between; gap: 16px; margin-top: 12px; font: 11.5px var(--mono); color: var(--dim); }
+.stage-note .acts { display: flex; gap: 16px; flex: none; }
+.stage-note button { border: 0; background: none; padding: 0; font: inherit; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.stage-note button:hover { color: var(--fg); }
+
+/* ───────── works with (from lane D) ───────── */
+.clients { display: flex; align-items: center; gap: 36px; border-block: 1px solid var(--line); padding: 22px 0; }
+.clients > .lab { font: 500 11.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin-right: auto; }
+.client-list { display: flex; gap: 56px; align-items: center; }
+.client { display: flex; align-items: center; gap: 9px; font-size: 20px; font-weight: 600; letter-spacing: -0.04em; color: var(--fg); opacity: 0.86; }
+.client svg { width: 23px; height: 23px; fill: currentColor; }
+.compat { margin-left: auto; padding-left: 26px; border-left: 1px solid var(--line2); color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+
+/* ───────── sections ───────── */
+section.block { padding: 96px 0; }
+.sec-head { max-width: 760px; margin-bottom: 40px; }
+.idx { font: 500 12.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-text); }
+.sec-head h2 { font-size: 50px; line-height: 1.04; margin: 14px 0 14px; letter-spacing: var(--track); }
+.sec-head p { color: var(--muted); font-size: 19px; max-width: 34em; }
+.sec-head.split { max-width: none; display: flex; justify-content: space-between; align-items: end; gap: 40px; }
+.sec-head.split h2 { margin-bottom: 0; }
+.sec-head.split p { max-width: 21em; font-size: 17px; }
+.dotc { color: var(--accent); }
+
+/* paths */
+.paths { padding: 56px 0 10px; }
+.paths .wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.path { position: relative; display: flex; flex-direction: column; min-height: 310px; padding: 34px 36px 32px; border-radius: 22px; border: 1px solid var(--line2); background: var(--card); text-decoration: none; overflow: hidden; transition: transform .35s var(--ease), border-color .3s; isolation: isolate; }
+.path::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: 0; transition: opacity .4s; }
+.path.try::before { background: radial-gradient(520px 300px at 85% 110%, var(--accent-soft), transparent 70%); }
+.path.build::before { background: radial-gradient(520px 300px at 85% 110%, var(--cool), transparent 70%); }
+.path:hover { transform: translateY(-4px); border-color: var(--line3); }
+.path:hover::before { opacity: 1; }
+.who-for { font: 500 12.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.path h3 { font-size: 44px; margin: 12px 0 12px; letter-spacing: var(--track); }
+.path p { color: var(--muted); max-width: min(25em, 100% - 210px); }
+.path .go { margin-top: auto; padding-top: 26px; display: inline-flex; gap: 9px; font-weight: 600; }
+.path.try .go { color: var(--accent-text); }
+.path .go span { transition: transform .25s var(--ease); }
+.path:hover .go span { transform: translateX(5px); }
+.path-art { position: absolute; right: 30px; top: 30px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 11px; border: 1px solid var(--line2); border-radius: 99px; background: var(--chip); font: 12px var(--mono); color: var(--muted); transition: transform .45s var(--ease), border-color .3s, color .3s; }
+.path:hover .chip { color: var(--fg); }
+.path:hover .chip:nth-child(1) { transform: translateX(-10px); }
+.path:hover .chip:nth-child(2) { transform: translateX(-22px); }
+.path:hover .chip:nth-child(3) { transform: translateX(-6px); }
+.path:hover .chip:nth-child(4) { transform: translateX(-16px); }
+.glyph { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 11px var(--sans); color: #fff; }
+.glyph.p { background: #3b6cf6; } .glyph.s { background: #0f9d7a; }
+
+/* inside a point: three channels (from lane D) */
+.channels { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line2); border-radius: 20px; overflow: hidden; background: var(--card); }
+.channels article { position: relative; padding: 26px 30px 32px; min-width: 0; }
+.channels article + article { border-left: 1px solid var(--line); }
+.channels article::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform .7s var(--ease) .15s; }
+.channels.in article::before { transform: scaleX(1); }
+.channels.in article:nth-child(2)::before { transition-delay: .3s; }
+.channels.in article:nth-child(3)::before { transition-delay: .45s; }
+.channels svg.dg { display: block; width: 150px; height: 90px; margin: 2px 0 18px -6px; overflow: visible; }
+.channels h3 { font-size: 26px; letter-spacing: -0.035em; }
+.channels p { color: var(--muted); font-size: 16px; margin-top: 9px; max-width: 21em; }
+.d-win { fill: var(--paper); stroke: var(--line3); stroke-width: 1.2; }
+.d-ln { fill: none; stroke: var(--line3); stroke-width: 1.2; }
+.d-bar { fill: var(--bar-b); }
+.d-hot { fill: var(--accent); }
+.d-dash { fill: none; stroke: var(--accent); stroke-width: 1.3; stroke-dasharray: 3.5 3; }
+.d-row { fill: var(--tint2); stroke: var(--line2); stroke-width: 1; }
+.d-lit { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+.d-ring { fill: none; stroke: var(--accent); stroke-width: 1.2; transform-box: fill-box; transform-origin: center; animation: ring 2.4s ease-out infinite; }
+@keyframes ring { 0% { opacity: 0.7; transform: scale(1); } 100% { opacity: 0; transform: scale(1.14, 1.9); } }
+.d-chip { fill: var(--bg); stroke: var(--accent-line); stroke-width: 1; }
+.d-txt { font: 8.5px var(--mono); fill: var(--accent-text); }
+.d-wire { fill: none; stroke: var(--accent-line); stroke-width: 1.2; stroke-dasharray: 2.5 3; }
+
+/* your agent, your permission (from lane D) */
+.access { background: var(--band); color: var(--band-fg); border-block: 1px solid var(--line); margin: 96px 0 0; }
+.access-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9%; padding: 72px 0; align-items: start; }
+.access .idx { color: var(--band-accent); }
+.access h2 { font-size: 56px; line-height: 1.02; letter-spacing: var(--track); margin-top: 14px; }
+.access h2 em { color: var(--band-accent); }
+.access-rows article { padding: 20px 0; border-top: 1px solid var(--band-line); }
+.access-rows article:first-child { padding-top: 0; border-top: 0; }
+.access-rows article:last-child { padding-bottom: 0; }
+.access h3 { font-size: 22px; letter-spacing: -0.03em; }
+.access p { color: var(--band-muted); font-size: 16px; margin-top: 7px; max-width: 32em; }
+
+/* the standard */
+.std { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line2); border-radius: 20px; background: var(--card); overflow: hidden; }
+.std a { padding: 26px 26px 28px; text-decoration: none; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; transition: background .25s; }
+.std a:last-child { border-right: 0; }
+.std a:hover { background: var(--tint); }
+.std b { font-size: 21px; letter-spacing: -0.02em; }
+.std span { color: var(--muted); font-size: 14.5px; }
+.std small { font: 11.5px var(--mono); color: var(--accent-text); margin-top: 8px; }
+
+/* closing + footer */
+.closing { text-align: center; padding: 110px 0 120px; }
+.closing h2 { font-size: 64px; letter-spacing: var(--track); line-height: 1; margin: 22px auto 16px; max-width: 14em; }
+.closing p { color: var(--muted); font-size: 19px; }
+.closing .cta-row { justify-content: center; }
+.closing .mark { margin: 0 auto; }
+footer { border-top: 1px solid var(--line); padding: 44px 0 110px; font-size: 14.5px; color: var(--muted); position: relative; z-index: 1; background: var(--foot); }
+footer .wrap { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 40px; }
+footer .brand { color: var(--fg); }
+footer h5 { margin: 0 0 12px; font: 500 11.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+footer ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+footer a { text-decoration: none; }
+footer a:hover { color: var(--fg); }
+footer .fine { font-size: 13px; color: var(--dim); margin-top: 12px; max-width: 30em; }
+
+/* ───────── Try it / Build it views ───────── */
+.view-hero { padding: 76px 0 36px; }
+.view-hero h1 { font-size: 62px; line-height: 1; letter-spacing: var(--track); margin: 18px 0 18px; max-width: 13em; }
+.view-hero .lede { max-width: 36em; }
+.back { font-size: 14.5px; color: var(--muted); margin-bottom: 26px; display: block; }
+.back a { color: var(--fg); }
+.try-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; padding-bottom: 40px; }
+.tsteps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.tsteps li { display: grid; grid-template-columns: 44px 1fr; gap: 18px; padding: 0 0 30px; position: relative; }
+.tsteps li::before { content: ""; position: absolute; left: 21px; top: 44px; bottom: 0; border-left: 1px dashed var(--line2); }
+.tsteps li:last-child::before { display: none; }
+.tsteps .n { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--accent-line); color: var(--accent-text); font: 600 14px var(--mono); background: var(--bg); }
+.tsteps b { display: block; font-size: 22px; letter-spacing: -0.02em; margin: 7px 0 6px; }
+.tsteps p { color: var(--muted); font-size: 16px; }
+.side { position: sticky; top: 92px; display: flex; flex-direction: column; gap: 16px; }
+.appcard { border: 1px solid var(--line2); border-radius: 18px; background: var(--card); padding: 22px 24px; }
+.appcard .row { display: flex; align-items: center; gap: 10px; }
+.appcard .glyph { width: 30px; height: 30px; border-radius: 9px; font-size: 16px; }
+.appcard b { font-size: 21px; letter-spacing: -0.02em; }
+.appcard p { color: var(--muted); font-size: 15.5px; margin: 8px 0 14px; }
+.appcard .links { display: flex; gap: 18px; font-size: 14.5px; }
+.appcard .links a { color: var(--fg); text-underline-offset: 4px; text-decoration-color: var(--line2); }
+.appcard .links a:hover { text-decoration-color: var(--accent); }
+.appcard .host { font: 11.5px var(--mono); color: var(--dim); margin-left: auto; }
+.wires { height: 54px; margin: -8px 0; display: block; width: 100%; }
+.wires path { fill: none; stroke: var(--accent-line); stroke-width: 1.5; stroke-dasharray: 5 6; animation: dash 1.4s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -22; } }
+.joiner { display: flex; align-items: center; gap: 12px; justify-content: center; font: 12px var(--mono); color: var(--muted); }
+.starter { margin: 20px 0 0; border: 1px solid var(--accent-line); border-radius: 22px; background: linear-gradient(180deg, var(--accent-soft), transparent), var(--card); padding: 34px 38px; display: grid; grid-template-columns: 210px 1fr 1fr; gap: 30px; align-items: start; }
+.starter h3 { font-size: 26px; line-height: 1.1; }
+.starter .who-for { color: var(--accent-text); display: block; margin-bottom: 10px; }
+.starter .move { font-size: 15.5px; color: var(--muted); }
+.starter .move a { color: var(--fg); }
+.starter .move small { display: block; font: 500 11.5px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+.starter .ask { margin-top: 12px; display: inline-block; background: var(--ink-bubble); color: var(--ink-fg); padding: 9px 14px; border-radius: 13px 13px 13px 4px; font-size: 15.5px; }
+.aside { margin: 26px 0 100px; font-size: 16px; color: var(--muted); }
+.aside b { color: var(--fg); }
+#v-try:not(.has-own) .if-own, #v-try.has-own .no-own { display: none !important; }
+.tsteps li.done .n { font-size: 0; border-color: #1f9d68; background: #1f9d68; }
+.tsteps li.done .n::after { content: ""; width: 6px; height: 13px; margin-top: -3px; border: solid #fff; border-width: 0 2.4px 2.4px 0; transform: rotate(45deg); }
+.tsteps li.done p, .tsteps li.done b { opacity: 0.55; }
+.tsteps li b::after { font: 500 11px var(--mono); letter-spacing: 0.04em; margin-left: 10px; padding: 2px 8px; border-radius: 99px; vertical-align: 3px; }
+.tsteps li.done b::after { content: "done in the hero"; border: 1px solid var(--line2); color: var(--muted); }
+.tsteps li.next .n { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.tsteps li.next b::after { content: "start here"; background: var(--accent-soft); color: var(--accent-text); border: 1px solid var(--accent-line); }
+.conn { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font: 500 12px var(--mono); color: #1f9d68; }
+.conn i { width: 16px; height: 16px; border-radius: 50%; background: #1f9d68; position: relative; }
+.conn i::after { content: ""; position: absolute; left: 5.5px; top: 3px; width: 3px; height: 7px; border: solid #fff; border-width: 0 1.8px 1.8px 0; transform: rotate(45deg); }
+.appcard.on { border-color: #1f9d68; }
+.protonote { margin-top: 18px; font: 11.5px var(--mono); color: var(--dim); }
+.protonote button { border: 0; background: none; padding: 0; font: inherit; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+
+/* build it: a short list beside the real payload (lane D's approach) */
+.build-grid { display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 56px; margin-top: 30px; align-items: start; }
+.build-grid h2 { font-size: 32px; letter-spacing: -0.04em; margin-bottom: 18px; }
+.bsteps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.bsteps li { border-top: 1px solid var(--line2); counter-increment: step; padding: 18px 0 18px 46px; position: relative; }
+.bsteps li::before { content: counter(step, decimal-leading-zero); position: absolute; left: 0; top: 21px; color: var(--accent-text); font: 12.5px var(--mono); }
+.bsteps h3 { font-size: 21px; letter-spacing: -0.03em; }
+.bsteps p { font-size: 15.5px; color: var(--muted); margin-top: 6px; }
+.codecard { background: var(--ink); color: var(--ink-fg); border: 1px solid var(--ink-line); border-radius: 18px; padding: 26px 28px; min-width: 0; position: sticky; top: 92px; }
+.codecard .idx { color: var(--ink-accent); }
+.codecard h3 { font-size: 30px; letter-spacing: -0.04em; margin: 10px 0 8px; color: #fff; }
+.codecard p { color: var(--ink-muted); font-size: 15.5px; }
+.codecard pre { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--ink-line2); font: 12.8px/1.6 var(--mono); color: #c9d1de; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pkgrow { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-top: 44px; padding-top: 22px; border-top: 1px solid var(--line2); font-size: 14px; color: var(--muted); }
+.pkgrow b { color: var(--fg); margin-right: 8px; }
+.guides { display: flex; flex-wrap: wrap; gap: 12px 30px; margin: 22px 0 14px; }
+.guides a { font-size: 15.5px; font-weight: 600; text-decoration: none; padding: 4px 0; border-bottom: 1px solid var(--accent-line); transition: color .2s; }
+.guides a:hover { color: var(--accent-text); }
+.lic { font-size: 13.5px; color: var(--dim); margin-bottom: 110px; }
+
+/* ───────── scroll reveal ───────── */
+.js .rv { opacity: 0; transform: translateY(22px); transition: opacity .7s var(--ease), transform .7s var(--ease); transition-delay: var(--d, 0s); }
+.js .rv.in { opacity: 1; transform: none; }
+
+/* ───────── proto bar + toast (fixed, same in both themes) ───────── */
+.proto { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 14px; border-radius: 99px; background: rgb(22 26 35 / 0.94); border: 1px solid rgb(255 255 255 / 0.16); font: 12px var(--mono); color: #7c8799; box-shadow: 0 12px 40px rgb(0 0 0 / 0.4); backdrop-filter: blur(10px); }
+.proto button { border: 0; background: none; padding: 6px 12px; border-radius: 99px; color: #a3adbf; font: 12px var(--mono); }
+.proto button:hover { color: #fff; }
+.proto button[aria-pressed="true"] { background: #ff9f1c; color: #1b1000; font-weight: 600; }
+.toast { position: fixed; left: 50%; bottom: 64px; transform: translate(-50%, 10px); z-index: 60; padding: 9px 16px; border-radius: 10px; background: #1c212c; border: 1px solid rgb(255 255 255 / 0.16); font: 12.5px var(--mono); color: #eef1f6; opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s var(--ease); max-width: 80vw; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+/* ───────── less motion ───────── */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .js .rv { opacity: 1; transform: none; }
+  .channels article::before { transform: scaleX(1); }
+  .d-ring { opacity: 0.5; }
+  .bd-ring { opacity: 0.8; }
+}
+</style>
+</head>
+<body>
+<canvas id="field" aria-hidden="true"></canvas>
+<div class="haze a" aria-hidden="true"></div>
+<div class="haze b" aria-hidden="true"></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <radialGradient id="blob" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#4a505e"/><stop offset="0.55" stop-color="#23262e"/><stop offset="1" stop-color="#0e0f13"/></radialGradient>
+    <symbol id="agent" viewBox="0 0 48 48">
+      <path d="M24 3.5c10.6 0 19.5 7.6 19.5 19.2 0 12.4-8.2 21.8-20.3 21.8C11.6 44.500 4.5 36 4.5 24.600 4.500 12.6 12.600 3.500 24 3.500Z" fill="url(#blob)" stroke="rgb(255 255 255 / 0.5)" stroke-width="1.2"/>
+      <g class="lid"><g class="pupils"><rect x="16.6" y="18.5" width="4.4" height="9.6" rx="2.2" fill="#fff"/><rect x="27" y="18.5" width="4.4" height="9.6" rx="2.2" fill="#fff"/></g></g>
+    </symbol>
+    <symbol id="claude" viewBox="0 0 24 24"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></symbol>
+  </defs>
+</svg>
+
+<div class="page">
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#/" data-view="landing">
+      <svg class="mark track" width="28" height="28"><use href="#agent"/></svg>
+      Agent Pointed Context <small>APC</small>
+    </a>
+    <nav aria-label="Site">
+      <a href="#/try" data-view="try">Try it</a>
+      <a href="#/build" data-view="build">Build it</a>
+      <a href="#" data-to="/docs">Docs</a>
+      <a href="#" data-to="/docs/spec">Spec</a>
+      <a href="https://github.com/tineira/agent-pointed-context" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+    <div class="right">
+      <button class="theme" id="theme" type="button" aria-label="Switch to the light theme" title="Light or dark. Follows your system until you choose.">
+        <svg class="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.500Z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.500M12 19v2.500M2.500 12H5M19 12h2.500M5.300 5.300l1.800 1.800M16.900 16.900l1.800 1.800M5.300 18.700l1.800-1.800M16.900 7.100l1.800-1.800"/></svg>
+      </button>
+      <a class="btn ghost sm" href="#/build" data-view="build">Add APC to your app</a>
+      <a class="btn primary sm" href="#/try" data-view="try">Try the demo</a>
+    </div>
+  </div>
+</header>
+
+<!-- ═════════════════════ LANDING ═════════════════════ -->
+<main id="v-landing">
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <div class="eyebrow"><i></i>An open standard, built on MCP</div>
+        <h1>Point your AI agent at <em>what you see.</em></h1>
+        <p class="lede">Drag your agent onto a chart, a row or a paragraph and ask about “this”. It reads the data underneath, through access it already has. <b>No screen sharing.</b></p>
+        <div class="cta-row">
+          <a class="btn primary" href="#/try" data-view="try">Try the demo <span class="arr">→</span></a>
+          <a class="btn ghost" href="#/build" data-view="build">Add APC to your app</a>
+        </div>
+        <a class="watch" href="https://youtu.be/pb46Sd0UOtM" target="_blank" rel="noopener"><span>▶</span> Watch the full video</a>
+      </div>
+
+      <div>
+        <div class="stage" id="stage" data-mode="demo">
+          <div class="stage-grid">
+            <div class="win app">
+              <div class="win-bar"><i></i><i></i><i></i><span>pulse · overview</span></div>
+              <div class="app-body">
+                <h4>Active customers <small>per month</small></h4>
+                <div class="chart" id="chart"><span class="grid-ln g100"><b>100</b></span><span class="grid-ln g50"><b>50</b></span></div>
+                <div class="months" id="months"></div>
+                <div class="agentbar"><span class="slot" id="slot"></span><span id="who"></span><span class="hint" id="hint"></span></div>
+              </div>
+            </div>
+            <div class="win chat" id="panel">
+              <div class="win-bar"><i></i><i></i><i></i><span id="panelTitle">your agent</span><button class="own" id="own" type="button">Use your own agent</button></div>
+              <div class="chat-body" id="chat" aria-live="polite"></div>
+              <div class="chat-foot"><span>Ask about “this”</span><kbd>↵</kbd></div>
+            </div>
+          </div>
+          <button id="mk" type="button" aria-label="Your agent's mark. Drag it onto a bar, or press a bar.">
+            <span class="mk-in">
+              <svg class="mark track mk-blob" width="44" height="44"><use href="#agent"/></svg>
+              <span class="mk-own" aria-hidden="true"><svg><use href="#claude"/></svg></span>
+            </span>
+            <svg class="cursor" viewBox="0 0 18 18"><path d="M2 1l13 7-5.5 1.6L7.8 15z" fill="#fff" stroke="#141a24" stroke-width="1.2" stroke-linejoin="round"/></svg>
+          </button>
+          <div id="badge" hidden>
+            <div class="bd-in" tabindex="0" role="button" aria-label="The pin. Drag it onto another bar to move it." title="The pin. Drag it onto another bar to move it.">
+              <span class="bd-ring"></span>
+              <span class="bd-disc"><svg class="mark bd-blob" width="28" height="28"><use href="#agent"/></svg><svg class="bd-own" viewBox="0 0 24 24"><use href="#claude"/></svg></span>
+              <span class="bd-check"></span>
+            </div>
+            <button class="bd-x" type="button" aria-label="Unpin" title="Unpin">×</button>
+          </div>
+          <div class="offer" id="offer" hidden></div>
+        </div>
+        <div class="rail" id="rail">
+          <div><b>View</b><span>The app says where you are, as identifiers.</span></div>
+          <div><b>Pin</b><span>You point. The app names the call that reads it.</span></div>
+          <div><b>Presence</b><span>What your agent reads lights up.</span></div>
+        </div>
+        <div class="stage-note"><span id="stageNote"></span><span class="acts"><button id="reset" type="button">Unpin</button><button id="replay" type="button">Replay</button></span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap clients rv" aria-label="Compatible agents">
+    <span class="lab">Works with</span>
+    <div class="client-list">
+      <span class="client"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#claude"/></svg>Claude</span>
+      <span class="client"><svg viewBox="165 165 370 370" aria-hidden="true"><path d="M508.749 317.399C516.777 287.314 508.991 253.884 485.389 230.282C461.788 206.681 428.36 198.895 398.273 206.923C376.231 184.928 343.39 174.956 311.148 183.596C278.906 192.234 255.45 217.292 247.36 247.361C217.291 255.451 192.233 278.91 183.595 311.149C174.957 343.391 184.927 376.232 206.924 398.274C198.896 428.359 206.683 461.789 230.284 485.391C253.885 508.992 287.313 516.779 317.401 508.75C339.442 530.745 372.286 540.717 404.525 532.079C436.767 523.441 460.223 498.384 468.313 468.315C498.383 460.224 523.44 436.766 532.078 404.526C540.716 372.285 530.747 339.443 508.749 317.402V317.399ZM470.899 244.776C486.892 260.77 493.488 282.601 490.687 303.412L415.577 260.046C412.411 258.218 408.509 258.218 405.345 260.046L317.401 310.82V277.526C317.401 275.191 318.652 273.005 320.676 271.837L387.644 233.174C414.178 218.353 448.346 222.223 470.901 244.776H470.899ZM357.837 311.144L398.275 334.491V381.185L357.837 404.532L317.398 381.185V334.491L357.837 311.144ZM264.776 269.693C265.207 239.305 285.644 211.649 316.453 203.393C338.3 197.54 360.505 202.744 377.127 215.573L302.014 258.937C298.848 260.764 296.898 264.144 296.898 267.798V369.346L268.065 352.699C266.043 351.531 264.776 349.353 264.776 347.017V269.691V269.693ZM203.391 316.454C209.244 294.608 224.854 277.978 244.276 269.999V356.73C244.276 360.384 246.226 363.763 249.392 365.591L337.337 416.365L308.503 433.013C306.481 434.181 303.961 434.188 301.939 433.02L234.971 394.357C208.868 378.789 195.138 347.261 203.391 316.454ZM244.775 470.9C228.781 454.906 222.186 433.075 224.986 412.264L300.096 455.63C303.263 457.457 307.164 457.457 310.328 455.63L398.273 404.856V438.149C398.273 440.485 397.022 442.671 394.997 443.839L328.029 482.502C301.495 497.322 267.327 493.452 244.772 470.9H244.775ZM450.897 445.982C450.466 476.371 430.029 504.027 399.22 512.283C377.373 518.136 355.168 512.932 338.547 500.102L413.659 456.738C416.826 454.911 418.775 451.532 418.775 447.877V346.329L447.609 362.977C449.631 364.145 450.897 366.323 450.897 368.659V445.985V445.982ZM512.282 399.221C506.429 421.068 490.819 437.697 471.397 445.676V358.946C471.397 355.292 469.448 351.912 466.281 350.085L378.336 299.311L407.17 282.663C409.192 281.495 411.712 281.487 413.734 282.655L480.702 321.318C506.805 336.887 520.536 368.415 512.282 399.221Z"/></svg>ChatGPT</span>
+      <span class="client"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23"/></svg>Cursor</span>
+      <span class="client"><svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M395.479 633.828L735.91 381.105C752.599 368.715 776.454 373.548 784.406 392.792C826.26 494.285 807.561 616.253 724.288 699.996C641.016 783.739 525.151 802.104 419.247 760.277L303.556 814.143C469.49 928.202 670.987 899.995 796.901 773.282C896.776 672.843 927.708 535.937 898.785 412.476L899.047 412.739C857.105 231.37 909.358 158.874 1016.4 10.6326C1018.93 7.11771 1021.47 3.60279 1024 0L883.144 141.651V141.212L395.392 633.916 M325.226 695.251C206.128 580.84 226.662 403.776 328.285 301.668C403.431 226.097 526.549 195.254 634.026 240.596L749.454 186.994C728.657 171.88 702.007 155.623 671.424 144.2C533.19 86.9942 367.693 115.465 255.323 228.382C147.234 337.081 113.244 504.215 171.613 646.833C215.216 753.423 143.739 828.818 71.7385 904.916C46.2237 931.893 20.6216 958.87 0 987.429L325.139 695.339"/></svg>Grok</span>
+    </div>
+    <span class="compat">and any agent that accepts<br>a remote MCP server</span>
+  </section>
+
+  <section class="paths">
+    <div class="wrap">
+      <a class="path try rv" href="#/try" data-view="try">
+        <span class="who-for">For people using an AI agent</span>
+        <h3>Try it</h3>
+        <p>Connect your own agent to two demo apps and point it at a chart. A few minutes, made-up data, no account.</p>
+        <div class="path-art" aria-hidden="true">
+          <span class="chip"><span class="glyph p">P</span>Pulse</span>
+          <span class="chip"><span class="glyph s">S</span>Signals</span>
+        </div>
+        <span class="go">Try the demo <span>→</span></span>
+      </a>
+      <a class="path build rv" style="--d:.08s" href="#/build" data-view="build">
+        <span class="who-for">For people building an app</span>
+        <h3>Build it</h3>
+        <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app straight to their agent.</p>
+        <div class="path-art" aria-hidden="true">
+          <span class="chip">@tineira/apc-protocol</span>
+          <span class="chip">@tineira/apc-server</span>
+          <span class="chip">@tineira/apc-web</span>
+          <span class="chip">@tineira/apc-conformance</span>
+        </div>
+        <span class="go">Add APC to your app <span>→</span></span>
+      </a>
+    </div>
+  </section>
+
+  <section class="block" id="how" style="padding-bottom: 0">
+    <div class="wrap">
+      <div class="sec-head split rv">
+        <div><span class="idx">How it works</span><h2>Inside a point<span class="dotc">.</span></h2></div>
+        <p>Three channels connect what you see to what your agent can read.</p>
+      </div>
+      <div class="channels rv">
+        <article>
+          <svg class="dg" viewBox="0 0 150 90" aria-hidden="true">
+            <rect class="d-win" x="6" y="8" width="92" height="70" rx="6"/><path class="d-ln" d="M6 22h92"/>
+            <rect class="d-bar" x="18" y="52" width="11" height="18" rx="1.5"/><rect class="d-bar" x="35" y="42" width="11" height="28" rx="1.5"/><rect class="d-bar" x="52" y="47" width="11" height="23" rx="1.5"/><rect class="d-hot" x="69" y="34" width="11" height="36" rx="1.5"/>
+            <path class="d-wire" d="M98 30h14"/>
+            <rect class="d-chip" x="112" y="21" width="36" height="18" rx="9"/><text class="d-txt" x="130" y="33" text-anchor="middle">ids</text>
+          </svg>
+          <h3>View</h3>
+          <p>The app names your screen, filters and selection with identifiers. No pixels travel.</p>
+        </article>
+        <article>
+          <svg class="dg" viewBox="0 0 150 90" aria-hidden="true">
+            <path class="d-ln" d="M8 78h100"/>
+            <rect class="d-bar" x="18" y="48" width="18" height="30" rx="2"/><rect class="d-hot" x="48" y="34" width="18" height="44" rx="2"/><rect class="d-bar" x="78" y="54" width="18" height="24" rx="2"/>
+            <rect class="d-dash" x="43" y="29" width="28" height="49" rx="4"/>
+            <use href="#agent" x="45" y="2" width="24" height="24"/>
+            <path class="d-wire" d="M71 44h20"/>
+            <rect class="d-chip" x="91" y="35" width="56" height="18" rx="9"/><text class="d-txt" x="119" y="47" text-anchor="middle">next call</text>
+          </svg>
+          <h3>Pin</h3>
+          <p>Drop your agent on an item. The app gives it the exact tool call that reads that item.</p>
+        </article>
+        <article>
+          <svg class="dg" viewBox="0 0 150 90" aria-hidden="true">
+            <rect class="d-row" x="8" y="12" width="96" height="18" rx="4"/>
+            <rect class="d-ring" x="8" y="36" width="96" height="18" rx="4"/>
+            <rect class="d-lit" x="8" y="36" width="96" height="18" rx="4"/>
+            <rect class="d-row" x="8" y="60" width="96" height="18" rx="4"/>
+            <use href="#agent" x="112" y="32" width="26" height="26"/>
+          </svg>
+          <h3>Presence</h3>
+          <p>Your agent is a mark on the page. What it reads lights up as it goes.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="access" id="access">
+    <div class="wrap access-grid">
+      <div class="rv"><span class="idx">Access and privacy</span><h2>Your agent.<br>Your <em>permission.</em></h2></div>
+      <div class="access-rows rv" style="--d:.08s">
+        <article><h3>Only the item you point at</h3><p>APC sends identifiers. Your agent reads the item with the access you gave it. Your screen and screenshots stay out of the exchange.</p></article>
+        <article><h3>One connection per app</h3><p>Each app keeps its data and provides its own MCP address. Your agent brings the answers together in your conversation.</p></article>
+        <article><h3>Revoke in the app</h3><p>Each app lists your agents. Revoke one there and its access to that app ends at once.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="standard">
+    <div class="wrap">
+      <div class="sec-head rv">
+        <span class="idx">The standard</span>
+        <h2>Free, open and versioned<span class="dotc">.</span></h2>
+        <p>APC started as a research paper. The spec is frozen and changes only by its versioning policy.</p>
+      </div>
+      <div class="std rv">
+        <a href="#" data-to="/docs/spec"><b>The spec</b><span>The core, connecting agents, the focus format, apc.json.</span><small>CC BY 4.0 →</small></a>
+        <a href="https://github.com/tineira/agent-pointed-context" target="_blank" rel="noopener"><b>The code</b><span>The packages and the conformance suite, on GitHub.</span><small>MIT ↗</small></a>
+        <a href="#" data-to="/docs/conformance"><b>Conformance</b><span>A suite that checks the view, the pin, the focus format and revoke.</span><small>@tineira/apc-conformance →</small></a>
+        <a href="https://doi.org/10.5281/zenodo.23382909" target="_blank" rel="noopener"><b>The paper</b><span>Letting a person point an AI agent at what they see, without sharing the screen.</span><small>doi:10.5281/zenodo.23382909 ↗</small></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="wrap rv">
+      <svg class="mark track" width="72" height="72"><use href="#agent"/></svg>
+      <h2>Point it at something.</h2>
+      <p>Two demo apps, made-up data, no account. Or read how small the integration is.</p>
+      <div class="cta-row">
+        <a class="btn primary" href="#/try" data-view="try">Try the demo <span class="arr">→</span></a>
+        <a class="btn ghost" href="#/build" data-view="build">Add APC to your app</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ═════════════════════ TRY IT ═════════════════════ -->
+<main id="v-try" hidden>
+  <section class="view-hero">
+    <div class="wrap">
+      <div class="eyebrow"><i></i>Try it</div>
+      <h1>Your agent, two demo apps, <em>one drag.</em></h1>
+      <p class="lede no-own">You need an agent that can add a remote MCP server. The demo is free and its data is made up. No account, nothing to install.</p>
+      <p class="lede if-own"><b><span class="own-name">Claude</span> is already connected to Pulse.</b> You did that on the landing page, and it is the same Pulse. Next, add Signals and ask one question across the two.</p>
+      <div class="cta-row">
+        <a class="btn primary no-own" href="https://pulse.apc.tineira.com/agents" target="_blank" rel="noopener">Open Pulse and connect your agent <span class="arr">↗</span></a>
+        <a class="btn primary if-own" href="https://signals.apc.tineira.com/?connect" target="_blank" rel="noopener">Connect <span class="own-name">Claude</span> to Signals <span class="arr">↗</span></a>
+        <a class="btn ghost if-own" href="https://pulse.apc.tineira.com/" target="_blank" rel="noopener">Open your Pulse ↗</a>
+      </div>
+      <p class="protonote if-own">Prototype: this state comes from “Simulate: Claude connected” in the hero. <button type="button" id="tryClear">Clear it</button></p>
+    </div>
+  </section>
+  <section>
+    <div class="wrap try-grid">
+      <ol class="tsteps">
+        <li class="rv"><span class="n">1</span><div><b>Open Pulse</b><p>A demo app: product analytics for a made-up SaaS. It opens a private copy for you.</p></div></li>
+        <li class="rv"><span class="n">2</span><div><b>Connect your agent</b><p>In Pulse's Agents page, make an agent and copy its MCP address, or the prompt that asks your agent to add it. Add it to Claude, ChatGPT, Cursor or Grok as a remote MCP server.</p></div></li>
+        <li class="rv"><span class="n">3</span><div><b>Point and ask</b><p>Drag your agent's mark from Pulse's agent bar onto a bar, a customer or a step, and ask about “this”.</p></div></li>
+        <li class="rv"><span class="n">4</span><div><b>Add a second app</b><p>Connect the same agent to Signals, with Signals' own address. Point at something in each and ask how they connect: your agent does the joining, and the two apps share nothing.</p></div></li>
+      </ol>
+      <div class="side">
+        <div class="appcard rv" id="pulseCard">
+          <div class="row"><span class="glyph p">P</span><b>Pulse</b><span class="host no-own">pulse.apc.tineira.com</span><span class="conn if-own"><i></i><span><span class="own-name">Claude</span> connected</span></span></div>
+          <p>Product analytics for a SaaS: customers, plans, seats, monthly activity.</p>
+          <div class="links"><a href="https://pulse.apc.tineira.com/" target="_blank" rel="noopener">Open Pulse ↗</a><a class="no-own" href="https://pulse.apc.tineira.com/agents" target="_blank" rel="noopener">Connect an agent ↗</a><a class="if-own" href="https://pulse.apc.tineira.com/agents" target="_blank" rel="noopener">Your agents, and Revoke ↗</a></div>
+        </div>
+        <div class="rv">
+          <svg class="wires" viewBox="0 0 400 54" preserveAspectRatio="none" aria-hidden="true"><path d="M200 0V54"/></svg>
+          <div class="joiner"><svg class="mark track" width="40" height="40"><use href="#agent"/></svg>your agent does the joining · the apps share nothing</div>
+          <svg class="wires" viewBox="0 0 400 54" preserveAspectRatio="none" aria-hidden="true"><path d="M200 54V0"/></svg>
+        </div>
+        <div class="appcard rv">
+          <div class="row"><span class="glyph s">S</span><b>Signals</b><span class="host">signals.apc.tineira.com<span class="if-own"> · not connected yet</span></span></div>
+          <p>A market feed: what competitors launch, price and say.</p>
+          <div class="links"><a href="https://signals.apc.tineira.com/" target="_blank" rel="noopener">Open Signals ↗</a><a href="https://signals.apc.tineira.com/?connect" target="_blank" rel="noopener">Connect an agent ↗</a></div>
+        </div>
+      </div>
+    </div>
+    <div class="wrap">
+      <div class="starter rv">
+        <div><span class="who-for">A question to start with</span><h3>One offer, one customer who left.</h3></div>
+        <div class="move"><small>First, in Signals</small>Drop your agent on <a href="https://signals.apc.tineira.com/?post=post_013" target="_blank" rel="noopener">Tallyfin's offer to Team teams in North America</a> and ask:<br><span class="ask">Which of our customers did this offer take?</span></div>
+        <div class="move"><small>Then, in Pulse</small>Point it at <a href="https://pulse.apc.tineira.com/customers/cus_0048" target="_blank" rel="noopener">Deep Harbor Logistics</a>, a customer who left, and ask:<br><span class="ask">How do the two connect?</span></div>
+      </div>
+      <p class="aside rv"><b>Cut it off any time.</b> Each app lists your agents on its own page, with Revoke: the agent loses that app at once, and keeps the other.</p>
+    </div>
+  </section>
+</main>
+
+<!-- ═════════════════════ BUILD IT ═════════════════════ -->
+<main id="v-build" hidden>
+  <section class="view-hero" style="padding-bottom: 0">
+    <div class="wrap">
+      <span class="back">New to APC? <a href="#/try" data-view="try">Try the demo first →</a></span>
+      <div class="eyebrow"><i></i>Build it</div>
+      <h1>Make your app <em>pointable.</em></h1>
+      <p class="lede">An APC app serves its own remote MCP endpoint. The person connects an agent to your app, and the agent reads through the tools you already have. Your app keeps its data.</p>
+      <div class="cta-row">
+        <a class="btn primary" href="#" data-to="/docs/integrate">Integrate your app in an afternoon <span class="arr">→</span></a>
+        <a class="btn ghost" href="#" data-to="/docs/spec">Read the spec</a>
+      </div>
+    </div>
+  </section>
+  <section>
+    <div class="wrap">
+      <div class="build-grid">
+        <div class="rv">
+          <h2>What to implement</h2>
+          <ol class="bsteps">
+            <li><h3>Serve an MCP endpoint</h3><p>Give each agent a grant and an MCP URL. Serve <code>get_current_view</code> and <code>wait_for_focus</code> beside your own tools.</p></li>
+            <li><h3>Make things pointable</h3><p>Mark charts, rows and paragraphs with <code>data-focus</code>: ids and keys only. A drop becomes a focus that names the call that reads it, in <code>next</code> and <code>next_args</code>.</p></li>
+            <li><h3>Publish <code>apc.json</code> and offer Revoke</h3><p><code>/.well-known/apc.json</code> says what your app is. List the person's agents in your page, with Revoke.</p></li>
+            <li><h3>Pass the conformance suite</h3><p><code>@tineira/apc-conformance</code> checks the view, the pin, the focus format and revoke through your endpoint.</p></li>
+          </ol>
+        </div>
+        <div class="codecard rv" style="--d:.08s">
+          <span class="idx">Example from Pulse · real output</span>
+          <h3>What the agent receives</h3>
+          <p>A pin on March in the chart of active customers. Ids and keys, and the call that reads it.</p>
+          <pre id="payloadCode" tabindex="0"></pre>
+        </div>
+      </div>
+      <div class="pkgrow rv"><b>Packages</b><span class="chip">@tineira/apc-protocol</span><span class="chip">@tineira/apc-server</span><span class="chip">@tineira/apc-web</span><span class="chip">@tineira/apc-conformance</span></div>
+      <div class="guides rv">
+        <a href="#" data-to="/docs/integrate">Integration guide →</a>
+        <a href="#" data-to="/docs/conformance">Conformance suite →</a>
+        <a href="#" data-to="/docs">Docs →</a>
+        <a href="#" data-to="/docs/spec">Spec →</a>
+        <a href="https://doi.org/10.5281/zenodo.23383101" target="_blank" rel="noopener">Payload specification ↗</a>
+        <a href="https://doi.org/10.5281/zenodo.23382909" target="_blank" rel="noopener">Paper ↗</a>
+        <a href="https://github.com/tineira/agent-pointed-context" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+      <p class="lic rv">Free and open: code MIT, docs and spec CC BY 4.0.</p>
+    </div>
+  </section>
+</main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <a class="brand" href="#/" data-view="landing"><svg class="mark" width="26" height="26"><use href="#agent"/></svg>Agent Pointed Context</a>
+      <p class="fine">An open standard built on the Model Context Protocol. Code MIT; docs and spec CC BY 4.0. The agents' marks are trademarks of their owners.</p>
+    </div>
+    <div><h5>Start</h5><ul>
+      <li><a href="#/try" data-view="try">Try it</a></li>
+      <li><a href="#/build" data-view="build">Build it</a></li>
+      <li><a href="https://youtu.be/pb46Sd0UOtM" target="_blank" rel="noopener">Full video ↗</a></li>
+    </ul></div>
+    <div><h5>Standard</h5><ul>
+      <li><a href="#" data-to="/docs">Docs</a></li>
+      <li><a href="#" data-to="/docs/spec">Spec</a></li>
+      <li><a href="#" data-to="/docs/integrate">Integration guide</a></li>
+      <li><a href="#" data-to="/docs/conformance">Conformance</a></li>
+    </ul></div>
+    <div><h5>Research and code</h5><ul>
+      <li><a href="https://github.com/tineira/agent-pointed-context" target="_blank" rel="noopener">GitHub ↗</a></li>
+      <li><a href="https://doi.org/10.5281/zenodo.23382909" target="_blank" rel="noopener">Paper ↗</a></li>
+      <li><a href="https://doi.org/10.5281/zenodo.23383101" target="_blank" rel="noopener">Payload specification ↗</a></li>
+      <li><a href="#" data-to="/v1/">Version 1, as described in the paper →</a></li>
+    </ul></div>
+  </div>
+</footer>
+
+<div class="proto" role="group" aria-label="Prototype views">proto
+  <button data-view="landing" aria-pressed="true">Landing</button>
+  <button data-view="try" aria-pressed="false">Try it</button>
+  <button data-view="build" aria-pressed="false">Build it</button>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  root.classList.add("js");
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const mq = matchMedia("(prefers-reduced-motion: reduce)");
+  let calm = mq.matches;
+
+  /* ───── Pulse's real data for the hero (context/pulse/pulse-hero-data.json) ─────
+     Per month: the focus payload, verbatim; values.active and values.seats from get_figure;
+     the mix by plan and by region and the two customers with the most seats, from the summary;
+     the month before, from get_figure's series. March's focus is FOCUS_EXAMPLE (landing-example.ts). */
+  const DATA = {
+    "2025-10": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2025-10"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2025-10","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2025-10"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":102,"seats":2770,"plan":{"starter":45,"business":19,"team":38},"region":{"na":37,"latam":41,"emea":24},"top":[{"name":"Cedar Harbor Health","seats":175,"plan":"business","region":"na"},{"name":"Silver River Logistics","seats":171,"plan":"business","region":"na"}],"prev":{"ym":"2025-09","value":92}},
+    "2025-11": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2025-11"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2025-11","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2025-11"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":100,"seats":2744,"plan":{"starter":43,"business":19,"team":38},"region":{"na":35,"latam":42,"emea":23},"top":[{"name":"Silver River Logistics","seats":170,"plan":"business","region":"na"},{"name":"Cedar Harbor Health","seats":169,"plan":"business","region":"na"}],"prev":{"ym":"2025-10","value":102}},
+    "2025-12": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2025-12"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2025-12","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2025-12"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":110,"seats":3100,"plan":{"starter":47,"business":20,"team":43},"region":{"na":42,"latam":44,"emea":24},"top":[{"name":"Silver River Logistics","seats":189,"plan":"business","region":"na"},{"name":"Cedar Harbor Health","seats":185,"plan":"business","region":"na"}],"prev":{"ym":"2025-11","value":100}},
+    "2026-01": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2026-01"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2026-01","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2026-01"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":112,"seats":3224,"plan":{"starter":48,"business":21,"team":43},"region":{"na":42,"latam":44,"emea":26},"top":[{"name":"Cedar Harbor Health","seats":186,"plan":"business","region":"na"},{"name":"Lumen Delta Systems","seats":186,"plan":"business","region":"latam"}],"prev":{"ym":"2025-12","value":110}},
+    "2026-02": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2026-02"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2026-02","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2026-02"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":113,"seats":3493,"plan":{"starter":46,"business":21,"team":46},"region":{"na":43,"emea":27,"latam":43},"top":[{"name":"Lumen Delta Systems","seats":205,"plan":"business","region":"latam"},{"name":"Open Pine Foods","seats":204,"plan":"business","region":"na"}],"prev":{"ym":"2026-01","value":112}},
+    "2026-03": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2026-03"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2026-03","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2026-03"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":123,"seats":4009,"plan":{"starter":48,"business":24,"team":51},"region":{"na":45,"latam":51,"emea":27},"top":[{"name":"Lumen Delta Systems","seats":229,"plan":"business","region":"latam"},{"name":"Open Pine Foods","seats":225,"plan":"business","region":"na"}],"prev":{"ym":"2026-02","value":113}},
+    "2026-04": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2026-04"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2026-04","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2026-04"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":128,"seats":4222,"plan":{"starter":50,"business":25,"team":53},"region":{"na":49,"latam":51,"emea":28},"top":[{"name":"Lumen Delta Systems","seats":236,"plan":"business","region":"latam"},{"name":"Open Pine Foods","seats":226,"plan":"business","region":"na"}],"prev":{"ym":"2026-03","value":123}},
+    "2026-05": {"focus":{"kind":"figure","id":null,"part":null,"params":{"key":"active_customers","month":"2026-05"},"pinned_at":"2026-11-04T14:02:11.000Z","app_url":"https://pulse.apc.tineira.com/overview?month=2026-05","next":"get_figure","next_args":{"key":"active_customers","params":{"month":"2026-05"}},"part_note":"values.active is the bar; breakdown.customers lists each active customer with plan, region and seats; inputs.customers are the external ids.","trimmed":null},"active":132,"seats":4437,"plan":{"starter":51,"business":26,"team":55},"region":{"na":51,"latam":52,"emea":29},"top":[{"name":"Open Pine Foods","seats":241,"plan":"business","region":"na"},{"name":"Lumen Delta Systems","seats":231,"plan":"business","region":"latam"}],"prev":{"ym":"2026-04","value":128}},
+  };
+  const YMS = Object.keys(DATA);
+  const SCALE = 140; // the chart's top, in customers; bars are values.active / SCALE
+  const MONTH = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const monthOf = (ym) => MONTH[Number(ym.slice(5)) - 1];
+  const PLAN = { starter: "Starter", team: "Team", business: "Business" };
+  const REGION = { na: "North America", latam: "LATAM", emea: "EMEA" };
+  const num = (n) => n.toLocaleString("en-US");
+  const FOCUS = DATA["2026-03"].focus;
+
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const paint = (json) => esc(json).replace(/("(?:[^"\\]|\\.)*")(\s*:)?|\b(null|true|false)\b|(-?\d+(?:\.\d+)?)/g, (m, str, colon) =>
+    str ? (colon ? `<span class="k">${str}</span>${colon}` : `<span class="s">${str}</span>`) : `<span class="n">${m}</span>`);
+  const inline = (v) => v === null || typeof v !== "object" ? JSON.stringify(v) : "{ " + Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${inline(x)}`).join(", ") + " }";
+
+  /* what an agent would say after reading get_figure: none of it is drawn on the chart */
+  function answer(ym) {
+    const d = DATA[ym];
+    const by = (o, f) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(f).join(", ");
+    const [a, b] = d.top;
+    const place = (c) => `${PLAN[c.plan]}, ${REGION[c.region]}`;
+    const most = a.seats === b.seats
+      ? `Two customers share the most seats, ${a.seats} each: ${a.name} (${place(a)}) and ${b.name} (${place(b)}).`
+      : `The most seats is ${a.name} (${a.seats}, ${place(a)}), then ${b.name} (${b.seats}).`;
+    const diff = d.active - d.prev.value;
+    const change = diff === 0 ? `The same as ${monthOf(d.prev.ym)}.` : `${diff > 0 ? "Up" : "Down"} from ${d.prev.value} customers in ${monthOf(d.prev.ym)}.`;
+    return `<p><b>${num(d.active)} active customers</b> in ${monthOf(ym)} ${ym.slice(0, 4)}, with <b>${num(d.seats)} seats</b> in total.</p>` +
+      `<p>${by(d.plan, ([k, v]) => `${v} on ${PLAN[k]}`)}. By region: ${by(d.region, ([k, v]) => `${REGION[k]} ${v}`)}.</p>` +
+      `<p>${most} ${change}</p>` +
+      `<small>read with get_figure · not drawn on the chart</small>`;
+  }
+
+  /* ───── theme: the system's, until the visitor chooses ───── */
+  const mqLight = matchMedia("(prefers-color-scheme: light)");
+  let chosen = null;
+  function applyTheme() {
+    const t = chosen || (mqLight.matches ? "light" : "dark");
+    root.dataset.theme = t;
+    $("#theme").setAttribute("aria-label", `Switch to the ${t === "dark" ? "light" : "dark"} theme`);
+    if (typeof size === "function" && W) size();
+  }
+  $("#theme").addEventListener("click", () => { chosen = root.dataset.theme === "dark" ? "light" : "dark"; applyTheme(); });
+  mqLight.addEventListener("change", () => { if (!chosen) applyTheme(); });
+
+  /* ───── views ───── */
+  const TITLES = { landing: "Agent Pointed Context: point your AI agent at what you see", try: "Try APC: your agent, two demo apps, one drag", build: "Build with APC: make your app pointable" };
+  let view = "landing";
+  function show(v, push) {
+    if (!TITLES[v]) v = "landing";
+    view = v;
+    for (const k of Object.keys(TITLES)) $("#v-" + k).hidden = k !== v;
+    $$(".proto button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+    $$(".nav nav a[data-view]").forEach((a) => a.dataset.view === v ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
+    document.title = TITLES[v];
+    if (push) history.pushState(null, "", v === "landing" ? "#/" : "#/" + v);
+    scrollTo({ top: 0, behavior: "instant" });
+    watchReveals();
+    if (v === "landing") requestAnimationFrame(place);
+  }
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-view], [data-to]");
+    if (!t) return;
+    e.preventDefault();
+    if (t.dataset.view) show(t.dataset.view, true);
+    else toast(`Prototype: this link goes to ${t.dataset.to}`);
+  });
+  addEventListener("popstate", () => show(location.hash.replace("#/", "") || "landing", false));
+  let toastT;
+  function toast(text) {
+    const el = $("#toast");
+    el.textContent = text;
+    el.classList.add("on");
+    clearTimeout(toastT);
+    toastT = setTimeout(() => el.classList.remove("on"), 2600);
+  }
+
+  /* ───── scroll reveals ───── */
+  const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" });
+  function watchReveals() { $$(".rv:not(.in)").forEach((el) => io.observe(el)); }
+
+  /* ───── hero: the stage ─────
+     It behaves as the reference apps do (the UX guide in @tineira/apc-web): the pet lives in the agent bar;
+     a drop leaves a pin badge on the target and the pet goes back; the badge has a dashed, breathing ring
+     until the agent reads the pin, then a check; what the agent reads lights up.
+     mode "demo": the page's own agent; the answer appears in the agent window.
+     mode "connected": a mock of the visitor's own agent; the answer is in their own chat. */
+  const stage = $("#stage"), chart = $("#chart"), months = $("#months"), mk = $("#mk"), badge = $("#badge"), chat = $("#chat"), panel = $("#panel"), slot = $("#slot"), hint = $("#hint"), who = $("#who"), offer = $("#offer");
+  const railBox = $("#rail"), rail = $$("#rail div");
+  const MARCH = YMS.indexOf("2026-03");
+  YMS.forEach((ym, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "bar";
+    b.style.height = (DATA[ym].active / SCALE * 100).toFixed(2) + "%";
+    b.setAttribute("aria-label", `Pin your agent on ${monthOf(ym)} ${ym.slice(0, 4)}`);
+    b.addEventListener("click", () => { touched(); pin(i, true); });
+    chart.append(b);
+    const s = document.createElement("span");
+    s.textContent = monthOf(ym).slice(0, 3);
+    months.append(s);
+  });
+  const bars = $$(".bar", chart), labels = $$("span", months);
+
+  /* the visitor's own agent, once connected (a mock): kept for the Try it view and across a reload */
+  const KEY = "apc-proto-own";
+  const store = {
+    get() { try { return JSON.parse(sessionStorage.getItem(KEY)); } catch { return null; } },
+    set(v) { try { v ? sessionStorage.setItem(KEY, JSON.stringify(v)) : sessionStorage.removeItem(KEY); } catch { /* no storage: the state lives in this page only */ } },
+  };
+  let own = store.get();
+  if (!own || own.agent !== "Claude") own = null;
+
+  let mode = own ? "connected" : "demo", pinned = -1, run = 0, user = !!own, pins = 0, offered = false, msg = null;
+  const pos = new Map();
+  const rel = (el) => { const a = el.getBoundingClientRect(), s = stage.getBoundingClientRect(); return { x: a.left - s.left, y: a.top - s.top, w: a.width, h: a.height }; };
+  const homeAt = () => { const r = rel(slot); return { x: r.x - 2, y: r.y - 2 }; };
+  const overAt = (i) => { const r = rel(bars[i]); return { x: r.x + r.w / 2 - 22, y: r.y - 50 }; };
+  const badgeAt = (i) => { const r = rel(bars[i]); return { x: r.x + r.w / 2 - 17, y: r.y - 17 }; };
+  function move(el, p, snap) { pos.set(el, p); el.classList.toggle("snap", !!snap && !calm); el.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`; }
+  function place() { if (!stage.offsetParent) return; move(mk, homeAt(), false); if (pinned >= 0) move(badge, badgeAt(pinned), false); }
+  const wait = (ms) => new Promise((r) => setTimeout(r, calm ? 0 : ms));
+  function touched() { user = true; mk.classList.remove("nudge", "auto"); }
+
+  function add(html, cls) { const d = document.createElement("div"); d.className = cls; d.innerHTML = html; chat.append(d); chat.scrollTop = chat.scrollHeight; return d; }
+  const AGENT = `<svg class="mark" width="22" height="22"><use href="#agent"/></svg>`;
+  const CLAUDE = `<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#claude"/></svg>`;
+  function focusCard(f) {
+    const major = new Set(["kind", "params", "next", "next_args"]);
+    const more = Object.keys(f).length - major.size;
+    const lines = Object.entries(f).map(([k, v]) => {
+      const line = paint(`"${k}": ${inline(v)}`) + ",\n";
+      const hot = k === "next" || k === "next_args";
+      return major.has(k) ? (hot ? `<span class="hl">${line.replace(/,\n$/, "")}</span>,\n` : line) : `<span class="minor">${line}</span>`;
+    }).join("");
+    const el = add(`<header><span>focus · ids and keys only</span><button type="button">+ ${more} more keys</button></header><pre>${lines}</pre>`, "focus");
+    $("button", el).addEventListener("click", (e) => { const o = el.classList.toggle("open"); e.target.textContent = o ? "fewer keys" : `+ ${more} more keys`; });
+  }
+
+  /* the focus message: in reality it travels underneath and nobody sees it. Here it lifts off the bar,
+     floats to the agent window and fades to black as it crosses into it. */
+  function clearMsg() { if (msg) { const m = msg; msg = null; m.anim.cancel(); m.el.remove(); } }
+  function travel(i, f) {
+    clearMsg();
+    if (calm || !stage.animate) return Promise.resolve();
+    const el = document.createElement("div");
+    el.className = "msg";
+    el.setAttribute("aria-hidden", "true");
+    el.innerHTML = `<b>focus</b>${paint(`{ "kind": ${JSON.stringify(f.kind)},\n  "month": ${JSON.stringify(f.params.month)},\n  "next": ${JSON.stringify(f.next)}, … }`)}`;
+    stage.append(el);
+    const b = rel(bars[i]), p = rel(panel), w = 196, hgt = el.offsetHeight;
+    const from = { x: b.x + b.w / 2 - w / 2, y: b.y - hgt - 26 };
+    const edge = { x: p.x - w * 0.55, y: p.y + p.h * 0.34 - hgt / 2 };
+    const to = { x: p.x + 26, y: p.y + p.h * 0.36 - hgt / 2 };
+    const t = (q, s) => `translate3d(${q.x}px, ${q.y}px, 0) scale(${s})`;
+    const anim = el.animate([
+      { transform: t({ x: from.x, y: from.y + 34 }, 0.5), opacity: 0, filter: "brightness(1)", offset: 0 },
+      { transform: t(from, 1), opacity: 1, filter: "brightness(1)", offset: 0.2 },
+      { transform: t(from, 1), opacity: 1, filter: "brightness(1)", offset: 0.34, easing: "cubic-bezier(0.5, 0, 0.5, 1)" },
+      { transform: t(edge, 1), opacity: 1, filter: "brightness(1)", offset: 0.7, easing: "linear" },
+      { transform: t({ x: (edge.x + to.x) / 2, y: (edge.y + to.y) / 2 }, 0.96), opacity: 1, filter: "brightness(0)", offset: 0.86, easing: "linear" },
+      { transform: t(to, 0.9), opacity: 0, filter: "brightness(0)", offset: 1 },
+    ], { duration: 2100, fill: "forwards" });
+    msg = { el, anim };
+    /* never wait on frames alone: a hidden tab produces none */
+    return Promise.race([anim.finished.catch(() => {}), new Promise((r) => setTimeout(r, 2300))]).then(() => { if (msg && msg.el === el) { el.remove(); msg = null; } });
+  }
+
+  /* what the agent window shows when nothing is pinned */
+  function idle() {
+    chat.innerHTML = "";
+    if (mode === "demo") chat.innerHTML = `<p class="empty">Drag the mark onto a bar. Your agent gets told what you pointed at, not what your screen looks like.</p>`;
+    else {
+      add(`${CLAUDE}<b>Claude</b><span>connected</span>`, "who");
+      add(`Drag Claude's mark onto a bar. The pin goes to Claude, and you ask there, in your own chat.`, "empty");
+    }
+  }
+
+  /* "Now use your own agent": the big panel in the stage, after the person's second pin */
+  function renderOffer() {
+    const on = mode === "connected", show = offered || on;
+    offer.hidden = !show; railBox.hidden = show;
+    stage.classList.toggle("offered", show);
+    place(); chat.scrollTop = chat.scrollHeight;
+    $("#own").hidden = show;
+    if (!show) return;
+    offer.className = "offer" + (on ? " done" : "");
+    offer.innerHTML = on ? `
+      <div><h3><i></i>Claude is connected to Pulse.</h3><p><b>The next drop goes to Claude.</b> Drag its mark onto a bar, right here, then ask in your own chat.</p></div>
+      <div class="col"><a class="btn ghost sm" href="#/try" data-view="try">Go on with Signals <span class="arr">→</span></a><button type="button" class="linkish" data-act="revoke">Revoke</button><small>a mock · simulated in this prototype</small></div>` : `
+      <div><span class="idx">Your turn</span><h3>Now use <em>your own agent.</em></h3><p>Add Pulse to your agent as a remote MCP server. <b>The next drop goes to your agent</b>, right here.</p></div>
+      <div class="col">
+        <label>Pulse's MCP address, for you · a placeholder</label>
+        <div class="addr"><code>https://pulse.apc.tineira.com/mcp/…</code><button type="button" data-act="copy">Copy</button></div>
+        <button type="button" class="linkish" data-act="prompt">Or copy a prompt that asks your agent to add it</button>
+        <div class="row"><span class="waiting"><i></i>Waiting for an agent to connect</span><button type="button" class="sim" data-act="sim"><b>proto</b>Simulate: Claude connected</button></div>
+      </div>`;
+  }
+  offer.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]"), act = b?.dataset.act;
+    if (act === "copy") { b.textContent = "Copied"; setTimeout(() => { if (b.isConnected) b.textContent = "Copy"; }, 1500); toast("Prototype: the real site copies your own MCP address for Pulse"); }
+    if (act === "prompt") toast("Prototype: the real site copies a prompt that asks your agent to add this address");
+    if (act === "sim") setMode("connected");
+    if (act === "revoke") { setMode("demo"); toast("Prototype: Revoke cuts Claude off at once. Back to the demo."); }
+  });
+  function showOffer() {
+    if (offered || mode === "connected") return;
+    offered = true;
+    renderOffer();
+    offer.scrollIntoView({ block: "nearest", behavior: calm ? "instant" : "smooth" });
+  }
+  $("#own").addEventListener("click", () => { touched(); showOffer(); });
+
+  /* Try it starts with Pulse already connected, when the person connected their agent in the hero */
+  function syncTry() {
+    const v = $("#v-try"), steps = $$(".tsteps li", v), done = own ? (own.pinned ? 3 : 2) : 0;
+    v.classList.toggle("has-own", !!own);
+    $("#pulseCard").classList.toggle("on", !!own);
+    steps.forEach((li, i) => { li.classList.toggle("done", i < done); li.classList.toggle("next", !!own && i === done); });
+    if (own) $$(".own-name", v).forEach((s) => { s.textContent = own.agent; });
+  }
+  $("#tryClear").addEventListener("click", () => { setMode("demo"); toast("Prototype: cleared. Try it is back to its first state."); });
+
+  function dress() {
+    stage.dataset.mode = mode;
+    $("#panelTitle").textContent = mode === "demo" ? "your agent" : "pulse · agents";
+    $("#replay").hidden = mode !== "demo";
+    $("#stageNote").textContent = mode === "demo"
+      ? "Pulse's demo data: one made-up world. Nothing leaves this page."
+      : "A mock. On the real site this is a real Pulse, and the pin goes to your own agent.";
+    who.innerHTML = mode === "connected" ? "<b>Claude</b><br>connected to Pulse" : "<b>Your agent</b><br>in the app's agent bar";
+    mk.setAttribute("aria-label", mode === "connected" ? "Claude's mark. Drag it onto a bar, or press a bar." : "Your agent's mark. Drag it onto a bar, or press a bar.");
+    renderOffer();
+    syncTry();
+  }
+  function setMode(m) {
+    mode = m; user = true;
+    own = m === "connected" ? { agent: "Claude", pinned: false } : null;
+    store.set(own);
+    mk.classList.remove("nudge", "auto", "drag");
+    dress();
+    unpin();
+  }
+
+  async function pin(i, byUser, moved) {
+    const me = ++run;
+    const live = () => me === run;
+    const ym = YMS[i], d = DATA[ym], m = monthOf(ym).slice(0, 3), mine = mode === "connected";
+    clearMsg();
+    if (byUser && !mine) pins++;
+    pinned = i;
+    bars.forEach((b, j) => { b.classList.toggle("pinned", j === i); b.classList.remove("read", "over"); });
+    labels.forEach((s, j) => s.classList.toggle("on", j === i));
+    rail.forEach((r, j) => r.classList.toggle("on", j === 1));
+    panel.classList.remove("recv");
+    /* the target wears the pin badge, unread; the pet goes back to the agent bar */
+    const first = badge.hidden;
+    badge.hidden = false;
+    badge.classList.remove("read", "drag");
+    move(badge, badgeAt(i), !!moved);
+    if (!moved) { const inn = $(".bd-in", badge); inn.classList.remove("pop"); if (!first) inn.getBoundingClientRect(); inn.classList.add("pop"); }
+    move(mk, homeAt(), true);
+    hint.textContent = "pinned on " + m;
+    chat.innerHTML = "";
+    if (mine) add(`${CLAUDE}<b>Claude</b><span>connected</span>`, "who");
+    await wait(520); if (!live()) return;
+
+    /* the focus travels to the agent, and fades to black on the way in */
+    await travel(i, d.focus); if (!live()) return;
+    panel.classList.add("recv");
+
+    if (mine) {
+      chat.innerHTML = "";
+      add(`<b>Sent to Claude.</b><span>Now ask it: <q>What is this?</q></span>`, "sent");
+      focusCard(d.focus);
+      await wait(1500); if (!live()) return;
+      add("Claude is reading · simulated", "logh");
+      const t1 = add(`<span class="dot"></span><span><b>get_current_view</b></span>`, "tool");
+      rail[0].classList.add("on");
+      await wait(800); if (!live()) return;
+      t1.classList.add("done");
+      const t2 = add(`<span class="dot"></span><span><b>get_figure</b> ${esc(inline(d.focus.next_args))}</span>`, "tool");
+      await wait(900); if (!live()) return;
+      t2.classList.add("done");
+      bars[i].classList.add("read");
+      badge.classList.add("read");
+      rail[2].classList.add("on");
+      if (own) { own.pinned = true; store.set(own); syncTry(); }
+      await wait(400); if (!live()) return;
+      add(`<b>The answer is in Claude</b>, in your own chat. It never appears on this page.`, "there");
+    } else {
+      const q = add("", "q"), text = "What's behind this bar?";
+      if (calm) q.textContent = text;
+      else for (let c = 1; c <= text.length; c++) { q.textContent = text.slice(0, c); await wait(16); if (!live()) return; }
+      await wait(350); if (!live()) return;
+      const t1 = add(`<span class="dot"></span><span><b>get_current_view</b></span>`, "tool");
+      rail[0].classList.add("on");
+      await wait(700); if (!live()) return;
+      t1.classList.add("done");
+      focusCard(d.focus);
+      await wait(1100); if (!live()) return;
+      const t2 = add(`<span class="dot"></span><span><b>get_figure</b> · the app's own tool</span>`, "tool");
+      await wait(750); if (!live()) return;
+      t2.classList.add("done");
+      bars[i].classList.add("read");
+      badge.classList.add("read");
+      rail[2].classList.add("on");
+      await wait(300); if (!live()) return;
+      add(`${AGENT}<div>${answer(ym)}</div>`, "a");
+    }
+    await wait(900); if (!live()) return;
+    hint.textContent = `${m} · read ✓`;
+    /* after the person's second pin and its answer: now with your own agent */
+    if (!mine && pins >= 2) { await wait(500); if (!live()) return; showOffer(); }
+  }
+  function unpin() {
+    run++; pinned = -1;
+    clearMsg();
+    badge.hidden = true; badge.classList.remove("read", "drag");
+    bars.forEach((b) => b.classList.remove("pinned", "read", "over"));
+    labels.forEach((s) => s.classList.remove("on"));
+    rail.forEach((r) => r.classList.remove("on"));
+    panel.classList.remove("recv");
+    hint.textContent = "drag it onto a bar ↑";
+    move(mk, homeAt(), true);
+    idle();
+  }
+  function barUnder(x, y) {
+    const c = chart.getBoundingClientRect();
+    if (y < c.top - 30 || y > c.bottom + 26) return -1;
+    return bars.findIndex((b) => { const r = b.getBoundingClientRect(); return x >= r.left - 5 && x <= r.right + 5; });
+  }
+  /* both marks drag the same way: the pet from the bar, and the badge from its target */
+  function draggable(el, end) {
+    let grab = null;
+    const hit = () => { const r = el.getBoundingClientRect(); return barUnder(r.left + r.width / 2, r.top + r.height * 0.9); };
+    el.addEventListener("pointerdown", (e) => {
+      if (e.target.closest(".bd-x")) return;
+      touched();
+      try { el.setPointerCapture(e.pointerId); } catch { /* a synthetic pointer has nothing to capture */ }
+      el.classList.remove("snap"); el.classList.add("drag");
+      const p = pos.get(el) || { x: 0, y: 0 };
+      grab = { dx: e.clientX - p.x, dy: e.clientY - p.y };
+      e.preventDefault();
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!grab) return;
+      move(el, { x: e.clientX - grab.dx, y: e.clientY - grab.dy }, false);
+      const over = hit();
+      bars.forEach((b, j) => b.classList.toggle("over", j === over));
+    });
+    const drop = () => {
+      if (!grab) return;
+      grab = null; el.classList.remove("drag");
+      const over = hit();
+      bars.forEach((b) => b.classList.remove("over"));
+      end(over);
+    };
+    el.addEventListener("pointerup", drop);
+    el.addEventListener("pointercancel", drop);
+  }
+  draggable(mk, (over) => { over >= 0 ? pin(over, true) : move(mk, homeAt(), true); });
+  draggable(badge, (over) => { over >= 0 && over !== pinned ? pin(over, true, true) : move(badge, badgeAt(pinned), true); });
+  const nextBar = () => (pinned < 0 ? MARCH : (pinned + 1) % bars.length);
+  mk.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); touched(); pin(nextBar(), true); } });
+  $(".bd-in", badge).addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); touched(); pin(nextBar(), true, true); } });
+  $(".bd-x", badge).addEventListener("click", () => { touched(); unpin(); });
+  $("#reset").addEventListener("click", () => { touched(); unpin(); });
+  $("#replay").addEventListener("click", () => { user = false; unpin(); setTimeout(autoplay, calm ? 0 : 600); });
+
+  /* the page shows the drag once by itself, then hands over. It does not count as one of the person's pins. */
+  function autoplay() {
+    if (user || view !== "landing" || mode !== "demo") return;
+    if (calm) { pin(MARCH, false); return; }
+    const from = homeAt(), to = overAt(MARCH), ctrl = { x: from.x - 40, y: to.y - 60 }, t0 = performance.now(), dur = 1500;
+    mk.classList.add("auto", "drag"); mk.classList.remove("snap", "nudge");
+    const me = ++run;
+    (function tick(now) {
+      if (me !== run || user) { mk.classList.remove("auto", "drag"); bars[MARCH].classList.remove("over"); if (me === run) move(mk, homeAt(), true); return; }
+      let t = Math.min(1, (now - t0) / dur);
+      t = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      const u = 1 - t;
+      move(mk, { x: u * u * from.x + 2 * u * t * ctrl.x + t * t * to.x, y: u * u * from.y + 2 * u * t * ctrl.y + t * t * to.y }, false);
+      bars[MARCH].classList.toggle("over", t > 0.8);
+      if (t < 1) return requestAnimationFrame(tick);
+      mk.classList.remove("auto", "drag"); bars[MARCH].classList.remove("over");
+      pin(MARCH, false);
+    })(t0);
+  }
+  dress(); idle();
+  hint.textContent = "drag it onto a bar ↑";
+  addEventListener("resize", place);
+
+/* ───── build it: the real payload ───── */
+  $("#payloadCode").innerHTML = paint(JSON.stringify(FOCUS, null, 2));
+
+  /* ───── eyes follow the pointer ───── */
+  let px = innerWidth * 0.7, py = innerHeight * 0.4, eyeQueued = false, lastMove = 0;
+  function eyes() {
+    eyeQueued = false;
+    for (const svg of $$("svg.track")) {
+      if (svg.getClientRects().length === 0) continue;
+      const r = svg.getBoundingClientRect(), dx = px - (r.left + r.width / 2), dy = py - (r.top + r.height / 2), d = Math.hypot(dx, dy) || 1, k = Math.min(1, d / 160) * 2.4;
+      svg.style.setProperty("--ex", (dx / d * k).toFixed(2));
+      svg.style.setProperty("--ey", (dy / d * k).toFixed(2));
+    }
+  }
+  addEventListener("pointermove", (e) => { px = e.clientX; py = e.clientY; lastMove = performance.now(); if (!eyeQueued && !calm) { eyeQueued = true; requestAnimationFrame(eyes); } }, { passive: true });
+
+  /* ───── the field: a grid of points; the ones near a pointer light up. One palette per theme. ───── */
+  const cv = $("#field"), cx = cv.getContext("2d"), base = document.createElement("canvas"), bx = base.getContext("2d");
+  const GAP = 30, IDS = ["figure", "active_customers", "2026-03", "next: get_figure", "cus_0048", "post_013", "data-focus", "get_current_view", "wait_for_focus", "apc.json", "kind: figure", "next_args"];
+  const INK = {
+    dark: { dot: "rgba(255,255,255,0.085)", glow: (k) => `rgba(255,${170 + 40 * (1 - k) | 0},${90 * (1 - k) + 40 | 0},${0.1 + k * 0.8})`, ring: "255,159,28", tag: "190,200,216", tagA: 0.42 },
+    light: { dot: "rgba(60,54,38,0.17)", glow: (k) => `rgba(${196 + 20 * k | 0},${96 - 20 * k | 0},${50 - 20 * k | 0},${0.2 + k * 0.75})`, ring: "196,80,29", tag: "84,80,66", tagA: 0.62 },
+  };
+  let W = 0, H = 0, dpr = 1, tags = [], nextTag = 0, raf = 0, wander = { x: 0, y: 0 };
+  const ink = () => INK[root.dataset.theme] || INK.dark;
+  function size() {
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    base.width = W * dpr; base.height = (H + GAP) * dpr;
+    bx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    bx.clearRect(0, 0, W, H + GAP);
+    bx.fillStyle = ink().dot;
+    for (let y = GAP / 2; y < H + GAP; y += GAP) for (let x = GAP / 2; x < W; x += GAP) bx.fillRect(x - 0.6, y - 0.6, 1.2, 1.2);
+    draw(performance.now());
+  }
+  function glow(c, lx, ly, R, off, strength) {
+    const x0 = Math.max(0, Math.floor((lx - R) / GAP)), x1 = Math.min(Math.ceil(W / GAP), Math.ceil((lx + R) / GAP));
+    const y0 = Math.floor((ly - R + off) / GAP), y1 = Math.ceil((ly + R + off) / GAP);
+    for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) {
+      const x = gx * GAP + GAP / 2, y = gy * GAP + GAP / 2 - off, d = Math.hypot(x - lx, y - ly);
+      if (d > R) continue;
+      const k = (1 - d / R) ** 2 * strength, s = 1.2 + k * 2.2;
+      cx.fillStyle = c.glow(k);
+      cx.fillRect(x - s / 2, y - s / 2, s, s);
+    }
+  }
+  function draw(now) {
+    const off = (scrollY * 0.25) % GAP, c = ink();
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.clearRect(0, 0, cv.width, cv.height);
+    cx.drawImage(base, 0, -off * dpr);
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (calm) return;
+    const t = now / 1000;
+    wander.x = W * (0.5 + 0.42 * Math.sin(t * 0.13 + 1)); wander.y = H * (0.5 + 0.38 * Math.sin(t * 0.19));
+    glow(c, wander.x, wander.y, 200, off, 0.55);
+    if (now - lastMove < 4000) glow(c, px, py, 170, off, Math.min(1, (4000 - (now - lastMove)) / 1200));
+    if (now > nextTag) {
+      nextTag = now + 2200 + Math.random() * 1600;
+      const side = Math.random() < 0.5, gx = Math.floor((side ? Math.random() * 0.16 : 0.84 + Math.random() * 0.13) * W / GAP), gy = Math.floor(Math.random() * (H / GAP - 2)) + 1;
+      tags.push({ gx, gy, text: IDS[Math.random() * IDS.length | 0], born: now, side });
+    }
+    cx.font = "11px ui-monospace, Consolas, monospace";
+    tags = tags.filter((g) => now - g.born < 5200);
+    for (const g of tags) {
+      const a = Math.sin((now - g.born) / 5200 * Math.PI), x = g.gx * GAP + GAP / 2, y = g.gy * GAP + GAP / 2 - off;
+      cx.strokeStyle = `rgba(${c.ring},${a * 0.6})`; cx.lineWidth = 1;
+      cx.beginPath(); cx.arc(x, y, 5 + (1 - a) * 3, 0, 7); cx.stroke();
+      cx.fillStyle = `rgba(${c.ring},${a * 0.9})`; cx.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
+      cx.fillStyle = `rgba(${c.tag},${a * c.tagA})`;
+      cx.textAlign = g.side ? "left" : "right";
+      cx.fillText(g.text, x + (g.side ? 12 : -12), y + 4);
+    }
+  }
+  function loop(now) { draw(now); raf = requestAnimationFrame(loop); }
+  function start() { cancelAnimationFrame(raf); if (calm || document.hidden) draw(performance.now()); else raf = requestAnimationFrame(loop); }
+  addEventListener("resize", size);
+  addEventListener("scroll", () => { if (calm) draw(0); }, { passive: true });
+  document.addEventListener("visibilitychange", start);
+  mq.addEventListener("change", () => { calm = mq.matches; start(); });
+
+  /* ───── go ───── */
+  applyTheme();
+  size(); start();
+  show(location.hash.replace("#/", "") || "landing", false);
+  if (!calm) mk.classList.add("nudge");
+  setTimeout(autoplay, calm ? 0 : 1300);
+})();
+</script>
+</body>
+</html>

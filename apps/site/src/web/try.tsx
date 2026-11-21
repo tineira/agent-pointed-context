@@ -4,8 +4,9 @@
  * link and its own Connect page, and the question to start with standing out. Nothing to install and no third
  * party: the agent connects to each app's own MCP address, as the standard's Direct profile says.
  */
-import { SiteFooter, SiteHeader, Steps } from "./site.tsx";
 import { APPS } from "./demo-apps.tsx";
+import { useScrollReveals } from "./reveal.ts";
+import { SiteBackdrop, SiteFooter, SiteHeader, Steps } from "./site.tsx";
 
 const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
 /** Where each app makes an agent and gives its MCP address: Pulse's Agents page, Signals' Connect panel. */
@@ -23,58 +24,62 @@ const TRY_STEPS = [
 ];
 
 export function TryPage() {
+  useScrollReveals();
   return (
-    <main className="landing">
-      <SiteHeader page="try" />
-
-      <section>
-        <h1 className="landing-eyebrow">Try it</h1>
-        <p className="landing-title">Your agent, two demo apps, one drag</p>
-        <p className="landing-sub">You need an agent that can add a remote MCP server. The demo is free and its data is made up.</p>
-        <Steps steps={TRY_STEPS} />
-        <div className="landing-try-cta">
-          <div className="row">
-            <a className="landing-cta big" href={PULSE_CONNECT}>Open Pulse and connect your agent</a>
-          </div>
-        </div>
-        <div className="landing-cards">
-          <div className="landing-card">
-            <div className="row">
-              {PULSE.glyph}
-              <b>Pulse</b>
+    <div className="site-shell">
+      <SiteBackdrop />
+      <div className="site-page">
+        <SiteHeader page="try" />
+        <main className="landing">
+          <section>
+            <h1 className="landing-eyebrow">Try it</h1>
+            <p className="landing-title">Your agent, two demo apps, one drag</p>
+            <p className="landing-sub">You need an agent that can add a remote MCP server. The demo is free and its data is made up.</p>
+            <Steps steps={TRY_STEPS} />
+            <div className="landing-try-cta">
+              <div className="row">
+                <a className="landing-cta big" href={PULSE_CONNECT}>Open Pulse and connect your agent</a>
+              </div>
             </div>
-            <p>Product analytics for a SaaS: customers, plans, seats, monthly activity.</p>
-            <div className="row small">
-              <a href={PULSE.url.replace(/overview$/, "")}>Open Pulse</a>
-              <a href={PULSE_CONNECT}>Connect an agent</a>
+            <div className="landing-cards rv">
+              <div className="landing-card">
+                <div className="row">
+                  {PULSE.glyph}
+                  <b>Pulse</b>
+                </div>
+                <p>Product analytics for a SaaS: customers, plans, seats, monthly activity.</p>
+                <div className="row small">
+                  <a href={PULSE.url.replace(/overview$/, "")}>Open Pulse</a>
+                  <a href={PULSE_CONNECT}>Connect an agent</a>
+                </div>
+              </div>
+              <div className="landing-card">
+                <div className="row">
+                  {SIGNALS.glyph}
+                  <b>Signals</b>
+                </div>
+                <p>A market feed: what competitors launch, price and say. Point your agent at a headline here and a customer in Pulse, and ask what it means for them.</p>
+                <div className="row small">
+                  <a href={SIGNALS.url}>Open Signals</a>
+                  <a href={SIGNALS_CONNECT}>Connect an agent</a>
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="landing-card">
-            <div className="row">
-              {SIGNALS.glyph}
-              <b>Signals</b>
+            <div className="landing-starter rv">
+              <span className="landing-who">A question to start with</span>
+              <p>
+                In Signals, drop your agent on <a href={TRY_POST}>Tallyfin's offer to Team teams in North America</a> and ask "Which of our customers did this offer take?". Then point it at <a href={TRY_CUSTOMER}>Deep Harbor Logistics</a> in Pulse, a customer who left, and ask how the two connect.
+              </p>
             </div>
-            <p>A market feed: what competitors launch, price and say. Point your agent at a headline here and a customer in Pulse, and ask what it means for them.</p>
-            <div className="row small">
-              <a href={SIGNALS.url}>Open Signals</a>
-              <a href={SIGNALS_CONNECT}>Connect an agent</a>
+            <div className="landing-asides rv">
+              <p>
+                <b>Cut it off any time.</b> Each app lists your agents on its own page, with Revoke: the agent loses that app at once, and keeps the other.
+              </p>
             </div>
-          </div>
-        </div>
-        <div className="landing-starter">
-          <span className="landing-who">A question to start with</span>
-          <p>
-            In Signals, drop your agent on <a href={TRY_POST}>Tallyfin's offer to Team teams in North America</a> and ask "Which of our customers did this offer take?". Then point it at <a href={TRY_CUSTOMER}>Deep Harbor Logistics</a> in Pulse, a customer who left, and ask how the two connect.
-          </p>
-        </div>
-        <div className="landing-asides">
-          <p>
-            <b>Cut it off any time.</b> Each app lists your agents on its own page, with Revoke: the agent loses that app at once, and keeps the other.
-          </p>
-        </div>
-      </section>
-
-      <SiteFooter />
-    </main>
+          </section>
+        </main>
+        <SiteFooter />
+      </div>
+    </div>
   );
 }
