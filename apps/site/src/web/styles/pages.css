@@ -1,0 +1,235 @@
+/* Styles for /try and /build pages: steps, demo app cards, starter callout, code blocks,
+   and developer reference lists. */
+
+.landing-sub {
+  max-width: 680px;
+  margin-bottom: 20px;
+  color: var(--muted);
+}
+
+.landing-back {
+  margin: 0 0 14px;
+  font-size: 14.5px;
+  color: var(--muted);
+}
+
+.landing-back a {
+  color: var(--accent-text);
+}
+
+.landing-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 14px;
+}
+
+.landing-steps li {
+  display: flex;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.landing-steps b {
+  color: var(--fg);
+}
+
+.landing-steps p {
+  font-size: 14.5px;
+  margin-top: 4px;
+}
+
+.landing-steps code {
+  font: 12.5px var(--mono);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  overflow-wrap: anywhere;
+}
+
+.landing-n {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--accent-line);
+  color: var(--accent-text);
+  font: 600 13px var(--mono);
+}
+
+.landing-try-cta {
+  margin: 24px 0;
+}
+
+.landing-try-cta .row {
+  gap: 12px;
+}
+
+.landing-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 16px;
+}
+
+.landing-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  border: 1px solid var(--line2);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.landing-card b {
+  color: var(--fg);
+  font-size: 18px;
+}
+
+.landing-card .row.small {
+  gap: 16px;
+  font-size: 14.5px;
+  margin-top: auto;
+}
+
+.landing-starter {
+  margin-top: 22px;
+  padding: 20px 22px;
+  border: 2px solid var(--accent);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.landing-starter p {
+  margin: 8px 0 0;
+  font-size: 16px;
+  color: var(--fg);
+}
+
+.landing-asides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 8px 24px;
+  margin-top: 20px;
+}
+
+.landing-asides p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.landing-asides b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.landing-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.landing .landing-h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: var(--hw);
+  line-height: 1.25;
+  color: var(--fg);
+  letter-spacing: -0.02em;
+}
+
+.landing-block .landing-sub {
+  margin-bottom: 4px;
+}
+
+.landing-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 780px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.landing-list b {
+  color: var(--fg);
+}
+
+.landing-list code,
+.landing-sub code,
+.landing-starter code {
+  font: 13px var(--mono);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  overflow-wrap: anywhere;
+}
+
+.landing-example-caption {
+  margin: 4px 0 8px;
+  font-size: 15px;
+}
+
+.landing-code {
+  margin: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--ink-line);
+  border-radius: 14px;
+  background: var(--ink);
+  color: var(--ink-fg);
+  font: 13px/1.55 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.landing-refgroups {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-top: 12px;
+}
+
+.landing-refs {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 12px;
+}
+
+.landing-refs a {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  height: 100%;
+  padding: 16px;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--fg);
+  text-decoration: none;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.landing-refs a:hover {
+  border-color: var(--accent-line);
+  background: var(--tint2);
+}
+
+.landing-refs span {
+  font-size: 13.5px;
+  color: var(--muted);
+}

@@ -59,6 +59,8 @@ try {
   // Every landing asset is the site's own: since TIN-1061 it names nothing of the hub's (icons, manifest).
   const refs = [...landing.text.matchAll(/(?:src|href)="(\/[^"#]+)"/g)].map((m) => m[1]);
   assert.ok(refs.some((p) => p.startsWith("/site-assets/")), "landing names its own asset directory");
+  assert.ok(refs.includes("/site-assets/theme.js"), "landing loads the first-party pre-paint theme script");
+  let sawAppBundle = false;
   for (const path of new Set(refs)) {
     const response = await send(path, { redirect: "manual" });
     assert.equal(response.status, 200, path);
@@ -68,9 +70,14 @@ try {
     assert.ok(!type.includes("text/html"), `${path} must be its own asset, never an SPA fallback`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     assert.ok(bytes.length > 0, path);
-    if (path.endsWith(".js")) assert.match(new TextDecoder().decode(bytes), /Point your AI agent at what you see/);
+    if (path.endsWith(".js")) {
+      const text = new TextDecoder().decode(bytes);
+      if (path === "/site-assets/theme.js") assert.match(text, /dataset\.theme/);
+      else if (/Point your AI agent at what you see/.test(text)) sawAppBundle = true;
+    }
     rows.push(`| GET ${path} | ${response.status} | ${type} | file bytes, no SPA fallback |`);
   }
+  assert.ok(sawAppBundle, "landing references its main JS bundle");
 
   const range = await send("/media/apc-hero.mp4", { headers: { range: "bytes=0-99" } });
   assert.equal(range.status, 206);

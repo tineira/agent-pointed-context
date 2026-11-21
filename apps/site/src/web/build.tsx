@@ -8,7 +8,8 @@
  */
 import type { ReactNode } from "react";
 import { FOCUS_EXAMPLE } from "./landing-example.ts";
-import { Code, SiteFooter, SiteHeader, Steps } from "./site.tsx";
+import { useScrollReveals } from "./reveal.ts";
+import { Code, SiteBackdrop, SiteFooter, SiteHeader, Steps } from "./site.tsx";
 import { DESIGN, DOCK_PRODUCT, DOCS, PAPER, RECORDS, REPO, SITE_PAGES } from "./site-pages.ts";
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -49,7 +50,7 @@ const BUILD_LINKS = REF_GROUPS.flatMap((g) => g.refs.map((r) => r.href));
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
-    <section className="landing-block">
+    <section className="landing-block rv">
       <h2 className="landing-h2">{props.title}</h2>
       {props.children}
     </section>
@@ -57,70 +58,74 @@ function Section(props: { title: string; children: ReactNode }) {
 }
 
 export function BuildPage() {
+  useScrollReveals();
   return (
-    <main className="landing">
-      <SiteHeader page="build" />
+    <div className="site-shell">
+      <SiteBackdrop />
+      <div className="site-page">
+        <SiteHeader page="build" />
+        <main className="landing">
+          <section>
+            <p className="landing-back">
+              New to APC? <a href={SITE_PAGES.try.path}>Try the demo first →</a>
+            </p>
+            <h1 className="landing-eyebrow">Build it</h1>
+            <p className="landing-title">Make your app pointable</p>
+            <p className="landing-sub">
+              APC is an open standard over MCP. Your app keeps its data and answers the person's agent with just what they pointed at, through its own tools. The agent connects to your app's own MCP address: nothing sits between you.
+            </p>
+          </section>
 
-      <section>
-        <p className="landing-back">
-          New to APC? <a href={SITE_PAGES.try.path}>Try the demo first →</a>
-        </p>
-        <h1 className="landing-eyebrow">Build it</h1>
-        <p className="landing-title">Make your app pointable</p>
-        <p className="landing-sub">
-          APC is an open standard over MCP. Your app keeps its data and answers the person's agent with just what they pointed at, through its own tools. The agent connects to your app's own MCP address: nothing sits between you.
-        </p>
-      </section>
+          <Section title="What every app implements">
+            <Steps steps={CORE_STEPS} />
+          </Section>
 
-      <Section title="What every app implements">
-        <Steps steps={CORE_STEPS} />
-      </Section>
+          <Section title="How agents connect">
+            <ul className="landing-list">
+              <li><b>A grant per agent.</b> The person makes an agent in your page; your server makes a grant with a secret of 128 random bits, the last segment of that agent's MCP URL (<code>newDirectGrant</code> in <code>@tineira/apc-server</code>). The URL is the access: Streamable HTTP, no OAuth.</li>
+              <li><b>The agent list.</b> Where the person makes and names agents and copies the URL, or a prompt that asks their agent to add it (<code>&lt;apc-direct-agents&gt;</code> in <code>@tineira/apc-web</code>). An agent names itself on <code>initialize</code> until the person renames it.</li>
+              <li><b>The agent bar.</b> <code>&lt;apc-agents&gt;</code> shows each agent's mark, its pin and Revoke: your page is where the person sees their agent and drags it onto what they mean. On a phone it stays in the page, at the bottom, and a tap pins.</li>
+              <li><b>In <code>apc.json</code></b>, <code>"direct"</code> among the profiles, and <code>direct.connect</code>: the page on your origin where the person connects an agent.</li>
+            </ul>
+          </Section>
 
-      <Section title="How agents connect">
-        <ul className="landing-list">
-          <li><b>A grant per agent.</b> The person makes an agent in your page; your server makes a grant with a secret of 128 random bits, the last segment of that agent's MCP URL (<code>newDirectGrant</code> in <code>@tineira/apc-server</code>). The URL is the access: Streamable HTTP, no OAuth.</li>
-          <li><b>The agent list.</b> Where the person makes and names agents and copies the URL, or a prompt that asks their agent to add it (<code>&lt;apc-direct-agents&gt;</code> in <code>@tineira/apc-web</code>). An agent names itself on <code>initialize</code> until the person renames it.</li>
-          <li><b>The agent bar.</b> <code>&lt;apc-agents&gt;</code> shows each agent's mark, its pin and Revoke: your page is where the person sees their agent and drags it onto what they mean. On a phone it stays in the page, at the bottom, and a tap pins.</li>
-          <li><b>In <code>apc.json</code></b>, <code>"direct"</code> among the profiles, and <code>direct.connect</code>: the page on your origin where the person connects an agent.</li>
-        </ul>
-      </Section>
+          <Section title="What the agent receives">
+            <p className="landing-sub landing-example-caption">
+              The focus an agent connected to Pulse gets when the person drops it on March in the chart of active customers: <a href={`${DOCS}/spec#the-pin-and-the-focus-format`}>the focus format</a>, ids and keys only, and the call that reads it.
+            </p>
+            <Code label="The focus from Pulse">{json(FOCUS_EXAMPLE)}</Code>
+          </Section>
 
-      <Section title="What the agent receives">
-        <p className="landing-sub landing-example-caption">
-          The focus an agent connected to Pulse gets when the person drops it on March in the chart of active customers: <a href={`${DOCS}/spec#the-pin-and-the-focus-format`}>the focus format</a>, ids and keys only, and the call that reads it.
-        </p>
-        <Code label="The focus from Pulse">{json(FOCUS_EXAMPLE)}</Code>
-      </Section>
+          <Section title="Other profiles">
+            <p className="landing-sub">
+              <code>profiles</code> in <code>apc.json</code> is an open list. APC defines and checks <code>"direct"</code>; a profile it does not define is specified by whoever defines it, and an app that declares one also meets that profile's own spec.
+              {DOCK_PRODUCT && <> The <a href={DOCK_PRODUCT.url}>{DOCK_PRODUCT.name}</a>, for one, defines <code>"dock"</code> in a protocol of its own.</>}
+            </p>
+          </Section>
 
-      <Section title="Other profiles">
-        <p className="landing-sub">
-          <code>profiles</code> in <code>apc.json</code> is an open list. APC defines and checks <code>"direct"</code>; a profile it does not define is specified by whoever defines it, and an app that declares one also meets that profile's own spec.
-          {DOCK_PRODUCT && <> The <a href={DOCK_PRODUCT.url}>{DOCK_PRODUCT.name}</a>, for one, defines <code>"dock"</code> in a protocol of its own.</>}
-        </p>
-      </Section>
-
-      <section>
-        <h2 className="landing-title">References</h2>
-        <div className="landing-refgroups">
-          {REF_GROUPS.map((g) => (
-            <div key={g.title}>
-              <h3 className="landing-eyebrow">{g.title}</h3>
-              <ul className="landing-refs">
-                {g.refs.map((r) => (
-                  <li key={r.title}>
-                    <a href={r.href}>
-                      <b>{r.title}</b>
-                      <span>{r.text}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
+          <section className="rv">
+            <h2 className="landing-title">References</h2>
+            <div className="landing-refgroups">
+              {REF_GROUPS.map((g) => (
+                <div key={g.title}>
+                  <h3 className="landing-eyebrow">{g.title}</h3>
+                  <ul className="landing-refs">
+                    {g.refs.map((r) => (
+                      <li key={r.title}>
+                        <a href={r.href}>
+                          <b>{r.title}</b>
+                          <span>{r.text}</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </section>
-
-      <SiteFooter onPage={BUILD_LINKS} />
-    </main>
+          </section>
+        </main>
+        <SiteFooter onPage={BUILD_LINKS} />
+      </div>
+    </div>
   );
 }

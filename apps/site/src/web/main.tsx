@@ -6,7 +6,10 @@ import { BuildPage } from "./build.tsx";
 import { legacyAnchor, SITE_PAGES, sitePageAt, type SitePage } from "./site-pages.ts";
 import { Docs } from "./docs.tsx";
 import { isDocsPath } from "../docs/pages.ts";
-import "./site.css";
+import "./styles/shell.css";
+import "./styles/landing.css";
+import "./styles/pages.css";
+import "./styles/docs.css";
 
 const path = location.pathname;
 // The one-page landing's old anchors (/#try, /#build) never reach the server: send them on to their pages.

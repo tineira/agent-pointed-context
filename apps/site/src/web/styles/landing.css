@@ -1,0 +1,299 @@
+/* Landing page styles (hero placeholder, works-with strip, paths, how it works, access).
+   Hero stage work (next step) and section restyling each own their pieces here. */
+
+main.landing {
+  width: min(1100px, 100% - 80px);
+  margin: 0 auto;
+  padding: 40px 0 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+  font-size: 16px;
+}
+
+.landing p {
+  line-height: 1.6;
+}
+
+.landing-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  padding-top: 12px;
+}
+
+.landing-hero h1 {
+  font-size: clamp(32px, 5.5vw, 56px);
+  line-height: 1.04;
+  margin: 0;
+  letter-spacing: var(--track);
+  text-wrap: balance;
+}
+
+.landing-lede {
+  max-width: 620px;
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.landing-stage {
+  position: relative;
+  width: 100%;
+  max-width: 860px;
+  margin: 16px 0 0;
+  aspect-ratio: 2 / 1;
+  border: 1px solid var(--line2);
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--ink);
+  box-shadow: var(--stage-shadow);
+}
+
+.landing-stage video,
+.landing-stage img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.landing-stage-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  font-size: 12px;
+  padding: 5px 11px;
+  border: 1px solid rgb(255 255 255 / 0.22);
+  border-radius: 8px;
+  background: rgb(11 14 19 / 0.78);
+  color: #eef1f6;
+  opacity: 0.72;
+  transition: opacity 0.2s, border-color 0.2s;
+}
+
+.landing-stage:hover .landing-stage-toggle,
+.landing-stage-toggle:focus-visible {
+  opacity: 1;
+  border-color: rgb(255 255 255 / 0.45);
+}
+
+.landing-watch {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14.5px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.landing-watch:hover {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.landing-watch span {
+  color: var(--accent-text);
+  font-size: 11px;
+}
+
+.landing-works {
+  border-block: 1px solid var(--line);
+  padding: 20px 0;
+}
+
+.landing-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 14px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.landing-agents li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--fg);
+}
+
+.landing-agents li:last-child {
+  color: var(--muted);
+}
+
+.landing-agents li > span {
+  display: inline-flex;
+  color: var(--fg);
+}
+
+.landing-paths {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 20px;
+}
+
+.landing-path {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px;
+  border: 1px solid var(--line2);
+  border-radius: 20px;
+  background: var(--card);
+  transition: border-color 0.25s, transform 0.25s var(--ease);
+}
+
+.landing-path:hover {
+  border-color: var(--line3);
+  transform: translateY(-2px);
+}
+
+.landing-path h3 {
+  margin: 0;
+  font-size: 28px;
+  color: var(--fg);
+  letter-spacing: var(--track);
+}
+
+.landing-path p {
+  margin-bottom: 12px;
+}
+
+.landing-path .row {
+  margin-top: auto;
+  gap: 14px;
+}
+
+.landing-who,
+.landing-eyebrow {
+  margin: 0;
+  font: 500 12px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.landing-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 1px solid var(--btn);
+  border-radius: 10px;
+  background: var(--btn);
+  color: var(--btn-fg);
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s, border-color 0.2s, background-color 0.2s;
+}
+
+.landing-cta.big {
+  padding: 12px 22px;
+  font-size: 16px;
+}
+
+.landing-cta.ghost {
+  background: var(--tint);
+  color: var(--fg);
+  border-color: var(--line2);
+}
+
+.landing-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 26px -6px var(--btn-glow);
+}
+
+.landing-cta.ghost:hover {
+  border-color: var(--line3);
+  background: var(--tint2);
+  box-shadow: none;
+}
+
+.landing section[id] {
+  scroll-margin-top: 80px;
+}
+
+.landing .landing-title {
+  margin: 6px 0 10px;
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: var(--hw);
+  line-height: 1.15;
+  color: var(--fg);
+  letter-spacing: var(--track);
+}
+
+.landing-how {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 16px;
+}
+
+.landing-how li {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px;
+  border: 1px solid var(--line2);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.landing-how b {
+  color: var(--fg);
+  font-size: 17px;
+}
+
+.landing-how p {
+  font-size: 14.5px;
+}
+
+.landing-see {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 12px;
+}
+
+.landing-see li {
+  padding: 16px 18px;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--card);
+  font-size: 15px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.landing-see li::before {
+  content: "✓ ";
+  color: var(--ok);
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  main.landing {
+    width: calc(100% - 32px);
+    padding: 24px 0 48px;
+    gap: 40px;
+  }
+
+  .landing-path {
+    padding: 20px;
+  }
+}
