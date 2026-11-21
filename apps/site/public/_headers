@@ -1,5 +1,5 @@
 # The site's Content-Security-Policy (TIN-1013): the same string as SITE_CSP in src/worker/csp.ts, which explains
 # it; scripts/test/site-csp.test.mjs fails if the two differ. Site assets keep the Dock's frame protection.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; frame-src https://pulse.apc.tineira.com/embed/; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
   X-Frame-Options: DENY

@@ -1,7 +1,7 @@
 // What a built site page carries that the site's CSP (apps/site/src/worker/csp.ts, TIN-1013) would block or must
 // never allow: an inline script without a matching 'sha256-…' in script-src, an inline event handler, a
 // javascript: URL, an inline <style> or style attribute (style-src has no 'unsafe-inline'), a <base> element, a form
-// that posts elsewhere, any <iframe>, <frame>, <object> or <embed>, an SVG image or use from elsewhere, and a script, stylesheet, preload, icon or media file (srcset included) from another origin
+// that posts elsewhere, any <iframe> or <frame> (the landing's one frame mounts only after a click, never in a built page), <object> or <embed>, an SVG image or use from elsewhere, and a script, stylesheet, preload, icon or media file (srcset included) from another origin
 // or scheme. Tags are read with a small tokenizer that follows the browser's rules (TIN-1036). Pure; scripts/site-routes.mjs runs it on every built page after
 // `pnpm build`, and scripts/test/site-csp.test.mjs checks it on fixtures.
 import { createHash } from "node:crypto";
@@ -159,7 +159,7 @@ export function cspViolations(html, csp) {
     if (tag.name === "style") found.push("inline <style> element (style-src has no 'unsafe-inline')");
     if (tag.name === "base") found.push("<base> element (base-uri is 'none')");
     if (tag.name === "object" || tag.name === "embed") found.push(`<${tag.name}> element (object-src is 'none')`);
-    if (tag.name === "iframe" || tag.name === "frame") found.push(`<${tag.name}> element (every page of this origin refuses framing, and frame-src allows no other)`);
+    if (tag.name === "iframe" || tag.name === "frame") found.push(`<${tag.name}> element (no built page frames anything: the landing mounts its one frame, Pulse's hero, only after a click; TIN-1071)`);
     if (["image", "use", "feimage"].includes(tag.name)) {
       for (const name of ["href", "xlink:href"]) {
         const value = attr(name)?.value;

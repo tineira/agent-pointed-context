@@ -73,7 +73,21 @@ test("the hero says what APC is, offers the two ways in, and links the full vide
   assert.match(heroSection, /<a className="landing-watch" href=\{VIDEO\} target="_blank" rel="noopener">/);
   assert.match(flat(heroSection), /<span aria-hidden="true">▶<\/span> Watch the full video/);
   assert.equal(VIDEO, "https://youtu.be/pb46Sd0UOtM");
-  assert.doesNotMatch(landing, /youtube\.com\/embed|youtube-nocookie|<iframe/, "no YouTube embed: its cookies would break the one-cookie promise");
+  assert.doesNotMatch(landing, /youtube\.com\/embed|youtube-nocookie/, "no YouTube embed: its cookies would break the one-cookie promise");
+  // One frame on the landing (TIN-1071): Pulse's hero view, mounted by "Use your own agent" only, and sandboxed.
+  assert.doesNotMatch(landing, /<iframe|createElement\("frame"|createElement\("embed"|createElement\("object"/, "no frame in JSX: the hero's one frame is built in hero/live.ts");
+  const frames = [...landing.matchAll(/h\("iframe", \{([^}]*)\}\)/g)].map((m) => m[1]!);
+  assert.equal(frames.length, 1, "exactly one frame, Pulse's hero");
+  assert.match(frames[0]!, /src: PULSE_HERO,/);
+  assert.match(frames[0]!, /sandbox: FRAME_SANDBOX,/);
+  assert.match(frames[0]!, /allow: FRAME_ALLOW,/);
+  assert.match(landing, /export const FRAME_SANDBOX = "allow-scripts allow-same-origin";/);
+  assert.match(landing, /export const FRAME_ALLOW = "clipboard-write";/);
+  assert.match(read("apps/site/src/web/pulse-status.ts"), /export const PULSE_HERO = `\$\{PULSE_ORIGIN\}\/embed\/hero`;/);
+  assert.match(read("apps/site/src/pulse-origin.ts"), /export const PULSE_ORIGIN = "https:\/\/pulse\.apc\.tineira\.com";/);
+  // Click-gated: the frame is PulseFrame's, which HeroSwitch renders only when live, and live starts false.
+  assert.match(landing, /props\.live \? h\(PulseFrame, \{ onBack: props\.onBack \}\) : h\(Fragment, null, props\.demo\)/);
+  assert.match(landing, /const \[live, setLive\] = useState\(false\);/);
   // The stage is its own step's: the hero only places it.
   assert.match(heroSection, /<div className="landing-hero-stage">\s*<HeroStage \/>\s*<\/div>/);
 });

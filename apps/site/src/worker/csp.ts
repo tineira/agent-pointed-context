@@ -16,7 +16,17 @@
  *
  * img-src allows data: for the agent logos (agent-logos.ts embeds them as data: PNGs). The landing's icons and
  * manifest come from the hub on the same origin, so 'self' covers them.
+ *
+ * frame-src allows one thing, by Tomas's decision (TIN-1063, TIN-1071): Pulse's views under /embed/, which the landing
+ * mounts only after "Use your own agent" (the hero view, https://pulse.apc.tineira.com/embed/hero). The path prefix
+ * keeps every other Pulse page out of a frame here, even if Pulse lost its own framing headers. connect-src stays
+ * 'self': the frame talks to the landing by postMessage only. No page of the build carries an <iframe> (site-csp.mjs).
  */
+import { PULSE_ORIGIN } from "../pulse-origin.ts";
+
+/** The one source frame-src allows: Pulse's embeddable views. */
+export const PULSE_EMBED_FRAMES = `${PULSE_ORIGIN}/embed/`;
+
 export const SITE_CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -25,6 +35,7 @@ export const SITE_CSP = [
   "media-src 'self'",
   "font-src 'self'",
   "connect-src 'self'",
+  `frame-src ${PULSE_EMBED_FRAMES}`,
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'",

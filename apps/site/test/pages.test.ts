@@ -72,9 +72,14 @@ test("Try it's steps do not overlap, and only the starter question stands out", 
   assert.match(pagesCss, /\.try-ask\s*\{[^}]*background:\s*var\(--ink-bubble\);[^}]*color:\s*var\(--ink-fg\)/);
 });
 
-test("/try leaves room for the connected walk, but ships no state of its own", () => {
-  // TIN-1072 fills the "Pulse already connected" state from Pulse; until then the page always shows the walk above.
-  assert.doesNotMatch(tryPage, /sessionStorage|localStorage|fetch\(|useState|useEffect/, "no stored or simulated connection");
+test("/try shows Pulse connected from the hero's hint only, and the name as text", () => {
+  // TIN-1072: the hint is read through pulse-status.ts (TTL, schema, cleanName; pulse-status.test.ts), never fetched.
+  assert.doesNotMatch(tryPage, /sessionStorage|localStorage|fetch\(|useEffect|dangerouslySetInnerHTML|innerHTML/, "no storage of its own, no request, no HTML");
+  assert.match(tryPage, /const \[pulse\] = useState\(\(\) => readPulseStatus\(\)\);/);
+  assert.match(tryPage, /\{pulse\.agentName \? `\$\{pulse\.agentName\} connected` : "Connected directly"\}/, "a text node, or Connected directly");
+  assert.match(tryPage, /<a href=\{PULSE_OVERVIEW\}>\s*Open Pulse/);
+  assert.match(tryPage, /className=\{pulse \? "try-app on rv" : "try-app rv"\}/);
+  assert.match(tryPage, /const DONE_IN_HERO = 3;/);
   for (const room of [".try-step.done", ".try-step.next", ".try-app.on", ".try-conn"]) {
     assert.ok(pagesCss.includes(room), `pages.css keeps room for ${room}`);
   }

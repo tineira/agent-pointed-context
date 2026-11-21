@@ -697,6 +697,89 @@ html.apc-bar-fixed:has(.hero-stage) body {
   color: var(--fg);
 }
 
+.hero-offer-open {
+  font-size: 14px;
+  color: var(--fg);
+  text-underline-offset: 3px;
+}
+
+.hero-offer-cookie {
+  margin-top: 14px;
+  font: 12px var(--mono);
+}
+
+/* The real hero (TIN-1071, hero/live.ts): Pulse's own view in a frame, in place of the simulated stage. The frame stays
+   hidden until the view says it is ready; its height follows the view (--hero-live-h, set through the CSSOM, clamped
+   to 280–720 px by the landing). */
+.hero-live-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 10px;
+  font: 12px var(--mono);
+  /* --fg, not --muted: like .hero-note, it sits on the stage over the dot field, where --muted drops under 4.5:1. */
+  color: var(--fg);
+}
+
+.hero-live-bar i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--line2);
+}
+
+.hero-live-bar span {
+  margin-left: 6px;
+}
+
+.hero-live-bar .hero-own {
+  border-color: var(--line2);
+  color: var(--fg);
+}
+
+.hero-live-body {
+  --hero-live-h: 500px;
+  position: relative;
+  height: var(--hero-live-h);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--card-solid);
+}
+
+.hero-live-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.hero-live[data-phase="loading"] .hero-live-frame {
+  visibility: hidden;
+}
+
+.hero-live-wait,
+.hero-live-fail {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  margin: 0;
+  text-align: center;
+  color: var(--fg);
+}
+
+.hero-live-fail p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.hero-live-fail a,
+.hero-live .hero-note a {
+  color: var(--fg);
+  text-underline-offset: 3px;
+}
+
 /* The stage sizes itself by its own width, not the viewport's: beside the hero copy it gets a column of about 520 to
    750 px; alone (one column, or a phone) up to the page's width. */
 .hero-stage {

@@ -139,11 +139,16 @@ test("the message travels and fades in transforms and opacity only, and stands s
   for (const animated of [".hero-chat > *", ".hero-offer", ".hero-tool-dot", '.hero-bar[data-apc-presence="read"]']) assert.ok(reduced.includes(animated), animated);
 });
 
-test("Now use your own agent leads to Pulse's Agents page, and a shortcut in the title bar opens it", () => {
-  assert.match(stage, /export const PULSE_AGENTS = "https:\/\/pulse\.apc\.tineira\.com\/agents";/);
-  assert.match(stage, /<a className="btn primary" href=\{PULSE_AGENTS\}>/);
-  assert.match(stage, /make an agent there, copy its MCP address into your agent, then drop your agent on a bar in Pulse\./);
-  assert.match(stage, /<button type="button" className="hero-own" onClick=\{openOffer\}>\s*Use your own agent\s*<\/button>/);
+test("Now use your own agent opens Pulse in the stage, from the panel or the title bar, with the cookie said beside it", () => {
+  assert.match(read("apps/site/src/web/pulse-status.ts"), /export const PULSE_AGENTS = `\$\{PULSE_ORIGIN\}\/agents`;/);
+  assert.match(stage, /<button type="button" className="btn primary" onClick=\{useOwnAgent\} aria-describedby="hero-offer-cookie">\s*Use your own agent/);
+  assert.match(stage, /<a className="hero-offer-open" href=\{PULSE_AGENTS\} target="_blank" rel="noopener">\s*or open Pulse/);
+  assert.match(stage, /copy its MCP address into your agent, then drop your agent on a bar\./);
+  assert.match(stage, /<button type="button" className="hero-own" onClick=\{useOwnAgent\} aria-describedby="hero-cookie">\s*Use your own agent\s*<\/button>/);
+  assert.match(stage, /const COOKIE_NOTE = "“Use your own agent” connects to Pulse \(pulse\.apc\.tineira\.com\) in this page, and Pulse sets its one sandbox cookie\.";/);
+  assert.match(stage, /<p id="hero-offer-cookie" className="hero-offer-cookie">\s*\{COOKIE_NOTE\}/);
+  assert.match(stage, /<span id="hero-cookie">\{COOKIE_NOTE\}<\/span>/);
+  assert.match(stage, /onUseOwnAgent=\{\(\) => setLive\(true\)\}/);
   assert.match(stage, /className="hero-offer" role="region"/);
   assert.match(css, /\.hero-offer \{\s*position: absolute;\s*inset: 0;/, "inside the stage, over it, not in a corner");
 });
@@ -214,6 +219,12 @@ test("the stage's text passes 4.5:1 in both themes, the caption over the worst c
     fields.push(over({ r: spec.tagRgb[0], g: spec.tagRgb[1], b: spec.tagRgb[2], a: spec.tagAlphaMax }, glow));
     const stageTop = name === "dark" ? "rgb(255 255 255 / 0.05)" : "rgb(255 255 255 / 0.4)";
     for (const f of fields) pairs.push(["--fg caption on the stage", v("fg"), color(stageTop, v("haze-b", v("haze-a", f)))]);
+    // The live hero's bar and the note sit on the same stage, so they must use the --fg checked above, never --muted.
+    for (const sel of [".hero-note {", ".hero-live-bar {"]) {
+      const open = css.indexOf(sel);
+      assert.ok(open >= 0, sel);
+      assert.match(css.slice(open, css.indexOf("}", open)), /\n\s*color: var\(--fg\);/, `${sel} uses --fg`);
+    }
     for (const [label, a, b] of pairs) {
       const r = ratio(a, b);
       assert.ok(r >= 4.5, `${name}: ${label} is ${r.toFixed(2)}:1`);

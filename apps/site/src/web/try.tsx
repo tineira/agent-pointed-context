@@ -5,13 +5,17 @@
  * agent joining between them, the starter question as its two moves, and the Revoke note. Nothing to install and
  * no third party: the agent connects to each app's own MCP address, as the standard's Direct profile says.
  *
- * The layout keeps room for the "Pulse already connected" state (TIN-1072: a check and "<agent> connected" on the
- * Pulse card, the first steps done, "start here" on the Signals side; the `.try-step.done`, `.try-step.next`,
- * `.try-app.on` and `.try-conn` rules in pages.css hold it). Until Pulse can say whether this browser's sandbox
- * has an agent, the page always shows the unconnected walk: no stored or simulated state ships here.
+ * Pulse already connected (TIN-1072): when the visitor's agent connected in the landing's real hero, this tab holds
+ * a hint (pulse-status.ts: the session storage key "apc:site:pulse-status", written from the frame's `apc:pulse-status`,
+ * at most 6 h old, the name cleaned again on read). Then the Pulse card shows a check and "<agent> connected" (or
+ * "Connected directly") and links Pulse's overview, the steps up to pointing are done in the hero, and Signals'
+ * step is "start here" (the `.try-step.done`, `.try-step.next`, `.try-app.on` and `.try-conn` rules in pages.css).
+ * Without a valid hint, the unconnected walk, unchanged. The hint is never a secret and never an auth check.
  */
+import { useState } from "react";
 import { AgentMark } from "./agent-mark.tsx";
 import { APPS } from "./demo-apps.tsx";
+import { PULSE_OVERVIEW, readPulseStatus } from "./pulse-status.ts";
 import { useScrollReveals } from "./reveal.ts";
 import { SiteBackdrop, SiteFooter, SiteHeader } from "./site.tsx";
 
@@ -32,8 +36,14 @@ const TRY_STEPS = [
   { title: "Add a second app", text: "Connect the same agent to Signals, with Signals' own address. Point at something in each and ask how they connect: your agent does the joining, and the two apps share nothing." },
 ];
 
+/** The steps the hero already did once Pulse is connected (open, connect, point), and the one to start with: Signals. */
+const DONE_IN_HERO = 3;
+const stepClass = (i: number, connected: boolean) => (!connected ? "try-step rv" : i < DONE_IN_HERO ? "try-step done rv" : i === DONE_IN_HERO ? "try-step next rv" : "try-step rv");
+
 export function TryPage() {
   useScrollReveals();
+  // Read once, on load: a hint for this tab, not live state (the landing writes it, this page only reads it).
+  const [pulse] = useState(() => readPulseStatus());
   return (
     <div className="site-shell">
       <SiteBackdrop />
@@ -58,7 +68,7 @@ export function TryPage() {
           <section className="try-grid">
             <ol className="try-steps">
               {TRY_STEPS.map((s, i) => (
-                <li className="try-step rv" key={s.title}>
+                <li className={stepClass(i, pulse !== null)} key={s.title}>
                   <span className="n">{i + 1}</span>
                   <div>
                     <b>{s.title}</b>
@@ -68,20 +78,35 @@ export function TryPage() {
               ))}
             </ol>
             <div className="try-side">
-              <div className="try-app rv">
+              <div className={pulse ? "try-app on rv" : "try-app rv"}>
                 <div className="row">
                   {PULSE.glyph}
                   <b>Pulse</b>
-                  <span className="try-host">{host(PULSE.url)}</span>
+                  {pulse ? (
+                    <span className="try-conn">
+                      <i aria-hidden="true" />
+                      {pulse.agentName ? `${pulse.agentName} connected` : "Connected directly"}
+                    </span>
+                  ) : (
+                    <span className="try-host">{host(PULSE.url)}</span>
+                  )}
                 </div>
                 <p>Product analytics for a SaaS: customers, plans, seats, monthly activity.</p>
                 <div className="try-links">
-                  <a href={PULSE.url.replace(/overview$/, "")}>
-                    Open Pulse <span aria-hidden="true">↗</span>
-                  </a>
-                  <a href={PULSE_CONNECT}>
-                    Connect an agent <span aria-hidden="true">↗</span>
-                  </a>
+                  {pulse ? (
+                    <a href={PULSE_OVERVIEW}>
+                      Open Pulse <span aria-hidden="true">↗</span>
+                    </a>
+                  ) : (
+                    <>
+                      <a href={PULSE.url.replace(/overview$/, "")}>
+                        Open Pulse <span aria-hidden="true">↗</span>
+                      </a>
+                      <a href={PULSE_CONNECT}>
+                        Connect an agent <span aria-hidden="true">↗</span>
+                      </a>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="rv">
