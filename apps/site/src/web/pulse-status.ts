@@ -9,14 +9,18 @@
  *   frame mounts and when Pulse says it is not connected, ignored and removed when malformed or older than 6 h.
  * - The agent's name passes `cleanName` on receipt and again on read (the hub and V1 share this origin's storage), and
  *   is rendered only as a React text node.
+ * - One connection state for the whole site (TIN-1087, TIN-1089): `usePulseView()` says whether the visitor's agent is
+ *   connected, its cleaned name, and where "Open Pulse" goes (Overview when connected, Agents otherwise). It follows the
+ *   landing's own hero live: saving or clearing the hint tells every subscriber in this page.
  */
+import { useEffect, useState } from "react";
 import { PULSE_ORIGIN } from "../pulse-origin.ts";
 
 /** The view the landing frames; the site's CSP allows framing Pulse's /embed/ views only. */
 export const PULSE_HERO = `${PULSE_ORIGIN}/embed/hero`;
 /** Pulse's Agents page, for the links the site owns outside the frame (the frame is sandboxed: no popups, no navigation). */
 export const PULSE_AGENTS = `${PULSE_ORIGIN}/agents`;
-/** Where /try sends a visitor whose agent is already connected. */
+/** Where the site sends a visitor whose agent is already connected (TIN-1087). */
 export const PULSE_OVERVIEW = `${PULSE_ORIGIN}/overview`;
 
 export const STATUS_KEY = "apc:site:pulse-status";
@@ -83,13 +87,30 @@ export function sessionStore(): Store | null {
   }
 }
 
-/** Drops the hint (the frame just mounted, or Pulse says it is not connected). */
-export function clearPulseStatus(store: Store | null = sessionStore()): void {
+const listeners = new Set<() => void>();
+
+/** Calls `listener` whenever this page saves or clears the hint (the hero's frame mounted, or said something). */
+export function subscribePulseStatus(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
+function notify(): void {
+  for (const listener of [...listeners]) listener();
+}
+
+function dropHint(store: Store | null): void {
   try {
     store?.removeItem(STATUS_KEY);
   } catch {
     // storage blocked: there is no hint to drop
   }
+}
+
+/** Drops the hint (the frame just mounted, or Pulse says it is not connected). */
+export function clearPulseStatus(store: Store | null = sessionStore()): void {
+  dropHint(store);
+  notify();
 }
 
 /** Keeps what an `apc:pulse-status` says: the hint when connected, nothing when not. */
@@ -98,8 +119,9 @@ export function savePulseStatus(status: { connected: boolean; agentName: string 
   try {
     store?.setItem(STATUS_KEY, JSON.stringify({ connected: true, agentName: cleanName(status.agentName), updatedAt: now }));
   } catch {
-    // storage blocked or full: /try shows the unconnected walk
+    // storage blocked or full: the site shows the unconnected state
   }
+  notify();
 }
 
 /**
@@ -131,8 +153,33 @@ export function readPulseStatus(store: Store | null = sessionStore(), now = Date
     v.updatedAt <= now &&
     now - v.updatedAt <= STATUS_TTL_MS;
   if (!valid) {
-    clearPulseStatus(store);
+    dropHint(store);
     return null;
   }
   return { agentName: cleanName(v.agentName) };
+}
+
+/** What a component needs of the connection: whether to show it, the name, and where "Open Pulse" goes. */
+export type PulseView = { connected: boolean; agentName: string | null; openHref: string };
+
+/** The view of a status read from `readPulseStatus()`: Overview when connected, Agents otherwise. */
+export function pulseView(status: { agentName: string | null } | null): PulseView {
+  return status ? { connected: true, agentName: status.agentName, openHref: PULSE_OVERVIEW } : { connected: false, agentName: null, openHref: PULSE_AGENTS };
+}
+
+/**
+ * The connection for a component: what the hint says on first render (these pages render in the browser only), read
+ * again once mounted, and whenever the hero's frame saves or clears it during the visit.
+ */
+export function usePulseView(): PulseView {
+  const [status, setStatus] = useState(() => readPulseStatus());
+  useEffect(() => {
+    const sync = () => {
+      const next = readPulseStatus();
+      setStatus((prev) => (prev === next || (prev && next && prev.agentName === next.agentName) ? prev : next));
+    };
+    sync();
+    return subscribePulseStatus(sync);
+  }, []);
+  return pulseView(status);
 }

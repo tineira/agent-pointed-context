@@ -142,13 +142,13 @@ test("the message travels and fades in transforms and opacity only, and stands s
 test("Now use your own agent opens Pulse in the stage, from the panel or the title bar, with the cookie said beside it", () => {
   assert.match(read("apps/site/src/web/pulse-status.ts"), /export const PULSE_AGENTS = `\$\{PULSE_ORIGIN\}\/agents`;/);
   assert.match(stage, /<button type="button" className="btn primary" onClick=\{useOwnAgent\} aria-describedby="hero-offer-cookie">\s*Use your own agent/);
-  assert.match(stage, /<a className="hero-offer-open" href=\{PULSE_AGENTS\} target="_blank" rel="noopener">\s*or open Pulse/);
+  assert.match(stage, /<a className="hero-offer-open" href=\{openHref\} target="_blank" rel="noopener">\s*or open Pulse/);
   assert.match(stage, /copy its MCP address into your agent, then drop your agent on a bar\./);
   assert.match(stage, /<button type="button" className="hero-own" onClick=\{useOwnAgent\} aria-describedby="hero-cookie">\s*Use your own agent\s*<\/button>/);
   assert.match(stage, /const COOKIE_NOTE = "“Use your own agent” connects to Pulse \(pulse\.apc\.tineira\.com\) in this page, and Pulse sets its one sandbox cookie\.";/);
   assert.match(stage, /<p id="hero-offer-cookie" className="hero-offer-cookie">\s*\{COOKIE_NOTE\}/);
   assert.match(stage, /<span id="hero-cookie">\{COOKIE_NOTE\}<\/span>/);
-  assert.match(stage, /onUseOwnAgent=\{\(\) => setLive\(true\)\}/);
+  assert.match(stage, /onUseOwnAgent=\{useOwnAgent\}/);
   assert.match(stage, /className="hero-offer" role="region"/);
   assert.match(css, /\.hero-offer \{\s*position: absolute;\s*inset: 0;/, "inside the stage, over it, not in a corner");
 });

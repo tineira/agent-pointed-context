@@ -9,13 +9,14 @@
  * - Its height follows `apc:embed-resize`, clamped to [280, 720]; its theme follows the site's (`apc:theme`, on load,
  *   on ready, and on every change of the toggle or the system's).
  * - `apc:pulse-status` keeps or drops the hint /try reads (pulse-status.ts); the hint is cleared when the frame mounts.
- * - The links to Pulse live here, outside the frame: a link inside the sandboxed frame could not open.
+ * - The links to Pulse live here, outside the frame: a link inside the sandboxed frame could not open. They go to
+ *   Overview once the frame says the agent is connected, to Agents until then (usePulseView, TIN-1087).
  *
  * Plain createElement, not JSX, so apps/site/test/pulse-status.test.ts renders it under node --test.
  */
 import { createElement as h, Fragment, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { PULSE_ORIGIN } from "../../../pulse-origin.ts";
-import { clearPulseStatus, embedMessage, PULSE_AGENTS, PULSE_HERO, READY_TIMEOUT_MS, savePulseStatus } from "../../pulse-status.ts";
+import { clearPulseStatus, embedMessage, PULSE_HERO, READY_TIMEOUT_MS, savePulseStatus, usePulseView } from "../../pulse-status.ts";
 import { currentTheme, subscribeTheme, type Theme } from "../../theme.ts";
 
 /** The frame's attributes, exactly (apps/site/test/landing.test.ts reads them). */
@@ -23,6 +24,15 @@ export const FRAME_SANDBOX = "allow-scripts allow-same-origin";
 export const FRAME_ALLOW = "clipboard-write";
 
 export type FramePhase = "loading" | "ready" | "failed";
+
+/**
+ * The component that can mount the frame: it starts on the simulated demo, whatever hint is stored, and switches on the
+ * demo's "Use your own agent" (the Back button returns). HeroStage renders it; pulse-status.test.ts renders it too.
+ */
+export function HeroStageHost(props: { demo: (useOwnAgent: () => void) => ReactNode }): ReactElement {
+  const [live, setLive] = useState(false);
+  return h(HeroSwitch, { live, demo: props.demo(() => setLive(true)), onBack: () => setLive(false) });
+}
 
 /** The stage: the simulated demo until the visitor asks for their own agent, then Pulse's live view. */
 export function HeroSwitch(props: { live: boolean; demo: ReactNode; onBack: () => void }): ReactElement {
@@ -33,6 +43,7 @@ export function PulseFrame(props: { onBack: () => void }): ReactElement {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [phase, setPhase] = useState<FramePhase>("loading");
+  const { openHref } = usePulseView();
 
   const postTheme = (scheme: Theme = currentTheme()) => frameRef.current?.contentWindow?.postMessage({ type: "apc:theme", scheme }, PULSE_ORIGIN);
 
@@ -72,7 +83,7 @@ export function PulseFrame(props: { onBack: () => void }): ReactElement {
     };
   }, []);
 
-  const newTab = (text: string) => h("a", { href: PULSE_AGENTS, target: "_blank", rel: "noopener" }, text, " ", h("span", { "aria-hidden": "true" }, "→"));
+  const newTab = (text: string) => h("a", { href: openHref, target: "_blank", rel: "noopener" }, text, " ", h("span", { "aria-hidden": "true" }, "→"));
 
   return h(
     "figure",
