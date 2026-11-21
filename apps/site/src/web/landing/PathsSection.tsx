@@ -1,24 +1,42 @@
+import { APPS } from "../demo-apps.tsx";
 import { SITE_PAGES } from "../site-pages.ts";
 
+/** The four packages an app builds with (packages/*, published as @tineira/apc-*). */
+const PACKAGES = ["@tineira/apc-protocol", "@tineira/apc-server", "@tineira/apc-web", "@tineira/apc-conformance"];
+
+/** The one decision: try it with your own agent, or build it into your app. Each card is one link (its "go" line). */
 export function PathsSection() {
   return (
-    <div className="landing-paths rv">
-      <div className="landing-path">
-        <span className="landing-who">For people using an AI agent</span>
-        <h3>Try it</h3>
+    <section className="wrap landing-paths" aria-label="Try it or build it">
+      <div className="landing-path landing-path-try rv">
+        <p className="landing-who">For people using an AI agent</p>
+        <h2>Try it</h2>
         <p>Connect your own agent to two demo apps and point it at a chart. A few minutes, made-up data, no account.</p>
-        <div className="row">
-          <a className="landing-cta" href={SITE_PAGES.try.path}>Try the demo →</a>
-        </div>
+        <ul className="landing-path-art" aria-label="The demo apps">
+          {APPS.map((app) => (
+            <li key={app.name} className="landing-chip">
+              <span className="landing-chip-glyph" aria-hidden="true">{app.glyph}</span>
+              {app.name}
+            </li>
+          ))}
+        </ul>
+        <a className="landing-go" href={SITE_PAGES.try.path}>
+          Try the demo <span aria-hidden="true">→</span>
+        </a>
       </div>
-      <div className="landing-path">
-        <span className="landing-who">For people building an app</span>
-        <h3>Build it</h3>
+      <div className="landing-path landing-path-build rv">
+        <p className="landing-who">For people building an app</p>
+        <h2>Build it</h2>
         <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app straight to their agent.</p>
-        <div className="row">
-          <a className="landing-cta ghost" href={SITE_PAGES.build.path}>Add APC to your app →</a>
-        </div>
+        <ul className="landing-path-art" aria-label="The packages">
+          {PACKAGES.map((pkg) => (
+            <li key={pkg} className="landing-chip">{pkg}</li>
+          ))}
+        </ul>
+        <a className="landing-go" href={SITE_PAGES.build.path}>
+          Add APC to your app <span aria-hidden="true">→</span>
+        </a>
       </div>
-    </div>
+    </section>
   );
 }

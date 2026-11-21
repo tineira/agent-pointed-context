@@ -73,7 +73,8 @@ try {
     if (path.endsWith(".js")) {
       const text = new TextDecoder().decode(bytes);
       if (path === "/site-assets/theme.js") assert.match(text, /dataset\.theme/);
-      else if (/Point your AI agent at what you see/.test(text)) sawAppBundle = true;
+      // A line only the landing's own component has (its closing call, ClosingSection.tsx): the landing is in this bundle.
+      else if (/Point it at something\./.test(text)) sawAppBundle = true;
     }
     rows.push(`| GET ${path} | ${response.status} | ${type} | file bytes, no SPA fallback |`);
   }
