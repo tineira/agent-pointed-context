@@ -17,6 +17,8 @@ import { Avatar, brandOf, compact, Icon, stats, Verified } from "./brands.tsx";
 import { AgentBar } from "./agent-bar.tsx";
 import { ApcPin } from "./apc-pin.tsx";
 import { openSession } from "./session.ts";
+import { cameToConnect, connectMint, ensureConnectGrant } from "./connect-grant.ts";
+import { createStateReader, type ReadFailure } from "./state-reads.ts";
 import { plainError, plainPinError } from "../../../demo/src/web/plain-errors.ts";
 import { StartOver } from "../../../demo/src/web/start-over.tsx";
 import { DirectAgents } from "../../../demo/src/web/direct-agents.tsx";
@@ -72,7 +74,7 @@ const monthLabel = (m: string) => `${MONTH_NAME[Number(m.slice(5)) - 1]} ${m.sli
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, body === undefined ? { credentials: "same-origin" } : { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  if (!response.ok && response.status !== 400) throw new Error(`${path}: ${response.status}`);
+  if (!response.ok && response.status !== 400) throw Object.assign(new Error(`${path}: ${response.status}`), { status: response.status });
   return (await response.json()) as T;
 }
 
@@ -142,8 +144,11 @@ function Feed({ sid }: { sid: string }) {
   // The post a link opened on (?post=), or the one whose time the person clicked: highlighted, in the address.
   const [selected, setSelected] = useState<string | null>(initial.post);
   const [notice, setNotice] = useState<string | null>(null);
-  // The Connect panel (Direct): open when the visitor came to connect (?connect, from the dock's landing page).
-  const [connectOpen, setConnectOpen] = useState(() => new URLSearchParams(location.search).has("connect") || location.hash === "#connect");
+  // The Connect panel (Direct): open when the visitor came to connect (?connect or #connect: /try, apc.json's connect).
+  const [arrivedToConnect] = useState(() => cameToConnect(location.search, location.hash));
+  const [connectOpen, setConnectOpen] = useState(arrivedToConnect);
+  // Arriving to connect, the agent is already made (TIN-1093): the feed's one connect grant, asked for once per page load.
+  const [making, setMaking] = useState(arrivedToConnect);
   const stateRef = useRef<FeedState | null>(null);
   stateRef.current = state;
   // The agents with a wait_for_focus open (APC 0.11), from the wait events on the presence channel.
@@ -156,14 +161,27 @@ function Feed({ sid }: { sid: string }) {
     return () => clearTimeout(id);
   }, [openWaits]);
 
-  const refresh = useCallback(() => void call<FeedState>(`${base}/state`).then(setState), [base]);
+  // The state (state-reads.ts, as Pulse's hero, TIN-1070): read on mount, on every socket open, on a message and after
+  // an action; only the newest read counts, and a failed one shows inline and reads again with backoff (fix round 1 of
+  // PR #249: a failed read after ?connect left the page on "Loading…").
+  const [readFailure, setReadFailure] = useState<ReadFailure | null>(null);
+  const reader = useMemo(() => createStateReader<FeedState>({ read: () => call<FeedState>(`${base}/state`), onState: setState, onFailure: setReadFailure }), [base]);
   useEffect(() => {
-    refresh();
+    reader.start();
+    return () => reader.stop();
+  }, [reader]);
+  const refresh = useCallback(() => reader.refresh(), [reader]);
+  useEffect(() => {
+    void refresh();
     let ws: WebSocket | null = null;
     let closed = false;
     const open = () => {
       ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${base}/ws`);
-      ws.onopen = () => ws?.send("ping");
+      // Every open, the first and each reconnect, reads the state again: what changed while the socket was down is not replayed.
+      ws.onopen = () => {
+        ws?.send("ping");
+        void refresh();
+      };
       ws.onmessage = (e) => {
         if (e.data === "pong") return;
         // Presence (APC 0.2): this page draws only the waits (APC 0.11); a call needs no new state.
@@ -172,7 +190,7 @@ function Feed({ sid }: { sid: string }) {
           if (message?.type === "presence") setOpenWaits((w) => foldWaitEvent(w, message.event));
           return;
         }
-        refresh();
+        void refresh();
       };
       ws.onclose = () => !closed && setTimeout(open, 2000);
     };
@@ -194,6 +212,21 @@ function Feed({ sid }: { sid: string }) {
     setNotice(text);
     setTimeout(() => setNotice(null), 8000);
   };
+
+  useEffect(() => {
+    if (!arrivedToConnect) return;
+    let live = true;
+    void ensureConnectGrant(sid, connectMint(base)).then(async (r) => {
+      if (!live) return;
+      if (!r.ok && r.error !== "dock_only") say(`No agent made. ${plainError("Signals", r.error === "failed" ? undefined : r.error)}`);
+      // "Making your agent…" stays until the state that lists it has been read, so the panel never flashes empty.
+      if (r.ok) await refresh();
+      if (live) setMaking(false);
+    });
+    return () => {
+      live = false;
+    };
+  }, [arrivedToConnect, sid, base, refresh]);
 
   // The view, as identifiers.
   const report = useMemo(() => createViewReporter((view) => void call(`${base}/view`, view)), [base]);
@@ -243,7 +276,9 @@ function Feed({ sid }: { sid: string }) {
     [base],
   );
 
-  if (!state) return <Shell><p className="muted">Loading…</p></Shell>;
+  const readNote =
+    readFailure === "ended" ? "This Signals session ended. Reload the page to open a new one." : readFailure === "limited" ? "Too many requests. Signals tries again in a moment." : readFailure ? "Could not reach Signals. Trying again…" : null;
+  if (!state) return <Shell><p className="muted" role="status">{readNote ?? "Loading…"}</p></Shell>;
   const pinsOn = (postId: string, part: string | null) => state.grants.filter((g) => g.pin?.id === postId && (g.pin.part ?? null) === part);
 
   const tabs: Array<["" | Post["kind"], string]> = [["", "For you"], ["competitor_offer", "Competitors"], ["our_ad", "Our ads"]];
@@ -289,6 +324,11 @@ function Feed({ sid }: { sid: string }) {
       <p className="muted small">
         Your agent reads Signals on its own URL, and the feed goes straight to it. Once it is connected, drag its mark from the top onto any post.
       </p>
+      {making && !directAgents.length ? (
+        <p className="muted small" role="status">
+          Making your agent…
+        </p>
+      ) : (
       <DirectAgents
         appName="Signals"
         agents={directAgents}
@@ -300,6 +340,7 @@ function Feed({ sid }: { sid: string }) {
         }
         onRename={(id, name) => void call(`${base}/grants/${id}/name`, { name }).then(refresh)}
       />
+      )}
     </section>
   );
   const connectButton = offersDirect && !connectOpen && (
@@ -382,6 +423,7 @@ function Feed({ sid }: { sid: string }) {
             ))}
           </div>
           {notice && <div className="notice">{notice}</div>}
+          {readNote && <div className="notice" role="status">{readNote}</div>}
           {state.grants
             .filter((g) => g.path === "dock" && g.state === "handoff")
             .map((g) => (

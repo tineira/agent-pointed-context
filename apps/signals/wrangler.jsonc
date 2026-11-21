@@ -8,6 +8,8 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
   "assets": {
+    // The Worker's last route hands an unknown path it runs first for (/connect/*) to the assets.
+    "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/connect/*", "/api/*", "/mcp/*", "/apc/*", "/.well-known/*"]
   },
