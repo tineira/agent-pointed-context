@@ -383,7 +383,7 @@ function Sandbox({ sid }: { sid: string }) {
                 void api
                   .revoke(id)
                   .then(
-                    (r) => (r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, connect it again on the Agents screen, or drop it here again from your dock.` : `Not revoked. ${plainError("Pulse", r.error)}`),
+                    (r) => (r.ok ? `Revoked ${name}: it can no longer read Pulse. To let it back, connect it again on the Agents screen.` : `Not revoked. ${plainError("Pulse", r.error)}`),
                     () => `Not revoked. ${plainError("Pulse", undefined)}`,
                   )
                   .then((message) => {

@@ -286,7 +286,7 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
         <section className="card">
           <h2>Agents connected directly</h2>
           <p className="hint">
-            Connect an agent to Pulse alone: it gets its own URL, and Pulse's data goes straight to it. To use one agent across apps, connect it once to your agent dock instead and drag it here. The same agent both ways shows as one, if it agrees.
+            Connect an agent to Pulse alone: it gets its own URL, and Pulse's data goes straight to it.
           </p>
           <DirectAgents
             appName="Pulse"
@@ -377,9 +377,9 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
       {state.v2 && (
         <section className="card">
           <h2>Start over</h2>
-          <p className="hint">Delete this Pulse's demo data and start from zero. Your dock and Signals keep theirs until you start over there too.</p>
+          <p className="hint">Delete this Pulse's demo data and start from zero. Signals keeps its own until you start over there too.</p>
           <div>
-            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents you connected here or your dock paired here, and their pins", "your view and these settings", "this demo's event log"]} reset={() => api.reset()} />
+            <StartOver site="Pulse" className="cursor-pointer rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:border-filament" wipes={["the agents you connected here, and their pins", "your view and these settings", "this demo's event log"]} reset={() => api.reset()} />
           </div>
         </section>
       )}
