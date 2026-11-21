@@ -1,4 +1,5 @@
-// Public demo/download links copied from Dock setup; no runtime dependency on the hub.
+// The two demo apps, each on its own origin (TIN-621). Pulse for Windows left with the Dock: it is pointed only by a
+// drag from a dock (apps/desktop/AgentDrag.cs), so the standard's site offers no downloads (TIN-1061).
 export const APPS = [
   {
     name: "Pulse",
@@ -22,12 +23,3 @@ export const APPS = [
     ),
   },
 ];
-
-export const DESKTOP_SHELL = (window as { __APC_SHELL__?: string }).__APC_SHELL__ === "desktop";
-export const DOCK_DESKTOP = {
-  url: "https://github.com/tineira/agent-pointed-context/releases/download/dock-desktop/APCDockSetup.exe",
-  note: "Unsigned for now: Windows asks once (More info, then Run anyway).",
-  offered: !DESKTOP_SHELL && /Windows/.test(navigator.userAgent),
-};
-
-export const DESKTOP = [{ label: "Windows", match: /Windows/, url: "https://github.com/tineira/agent-pointed-context/releases/download/pulse-desktop/PulseDesktop.exe", note: "Unsigned for now: Windows asks once (More info, then Run anyway)." }];

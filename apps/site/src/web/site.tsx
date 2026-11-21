@@ -1,43 +1,22 @@
 /**
  * What every page of the site shares (TIN-627): the top bar, the footer, numbered steps and code blocks. The top
- * bar's Try it and Build it lead to their own pages, so a visitor can switch paths from anywhere; a visitor who
- * already has a dock also gets "Your dock".
+ * bar's Try it and Build it lead to their own pages, so a visitor can switch paths from anywhere. It asks nothing
+ * of any server: the site holds no visitor state of its own (TIN-1061).
  */
-import { useEffect, useState, type ReactNode } from "react";
-import { DOCK, DOCS, REPO, SITE_PAGES, footerLinks, type SitePage } from "./site-pages.ts";
+import type { ReactNode } from "react";
+import { DOCS, REPO, SITE_PAGES, footerLinks, type SitePage } from "./site-pages.ts";
 
-/** Whether this visitor already has a dock (the Worker answers by cookie, TIN-610); false until it says so, and if it fails. */
-function useHasDock(): boolean {
-  const [has, setHas] = useState(false);
-  useEffect(() => {
-    let live = true;
-    fetch("/api/dock/mine", { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body: { has_dock?: unknown } | null) => live && setHas(body?.has_dock === true))
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
-  return has;
-}
-
-/** Which top-bar link a page sits under: Try it for /try, Build it for every /build page. */
-const section = (page: SitePage): "try" | "build" | null => (page === "try" ? "try" : page.startsWith("build") ? "build" : null);
-
-/** "page" on the link to this very page; "true" on Build it from a page under it (/build/direct…), which is the current section, not the page. */
-const current = (page: SitePage, link: "try" | "build", here: "try" | "build" | null) => (here !== link ? undefined : page === link ? "page" : "true");
+/** Which top-bar link a page sits under. */
+const section = (page: SitePage): "try" | "build" | null => (page === "landing" ? null : page);
 
 export function SiteHeader(props: { page: SitePage }) {
-  const hasDock = useHasDock();
   const here = section(props.page);
   return (
     <header className="landing-head">
       {props.page === "landing" ? <span className="kicker">Agent Pointed Context</span> : <a className="kicker" href="/">Agent Pointed Context</a>}
       <nav className="landing-nav" aria-label="Site">
-        {hasDock && <a href={DOCK}>Your dock</a>}
-        <a href={SITE_PAGES.try.path} aria-current={current(props.page, "try", here)}>Try it</a>
-        <a href={SITE_PAGES.build.path} aria-current={current(props.page, "build", here)}>Build it</a>
+        <a href={SITE_PAGES.try.path} aria-current={here === "try" ? "page" : undefined}>Try it</a>
+        <a href={SITE_PAGES.build.path} aria-current={here === "build" ? "page" : undefined}>Build it</a>
         <a href={DOCS}>Docs</a>
         <a href={REPO}>GitHub</a>
       </nav>

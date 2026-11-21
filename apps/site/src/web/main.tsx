@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 import { createRoot } from "react-dom/client";
 import { Landing } from "./landing.tsx";
 import { TryPage } from "./try.tsx";
-import { BuildBothPage, BuildDirectPage, BuildDockPage, BuildPage } from "./build.tsx";
+import { BuildPage } from "./build.tsx";
 import { legacyAnchor, SITE_PAGES, sitePageAt, type SitePage } from "./site-pages.ts";
 import { Docs } from "./docs.tsx";
 import { isDocsPath } from "../docs/pages.ts";
@@ -22,9 +22,6 @@ const SITE: Record<SitePage, ComponentType> = {
   landing: Landing,
   try: TryPage,
   build: BuildPage,
-  "build-direct": BuildDirectPage,
-  "build-dock": BuildDockPage,
-  "build-both": BuildBothPage,
 };
 if (page) document.title = SITE_PAGES[page].title;
 // /docs: the standard's docs (TIN-611); each page sets its own title.

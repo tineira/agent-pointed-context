@@ -8,9 +8,6 @@ import { startWorkerd } from "./lib/dock-workerd.mjs";
 import { cspViolations, headersFileCsp } from "./lib/site-csp.mjs";
 
 const ORIGIN = "https://apc.tineira.com";
-// The landing uses the hub's root-level icons and PWA manifest on the shared origin; the hub lives in
-// tineira/agent-dock (TIN-1010), so they are not served here.
-const dockAssets = new Set(["/icon.svg", "/favicon-32.png", "/manifest.webmanifest", "/icon-192.png"]);
 
 // Every built page first: an inline script without its hash, a handler, a javascript: URL, an inline style or a
 // file from another origin would be blocked in production (or must never be allowed). Fails before workerd starts.
@@ -48,17 +45,21 @@ try {
   }
   await check("/?start_over=1");
   await check("/?utm=site");
-  for (const path of ["/try", "/try?ref=test", "/build", "/build/direct", "/build/dock", "/build/both"]) await check(path);
+  for (const path of ["/try", "/try?ref=test", "/build"]) await check(path);
+  // The pages that left with the Dock's profile answer a 301 to /build, with the site's headers (TIN-1061).
+  for (const path of ["/build/direct", "/build/dock/", "/build/both?ref=test"]) {
+    const { response } = await check(path, { status: 301, type: /.*/, body: /.*/ });
+    assert.equal(response.headers.get("location"), path.includes("?") ? "/build?ref=test" : "/build", path);
+  }
   for (const path of ["/docs", "/docs?ref=test", "/docs/spec"]) await check(path, { body: /<article class="docs-body"><h1/ });
   await check("/docs/spec.md", { type: /markdown|text\/plain/, body: /^# The APC specification/ });
   await check("/llms.txt", { type: /text\/plain/, body: /\(\/docs\/spec\.md\)/ });
   await check("/llms.txt?ref=test", { type: /text\/plain/, body: /\(\/docs\/spec\.md\)/ });
 
-  // Every landing asset resolves at the shared origin when Dock is mounted.
+  // Every landing asset is the site's own: since TIN-1061 it names nothing of the hub's (icons, manifest).
   const refs = [...landing.text.matchAll(/(?:src|href)="(\/[^"#]+)"/g)].map((m) => m[1]);
   assert.ok(refs.some((p) => p.startsWith("/site-assets/")), "landing names its own asset directory");
   for (const path of new Set(refs)) {
-    if (dockAssets.has(path)) continue;
     const response = await send(path, { redirect: "manual" });
     assert.equal(response.status, 200, path);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);

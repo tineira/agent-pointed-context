@@ -1,9 +1,9 @@
 /**
- * The site (TIN-620, TIN-627): the landing at / says what APC is and plays a silent loop of the drag, self-hosted,
- * then offers one decision, Try it or Build it, each its own page. /try opens the dock once and links each demo
- * app; /build chooses between Direct and Dock, with a strip for shipping both; each profile page and /build/both
- * show real focus payloads and real code; every docs link names a page and a heading that exist; the old anchors
- * land on the new pages; no footer repeats its page.
+ * The site (TIN-620, TIN-627; after the Dock left, TIN-1061): the landing at / says what APC is and plays a silent
+ * loop of the drag, self-hosted, then offers one decision, Try it or Build it, each its own page. /try connects the
+ * person's agent to each demo app on its own address, with no dock; /build is one page with a real focus payload;
+ * the Dock is named once, as a separate product; every docs link names a page and a heading that exist; the old
+ * anchors and the old /build pages land on the new pages; no footer repeats its page.
  */
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { headingIds, parseMarkdown } from "../src/docs/markdown.ts";
 import { DOC_PAGES } from "../src/docs/pages.ts";
 import { clipFallback } from "../src/web/clip-fallback.ts";
-import { FOOTER_LINKS, footerLinks, legacyAnchor, SITE_PAGES, sitePageAt } from "../src/web/site-pages.ts";
+import { DOCK_PRODUCT, FOOTER_LINKS, footerLinks, legacyAnchor, MOVED_PAGES, SITE_PAGES, sitePageAt } from "../src/web/site-pages.ts";
 
 const root = new URL("../../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
@@ -21,6 +21,7 @@ const build = read("apps/site/src/web/build.tsx");
 const site = read("apps/site/src/web/site.tsx");
 const sitePages = read("apps/site/src/web/site-pages.ts");
 const main = read("apps/site/src/web/main.tsx");
+const worker = read("apps/site/src/worker/index.ts");
 /** One page component's source, from its `export function` to the next one. */
 const pageOf = (source: string, name: string) => {
   const start = source.indexOf(`export function ${name}(`);
@@ -71,16 +72,6 @@ test("a clip that fails falls back: a failed WebM to the MP4, and no playable cl
   assert.match(video, /onError=\{\(e\) => e\.target === e\.currentTarget && fallBack\(\{ on: "video", currentSrc: e\.currentTarget\.currentSrc \}\)\}/);
 });
 
-test("In use lists only apps that pass conformance live, each with its public site", () => {
-  const start = landing.indexOf("const IN_USE = [");
-  assert.ok(start >= 0, "the landing has an IN_USE list");
-  const list = landing.slice(start, landing.indexOf("];", start));
-  assert.match(list, /name: "Autio",\s*url: "https:\/\/www\.autio\.cl",/);
-  for (const url of list.matchAll(/url: "([^"]+)"/g)) assert.match(url[1]!, /^https:\/\//, "an https link");
-  assert.match(landing, /<h2 className="landing-title">In use<\/h2>/);
-  assert.ok(landing.indexOf("In use</h2>") < landing.indexOf(">What your agent can and cannot see</h2>"), "In use comes before the closing section");
-});
-
 test("the clip's button follows the video and says what it does", () => {
   assert.match(video, /onPlay=\{\(\) => setPaused\(false\)\}/);
   assert.match(video, /onPause=\{\(\) => setPaused\(true\)\}/);
@@ -121,6 +112,7 @@ test("the landing offers one decision: Try it or Build it, each its own page", (
   assert.doesNotMatch(landing, /<section id=|href="#|<Steps|FOCUS_EXAMPLE|Open your dock|landing-refs/);
   assert.ok(landing.indexOf("landing-paths") < landing.lastIndexOf("What your agent can and cannot see"), "what the agent can see closes the page");
   assert.equal(landing.match(/<li>/g)?.length, 5, "the agents' \"any agent\" line and the four lines of what the agent can see");
+  assert.match(landing, /<h2 className="landing-title">How it works<\/h2>/);
 });
 
 test("each page has its path, a trailing slash allowed, and its own title", () => {
@@ -129,7 +121,7 @@ test("each page has its path, a trailing slash allowed, and its own title", () =
     if (path !== "/") assert.equal(sitePageAt(`${path}/`), page);
     if (path !== "/") assert.equal(sitePageAt(`${path}//`), page);
   }
-  for (const other of ["/dock", "/dock/agents/ag_1", "/docs", "/extension", "/builder", "/build/other", "/try/x"]) assert.equal(sitePageAt(other), null, other);
+  for (const other of ["/dock", "/docs", "/extension", "/builder", "/build/other", "/build/direct", "/build/dock", "/build/both", "/try/x"]) assert.equal(sitePageAt(other), null, other);
   assert.equal(new Set(Object.values(SITE_PAGES).map((p) => p.title)).size, Object.keys(SITE_PAGES).length, "no two pages share a title");
   for (const page of Object.keys(SITE_PAGES)) assert.match(main, new RegExp(`"?${page}"?: [A-Z][A-Za-z]+,`), `main.tsx renders ${page}`);
 });
@@ -143,17 +135,38 @@ test("the old anchors land on the new pages", () => {
   assert.match(main, /const moved = legacyAnchor\(path, location\.hash\);\s*if \(moved\) location\.replace\(moved\);/);
 });
 
-test("the top bar leads to the new pages from everywhere, and keeps Your dock, Docs and GitHub", () => {
-  assert.match(site, /\{hasDock && <a href=\{DOCK\}>Your dock<\/a>\}/);
+test("the top bar leads to the pages from everywhere: Try it, Build it, Docs and GitHub, and nothing of the Dock", () => {
   assert.match(site, /href=\{SITE_PAGES\.try\.path\}[^>]*>Try it</);
   assert.match(site, /href=\{SITE_PAGES\.build\.path\}[^>]*>Build it</);
   assert.match(site, /href=\{DOCS\}>Docs</);
   assert.match(site, /href=\{REPO\}>GitHub</);
+  assert.doesNotMatch(site, /Your dock|\/api\/|fetch\(/, "the site asks no server about the visitor");
   for (const [file, source] of [["landing", landing], ["try", tryPage], ["build", build]] as const) {
     const pages = source.match(/<SiteHeader page="[a-z-]+" \/>/g) ?? [];
-    assert.ok(pages.length >= 1, `${file} has the top bar`);
+    assert.equal(pages.length, 1, `${file} has the top bar`);
     assert.equal(pages.length, (source.match(/<SiteFooter/g) ?? []).length, `${file}: every page has its footer`);
   }
+});
+
+test("neither the Dock nor Autio is named on the landing, /try or /build, and nothing of the Dock is in the navigation", () => {
+  assert.equal(DOCK_PRODUCT, null);
+  assert.equal(build.match(/DOCK_PRODUCT\.url/g)?.length, 1);
+  const stripComments = (source: string) =>
+    source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|\s)\/\/.*$/gm, "")
+      .replace(/\{DOCK_PRODUCT && <>[\s\S]*?<\/>\}/g, "");
+  for (const [name, source] of [["landing.tsx", landing], ["try.tsx", tryPage], ["build.tsx", build]] as const) {
+    assert.doesNotMatch(stripComments(source), /\b(Autio|Dock)\b/i, `${name} names Autio or Dock outside comments`);
+  }
+  for (const source of [landing, tryPage, build, site]) assert.doesNotMatch(source, /href="\/dock|href="\/extension|DOCK_DESKTOP|Dock for Windows|Pulse for Windows/);
+});
+
+test("the old /build pages answer a permanent redirect to /build, keeping the query", () => {
+  assert.deepEqual(Object.keys(MOVED_PAGES).sort(), ["/build/both", "/build/direct", "/build/dock"]);
+  for (const to of Object.values(MOVED_PAGES)) assert.equal(sitePageAt(to), "build");
+  assert.ok(worker.includes('const to = MOVED_PAGES[url.pathname.replace(/\\/+$/, "")];'));
+  assert.ok(worker.includes("c.redirect(`${to}${url.search}`, 301)"));
 });
 
 test("no footer repeats a link of its page", () => {
@@ -167,70 +180,57 @@ test("no footer repeats a link of its page", () => {
   assert.match(sitePages, /export const V1 = "\/v1\/";/);
   assert.match(sitePages, /label: "Version 1, as described in the paper →"/);
   // Every other page links none of the footer's: they get it whole.
-  for (const [name, source] of [["Landing", landing], ["TryPage", tryPage], ["BuildDirectPage", build], ["BuildDockPage", build], ["BuildBothPage", build]] as const) {
-    const body = name === "Landing" || name === "TryPage" ? source : pageOf(source, name);
+  for (const [name, source] of [["Landing", landing], ["TryPage", tryPage]] as const) {
+    const body = source;
     assert.doesNotMatch(body, /\{PAPER\}|\{RECORDS\}|href=\{`\$\{DOCS\}\/spec`\}|href="\/v1/, `${name} links a footer link itself`);
   }
 });
 
-test("Try it opens the dock once and links each demo app; the dock does not launch them", () => {
-  assert.equal(tryPage.match(/Open the web dock/g)?.length, 1, "only the button says it; the step and the top bar say \"Your dock\"");
-  assert.equal(tryPage.match(/<Cta \/>/g)?.length, 1, "one button");
-  // Dock for Windows beside it, by the dock menu's rule: a button on Windows, a line elsewhere, Mac and Linux a note.
-  assert.match(tryPage, /<Cta \/>\s*<DockForWindows \/>/);
-  assert.match(tryPage, /platform\.dock \? <a className="landing-cta big ghost" href=\{DOCK_DESKTOP\.url\}>Get the dock for Windows<\/a>/);
-  assert.match(tryPage, /if \(platform\.later\) return <p className="small-note">Also as an app: <a href=\{DOCK_DESKTOP\.url\}>Dock for Windows<\/a>\. Mac and Linux later\.<\/p>/);
-  assert.doesNotMatch(tryPage, /disabled/, "Mac and Linux are a note, never a dead button");
+test("Try it connects the agent to each demo app on its own address, with nothing to install", () => {
+  assert.equal(tryPage.match(/className="landing-cta big"/g)?.length, 1, "one button");
+  assert.match(tryPage, /href=\{PULSE_CONNECT\}>Open Pulse and connect your agent</);
+  assert.ok(tryPage.includes('const PULSE_CONNECT = PULSE.url.replace(/overview$/, "agents");'), "Pulse's Agents page");
+  assert.ok(tryPage.includes("const SIGNALS_CONNECT = `${SIGNALS.url}?connect`;"), "Signals' Connect panel");
+  assert.match(tryPage, /href=\{SIGNALS_CONNECT\}>Connect an agent</);
   assert.match(tryPage, /href=\{PULSE\.url/);
   assert.match(tryPage, /href=\{SIGNALS\.url\}/);
-  assert.match(tryPage, /Download for \{d\.label\}/);
-  assert.match(tryPage, /href="\/extension"/);
-  assert.match(tryPage, /href=\{DIRECT_TRY\}/, "Direct, as a note");
-  assert.doesNotMatch(tryPage, /dock opens Pulse|checklist opens|Open them from your dock|sets up the same world/i, "the dock no longer launches the demo apps (TIN-621)");
+  assert.doesNotMatch(tryPage, /Download|\.exe|window\.open|extension/i, "no downloads, no popup dock, no extension");
 });
 
 test("Try it's steps do not overlap, and only the starter question stands out", () => {
   const steps = [...tryPage.matchAll(/\{ title: "([^"]+)", text: "((?:[^"\\]|\\.)*)" \}/g)].map((m) => ({ title: m[1]!, text: m[2]! }));
-  assert.deepEqual(steps.map((s) => s.title), ["Your dock", "Connect your agent", "Open Pulse or Signals", "Point and ask"]);
-  assert.match(steps[2]!.text, /allow it/);
-  assert.doesNotMatch(steps[2]!.text, /drop|drag/i, "step 3 opens an app and allows the agent; pointing is step 4");
-  assert.match(steps[3]!.text, /^Drag your agent/);
-  // The starter question is the one highlighted block; the extension and Direct are quieter asides.
+  assert.deepEqual(steps.map((s) => s.title), ["Open Pulse", "Connect your agent", "Point and ask", "Add a second app"]);
+  assert.match(steps[1]!.text, /MCP address/);
+  assert.doesNotMatch(steps[1]!.text, /drop|drag/i, "step 2 connects; pointing is step 3");
+  assert.match(steps[2]!.text, /^Drag your agent's mark from Pulse's agent bar/);
+  assert.match(steps[3]!.text, /Signals' own address/);
   assert.equal(tryPage.match(/className="landing-starter"/g)?.length, 1);
   assert.doesNotMatch(tryPage, /landing-note/);
   const starter = tryPage.slice(tryPage.indexOf('className="landing-starter"'), tryPage.indexOf('className="landing-asides"'));
   assert.match(starter, /href=\{TRY_POST\}>Tallyfin's offer to Team teams in North America</);
   assert.match(starter, /href=\{TRY_CUSTOMER\}>Deep Harbor Logistics</);
-  const asides = tryPage.slice(tryPage.indexOf('className="landing-asides"'));
-  assert.match(asides, /browser extension/);
-  assert.match(asides, /DIRECT_TRY/);
+  assert.match(tryPage.slice(tryPage.indexOf('className="landing-asides"')), /Revoke/);
   const css = read("apps/site/src/web/site.css");
   assert.match(css, /^\.landing-starter \{[^}]*border: 2px solid var\(--accent\)/m);
   assert.match(css, /^\.landing-asides p \{[^}]*font-size: 13px; color: var\(--muted\)/m);
 });
 
-test("/build: Direct and Dock as two equal cards, each to its page, and a strip (not a card) for both", () => {
+test("/build is one page: the core, how agents connect, a real payload, other profiles, the references", () => {
   const page = pageOf(build, "BuildPage");
   assert.match(page, /New to APC\? <a href=\{SITE_PAGES\.try\.path\}>Try the demo first →<\/a>/);
-  assert.match(page, /\(\["direct", "dock"\] as const\)\.map/, "one component draws both cards");
-  for (const key of ["direct", "dock"]) {
-    const block = build.slice(build.indexOf(`  ${key}: {\n    page:`), build.indexOf("},\n", build.indexOf(`  ${key}: {\n    page:`)));
-    for (const field of ["users:", "pros:", "cons:"]) assert.ok(block.includes(field), `${key} has ${field}`);
-  }
-  assert.match(page, /href=\{SITE_PAGES\[p\.page\]\.path\}>Build \{p\.name\} →/);
-  assert.match(build, /page: "build-direct" as SitePage/);
-  assert.match(build, /page: "build-dock" as SitePage/);
-  assert.match(page, /<a className="landing-both" href=\{SITE_PAGES\["build-both"\]\.path\}>/);
-  assert.match(build, /Let each person choose: Direct for whoever uses only your app, Dock for whoever uses several\. The same agent on both paths shows as one\./);
-  assert.doesNotMatch(page, /<Code|<Steps|FOCUS_EXAMPLE|apc_link|APC_PROFILES/, "no implementation detail on /build");
-  // Direct has no dock: its mark lives in the app's page.
-  assert.match(build, /There is no dock: their agent's mark lives in your page/);
+  const sections = [...page.matchAll(/<Section title="([^"]+)">/g)].map((m) => m[1]);
+  assert.deepEqual(sections, ["What every app implements", "How agents connect", "What the agent receives", "Other profiles"]);
+  assert.match(page, /<Section title="What every app implements">\s*<Steps steps=\{CORE_STEPS\} \/>/);
+  assert.match(page, /\{json\(FOCUS_EXAMPLE\)\}/);
+  for (const core of ["MCP endpoint", "data-focus", "apc.json", "@tineira/apc-conformance"]) assert.ok(build.slice(build.indexOf("const CORE_STEPS"), build.indexOf("const REF_GROUPS")).includes(core), core);
+  for (const part of ["newDirectGrant", "&lt;apc-direct-agents&gt;", "&lt;apc-agents&gt;", "direct.connect"]) assert.ok(page.includes(part), part);
+  assert.doesNotMatch(build, /apc_link|DOCK_FOCUS_EXAMPLE|call_app_tool|requestConnect|ShipBoth|build-both/, "nothing of the Dock's profile");
 });
 
 test("/build groups the references: Start here, Deep dive, Code", () => {
   const groups = [...build.matchAll(/title: "(Start here|Deep dive|Code)",\s*refs: \[([^]*?)\],\n  \}/g)].map((m) => ({ title: m[1]!, refs: [...m[2]!.matchAll(/title: "([^"]+)"/g)].map((r) => r[1]) }));
   assert.deepEqual(groups, [
-    { title: "Start here", refs: ["Integration guide", "Docs"] },
+    { title: "Start here", refs: ["Integration guide", "Conformance suite", "Docs"] },
     { title: "Deep dive", refs: ["Spec", "Payload specification", "Design record", "Paper"] },
     { title: "Code", refs: ["GitHub"] },
   ]);
@@ -238,48 +238,10 @@ test("/build groups the references: Start here, Deep dive, Code", () => {
   for (const ref of ["https://doi.org/10.5281/zenodo.23382909", "https://doi.org/10.5281/zenodo.23383101", "blob/main/DESIGN.md", "https://github.com/tineira/agent-pointed-context"]) assert.ok(sitePages.includes(ref), ref);
 });
 
-test("each profile page has the core, its own part, a real payload, its references, and ends on Ship both", () => {
-  for (const [name, other] of [["BuildDirectPage", "Dock"], ["BuildDockPage", "Direct"]] as const) {
-    const page = pageOf(build, name);
-    assert.match(page, /<Section title="What every app implements">\s*<Steps steps=\{CORE_STEPS\} \/>/);
-    assert.match(page, /<Section title="What (Direct|Dock) adds">/);
-    assert.match(page, /\{json\(FOCUS_EXAMPLE\)\}/);
-    assert.match(page, /<Refs refs=\{PROFILE_REFS\.(direct|dock)\} \/>/);
-    assert.match(page, new RegExp(`<ShipBothNext other="${other}" />\\s*<SiteFooter />`), `${name} ends with Ship both`);
-  }
-  assert.match(pageOf(build, "BuildDockPage"), /\{json\(DOCK_FOCUS_EXAMPLE\)\}/);
-  for (const core of ["MCP endpoint", "data-focus", "apc.json", "@tineira/apc-conformance"]) assert.ok(build.slice(build.indexOf("const CORE_STEPS"), build.indexOf("const PROFILES")).includes(core), core);
-});
-
-test("/build/both: the profiles, apc_link, the bar and the dock hint, in code the repo runs", () => {
-  const page = pageOf(build, "BuildBothPage");
-  for (const title of ["Declare both profiles", "One agent on both paths: apc_link", "The linked agent in the agent bar", "Offer the dock to Direct users (optional)", "Test it"]) assert.ok(page.includes(`<Section title="${title}">`), title);
-  // Every line of code shown is a line of the integration guide's Orders, or of Signals.
-  const orders = read("apps/site/src/docs/examples/orders-app.ts");
-  const signals = read("apps/signals/src/worker/index.ts") + read("apps/signals/wrangler.jsonc");
-  const snippet = (name: string) => {
-    const m = build.match(new RegExp(`export const ${name} = \`([^\`]*)\`;`));
-    assert.ok(m, name);
-    return m[1]!.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("//"));
-  };
-  for (const line of snippet("LINK_SNIPPET")) assert.ok(orders.includes(line), `not in orders-app.ts: ${line}`);
-  for (const line of snippet("PROFILES_SNIPPET")) assert.ok(signals.includes(line.replace(/^"vars": \{ /, "").replace(/ \}$/, "")), `not in Signals: ${line}`);
-  // The bar's words and switches are the package's own.
-  const bar = read("packages/web/src/agents-bar.ts");
-  const words = read("packages/web/src/strings.ts");
-  assert.ok(words.includes('dockHint: "Use this agent across apps with the dock"') && page.includes('"Use this agent across apps with the dock"'));
-  assert.ok(bar.includes('"dock-hint") === "off"') && page.includes('dock-hint="off"'));
-  assert.ok(words.includes('pathBoth: "direct + dock"') && page.includes("direct + dock"));
-  assert.ok(read("apps/site/src/docs/examples/orders-page.ts").includes('"apc-unlink"') && page.includes("apc-unlink"));
-  const server = read("packages/server/src/direct.ts");
-  assert.match(server, /export function parseProfiles\(/);
-  assert.match(server, /Unset or blank means both/);
-});
-
 test("the docs links name pages and headings that exist", () => {
   const ids = new Map(DOC_PAGES.map((p) => [p.path, new Set(headingIds(parseMarkdown(read(p.file))))]));
   const links = [...[landing, tryPage, build, site, sitePages].join("\n").matchAll(/\$\{DOCS\}(\/[a-z]+)?(#[a-z0-9_-]+)?/g)];
-  assert.ok(links.length >= 10);
+  assert.ok(links.length >= 5);
   for (const [, page = "", hash] of links) {
     const path = `/docs${page}`;
     assert.ok(ids.has(path), `${path} is not a docs page`);

@@ -1,10 +1,10 @@
 /**
- * The site around the dock (TIN-627): a light landing at /, the demo at /try, and the developer's pages under
- * /build, one per profile and one for shipping both. Plain data, so the routing, the titles, the old anchors and
- * the footer can be tested without a browser.
+ * The standard's site (TIN-627; after the Dock left, TIN-1061): a light landing at /, the demo at /try, and one
+ * developer's page at /build. Plain data, so the routing, the titles, the old anchors and the footer can be tested
+ * without a browser. The Dock is a separate product: the site names it once, as something built on APC, and
+ * links nothing of it from its navigation.
  */
 
-export const DOCK = "/dock";
 /** The standard's docs (TIN-611): spec, integration guide, conformance. */
 export const DOCS = "/docs";
 export const REPO = "https://github.com/tineira/agent-pointed-context";
@@ -15,19 +15,33 @@ export const DESIGN = `${REPO}/blob/main/DESIGN.md`;
 export const VIDEO = "https://youtu.be/pb46Sd0UOtM";
 export const V1 = "/v1/";
 
-export type SitePage = "landing" | "try" | "build" | "build-direct" | "build-dock" | "build-both";
+/**
+ * The Dock, a separate product built on APC (TIN-930): one agent connection that follows the person across APC
+ * apps. Its home is not settled (TIN-1061); null hides the line that names it.
+ */
+export const DOCK_PRODUCT: { name: string; url: string } | null = null;
+
+export type SitePage = "landing" | "try" | "build";
 
 /** Each page, its path and its title. */
 export const SITE_PAGES: Record<SitePage, { path: string; title: string }> = {
   landing: { path: "/", title: "Agent Pointed Context: point your AI agent at what you see" },
   try: { path: "/try", title: "Try APC: your agent, two demo apps, one drag" },
   build: { path: "/build", title: "Build with APC: make your app pointable" },
-  "build-direct": { path: "/build/direct", title: "Build with APC: the Direct profile" },
-  "build-dock": { path: "/build/dock", title: "Build with APC: the Dock profile" },
-  "build-both": { path: "/build/both", title: "Build with APC: ship both profiles" },
 };
 
-/** The page at a path, a trailing slash allowed; null for any other path (the dock, /docs, /extension). */
+/**
+ * The pages that left with the Dock's profile, and where their links go now: Direct was /build/direct and is /build
+ * itself; the Dock profile and shipping both are no longer the standard's, so their links land on /build too. The
+ * Worker answers them with a 301 (worker/index.ts); this list is the one place that names them.
+ */
+export const MOVED_PAGES: Readonly<Record<string, string>> = {
+  "/build/direct": "/build",
+  "/build/dock": "/build",
+  "/build/both": "/build",
+};
+
+/** The page at a path, a trailing slash allowed; null for any other path (/docs, /v1). */
 export function sitePageAt(pathname: string): SitePage | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   for (const [page, { path: p }] of Object.entries(SITE_PAGES) as [SitePage, { path: string }][]) if (p === path) return page;
