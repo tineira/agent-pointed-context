@@ -1,7 +1,8 @@
 /**
  * When the hero says "Now use your own agent" (TIN-1066): after the visitor's second own pin and its answer. The pin the
  * stage plays by itself on load does not count, a pin cut short by the next one still counts, and the panel opens by
- * itself once (the title bar's shortcut opens it any time). Pure, so it is tested.
+ * itself once: it counts as offered only when it actually opens (the title bar's shortcut opens it any time), so a pin
+ * or an unpin during the wait before it opens leaves it for the next answer. Pure, so it is tested.
  */
 
 export type PinBy = "self" | "visitor";
@@ -23,13 +24,12 @@ export function pinMade(count: PinCount, by: PinBy): PinCount {
   return by === "visitor" ? { ...count, own: count.own + 1 } : count;
 }
 
-/** A pin's answer was shown: whether the panel opens now, and the count after. */
-export function answerShown(count: PinCount, by: PinBy): { count: PinCount; offer: boolean } {
-  const offer = by === "visitor" && !count.offered && count.own >= PINS_BEFORE_OFFER;
-  return { count: offer ? { ...count, offered: true } : count, offer };
+/** Whether the answer just shown, to a pin `by`, is the one after which the panel opens. It does not mark it offered. */
+export function offerDue(count: PinCount, by: PinBy): boolean {
+  return by === "visitor" && !count.offered && count.own >= PINS_BEFORE_OFFER;
 }
 
-/** The panel was opened from the shortcut. */
+/** The panel opened, by itself or from the shortcut. */
 export function offerOpened(count: PinCount): PinCount {
   return { ...count, offered: true };
 }

@@ -10,7 +10,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { answerParagraphs, answerText, heroAnswer, PLAN_NAMES, REGION_NAMES } from "../src/web/landing/hero/answer.ts";
 import { CHART_TOP, monthName, type HeroData } from "../src/web/landing/hero/data.ts";
-import { answerShown, NO_PINS, offerOpened, pinMade, type PinBy, type PinCount } from "../src/web/landing/hero/pins.ts";
+import { NO_PINS, offerDue, offerOpened, pinMade, type PinBy, type PinCount } from "../src/web/landing/hero/pins.ts";
 import { DOT_FIELD_SPECS, type RgbaColor } from "../src/web/dot-field.ts";
 
 const root = new URL("../../../", import.meta.url);
@@ -86,10 +86,10 @@ test("the panel opens after the visitor's second own pin and its answer; the sta
     const offers: number[] = [];
     steps.forEach(([step, by], i) => {
       if (step === "pin") count = pinMade(count, by);
-      else {
-        const shown = answerShown(count, by);
-        count = shown.count;
-        if (shown.offer) offers.push(i);
+      else if (offerDue(count, by)) {
+        // The panel opens (and only then counts as offered).
+        count = offerOpened(count);
+        offers.push(i);
       }
     });
     return { count, offers };
@@ -105,7 +105,11 @@ test("the panel opens after the visitor's second own pin and its answer; the sta
   // Opened from the title bar's shortcut: it does not open again by itself.
   let count = offerOpened(pinMade(NO_PINS, "visitor"));
   count = pinMade(count, "visitor");
-  assert.equal(answerShown(count, "visitor").offer, false);
+  assert.equal(offerDue(count, "visitor"), false);
+  // Due is not offered: until the panel opens, the next answer is due again (hero-sequence.test.ts drives the wait).
+  const two = pinMade(pinMade(NO_PINS, "visitor"), "visitor");
+  assert.equal(offerDue(two, "visitor"), true);
+  assert.equal(two.offered, false);
 });
 
 test("the stage is the standard APC pinning, not a redrawn imitation", () => {

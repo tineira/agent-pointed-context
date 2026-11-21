@@ -15,12 +15,13 @@ import { enablePinning, initials, pinBadgeX, pinTouch, type AgentState, type Bar
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import "../styles/hero.css";
 import { AgentMark } from "../agent-mark.tsx";
-import { answerParagraphs, answerText, heroAnswer, topTwo, type HeroAnswer } from "./hero/answer.ts";
-import { CHART_TOP, loadHeroData, monthName, monthShort, type HeroData, type HeroFocus } from "./hero/data.ts";
+import { answerParagraphs } from "./hero/answer.ts";
+import { createClock } from "./hero/clock.ts";
+import { CHART_TOP, loadHeroData, monthName, monthShort, type HeroData } from "./hero/data.ts";
 import { HERO_AGENT, HeroAgentBar, HeroPin } from "./hero/elements.tsx";
-import { FocusCard, inlineJson, Json } from "./hero/json.tsx";
+import { FocusCard, Json } from "./hero/json.tsx";
 import { carryMark, sendMessage } from "./hero/motion.ts";
-import { answerShown, NO_PINS, offerOpened, pinMade, type PinBy } from "./hero/pins.ts";
+import { createHeroSequence, type ChatItem } from "./hero/sequence.ts";
 
 /** Pulse's Agents page: where the visitor makes an agent and copies its MCP address. */
 export const PULSE_AGENTS = "https://pulse.apc.tineira.com/agents";
@@ -41,15 +42,6 @@ function useReducedMotion(): boolean {
   }, []);
   return reduce;
 }
-
-type ChatItem =
-  | { id: number; type: "question"; text: string }
-  | { id: number; type: "tool"; name: string; args: string | null; result: string | null; done: boolean }
-  | { id: number; type: "focus"; focus: HeroFocus }
-  | { id: number; type: "answer"; answer: HeroAnswer }
-  | { id: number; type: "turn" };
-/** A chat item before it has its id. */
-type NewItem = ChatItem extends infer T ? (T extends ChatItem ? Omit<T, "id"> : never) : never;
 
 export function HeroStage() {
   const [data, setData] = useState<HeroData | null>(null);
@@ -82,125 +74,67 @@ function Stage(props: { data: HeroData }) {
   const [said, setSaid] = useState("");
   const [badgeAt, setBadgeAt] = useState<{ left: number; top: number } | null>(null);
 
-  const run = useRef(0);
-  const count = useRef(NO_PINS);
-  const nextId = useRef(0);
-  const message = useRef<{ cancel: () => void } | null>(null);
-  const selfPlay = useRef<{ cancel: () => void } | null>(null);
+  const clock = useMemo(() => createClock(), []);
+  const selfPlay = useRef<AbortController | null>(null);
   const litTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nextId = useRef(0);
   const reduceRef = useRef(reduce);
   reduceRef.current = reduce;
 
-  const add = (item: NewItem): number => {
-    const id = ++nextId.current;
-    setChat((c) => [...c, { ...item, id } as ChatItem]);
-    return id;
-  };
-  const finishTool = (id: number, result: string | null) => setChat((c) => c.map((i) => (i.id === id && i.type === "tool" ? { ...i, done: true, result } : i)));
+  // The sequence (hero/sequence.ts) drives the stage through this view.
+  const sequence = useMemo(() => {
+    const clearLit = () => {
+      if (litTimer.current) clearTimeout(litTimer.current);
+      litTimer.current = null;
+    };
+    return createHeroSequence({
+      months,
+      clock,
+      reduce: () => reduceRef.current,
+      view: {
+        pinned: (index) => {
+          clearLit();
+          setPinned(index);
+          setSeen(false);
+          setBusy(false);
+          setLit(null);
+          setChat([]);
+        },
+        read: (index) => {
+          setSeen(true);
+          setLit(index);
+          clearLit();
+          litTimer.current = setTimeout(() => setLit(null), LIT_MS);
+        },
+        busy: setBusy,
+        add: (item) => {
+          const id = ++nextId.current;
+          setChat((c) => [...c, { ...item, id } as ChatItem]);
+          return id;
+        },
+        finish: (id, result) => setChat((c) => c.map((i) => (i.id === id && i.type === "tool" ? { ...i, done: true, result } : i))),
+        say: setSaid,
+        offer: () => setOffer(true),
+        travel: (index, signal) => {
+          const stage = stageRef.current;
+          const bar = barRefs.current[index];
+          const agent = agentWinRef.current;
+          if (!stage || !bar || !agent) return Promise.resolve();
+          const sent = sendMessage({ stage, bar, agent, month: months[index]!.month, reduce: reduceRef.current, wait: clock.wait });
+          signal.addEventListener("abort", sent.cancel, { once: true });
+          return sent.done;
+        },
+      },
+    });
+  }, [months, clock]);
 
   /** The stage's own drag stops for good as soon as the visitor does anything. */
   const stopSelfPlay = useCallback(() => {
-    selfPlay.current?.cancel();
+    selfPlay.current?.abort();
     selfPlay.current = null;
   }, []);
 
-  const unpin = useCallback(() => {
-    run.current++;
-    message.current?.cancel();
-    message.current = null;
-    if (litTimer.current) clearTimeout(litTimer.current);
-    setPinned(null);
-    setSeen(false);
-    setBusy(false);
-    setLit(null);
-    setChat([]);
-    setSaid("Unpinned.");
-  }, []);
-
-  /** A pin on bar `index`: the message travels, the agent reads, and it answers. */
-  const pin = useCallback(
-    async (index: number, by: PinBy) => {
-      const m = months[index];
-      const stage = stageRef.current;
-      const bar = barRefs.current[index];
-      if (!m || !stage || !bar || !agentWinRef.current) return;
-      const me = ++run.current;
-      const live = () => run.current === me;
-      const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, reduceRef.current ? Math.min(ms, 250) : ms));
-      count.current = pinMade(count.current, by);
-      message.current?.cancel();
-      if (litTimer.current) clearTimeout(litTimer.current);
-      setPinned(index);
-      setSeen(false);
-      setBusy(false);
-      setLit(null);
-      setChat([]);
-      setSaid(`Your agent is pinned on ${monthName(m.month)}.`);
-
-      await pause(420);
-      if (!live()) return;
-      const sent = sendMessage({ stage, bar, agent: agentWinRef.current, month: m.month, reduce: reduceRef.current });
-      message.current = sent;
-      await sent.done;
-      if (!live()) return;
-      message.current = null;
-
-      add({ type: "question", text: "What's behind this bar?" });
-      setBusy(true);
-      await pause(550);
-      if (!live()) return;
-      const view = add({ type: "tool", name: "get_current_view", args: null, result: null, done: false });
-      await pause(650);
-      if (!live()) return;
-      finishTool(view, null);
-      add({ type: "focus", focus: m.focus });
-      await pause(1000);
-      if (!live()) return;
-      const figure = m.get_figure;
-      const read = add({ type: "tool", name: "get_figure", args: inlineJson(m.focus.next_args), result: null, done: false });
-      await pause(750);
-      if (!live()) return;
-      finishTool(read, `{ "values": ${inlineJson(figure.values)}, "breakdown": { "customers": [${figure.breakdown.customers.length} customers] }, … }`);
-      // The agent read the pin: the badge's ring becomes a check, and what it read lights up.
-      setSeen(true);
-      setLit(index);
-      litTimer.current = setTimeout(() => setLit(null), LIT_MS);
-      setSaid(`Your agent read ${monthName(m.month)}.`);
-      for (const fact of topTwo(figure.breakdown.customers)) {
-        await pause(420);
-        if (!live()) return;
-        const call = add({ type: "tool", name: "get_customer", args: inlineJson({ id: fact.customer_id }), result: null, done: false });
-        await pause(480);
-        if (!live()) return;
-        const c = m.get_customer.find((x) => x.customer.id === fact.customer_id)?.customer;
-        finishTool(call, c ? `{ "customer": { "name": ${JSON.stringify(c.name)}, "plan": ${JSON.stringify(c.plan)}, "region": ${JSON.stringify(c.region)}, … }, … }` : null);
-      }
-      await pause(400);
-      if (!live()) return;
-      const answer = heroAnswer(m);
-      add({ type: "answer", answer });
-      setBusy(false);
-      setSaid(answerText(answer));
-      if (by === "self") {
-        await pause(900);
-        if (!live()) return;
-        add({ type: "turn" });
-        return;
-      }
-      const shown = answerShown(count.current, by);
-      count.current = shown.count;
-      if (shown.offer) {
-        await pause(700);
-        if (!live()) return;
-        setOffer(true);
-        setSaid("Now use your own agent.");
-      }
-    },
-    [months],
-  );
-
-  const pinRef = useRef(pin);
-  pinRef.current = pin;
+  const unpin = useCallback(() => sequence.unpin(), [sequence]);
 
   // Standard pinning on the stage: drag the agent (or its badge) onto a bar, tap it and then a bar, or the keyboard.
   useEffect(() => {
@@ -212,10 +146,10 @@ function Stage(props: { data: HeroData }) {
         const index = months.findIndex((m) => m.month === target.params?.month);
         if (index < 0) return;
         stopSelfPlay();
-        void pinRef.current(index, "visitor");
+        void sequence.pin(index, "visitor");
       },
     });
-  }, [months, stopSelfPlay]);
+  }, [months, sequence, stopSelfPlay]);
 
   // Any press or key on the stage, or an agent armed for a tap, ends the stage's own drag.
   useEffect(() => {
@@ -231,44 +165,42 @@ function Stage(props: { data: HeroData }) {
     };
   }, [stopSelfPlay]);
 
+  // A hidden tab holds the demo where it is (every wait goes through the clock); leaving the page clears every timer.
+  useEffect(() => {
+    const follow = () => (document.visibilityState === "hidden" ? clock.pause() : clock.resume());
+    follow();
+    document.addEventListener("visibilitychange", follow);
+    return () => {
+      document.removeEventListener("visibilitychange", follow);
+      sequence.dispose();
+      clock.dispose();
+      if (litTimer.current) clearTimeout(litTimer.current);
+    };
+  }, [clock, sequence]);
+
   // Self-play on load: one pin, then the visitor's turn. None under reduced motion.
   useEffect(() => {
     if (reduceRef.current) return;
     const index = months.findIndex((m) => m.month === SELF_PLAY_MONTH);
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let carry: { cancel: () => void } | null = null;
-    let over = false;
-    const cancel = () => {
-      over = true;
-      if (timer) clearTimeout(timer);
-      carry?.cancel();
-      barRefs.current[index]?.classList.remove("apc-target");
-      document.removeEventListener("visibilitychange", start);
-    };
-    selfPlay.current = { cancel };
-    function start() {
-      if (over || document.visibilityState !== "visible") return;
-      document.removeEventListener("visibilitychange", start);
-      timer = setTimeout(() => {
-        const stage = stageRef.current;
-        const bar = barRefs.current[index];
-        const mark = stage?.querySelector<HTMLElement>(".apc-agents__mark");
-        if (over || !stage || !bar || !mark || reduceRef.current) return;
-        const carried = carryMark({ stage, mark, bar });
-        carry = carried;
-        bar.classList.add("apc-target");
-        void carried.done.then((arrived) => {
-          bar.classList.remove("apc-target");
-          if (!arrived || over) return;
-          selfPlay.current = null;
-          void pinRef.current(index, "self");
-        });
-      }, 1100);
-    }
-    if (document.visibilityState === "visible") start();
-    else document.addEventListener("visibilitychange", start);
-    return cancel;
-  }, [months]);
+    const play = new AbortController();
+    selfPlay.current = play;
+    void (async () => {
+      await clock.wait(1100, play.signal);
+      const stage = stageRef.current;
+      const bar = barRefs.current[index];
+      const mark = stage?.querySelector<HTMLElement>(".apc-agents__mark");
+      if (play.signal.aborted || !stage || !bar || !mark || reduceRef.current) return;
+      const carried = carryMark({ stage, mark, bar, wait: clock.wait });
+      play.signal.addEventListener("abort", carried.cancel, { once: true });
+      bar.classList.add("apc-target");
+      const arrived = await carried.done;
+      bar.classList.remove("apc-target");
+      if (!arrived || play.signal.aborted) return;
+      selfPlay.current = null;
+      void sequence.pin(index, "self");
+    })();
+    return () => play.abort();
+  }, [months, clock, sequence]);
 
   // The badge sits astride the pinned bar's right edge, just below its top, as Pulse places it.
   const place = useCallback(() => {
@@ -297,20 +229,9 @@ function Stage(props: { data: HeroData }) {
     if (body) body.scrollTop = body.scrollHeight;
   }, [chat]);
 
-  // Nothing keeps running once the stage is gone.
-  useEffect(
-    () => () => {
-      run.current++;
-      message.current?.cancel();
-      if (litTimer.current) clearTimeout(litTimer.current);
-    },
-    [],
-  );
-
   const openOffer = () => {
     stopSelfPlay();
-    count.current = offerOpened(count.current);
-    setOffer(true);
+    sequence.openOffer();
   };
   useEffect(() => {
     if (offer) offerRef.current?.focus({ preventScroll: true });

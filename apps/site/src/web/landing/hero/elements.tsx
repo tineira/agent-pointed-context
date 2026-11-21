@@ -43,7 +43,9 @@ export function HeroAgentBar(props: { agent: BarAgent; onUnpin: () => void }) {
     if (ref.current) ref.current.agents = [props.agent];
   }, [props.agent]);
 
-  return createElement("apc-agents", { ref, class: "hero-agents" });
+  // The bar's hint off from its first render (an attribute, there when it connects): it then never reads that hint's
+  // dismissal from this origin's localStorage, which is the hub's key on apc.tineira.com.
+  return createElement("apc-agents", { ref, class: "hero-agents", "dock-hint": "off" });
 }
 
 /** The pin badge on the pinned bar: a dashed, breathing ring until the agent reads the pin, then a check, and ×. */
