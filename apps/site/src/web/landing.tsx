@@ -1,14 +1,15 @@
 /**
- * The landing of apc.tineira.com (TIN-420, TIN-605, TIN-620, TIN-627): what APC is, from the hero alone (a line
- * and a short silent clip of the drag), the agents it works with, then one decision: Try it (/try, for people
- * using an AI agent) or Build it (/build, for people building an app). "What your agent can and cannot see" closes
- * it. Everyone sees it (TIN-610); a visitor who already has a dock also gets "Your dock" in the top bar.
+ * The landing of apc.tineira.com (TIN-420, TIN-605, TIN-620, TIN-627; after the Dock left, TIN-1061): what APC is,
+ * from the hero alone (a line and a short silent clip of the drag), the agents it works with, then one decision:
+ * Try it (/try, for people using an AI agent) or Build it (/build, for people building an app). How it works in
+ * three lines, the apps that use it, and "What your agent can and cannot see" close it. The Dock, a separate
+ * product built on APC, is one quiet line under In use.
  */
 import { useEffect, useState } from "react";
 import { AgentIcon } from "./agent-icon.tsx";
 import { clipFallback, type ClipError } from "./clip-fallback.ts";
 import { SiteFooter, SiteHeader } from "./site.tsx";
-import { SITE_PAGES, VIDEO } from "./site-pages.ts";
+import { DOCK_PRODUCT, SITE_PAGES, VIDEO } from "./site-pages.ts";
 
 /**
  * The hero clip: rendered from the November 2026 promo's own Remotion scene (the media repo), silent, without
@@ -36,6 +37,13 @@ const IN_USE = [
     url: "https://www.autio.cl",
     what: "A used-car marketplace in Chile. Private sellers and dealerships point their own agent at a listing, a visit or a buyer conversation.",
   },
+];
+
+/** The three channels of the core, as a person meets them (the spec's "The idea in three channels"). */
+const HOW = [
+  { title: "The app says what you see", text: "As identifiers only: the screen, the period, the row you selected. Never the numbers or the text on it." },
+  { title: "You point", text: "Drag your agent's mark from the app's page onto a bar, a row or a paragraph. On a phone, tap it there." },
+  { title: "Your agent reads it", text: "It gets the exact tool call that reads what you pointed at, and calls it with the access you gave it." },
 ];
 
 /** Whether the visitor asks for less motion, kept current. */
@@ -140,7 +148,7 @@ export function Landing() {
         <div className="landing-path">
           <span className="landing-who">For people using an AI agent</span>
           <h3>Try it</h3>
-          <p>Use your own agent on two demo apps. A few minutes, made-up data, no account.</p>
+          <p>Connect your own agent to two demo apps and point it at a chart. A few minutes, made-up data, no account.</p>
           <div className="row">
             <a className="landing-cta" href={SITE_PAGES.try.path}>Try the demo →</a>
           </div>
@@ -148,12 +156,25 @@ export function Landing() {
         <div className="landing-path">
           <span className="landing-who">For people building an app</span>
           <h3>Build it</h3>
-          <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app to their agent.</p>
+          <p>Make your app pointable. It serves its own MCP endpoint, and what the person points at goes from your app straight to their agent.</p>
           <div className="row">
             <a className="landing-cta ghost" href={SITE_PAGES.build.path}>Add APC to your app →</a>
           </div>
         </div>
       </div>
+
+      <section>
+        <h2 className="landing-title">How it works</h2>
+        <ol className="landing-how">
+          {HOW.map((h, i) => (
+            <li key={h.title}>
+              <span className="landing-n">{i + 1}</span>
+              <b>{h.title}</b>
+              <p>{h.text}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
 
       <section>
         <h2 className="landing-title">In use</h2>
@@ -165,15 +186,20 @@ export function Landing() {
             </li>
           ))}
         </ul>
+        {DOCK_PRODUCT && (
+          <p className="landing-built">
+            Built on APC: <a href={DOCK_PRODUCT.url}>{DOCK_PRODUCT.name}</a>, a separate product that connects your agent once and lets you drag it onto any app that pairs with it.
+          </p>
+        )}
       </section>
 
       <section>
         <h2 className="landing-title">What your agent can and cannot see</h2>
         <ul className="landing-see">
-          <li>Only what you pointed at, in apps you paired, after you allowed it in the app and in the dock.</li>
+          <li>Only what you pointed at, in apps you connected it to yourself, with the access each app gave it.</li>
           <li>No screenshots and no screen sharing: each app answers with its own data, through its own tools.</li>
           <li>Each app keeps its data. The agent does the joining, in your conversation.</li>
-          <li>You can remove an agent, an app or a computer from the dock at any time, and start over on every site.</li>
+          <li>Revoke an agent in the app's own page at any time: it is cut off at once, and nobody else is called.</li>
         </ul>
       </section>
 

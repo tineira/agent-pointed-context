@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { SITE_CSP } from "./csp.ts";
 import { withByteRanges } from "./range.ts";
 import { viewPoint } from "./views.ts";
+import { MOVED_PAGES } from "../web/site-pages.ts";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -30,6 +31,13 @@ app.on(["GET", "HEAD"], "/media/*", async (c) => {
   // Assets ignore Range and omit Content-Length on HEAD. Fetch GET, then slice/strip the body.
   const asset = await c.env.ASSETS.fetch(request.method === "HEAD" ? new Request(request, { method: "GET" }) : request);
   return withByteRanges(request, asset);
+});
+// The pages that left with the Dock's profile (TIN-1061): a permanent redirect, so old links and search results land
+// on /build. A trailing slash is allowed, and the query string is kept.
+app.on(["GET", "HEAD"], "/build/*", (c, next) => {
+  const url = new URL(c.req.url);
+  const to = MOVED_PAGES[url.pathname.replace(/\/+$/, "")];
+  return to ? c.redirect(`${to}${url.search}`, 301) : next();
 });
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 

@@ -46,9 +46,18 @@ test("assets, media, Markdown, HEAD, errors and redirects are not page views", a
 });
 
 test("only the site's own pages are named; any other path is (other), never the visitor's text (review of #235)", async () => {
-  for (const [path, page] of [["/docs/zzz-not-a-page", "(other)"], ["/tryXYZ-secret", "(other)"], ["/build/x/y/z", "(other)"], ["/docs/%E2%9C%93", "(other)"], ["/docs/" + "a".repeat(5000), "(other)"], ["/try/", "/try"], ["/docs/spec/", "/docs/spec"], ["/", "/"], ["/build/dock", "/build/dock"], ["/docs/changelog", "/docs/changelog"]]) {
+  for (const [path, page] of [["/docs/zzz-not-a-page", "(other)"], ["/tryXYZ-secret", "(other)"], ["/build/x/y/z", "(other)"], ["/docs/%E2%9C%93", "(other)"], ["/docs/" + "a".repeat(5000), "(other)"], ["/try/", "/try"], ["/docs/spec/", "/docs/spec"], ["/", "/"], ["/build", "/build"], ["/docs/changelog", "/docs/changelog"]]) {
     const { points } = await visit(path, { headers: { "user-agent": CHROME } });
     assert.deepEqual(points.map((p) => [p.indexes[0], p.blobs[0]]), [[page, page]], path.slice(0, 40));
+  }
+});
+
+test("an old /build page answers a 301 to /build and counts no view (TIN-1061)", async () => {
+  for (const path of ["/build/dock", "/build/direct/", "/build/both"]) {
+    const { response, points } = await visit(`${path}?ref=x`, { headers: { "user-agent": CHROME } });
+    assert.equal(response.status, 301, path);
+    assert.equal(new URL(response.headers.get("location"), "https://apc.tineira.com").pathname + new URL(response.headers.get("location"), "https://apc.tineira.com").search, "/build?ref=x", path);
+    assert.deepEqual(points, [], path);
   }
 });
 

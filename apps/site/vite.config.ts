@@ -8,21 +8,6 @@ import { DOC_PAGES, EXAMPLES_DIR } from "./src/docs/pages.ts";
 import { staticDocFiles } from "./src/docs/static.ts";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
-/** A dev navigation must load Dock's own Vite client/module namespace on port 5200. */
-function dockLinks(): Plugin {
-  return {
-    name: "apc-site-dev-dock-links",
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        const path = new URL(req.url ?? "/", "http://localhost").pathname;
-        if (path !== "/dock" && !path.startsWith("/dock/") && path !== "/extension" && !path.startsWith("/extension/")) return next();
-        res.writeHead(302, { location: `http://localhost:5200${req.url}` });
-        res.end();
-      });
-    },
-  };
-}
-
 /**
  * The docs without JavaScript (TIN-914): each /docs page as HTML with its text in it (docs.html, docs/spec.html…,
  * which the asset server answers at /docs and /docs/spec), its Markdown at /docs/<page>.md, and /llms.txt,
@@ -45,14 +30,9 @@ function staticDocs(): Plugin {
   };
 }
 
-
 export default defineConfig({
-  plugins: [dockLinks(), staticDocs(), react(), cloudflare({ inspectorPort: false })],
+  plugins: [staticDocs(), react(), cloudflare({ inspectorPort: false })],
   build: { assetsDir: "site-assets" },
-  // Direct site development: the hub still answers these URLs, over HTTP only.
-  server: { origin: "http://localhost:5202", port: 5202, strictPort: true, proxy: {
-    "/api": "http://localhost:5200", "/assets": "http://localhost:5200",
-    "/sw.js": "http://localhost:5200", "/manifest.webmanifest": "http://localhost:5200",
-    "/icon": "http://localhost:5200", "/favicon": "http://localhost:5200",
-  } },
+  // The site asks nothing of a hub any more (TIN-1061): it serves every URL it links.
+  server: { origin: "http://localhost:5202", port: 5202, strictPort: true },
 });

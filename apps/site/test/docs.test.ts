@@ -164,6 +164,7 @@ test("the link check finds what is broken", () => {
     "/docs/spec#nope: no heading #nope on /docs/spec",
     "/docs/nope: no such page on the site",
     "/nope: no such page on the site",
+    "/dock: no such page on the site",
     "../../NOPE.md: no NOPE.md in the repo",
     "http://x.example: not https",
     "include orders-app.ts#nope: no such region",
@@ -216,7 +217,7 @@ test("the docs are static assets, and the assets keep their frame protection", (
   // straight to the built files (ASSETS), so a doc page is still the static HTML the build writes.
   const worker = read("apps/site/src/worker/index.ts");
   assert.match(worker, /^app\.all\("\*", \(c\) => c\.env\.ASSETS\.fetch\(c\.req\.raw\)\);$/m);
-  assert.deepEqual([...worker.matchAll(/^app\.(?:get|post|all|on)\(/gm)].length, 2, "the /media route and the pass-through, nothing else");
+  assert.deepEqual([...worker.matchAll(/^app\.(?:get|post|all|on)\(/gm)].length, 3, "the /media route, the redirects of the old /build pages and the pass-through, nothing else");
   const headers = read("apps/site/public/_headers");
   assert.match(headers, /^\/\*$/m);
   assert.match(headers, /Content-Security-Policy: [^\n]*\bframe-ancestors 'none'/);

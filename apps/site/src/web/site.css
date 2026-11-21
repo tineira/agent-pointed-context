@@ -144,3 +144,9 @@ main.docs { max-width: 860px; margin: 0 auto; padding: 20px 16px 48px; gap: 18px
 .docs-body blockquote { margin: 0 0 14px; padding: 8px 14px; border-left: 3px solid var(--line); color: var(--muted); }
 .docs-body blockquote p { color: var(--muted); }
 .docs-foot { display: grid; gap: 6px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; }
+/* After the Dock left (TIN-1061): How it works on the landing, and the one line that names the Dock. */
+.landing-how { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.landing-how li { display: flex; flex-direction: column; gap: 6px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.landing-how b { color: var(--fg); }
+.landing-how p { font-size: 14px; }
+.landing-built { margin-top: 12px; font-size: 13px; }
