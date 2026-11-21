@@ -1,10 +1,10 @@
 /**
  * What every page of the site shares: the moving dot field + haze backdrop, the sticky header
  * (brand, nav: Try it, Build it, Docs, Spec, GitHub, plus the theme toggle), the footer
- * (keeping Spec, Payload specification, Paper, Version 1), numbered steps and code blocks.
+ * (keeping Spec, Payload specification, Paper, Version 1).
  * It asks nothing of any server: the site holds no visitor state of its own.
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef } from "react";
 import { AgentMark } from "./agent-mark.tsx";
 import { createDotField, type CanvasLike } from "./dot-field.ts";
 import { DOCS, REPO, SITE_PAGES, footerLinks, type SitePage } from "./site-pages.ts";
@@ -143,26 +143,3 @@ export function SiteFooter(props: { onPage?: readonly string[] }) {
   );
 }
 
-export function Steps(props: { steps: { title: string; text: ReactNode }[] }) {
-  return (
-    <ol className="landing-steps">
-      {props.steps.map((s, i) => (
-        <li key={s.title}>
-          <span className="landing-n">{i + 1}</span>
-          <div>
-            <b>{s.title}</b>
-            <p>{s.text}</p>
-          </div>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-export function Code(props: { children: string; label?: string }) {
-  return (
-    <pre className="landing-code" aria-label={props.label}>
-      <code>{props.children}</code>
-    </pre>
-  );
-}

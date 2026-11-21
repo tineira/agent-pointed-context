@@ -1,50 +1,411 @@
-/* Styles for /try and /build pages: steps, demo app cards, starter callout, code blocks,
-   and developer reference lists. */
+/* Styles for the /try and /build pages (TIN-1068, from the winning prototype's #/try and #/build views, round 3):
+   the page heroes, the walk's numbered steps beside the two app cards, the starter question, the numbered rows
+   beside the payload, the packages and the guides. Tokens and shared chrome come from shell.css. */
 
-.landing-sub {
-  max-width: 680px;
-  margin-bottom: 20px;
-  color: var(--muted);
-}
+/* ───────── shared page hero (both pages) ───────── */
 
-.landing-back {
-  margin: 0 0 14px;
-  font-size: 14.5px;
-  color: var(--muted);
-}
-
-.landing-back a {
+.page-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 500 12.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--accent-text);
 }
 
-.landing-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  gap: 14px;
+.page-eyebrow i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
-.landing-steps li {
+.page-hero h1 {
+  font-size: clamp(38px, 5.2vw, 58px);
+  line-height: 1.03;
+  letter-spacing: var(--track);
+  margin: 16px 0 18px;
+  max-width: 13em;
+}
+
+.page-lede {
+  max-width: 36em;
+  font-size: 19px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.page-cta-row {
   display: flex;
   gap: 12px;
-  padding: 18px;
-  border: 1px solid var(--line2);
-  border-radius: 14px;
-  background: var(--card);
+  margin-top: 28px;
+  flex-wrap: wrap;
 }
 
-.landing-steps b {
+.page-back {
+  font-size: 14.5px;
+  color: var(--muted);
+  margin: 0 0 22px;
+}
+
+.page-back a {
   color: var(--fg);
 }
 
-.landing-steps p {
-  font-size: 14.5px;
-  margin-top: 4px;
+/* ───────── /try: the walk ───────── */
+
+.try-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
 }
 
-.landing-steps code {
+.try-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.try-step {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 18px;
+  padding-bottom: 30px;
+  position: relative;
+}
+
+.try-step::before {
+  content: "";
+  position: absolute;
+  left: 21px;
+  top: 46px;
+  bottom: 0;
+  border-left: 1px dashed var(--line2);
+}
+
+.try-step:last-child::before {
+  display: none;
+}
+
+.try-step .n {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--accent-line);
+  color: var(--accent-text);
+  font: 600 14px var(--mono);
+  background: var(--bg);
+}
+
+.try-step b {
+  display: block;
+  font-size: 21px;
+  letter-spacing: -0.02em;
+  margin: 7px 0 6px;
+  color: var(--fg);
+}
+
+.try-step p {
+  color: var(--muted);
+  font-size: 16px;
+}
+
+/* Room for the "Pulse already connected" walk (TIN-1072 fills it from Pulse; nothing here renders it yet):
+   steps done in the hero get a checked disc and quieter (solid --muted, never opacity) titles, the first open one is
+   marked "start here". The check is --btn-fg on --ok; apps/site/test/pages.test.ts holds every pair to 4.5:1 (text) and 3:1 (check). */
+
+.try-step.done .n {
+  font-size: 0;
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.try-step.done .n::after {
+  content: "";
+  width: 6px;
+  height: 13px;
+  margin-top: -3px;
+  border: solid var(--btn-fg);
+  border-width: 0 2.4px 2.4px 0;
+  transform: rotate(45deg);
+}
+
+.try-step.done b,
+.try-step.done p {
+  color: var(--muted);
+}
+
+.try-step.next .n {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--btn-fg);
+}
+
+.try-step b::after {
+  font: 500 11px var(--mono);
+  letter-spacing: 0.04em;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  vertical-align: 3px;
+}
+
+.try-step.done b::after {
+  content: "done in the hero";
+  border: 1px solid var(--line2);
+  color: var(--muted);
+}
+
+.try-step.next b::after {
+  content: "start here";
+  background: var(--chip);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-line);
+}
+
+.try-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.try-app {
+  border: 1px solid var(--line2);
+  border-radius: 18px;
+  background: var(--card);
+  padding: 22px 24px;
+}
+
+.try-app .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.try-app b {
+  font-size: 21px;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+.try-app > p {
+  color: var(--muted);
+  font-size: 15.5px;
+  margin: 8px 0 14px;
+}
+
+.try-links {
+  display: flex;
+  gap: 18px;
+  font-size: 14.5px;
+  flex-wrap: wrap;
+}
+
+.try-links a {
+  color: var(--fg);
+  text-underline-offset: 4px;
+  text-decoration-color: var(--line2);
+}
+
+.try-links a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.try-host {
+  font: 11.5px var(--mono);
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* Room for the connected Pulse card (TIN-1072): a green border, a check and "<agent> connected". */
+
+.try-app.on {
+  border-color: var(--ok);
+}
+
+.try-conn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: 500 12px var(--mono);
+  color: var(--ok);
+}
+
+.try-conn i {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ok);
+  position: relative;
+}
+
+.try-conn i::after {
+  content: "";
+  position: absolute;
+  left: 5.5px;
+  top: 3px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--btn-fg);
+  border-width: 0 1.8px 1.8px 0;
+  transform: rotate(45deg);
+}
+
+.try-wires {
+  height: 54px;
+  margin: -8px 0;
+  display: block;
+  width: 100%;
+}
+
+.try-wires path {
+  fill: none;
+  stroke: var(--accent-line);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 6;
+  animation: try-dash 1.4s linear infinite;
+}
+
+@keyframes try-dash {
+  to {
+    stroke-dashoffset: -11;
+  }
+}
+
+.try-joiner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  font: 12px var(--mono);
+  color: var(--muted);
+  text-align: center;
+  padding: 0 8px;
+}
+
+/* ───────── /try: the starter question and the Revoke note ───────── */
+
+.try-starter {
+  margin-top: 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, var(--accent-soft), transparent),
+    var(--card);
+  padding: 34px 38px;
+  display: grid;
+  grid-template-columns: 210px 1fr 1fr;
+  gap: 30px;
+  align-items: start;
+}
+
+.try-starter h3 {
+  font-size: 26px;
+  line-height: 1.1;
+  letter-spacing: var(--track);
+  margin-top: 10px;
+}
+
+.try-move {
+  font-size: 15.5px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.try-move a {
+  color: var(--fg);
+}
+
+.try-move small {
+  display: block;
+  font: 500 11.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.try-ask {
+  margin-top: 12px;
+  display: inline-block;
+  background: var(--ink-bubble);
+  color: var(--ink-fg);
+  padding: 9px 14px;
+  border-radius: 13px 13px 13px 4px;
+  font-size: 15.5px;
+}
+
+.try-aside {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.try-aside b {
+  color: var(--fg);
+}
+
+/* ───────── /build: the rows beside the payload ───────── */
+
+.build-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 56px;
+  margin-top: 6px;
+  align-items: start;
+}
+
+.build-h2 {
+  font-size: 32px;
+  letter-spacing: -0.04em;
+  margin: 0 0 18px;
+}
+
+.build-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: build-step;
+}
+
+.build-step {
+  border-top: 1px solid var(--line2);
+  counter-increment: build-step;
+  padding: 18px 0 18px 46px;
+  position: relative;
+}
+
+.build-step::before {
+  content: counter(build-step, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 21px;
+  color: var(--accent-text);
+  font: 12.5px var(--mono);
+}
+
+.build-step h3 {
+  font-size: 21px;
+  letter-spacing: -0.03em;
+}
+
+.build-step p {
+  font-size: 15.5px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.build-step code,
+.build-note code {
   font: 12.5px var(--mono);
   padding: 1px 5px;
   border-radius: 5px;
@@ -52,6 +413,117 @@
   color: var(--code-fg);
   overflow-wrap: anywhere;
 }
+
+.build-code {
+  background: var(--ink);
+  color: var(--ink-fg);
+  border: 1px solid var(--ink-line);
+  border-radius: 18px;
+  padding: 26px 28px;
+  min-width: 0;
+  position: sticky;
+  top: 92px;
+}
+
+.build-code-idx {
+  color: var(--ink-accent);
+  font: 500 12px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.build-code h3 {
+  font-size: 30px;
+  letter-spacing: -0.04em;
+  margin: 10px 0 8px;
+  color: var(--paper);
+}
+
+.build-code p {
+  color: var(--ink-muted);
+  font-size: 15.5px;
+}
+
+.build-code p a {
+  color: var(--ink-accent);
+}
+
+.build-code pre {
+  margin: 16px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--ink-line2);
+  font: 12.8px/1.6 var(--mono);
+  color: var(--ink-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ───────── /build: packages, guides, the note, the license ───────── */
+
+.build-packages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin-top: 20px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line2);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.build-packages b {
+  color: var(--fg);
+  margin-right: 8px;
+}
+
+.build-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px;
+  border: 1px solid var(--line2);
+  border-radius: 99px;
+  background: var(--chip);
+  font: 12px var(--mono);
+  color: var(--muted);
+}
+
+.build-guides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 30px;
+  margin-top: 22px;
+}
+
+.build-guides a {
+  font-size: 15.5px;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--accent-line);
+  color: var(--fg);
+  transition: color 0.2s;
+}
+
+.build-guides a:hover {
+  color: var(--accent-text);
+}
+
+.build-note {
+  font-size: 15px;
+  color: var(--muted);
+  margin-top: 26px;
+  max-width: 60em;
+}
+
+.build-lic {
+  font-size: 13.5px;
+  color: var(--muted);
+  margin: 14px 0 8px;
+}
+
+/* ───────── shared with the landing (How it works numbers its steps the same way) ───────── */
 
 .landing-n {
   display: grid;
@@ -65,171 +537,82 @@
   font: 600 13px var(--mono);
 }
 
-.landing-try-cta {
-  margin: 24px 0;
+/* ───────── responsive: holds at 375 px with no horizontal scroll ───────── */
+
+@media (max-width: 980px) {
+  .try-grid,
+  .build-grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+
+  .try-starter {
+    grid-template-columns: 1fr;
+    padding: 24px;
+    gap: 22px;
+  }
+
+  .try-starter h3 {
+    margin-top: 6px;
+  }
+
+  .build-code {
+    position: static;
+  }
 }
 
-.landing-try-cta .row {
-  gap: 12px;
-}
+@media (max-width: 760px) {
+  .page-hero h1 {
+    font-size: clamp(34px, 9vw, 44px);
+  }
 
-.landing-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 16px;
-}
+  .page-lede {
+    font-size: 17px;
+  }
 
-.landing-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 20px;
-  border: 1px solid var(--line2);
-  border-radius: 16px;
-  background: var(--card);
-}
+  .try-step {
+    grid-template-columns: 36px 1fr;
+    gap: 14px;
+    padding-bottom: 22px;
+  }
 
-.landing-card b {
-  color: var(--fg);
-  font-size: 18px;
-}
+  .try-step::before {
+    left: 17px;
+    top: 40px;
+  }
 
-.landing-card .row.small {
-  gap: 16px;
-  font-size: 14.5px;
-  margin-top: auto;
-}
+  .try-step .n {
+    width: 36px;
+    height: 36px;
+    font-size: 13px;
+  }
 
-.landing-starter {
-  margin-top: 22px;
-  padding: 20px 22px;
-  border: 2px solid var(--accent);
-  border-radius: 16px;
-  background: var(--card);
-}
+  .try-step b {
+    font-size: 19px;
+  }
 
-.landing-starter p {
-  margin: 8px 0 0;
-  font-size: 16px;
-  color: var(--fg);
-}
+  .try-app {
+    padding: 18px 20px;
+  }
 
-.landing-asides {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-  gap: 8px 24px;
-  margin-top: 20px;
-}
+  .try-host {
+    margin-left: 0;
+    width: 100%;
+  }
 
-.landing-asides p {
-  margin: 0;
-  font-size: 14px;
-  color: var(--muted);
-}
+  .build-h2 {
+    font-size: 27px;
+  }
 
-.landing-asides b {
-  color: var(--fg);
-  font-weight: 600;
-}
+  .build-step {
+    padding-left: 34px;
+  }
 
-.landing-block {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+  .build-code {
+    padding: 20px;
+  }
 
-.landing .landing-h2 {
-  margin: 0;
-  font-size: 22px;
-  font-weight: var(--hw);
-  line-height: 1.25;
-  color: var(--fg);
-  letter-spacing: -0.02em;
-}
-
-.landing-block .landing-sub {
-  margin-bottom: 4px;
-}
-
-.landing-list {
-  margin: 0;
-  padding-left: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 780px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
-.landing-list b {
-  color: var(--fg);
-}
-
-.landing-list code,
-.landing-sub code,
-.landing-starter code {
-  font: 13px var(--mono);
-  padding: 1px 5px;
-  border-radius: 5px;
-  background: var(--code-bg);
-  color: var(--code-fg);
-  overflow-wrap: anywhere;
-}
-
-.landing-example-caption {
-  margin: 4px 0 8px;
-  font-size: 15px;
-}
-
-.landing-code {
-  margin: 0;
-  padding: 18px 20px;
-  border: 1px solid var(--ink-line);
-  border-radius: 14px;
-  background: var(--ink);
-  color: var(--ink-fg);
-  font: 13px/1.55 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.landing-refgroups {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  margin-top: 12px;
-}
-
-.landing-refs {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
-  gap: 12px;
-}
-
-.landing-refs a {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  height: 100%;
-  padding: 16px;
-  border: 1px solid var(--line2);
-  border-radius: 14px;
-  background: var(--card);
-  color: var(--fg);
-  text-decoration: none;
-  transition: border-color 0.2s, background-color 0.2s;
-}
-
-.landing-refs a:hover {
-  border-color: var(--accent-line);
-  background: var(--card-solid);
-}
-
-.landing-refs span {
-  font-size: 13.5px;
-  color: var(--muted);
+  .build-code h3 {
+    font-size: 25px;
+  }
 }
