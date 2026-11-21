@@ -64,7 +64,8 @@ export function SiteBackdrop() {
   );
 }
 
-export function SiteHeader(props: { page: SitePage | "docs" }) {
+/** `docsAt`: on a docs page, the header link that is exactly this page (docsHeaderCurrent). */
+export function SiteHeader(props: { page: SitePage | "docs"; docsAt?: string | null }) {
   const here = section(props.page);
   const { theme, toggleTheme } = useTheme();
   const nextLabel = theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme";
@@ -79,8 +80,8 @@ export function SiteHeader(props: { page: SitePage | "docs" }) {
         <nav className="site-nav-links" aria-label="Site">
           <a href={SITE_PAGES.try.path} aria-current={here === "try" ? "page" : undefined}>Try it</a>
           <a href={SITE_PAGES.build.path} aria-current={here === "build" ? "page" : undefined}>Build it</a>
-          <a href={DOCS} aria-current={props.page === "docs" ? "page" : undefined}>Docs</a>
-          <a href={`${DOCS}/spec`}>Spec</a>
+          <a href={DOCS} aria-current={props.docsAt === DOCS ? "page" : undefined}>Docs</a>
+          <a href={`${DOCS}/spec`} aria-current={props.docsAt === `${DOCS}/spec` ? "page" : undefined}>Spec</a>
           <a href={REPO} target="_blank" rel="noopener">
             GitHub <span aria-hidden="true">↗</span>
           </a>

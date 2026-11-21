@@ -70,3 +70,13 @@ export const FOOTER_LINKS = [
 export function footerLinks(onPage: readonly string[]): { label: string; href: string }[] {
   return FOOTER_LINKS.filter((l) => !onPage.includes(l.href));
 }
+
+/**
+ * Which header link is the current page on a docs page: only the link whose target is exactly the URL (Docs on /docs,
+ * Spec on /docs/spec), so no two links of the header, or of the header and the docs' own navigation, are both current
+ * for a page that is another one (TIN-1069). Null for every other docs page.
+ */
+export function docsHeaderCurrent(pathname: string): string | null {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return path === DOCS || path === `${DOCS}/spec` ? path : null;
+}

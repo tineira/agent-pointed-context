@@ -14,7 +14,7 @@ import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { exampleRegion, fragmentTarget, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "../docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, type DocPage } from "../docs/pages.ts";
 import { docMarkdownPath } from "../docs/static.ts";
-import { DOCS } from "./site-pages.ts";
+import { DOCS, docsHeaderCurrent } from "./site-pages.ts";
 import { SiteFooter, SiteHeader } from "./site.tsx";
 import overview from "../docs/pages/overview.md?raw";
 import spec from "../docs/pages/spec.md?raw";
@@ -121,7 +121,7 @@ export function Docs({ path }: { path: string }) {
   return (
     <div className="site-shell">
       <div className="site-page">
-        <SiteHeader page="docs" />
+        <SiteHeader page="docs" docsAt={docsHeaderCurrent(path)} />
         <main className="docs">
           <Nav current={page} />
           <aside className="docs-standard" role="note">

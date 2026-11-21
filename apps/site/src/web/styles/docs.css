@@ -76,6 +76,7 @@ main.docs {
   text-transform: none;
   letter-spacing: normal;
   line-height: 1.3;
+  /* Clear of the sticky header: one row on a desktop, three rows (brand, toggle, links) on a phone. */
   scroll-margin-top: 84px;
 }
 
@@ -215,4 +216,12 @@ main.docs {
   padding-top: 14px;
   border-top: 1px solid var(--line);
   font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .docs-body h2,
+  .docs-body h3,
+  .docs-body h4 {
+    scroll-margin-top: 112px;
+  }
 }

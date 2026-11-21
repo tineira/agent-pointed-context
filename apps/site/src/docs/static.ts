@@ -9,7 +9,7 @@
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { ANCHOR_ALIASES, exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "./markdown.ts";
 import { DOC_PAGES, EXAMPLES_DIR, type DocPage } from "./pages.ts";
-import { DOCS, footerLinks, SITE_PAGES } from "../web/site-pages.ts";
+import { DOCS, docsHeaderCurrent, footerLinks, SITE_PAGES } from "../web/site-pages.ts";
 
 /** Where a page's Markdown is served: /docs/spec.md for /docs/spec, /docs/overview.md for /docs itself. */
 export function docMarkdownPath(page: DocPage): string {
@@ -92,12 +92,13 @@ function agentMarkHtml(size: number, id: string): string {
 }
 
 /** The site's header (SiteHeader in src/web/site.tsx, on the docs page): the same markup, so a page with no script wears the same frame. Its theme toggle waits for the script, which replaces this page. */
-export function siteHeaderHtml(): string {
+export function siteHeaderHtml(at: string | null = null): string {
+  const cur = (href: string) => (at === href ? ' aria-current="page"' : "");
   const nav = [
     `<a href="${SITE_PAGES.try.path}">Try it</a>`,
     `<a href="${SITE_PAGES.build.path}">Build it</a>`,
-    `<a href="${DOCS}" aria-current="page">Docs</a>`,
-    `<a href="${DOCS}/spec">Spec</a>`,
+    `<a href="${DOCS}"${cur(DOCS)}>Docs</a>`,
+    `<a href="${DOCS}/spec"${cur(`${DOCS}/spec`)}>Spec</a>`,
     `<a href="${REPO}" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>`,
   ].join("");
   const toggle =
@@ -131,7 +132,7 @@ export function docPageHtml(page: DocPage, source: string, examples: Record<stri
   const nav = DOC_PAGES.map((p) => `<a href="${p.path}"${p === page ? ' aria-current="page"' : ""}>${escapeHtml(p.nav)}</a>`).join("");
   return [
     `<div class="site-shell"><div class="site-page">`,
-    siteHeaderHtml(),
+    siteHeaderHtml(docsHeaderCurrent(page.path)),
     `<main class="docs">`,
     `<nav class="docs-nav" aria-label="Docs">${nav}</nav>`,
     `<aside class="docs-standard" role="note"><b>APC ${APC_STANDARD_VERSION}.</b> The standard is frozen and changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.</aside>`,

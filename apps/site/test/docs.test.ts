@@ -207,7 +207,7 @@ test("the docs page has a source for every page, and the static and React banner
 
 test("every page of the site (its top bar) links to the docs", () => {
   // The top bar has Docs on every page (TIN-627), so the footers, which never repeat their page, do not.
-  assert.match(read("apps/site/src/web/site.tsx"), /<a href=\{DOCS\}[^>]*>Docs<\/a>/);
+  assert.match(read("apps/site/src/web/site.tsx"), /<a href=\{DOCS\} aria-current=\{props\.docsAt === DOCS \? "page" : undefined\}>Docs<\/a>/);
   assert.match(read("apps/site/src/web/landing.tsx"), /<SiteHeader page="landing" \/>/);
 });
 
@@ -247,7 +247,7 @@ for (const { page, blocks } of pages) {
   test(`${page.path} reads with a plain GET: its whole text in the HTML, and its Markdown beside it`, () => {
     const html = built.get(docHtmlFile(page));
     assert.ok(html, `no ${docHtmlFile(page)} in the build`);
-    assert.ok(html.includes('<div id="root"><div class="site-shell">') && html.includes('<main class="docs">'), "the text is in #root, inside the site's frame");
+    assert.ok(/<div id="root"><div class="site-shell"><div class="site-page">\s*<header class="site-nav">[^]*<\/header>\s*<main class="docs">[^]*<article class="docs-body">[^]*<\/article>[^]*<\/main>\s*<footer class="site-foot">/.test(html), "the text is in #root, inside the site's frame");
     assert.ok(html.includes('<script type="module" src="/site-assets/x.js"></script>'), "the page's script stays, so it still renders itself");
     assert.ok(html.includes(`<link rel="alternate" type="text/markdown" href="${docMarkdownPath(page)}" />`), "the page names its Markdown");
     const text = textOf(html);
