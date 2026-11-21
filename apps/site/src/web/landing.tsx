@@ -2,14 +2,13 @@
  * The landing of apc.tineira.com (TIN-420, TIN-605, TIN-620, TIN-627; after the Dock left, TIN-1061): what APC is,
  * from the hero alone (a line and a short silent clip of the drag), the agents it works with, then one decision:
  * Try it (/try, for people using an AI agent) or Build it (/build, for people building an app). How it works in
- * three lines, the apps that use it, and "What your agent can and cannot see" close it. The Dock, a separate
- * product built on APC, is one quiet line under In use.
+ * three lines and "What your agent can and cannot see" close it.
  */
 import { useEffect, useState } from "react";
 import { AgentIcon } from "./agent-icon.tsx";
 import { clipFallback, type ClipError } from "./clip-fallback.ts";
 import { SiteFooter, SiteHeader } from "./site.tsx";
-import { DOCK_PRODUCT, SITE_PAGES, VIDEO } from "./site-pages.ts";
+import { SITE_PAGES, VIDEO } from "./site-pages.ts";
 
 /**
  * The hero clip: rendered from the November 2026 promo's own Remotion scene (the media repo), silent, without
@@ -25,18 +24,6 @@ const AGENTS = [
   { brand: "openai", name: "ChatGPT" },
   { brand: "cursor", name: "Cursor" },
   { brand: "grok", name: "Grok" },
-];
-
-/**
- * Apps that serve APC in production and pass the standard's conformance live (TIN-804): each line was confirmed by
- * the app's owner. An app is listed only after `apc-conformance` passes against its live hosts with a real grant.
- */
-const IN_USE = [
-  {
-    name: "Autio",
-    url: "https://www.autio.cl",
-    what: "A used-car marketplace in Chile. Private sellers and dealerships point their own agent at a listing, a visit or a buyer conversation.",
-  },
 ];
 
 /** The three channels of the core, as a person meets them (the spec's "The idea in three channels"). */
@@ -174,23 +161,6 @@ export function Landing() {
             </li>
           ))}
         </ol>
-      </section>
-
-      <section>
-        <h2 className="landing-title">In use</h2>
-        <ul className="landing-apps">
-          {IN_USE.map((app) => (
-            <li key={app.name}>
-              <a href={app.url}>{app.name}</a>
-              <span>{app.what}</span>
-            </li>
-          ))}
-        </ul>
-        {DOCK_PRODUCT && (
-          <p className="landing-built">
-            Built on APC: <a href={DOCK_PRODUCT.url}>{DOCK_PRODUCT.name}</a>, a separate product that connects your agent once and lets you drag it onto any app that pairs with it.
-          </p>
-        )}
       </section>
 
       <section>

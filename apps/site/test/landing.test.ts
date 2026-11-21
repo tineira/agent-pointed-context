@@ -72,16 +72,6 @@ test("a clip that fails falls back: a failed WebM to the MP4, and no playable cl
   assert.match(video, /onError=\{\(e\) => e\.target === e\.currentTarget && fallBack\(\{ on: "video", currentSrc: e\.currentTarget\.currentSrc \}\)\}/);
 });
 
-test("In use lists only apps that pass conformance live, each with its public site", () => {
-  const start = landing.indexOf("const IN_USE = [");
-  assert.ok(start >= 0, "the landing has an IN_USE list");
-  const list = landing.slice(start, landing.indexOf("];", start));
-  assert.match(list, /name: "Autio",\s*url: "https:\/\/www\.autio\.cl",/);
-  for (const url of list.matchAll(/url: "([^"]+)"/g)) assert.match(url[1]!, /^https:\/\//, "an https link");
-  assert.match(landing, /<h2 className="landing-title">In use<\/h2>/);
-  assert.ok(landing.indexOf("In use</h2>") < landing.indexOf(">What your agent can and cannot see</h2>"), "In use comes before the closing section");
-});
-
 test("the clip's button follows the video and says what it does", () => {
   assert.match(video, /onPlay=\{\(\) => setPaused\(false\)\}/);
   assert.match(video, /onPause=\{\(\) => setPaused\(true\)\}/);
@@ -158,12 +148,17 @@ test("the top bar leads to the pages from everywhere: Try it, Build it, Docs and
   }
 });
 
-test("the Dock is a separate product: named once on the landing and once on /build, never in the navigation", () => {
-  assert.ok(DOCK_PRODUCT === null || DOCK_PRODUCT.url.startsWith("https://"));
-  assert.equal(landing.match(/DOCK_PRODUCT\.url/g)?.length, 1);
+test("neither the Dock nor Autio is named on the landing, /try or /build, and nothing of the Dock is in the navigation", () => {
+  assert.equal(DOCK_PRODUCT, null);
   assert.equal(build.match(/DOCK_PRODUCT\.url/g)?.length, 1);
-  assert.match(landing, /\{DOCK_PRODUCT && \(/, "null hides it");
-  assert.doesNotMatch(tryPage.slice(tryPage.indexOf("*/")), /dock/i, "the demo needs no dock");
+  const stripComments = (source: string) =>
+    source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|\s)\/\/.*$/gm, "")
+      .replace(/\{DOCK_PRODUCT && <>[\s\S]*?<\/>\}/g, "");
+  for (const [name, source] of [["landing.tsx", landing], ["try.tsx", tryPage], ["build.tsx", build]] as const) {
+    assert.doesNotMatch(stripComments(source), /\b(Autio|Dock)\b/i, `${name} names Autio or Dock outside comments`);
+  }
   for (const source of [landing, tryPage, build, site]) assert.doesNotMatch(source, /href="\/dock|href="\/extension|DOCK_DESKTOP|Dock for Windows|Pulse for Windows/);
 });
 

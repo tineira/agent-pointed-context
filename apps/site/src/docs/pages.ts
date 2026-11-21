@@ -38,5 +38,5 @@ export function isDocsPath(pathname: string): boolean {
   return pathname === DOCS_ROOT || pathname.startsWith(`${DOCS_ROOT}/`);
 }
 
-/** The site's other pages a docs page may link to (served by the site or V1). */
-export const SITE_PATHS: readonly string[] = ["/", "/try", "/build", "/v1/", "/.well-known/apc.json"];
+/** The site's other pages a docs page may link to (served by the site, Dock or V1). */
+export const SITE_PATHS: readonly string[] = ["/", "/try", "/build", "/build/direct", "/build/dock", "/build/both", "/dock", "/extension", "/v1/", "/.well-known/apc.json"];

@@ -164,7 +164,6 @@ test("the link check finds what is broken", () => {
     "/docs/spec#nope: no heading #nope on /docs/spec",
     "/docs/nope: no such page on the site",
     "/nope: no such page on the site",
-    "/dock: no such page on the site",
     "../../NOPE.md: no NOPE.md in the repo",
     "http://x.example: not https",
     "include orders-app.ts#nope: no such region",

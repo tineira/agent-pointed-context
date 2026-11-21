@@ -19,7 +19,7 @@ export const V1 = "/v1/";
  * The Dock, a separate product built on APC (TIN-930): one agent connection that follows the person across APC
  * apps. Its home is not settled (TIN-1061); null hides the line that names it.
  */
-export const DOCK_PRODUCT: { name: string; url: string } | null = { name: "Dock", url: "https://apc.tineira.com/dock" };
+export const DOCK_PRODUCT: { name: string; url: string } | null = null;
 
 export type SitePage = "landing" | "try" | "build";
 

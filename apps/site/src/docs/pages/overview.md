@@ -12,15 +12,20 @@ An app that speaks APC gives every agent connected to it over the [Model Context
 
 Because it is your own agent, it already knows what the app does not: your files, your other tools, your memory. It joins them in your conversation; the app never sees them.
 
-## How an agent connects
+## Two ways to connect
 
-Your agent connects to each app's own MCP address, one per app, and you point it by dragging its mark from the app's agent bar. The data goes from the app straight to your agent: nothing sits in between. An app makes one address per agent, lists your agents in its own page, and cuts one off at once when you revoke it there.
+An app offers one profile or both. The core (the three channels, the two APC tools, revoke) is the same on each.
+
+| | Direct | Dock |
+|---|---|---|
+| Your agent connects to | the app's own MCP URL, one per app | your agent dock, once |
+| You point it by | dragging its mark from the app's agent bar | dragging it from your dock onto any app you paired |
+| The data goes | from the app to your agent | from the app through your dock to your agent |
+| Good for | one app, no third party in the path | one agent that follows you across apps |
 
 On a phone there is nothing to drag from, so every app shows its agents in its own page, and a finger pins with a tap.
 
-`apc.json` names the ways an app accepts agents in `profiles`, an open list. APC defines `"direct"`, the one above. A profile it does not define, such as the Dock's `"dock"`, is specified by whoever defines it, in a document of its own.
-
-You can try it at [apc.tineira.com](/try): connect your agent to Pulse and Signals, the two demo apps.
+You can try both at [apc.tineira.com](/): open your [dock](/dock), or connect directly to Signals, one of the two demo apps.
 
 ## Who it is for
 
@@ -30,15 +35,15 @@ You can try it at [apc.tineira.com](/try): connect your agent to Pulse and Signa
 
 ## Where to read next
 
-- [The spec](/docs/spec): the core, how agents connect, `apc.json`, untrusted marking, and how versions work.
-- [Integrate your app in an afternoon](/docs/integrate): with code that compiles against the packages.
-- [The UX guide](/docs/ux): how the reference software shows agents in a page (the pet, the pin badge). Non-normative.
+- [The spec](/docs/spec): the core, the two profiles, `apc_link`, `apc.json`, the hub's trust model, and how versions work.
+- [Integrate your app in an afternoon](/docs/integrate): Direct first, then Dock, with code that compiles against the packages.
+- [The UX guide](/docs/ux): how the reference software shows agents in a page (the pet, the pin badge, the pairing cards). Non-normative.
 - [Conformance](/docs/conformance): what the suite checks, and how to run it.
 - [For agents](/docs/agents): instructions, tools, `then`, `attention`, and untrusted marking.
 - [The standard's changelog](/docs/changelog): every change to the contract, version by version.
 
 ## A frozen standard, in the open
 
-The standard is frozen and changes only by the [versioning and compatibility policy](/docs/spec#versioning-and-compatibility), and these docs name the version they describe. 2.0 is the interaction standard alone: the connection half that 1.1 to 1.3 marked moved, word for word, to the Dock protocol, which binds every party that implements the Dock. The code is at [github.com/tineira/agent-pointed-context](https://github.com/tineira/agent-pointed-context) (MIT); these docs and the spec are CC BY 4.0. To propose a change to the contract, open a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
+The standard is frozen and changes only by the [versioning and compatibility policy](/docs/spec#versioning-and-compatibility), and these docs name the version they describe. From 1.1 its connection half is being deprecated, in instalments, and moves unchanged to a Dock protocol of its own. 1.1 marks the first instalment — the Dock profile, pairing clauses of `apc.json`, the hub's trust model bar the marking of what an unverified app gives, and the pairing error codes — and nothing in it changes before a 2.0 removes it, so an app that conforms today goes on conforming. [What 1.1 deprecates](/docs/spec#what-11-deprecates) is the list and says what it does not yet cover. 1.2 marks the rest — `apc_link`, the core's sentences on a Dock grant, and every kept span that names what is marked — with nothing changing either; [what 1.2 deprecates](/docs/spec#what-12-deprecates) is its list. 1.3 adds recommendations for profile words and their count, with no new marking and no reader change; an app on 1.2 claims it by changing only `standard`. The code is at [github.com/tineira/agent-pointed-context](https://github.com/tineira/agent-pointed-context) (MIT); these docs and the spec are CC BY 4.0. To propose a change to the contract, open a [contract change issue](https://github.com/tineira/agent-pointed-context/issues/new?template=contract-change.md).
 
 APC started with a paper, *Agent Pointed Context: letting a person point an AI agent at what they see, without sharing the screen* ([doi:10.5281/zenodo.23382909](https://doi.org/10.5281/zenodo.23382909)), with its [design records and payload specification](https://doi.org/10.5281/zenodo.23383101). The demo it describes is kept as it was, as [version 1](/v1/).
