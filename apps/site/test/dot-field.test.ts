@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDotField, createFrameGuard, DOT_FIELD_PALETTES, type CanvasContextLike, type CanvasLike } from "../src/web/dot-field.ts";
+import { createDotField, createFrameGuard, DOT_FIELD_PALETTES, DOT_FIELD_SPECS, type CanvasContextLike, type CanvasLike } from "../src/web/dot-field.ts";
 import type { Theme } from "../src/web/theme.ts";
 
 interface RecordedContext {
@@ -266,4 +266,46 @@ test("theme change rebuilds the dot grid with the active theme's palette", () =>
   h.setTheme("light");
   h.field.onThemeChange();
   assert.equal(h.offscreen.rec.fillRectCalls.at(-1)?.fillStyle, DOT_FIELD_PALETTES.light.dot);
+});
+
+test("glow merges wander and pointer into one non-stacking pass capped by DOT_FIELD_SPECS", () => {
+  const parseAlpha = (rgba: string) => {
+    const m = rgba.match(/^rgba\(\d+,\d+,\d+,([0-9.]+)\)$/);
+    assert.ok(m, `unexpected rgba: ${rgba}`);
+    return Number(m[1]);
+  };
+
+  for (const theme of ["dark", "light"] as const) {
+    const spec = DOT_FIELD_SPECS[theme];
+    const pal = DOT_FIELD_PALETTES[theme];
+    // Out-of-range k is clamped to glowMax.a.
+    assert.equal(parseAlpha(pal.glow(2.5)), spec.glowMax.a);
+    assert.equal(parseAlpha(pal.glow(-1)), spec.glowMin.a);
+
+    // Place pointer directly on top of the wander center at t = 0 so both lights overlap.
+    const h = makeHarness({ width: 900, height: 600, theme });
+    const wanderX = 900 * (0.5 + 0.42 * Math.sin(1));
+    const wanderY = 600 * 0.5;
+    h.field.start();
+    h.field.onPointerMove(wanderX, wanderY);
+    h.main.rec.fillRectCalls.length = 0;
+    h.main.rec.clearRectCalls.length = 0;
+    h.stepFrame(16);
+
+    assert.ok(h.main.rec.fillRectCalls.length > 0, `${theme}: glow draws lit dots`);
+    // Every glowing dot center is drawn at most once per frame (never wander + pointer stacked),
+    // its base dot is cleared first, and its alpha never exceeds glowMax.a.
+    const centers = new Set<string>();
+    for (const call of h.main.rec.fillRectCalls) {
+      const cx = Math.round(call.x + call.w / 2);
+      const cy = Math.round(call.y + call.h / 2);
+      const key = `${cx},${cy}`;
+      assert.ok(!centers.has(key), `${theme}: dot at ${key} was double-painted in one frame`);
+      centers.add(key);
+      assert.ok(parseAlpha(call.fillStyle) <= spec.glowMax.a + 1e-6, `${theme}: glow alpha ${call.fillStyle} exceeds cap ${spec.glowMax.a}`);
+    }
+    // 1 full-canvas clear + 1 clear per lit dot.
+    assert.equal(h.main.rec.clearRectCalls.length, 1 + h.main.rec.fillRectCalls.length);
+    h.field.stop();
+  }
 });

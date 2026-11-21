@@ -11,29 +11,91 @@
  */
 import type { Theme } from "./theme.ts";
 
+export interface RgbaColor {
+  readonly r: number;
+  readonly g: number;
+  readonly b: number;
+  readonly a: number;
+}
+
+export interface DotFieldPaletteSpec {
+  /** Base 30 px grid dot color and alpha. */
+  readonly dot: RgbaColor;
+  /** Low-intensity glow color (k = 0) and hard-capped peak glow color (k = 1). */
+  readonly glowMin: RgbaColor;
+  readonly glowMax: RgbaColor;
+  /** Outer-gutter tag ring, center dot, and label RGB + hard alpha caps. */
+  readonly ringRgb: readonly [number, number, number];
+  readonly ringAlphaMax: number;
+  readonly ringDotAlphaMax: number;
+  readonly tagRgb: readonly [number, number, number];
+  readonly tagAlphaMax: number;
+}
+
+/**
+ * Single source of truth for every color and alpha the dot field can paint.
+ * Imported directly by the contrast test so any change that breaches 4.5:1 fails tests.
+ */
+export const DOT_FIELD_SPECS: Record<Theme, DotFieldPaletteSpec> = {
+  dark: {
+    dot: { r: 255, g: 255, b: 255, a: 0.085 },
+    glowMin: { r: 255, g: 190, b: 90, a: 0.06 },
+    glowMax: { r: 235, g: 136, b: 24, a: 0.2 },
+    ringRgb: [235, 136, 24],
+    ringAlphaMax: 0.12,
+    ringDotAlphaMax: 0.2,
+    tagRgb: [190, 200, 216],
+    tagAlphaMax: 0.08,
+  },
+  light: {
+    dot: { r: 60, g: 54, b: 38, a: 0.12 },
+    glowMin: { r: 216, g: 128, b: 56, a: 0.06 },
+    glowMax: { r: 224, g: 122, b: 46, a: 0.22 },
+    ringRgb: [224, 122, 46],
+    ringAlphaMax: 0.14,
+    ringDotAlphaMax: 0.22,
+    tagRgb: [84, 80, 66],
+    tagAlphaMax: 0.09,
+  },
+};
+
 export interface DotFieldPalette {
   dot: string;
   glow: (k: number) => string;
   ring: string;
+  ringAlphaMax: number;
+  ringDotAlphaMax: number;
   tag: string;
   tagA: number;
 }
 
+function formatRgba(c: RgbaColor): string {
+  return `rgba(${c.r},${c.g},${c.b},${c.a})`;
+}
+
+function buildPalette(spec: DotFieldPaletteSpec): DotFieldPalette {
+  const lerp = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
+  return {
+    dot: formatRgba(spec.dot),
+    glow: (rawK) => {
+      const k = Math.min(1, Math.max(0, rawK));
+      const r = lerp(spec.glowMin.r, spec.glowMax.r, k);
+      const g = lerp(spec.glowMin.g, spec.glowMax.g, k);
+      const b = lerp(spec.glowMin.b, spec.glowMax.b, k);
+      const a = spec.glowMin.a + (spec.glowMax.a - spec.glowMin.a) * k;
+      return `rgba(${r},${g},${b},${a.toFixed(3)})`;
+    },
+    ring: spec.ringRgb.join(","),
+    ringAlphaMax: spec.ringAlphaMax,
+    ringDotAlphaMax: spec.ringDotAlphaMax,
+    tag: spec.tagRgb.join(","),
+    tagA: spec.tagAlphaMax,
+  };
+}
+
 export const DOT_FIELD_PALETTES: Record<Theme, DotFieldPalette> = {
-  dark: {
-    dot: "rgba(255,255,255,0.085)",
-    glow: (k) => `rgba(255,${(170 + 40 * (1 - k)) | 0},${(90 * (1 - k) + 40) | 0},${(0.1 + k * 0.8).toFixed(3)})`,
-    ring: "255,159,28",
-    tag: "190,200,216",
-    tagA: 0.42,
-  },
-  light: {
-    dot: "rgba(60,54,38,0.17)",
-    glow: (k) => `rgba(${(196 + 20 * k) | 0},${(96 - 20 * k) | 0},${(50 - 20 * k) | 0},${(0.2 + k * 0.75).toFixed(3)})`,
-    ring: "196,80,29",
-    tag: "84,80,66",
-    tagA: 0.62,
-  },
+  dark: buildPalette(DOT_FIELD_SPECS.dark),
+  light: buildPalette(DOT_FIELD_SPECS.light),
 };
 
 const GAP = 30;
@@ -233,23 +295,53 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
     return true;
   }
 
-  function drawGlow(c: DotFieldPalette, lx: number, ly: number, radius: number, off: number, strength: number) {
-    if (!cx) return;
-    const x0 = Math.max(0, Math.floor((lx - radius) / GAP));
-    const x1 = Math.min(Math.ceil(width / GAP), Math.ceil((lx + radius) / GAP));
-    const y0 = Math.floor((ly - radius + off) / GAP);
-    const y1 = Math.ceil((ly + radius + off) / GAP);
-    for (let gy = y0; gy <= y1; gy++) {
-      for (let gx = x0; gx <= x1; gx++) {
-        const x = gx * GAP + GAP / 2;
-        const y = gy * GAP + GAP / 2 - off;
-        const d = Math.hypot(x - lx, y - ly);
-        if (d > radius) continue;
-        const k = (1 - d / radius) ** 2 * strength;
-        const s = 1.2 + k * 2.2;
-        cx.fillStyle = c.glow(k);
-        cx.fillRect(x - s / 2, y - s / 2, s, s);
+  interface GlowLight {
+    x: number;
+    y: number;
+    radius: number;
+    strength: number;
+  }
+
+  /**
+   * Paint every glowing dot at most once per frame using the max intensity across active lights
+   * (wander + pointer), clearing the base dot underneath first so alphas never stack past glowMax.
+   */
+  function drawGlows(c: DotFieldPalette, lights: readonly GlowLight[], off: number) {
+    if (!cx || lights.length === 0) return;
+    const cols = Math.ceil(width / GAP) + 2;
+    const minGy = -2;
+    const cells = new Map<number, { gx: number; gy: number; k: number }>();
+
+    for (const light of lights) {
+      if (light.strength <= 0) continue;
+      const x0 = Math.max(0, Math.floor((light.x - light.radius) / GAP));
+      const x1 = Math.min(Math.ceil(width / GAP), Math.ceil((light.x + light.radius) / GAP));
+      const y0 = Math.floor((light.y - light.radius + off) / GAP);
+      const y1 = Math.ceil((light.y + light.radius + off) / GAP);
+      for (let gy = y0; gy <= y1; gy++) {
+        for (let gx = x0; gx <= x1; gx++) {
+          const x = gx * GAP + GAP / 2;
+          const y = gy * GAP + GAP / 2 - off;
+          const d = Math.hypot(x - light.x, y - light.y);
+          if (d > light.radius) continue;
+          const k = Math.min(1, (1 - d / light.radius) ** 2 * light.strength);
+          if (k <= 0) continue;
+          const key = (gy - minGy) * cols + gx;
+          const prev = cells.get(key);
+          if (!prev || k > prev.k) {
+            cells.set(key, { gx, gy, k });
+          }
+        }
       }
+    }
+
+    for (const { gx, gy, k } of cells.values()) {
+      const x = gx * GAP + GAP / 2;
+      const y = gy * GAP + GAP / 2 - off;
+      const s = 1.2 + k * 2.2;
+      cx.clearRect(x - s / 2 - 1, y - s / 2 - 1, s + 2, s + 2);
+      cx.fillStyle = c.glow(k);
+      cx.fillRect(x - s / 2, y - s / 2, s, s);
     }
   }
 
@@ -267,11 +359,17 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
     const t = frameNow / 1000;
     const wanderX = width * (0.5 + 0.42 * Math.sin(t * 0.13 + 1));
     const wanderY = height * (0.5 + 0.38 * Math.sin(t * 0.19));
-    drawGlow(c, wanderX, wanderY, 200, off, 0.55);
+    const lights: GlowLight[] = [{ x: wanderX, y: wanderY, radius: 200, strength: 0.55 }];
 
     if (frameNow - lastMove < 4000) {
-      drawGlow(c, pointerX, pointerY, 170, off, Math.min(1, (4000 - (frameNow - lastMove)) / 1200));
+      lights.push({
+        x: pointerX,
+        y: pointerY,
+        radius: 170,
+        strength: Math.min(1, (4000 - (frameNow - lastMove)) / 1200),
+      });
     }
+    drawGlows(c, lights, off);
 
     if (width >= TAG_MIN_WIDTH) {
       if (frameNow > nextTag) {
@@ -285,15 +383,16 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
       cx.font = "11px ui-monospace, Consolas, monospace";
       tags = tags.filter((g) => frameNow - g.born < 5200);
       for (const g of tags) {
-        const a = Math.sin(((frameNow - g.born) / 5200) * Math.PI);
+        const a = Math.min(1, Math.max(0, Math.sin(((frameNow - g.born) / 5200) * Math.PI)));
         const x = g.gx * GAP + GAP / 2;
         const y = g.gy * GAP + GAP / 2 - off;
-        cx.strokeStyle = `rgba(${c.ring},${(a * 0.6).toFixed(3)})`;
+        cx.strokeStyle = `rgba(${c.ring},${(a * c.ringAlphaMax).toFixed(3)})`;
         cx.lineWidth = 1;
         cx.beginPath();
         cx.arc(x, y, 5 + (1 - a) * 3, 0, Math.PI * 2);
         cx.stroke();
-        cx.fillStyle = `rgba(${c.ring},${(a * 0.9).toFixed(3)})`;
+        cx.clearRect(x - 2, y - 2, 4, 4);
+        cx.fillStyle = `rgba(${c.ring},${(a * c.ringDotAlphaMax).toFixed(3)})`;
         cx.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
         cx.fillStyle = `rgba(${c.tag},${(a * c.tagA).toFixed(3)})`;
         cx.textAlign = g.side ? "left" : "right";

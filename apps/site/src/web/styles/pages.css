@@ -226,7 +226,7 @@
 
 .landing-refs a:hover {
   border-color: var(--accent-line);
-  background: var(--tint2);
+  background: var(--card-solid);
 }
 
 .landing-refs span {

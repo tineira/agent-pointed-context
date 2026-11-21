@@ -12,6 +12,7 @@ import { test } from "node:test";
 import { headingIds, parseMarkdown } from "../src/docs/markdown.ts";
 import { DOC_PAGES } from "../src/docs/pages.ts";
 import { clipFallback } from "../src/web/clip-fallback.ts";
+import { DOT_FIELD_SPECS, type RgbaColor } from "../src/web/dot-field.ts";
 import { DOCK_PRODUCT, FOOTER_LINKS, footerLinks, legacyAnchor, MOVED_PAGES, SITE_PAGES, sitePageAt } from "../src/web/site-pages.ts";
 
 const root = new URL("../../../", import.meta.url);
@@ -96,7 +97,7 @@ test("the clip's button follows the video and says what it does", () => {
   assert.doesNotMatch(toggleRule[0], /opacity:\s*0[;}]/, "the button is always visible");
 });
 
-test("text, links and buttons pass 4.5:1 contrast in both light and dark themes", () => {
+test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot field + haze, and translucent surfaces in both themes", () => {
   type Rgb = [number, number, number];
   const parseBlock = (selector: string) => {
     const start = shellCss.indexOf(selector);
@@ -106,6 +107,8 @@ test("text, links and buttons pass 4.5:1 contrast in both light and dark themes"
     const body = shellCss.slice(open + 1, close);
     return Object.fromEntries([...body.matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]));
   };
+  const compositeRgba = (fg: RgbaColor, under: Rgb): Rgb =>
+    [fg.r, fg.g, fg.b].map((c, i) => Math.round(c * fg.a + under[i]! * (1 - fg.a))) as Rgb;
   const parseColor = (raw: string, under: Rgb): Rgb => {
     if (raw.startsWith("#")) {
       const hex = raw.length === 4 ? `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}` : raw;
@@ -113,8 +116,7 @@ test("text, links and buttons pass 4.5:1 contrast in both light and dark themes"
     }
     const m = raw.match(/^rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*([0-9.]+)\s*\)$/);
     assert.ok(m, `unsupported color format: ${raw}`);
-    const alpha = Number(m[4]);
-    return [Number(m[1]), Number(m[2]), Number(m[3])].map((c, i) => Math.round(c * alpha + under[i]! * (1 - alpha))) as Rgb;
+    return compositeRgba({ r: Number(m[1]), g: Number(m[2]), b: Number(m[3]), a: Number(m[4]) }, under);
   };
   const lum = (rgb: Rgb) => {
     const [r, g, b] = rgb.map((v) => v / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
@@ -129,16 +131,55 @@ test("text, links and buttons pass 4.5:1 contrast in both light and dark themes"
   assert.match(landingCss, /\.landing-cta\s*\{[^}]*background:\s*var\(--btn\);[^}]*color:\s*var\(--btn-fg\);/, "landing CTA buttons use --btn / --btn-fg");
   assert.match(shellCss, /^a\s*\{[^}]*color:\s*var\(--accent-text\);/m, "links use --accent-text");
 
+  // --dim is reserved for surface-backed chrome (nav badge, footer), never bare over the moving field.
+  for (const [sheetName, css] of [["landing.css", landingCss], ["pages.css", pagesCss], ["docs.css", docsCss]] as const) {
+    assert.doesNotMatch(css, /var\(--dim\)/, `${sheetName} does not place --dim directly over the backdrop`);
+  }
+
   const dark = parseBlock(":root {");
   const light = parseBlock(':root[data-theme="light"] {');
+  const lightNoJs = parseBlock(':root:not([data-theme="dark"]) {');
+  assert.deepEqual(lightNoJs, light, "no-JS prefers-color-scheme light tokens stay in sync with [data-theme=light]");
+
   for (const [name, t] of [["dark", dark], ["light", light]] as const) {
+    const isDark = name === "dark";
     const bg = parseColor(t["bg"]!, [0, 0, 0]);
-    const card = parseColor(t["card"]!, bg);
-    const foot = parseColor(t["foot"]!, bg);
-    const nav = parseColor(t["nav"]!, bg);
-    const tint = parseColor(t["tint"]!, bg);
-    const chip = parseColor(t["chip"]!, bg);
-    const band = parseColor(t["band"]!, bg);
+    const spec = DOT_FIELD_SPECS[name];
+
+    // Worst-case pixel the canvas can paint over --bg, using the exact DOT_FIELD_SPECS constants
+    // that dot-field.ts renders with: base dot, glow range, gutter ring/dot/tag, and tag or ring
+    // crossing a peak-glow dot.
+    const onGlowMax = compositeRgba(spec.glowMax, bg);
+    const canvasCandidates: [string, Rgb][] = [
+      ["base dot", compositeRgba(spec.dot, bg)],
+      ["glowMin", compositeRgba(spec.glowMin, bg)],
+      ["glowMax", onGlowMax],
+      ["gutter ring", compositeRgba({ r: spec.ringRgb[0], g: spec.ringRgb[1], b: spec.ringRgb[2], a: spec.ringAlphaMax }, bg)],
+      ["gutter ringDot", compositeRgba({ r: spec.ringRgb[0], g: spec.ringRgb[1], b: spec.ringRgb[2], a: spec.ringDotAlphaMax }, bg)],
+      ["gutter tag", compositeRgba({ r: spec.tagRgb[0], g: spec.tagRgb[1], b: spec.tagRgb[2], a: spec.tagAlphaMax }, bg)],
+      ["gutter tag over glowMax", compositeRgba({ r: spec.tagRgb[0], g: spec.tagRgb[1], b: spec.tagRgb[2], a: spec.tagAlphaMax }, onGlowMax)],
+      ["gutter ring over glowMax", compositeRgba({ r: spec.ringRgb[0], g: spec.ringRgb[1], b: spec.ringRgb[2], a: spec.ringAlphaMax }, onGlowMax)],
+    ];
+    canvasCandidates.sort((a, b) => (isDark ? lum(b[1]) - lum(a[1]) : lum(a[1]) - lum(b[1])));
+    const [worstCanvasLabel, worstCanvas] = canvasCandidates[0]!;
+
+    // Stack both CSS haze layers over the worst canvas pixel to get the worst-case backdrop pixel.
+    const hazeAOnly = parseColor(t["haze-a"]!, bg);
+    const hazeBOnly = parseColor(t["haze-b"]!, bg);
+    const glowPlusHazeA = parseColor(t["haze-a"]!, onGlowMax);
+    const glowPlusHazeB = parseColor(t["haze-b"]!, glowPlusHazeA);
+    const worstField = parseColor(t["haze-b"]!, parseColor(t["haze-a"]!, worstCanvas));
+
+    // Every translucent surface composited over the worst-case backdrop (canvas + haze).
+    const card = parseColor(t["card"]!, worstField);
+    const foot = parseColor(t["foot"]!, worstField);
+    const nav = parseColor(t["nav"]!, worstField);
+    const navTint = parseColor(t["tint"]!, nav);
+    const tint = parseColor(t["tint"]!, worstField);
+    const tint2 = parseColor(t["tint2"]!, worstField);
+    const chip = parseColor(t["chip"]!, worstField);
+    const band = parseColor(t["band"]!, worstField);
+    const codeBgOnField = parseColor(t["code-bg"]!, worstField);
     const codeBgOnCard = parseColor(t["code-bg"]!, card);
 
     const fg = parseColor(t["fg"]!, bg);
@@ -154,23 +195,36 @@ test("text, links and buttons pass 4.5:1 contrast in both light and dark themes"
 
     const pairs: [string, Rgb, Rgb][] = [
       ["text (--fg) on --bg", fg, bg],
-      ["text (--fg) on --card", fg, card],
-      ["text (--fg) on --nav", fg, nav],
+      ["text (--fg) on glowMax", fg, onGlowMax],
+      [`text (--fg) on worst field (${worstCanvasLabel} + haze)`, fg, worstField],
+      ["text (--fg) on --card over worst field", fg, card],
+      ["text (--fg) on --nav over worst field", fg, nav],
       ["text (--fg) on --chip", fg, chip],
       ["muted text (--muted) on --bg", muted, bg],
-      ["muted text (--muted) on --card", muted, card],
-      ["muted text (--muted) on --foot", muted, foot],
-      ["muted text (--muted) on --nav", muted, nav],
-      ["dim text (--dim) on --bg", dim, bg],
-      ["dim text (--dim) on --card", dim, card],
-      ["dim text (--dim) on --foot", dim, foot],
+      ["muted text (--muted) on --haze-a", muted, hazeAOnly],
+      ["muted text (--muted) on --haze-b", muted, hazeBOnly],
+      ["muted text (--muted) on glowMax", muted, onGlowMax],
+      ["muted text (--muted) on glowMax + haze", muted, glowPlusHazeB],
+      [`muted text (--muted) on worst field (${worstCanvasLabel} + haze)`, muted, worstField],
+      ["muted text (--muted) on --card over worst field", muted, card],
+      ["muted text (--muted) on --foot over worst field", muted, foot],
+      ["muted text (--muted) on --nav over worst field", muted, nav],
+      ["theme toggle (--muted) on --tint over --nav", muted, navTint],
+      ["dim text (--dim) on solid --bg", dim, bg],
+      ["dim text (--dim) on --card over worst field", dim, card],
+      ["dim text (--dim) on --nav over worst field", dim, nav],
+      ["dim text (--dim) on --foot over worst field", dim, foot],
       ["link (--accent-text) on --bg", accentText, bg],
-      ["link (--accent-text) on --card", accentText, card],
-      ["link (--accent-text) on --foot", accentText, foot],
+      ["link (--accent-text) on glowMax", accentText, onGlowMax],
+      [`link (--accent-text) on worst field (${worstCanvasLabel} + haze)`, accentText, worstField],
+      ["link (--accent-text) on --card over worst field", accentText, card],
+      ["link (--accent-text) on --foot over worst field", accentText, foot],
       ["link (--accent-text) on --chip", accentText, chip],
       ["primary button (--btn-fg on --btn)", btnFg, btnBg],
-      ["ghost button (--fg on --tint)", fg, tint],
-      ["inline code (--code-fg on --code-bg)", codeFg, codeBgOnCard],
+      ["ghost button (--fg on --tint over worst field)", fg, tint],
+      ["ghost button hover (--fg on --tint2 over worst field)", fg, tint2],
+      ["inline code (--code-fg on --code-bg over worst field)", codeFg, codeBgOnField],
+      ["inline code (--code-fg on --code-bg over --card)", codeFg, codeBgOnCard],
       ["band text (--band-fg on --band)", bandFg, band],
       ["band muted (--band-muted on --band)", bandMuted, band],
       ["band accent (--band-accent on --band)", bandAccent, band],
