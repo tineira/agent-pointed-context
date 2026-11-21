@@ -5,6 +5,7 @@
  * schema and 6 h, with the agent's name cleaned as Pulse cleans it.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -59,10 +60,20 @@ test("the landing renders no frame before the click, even with the hint stored, 
     assert.doesNotMatch(after, /simulated/, "in place of the simulated stage");
     assert.match(after, /data-phase="loading"/);
     assert.match(after, /Opening Pulse…/);
-    // The frame clears the stored hint when it mounts, so once effects run its links start on Agents; a static render
-    // reads the hint as stored. connected.test.ts drives the live change.
+    // A static render runs no effect, so it reads the hint as stored: this is the first paint, before the mount clears it.
     assert.match(after, /<a href="https:\/\/pulse\.apc\.tineira\.com\/overview" target="_blank" rel="noopener">or open Pulse/, "the site owns the way out");
     assert.match(after, /Back to the demo/);
+    // After the click, the frame's mount effect clears the hint before anything else (Grok's P3 on #250): pinned in the
+    // source, since node runs no effects, and then run here as that effect runs it. Removing the call fails this test.
+    const frameSource = readFileSync(new URL("../src/web/landing/hero/live.ts", import.meta.url), "utf8");
+    const mount = frameSource.slice(frameSource.indexOf("export function PulseFrame("));
+    const effect = mount.slice(mount.indexOf("useEffect(() => {") + "useEffect(() => {".length);
+    assert.match(effect, /^\s*(?:\/\/[^\n]*\n\s*)*clearPulseStatus\(\);/, "PulseFrame's mount effect starts by clearing the hint");
+    clearPulseStatus();
+    assert.equal(globalThis.sessionStorage.getItem(STATUS_KEY), null, "the hint is gone");
+    const mounted = renderToStaticMarkup(createElement(HeroSwitch, { live: true, demo, onBack: () => {} }));
+    assert.match(mounted, /<a href="https:\/\/pulse\.apc\.tineira\.com\/agents" target="_blank" rel="noopener">or open Pulse/, "until the frame reports, its links go to Agents");
+    assert.doesNotMatch(mounted, /\/overview/);
   } finally {
     if (previous) Object.defineProperty(globalThis, "sessionStorage", previous);
     else delete (globalThis as { sessionStorage?: unknown }).sessionStorage;

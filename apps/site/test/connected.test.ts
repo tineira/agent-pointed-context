@@ -145,8 +145,10 @@ test("the components read the shared state: no Open Pulse link keeps its own tar
     assert.doesNotMatch(source, /href[:=]\{?\s*PULSE_AGENTS/, `${file} does not hard-code Agents`);
   }
   assert.match(tryPage, /const pulse = usePulseView\(\);/);
-  assert.match(tryPage, /<a className="btn primary" href=\{pulse\.openHref\}>\s*\{pulse\.connected \? "Open Pulse" : "Open Pulse and connect your agent"\}/);
-  assert.match(tryPage, /<a href=\{pulse\.openHref\}>\s*Open Pulse/);
+  // /try's one Open Pulse is the button in step 1 (TIN-1090, TIN-1094); it reads the same in both states.
+  assert.match(tryPage, /<a className="btn primary" href=\{pulse\.openHref\} \{\.\.\.OUT\}>\s*Open Pulse <span aria-hidden="true">↗<\/span>/);
+  assert.equal(tryPage.match(/href=\{pulse\.openHref\}/g)?.length, 1, "one Open Pulse on /try");
+  assert.doesNotMatch(tryPage, /PULSE_AGENTS|PULSE_OVERVIEW|\/agents"|\/overview"/, "/try does not hard-code either target");
   assert.doesNotMatch(tryPage, /useEffect|sessionStorage|localStorage|fetch\(/, "/try keeps no storage or request of its own");
 });
 

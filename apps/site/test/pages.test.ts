@@ -1,8 +1,9 @@
 /**
- * /try and /build (TIN-627; one page each since the Dock left, TIN-1061; the new design, TIN-1068): the walk's
- * steps and links, the app cards and the starter question on /try; the numbered rows beside the real payload from
- * Pulse, the packages, the guide links and the open-list note on /build; no Dock and no Autio on either page; every
- * docs link names a page and a heading that exist; no footer repeats its page.
+ * /try and /build (TIN-627; one page each since the Dock left, TIN-1061; the new design, TIN-1068): /try's two
+ * phases (TIN-1094), its buttons and their targets in both connection states, step 3's examples and the optional
+ * phase 2, and its phone layout; the numbered rows beside the real payload from Pulse, the packages, the guide links
+ * and the open-list note on /build; no Dock and no Autio on either page; every docs link names a page and a heading
+ * that exist; no footer repeats its page; the contrast of every /try and /build pairing over the dot field.
  */
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -12,6 +13,7 @@ import { DOC_PAGES } from "../src/docs/pages.ts";
 import { DOT_FIELD_SPECS } from "../src/web/dot-field.ts";
 import { FOCUS_EXAMPLE } from "../src/web/landing-example.ts";
 import { DOCK_PRODUCT, FOOTER_LINKS, footerLinks, MOVED_PAGES, SITE_PAGES, sitePageAt, V1 } from "../src/web/site-pages.ts";
+import { TRY_BAR, TRY_BRIDGE, TRY_CUSTOMER_ROW } from "../src/web/try-examples.ts";
 
 const root = new URL("../../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
@@ -37,57 +39,136 @@ const pageOf = (source: string, name: string) => {
   return source.slice(start, next < 0 ? undefined : next);
 };
 
-test("Try it walks Connect, Point, then Join, with each app on its own address and nothing to install", () => {
-  assert.match(tryPage, /className="btn primary" href=\{pulse\.openHref\}>\s*\{pulse\.connected \? "Open Pulse" : "Open Pulse and connect your agent"\}/);
-  assert.ok(tryPage.includes('const PULSE_CONNECT = PULSE.url.replace(/overview$/, "agents");'), "Pulse's Agents page");
-  assert.ok(tryPage.includes("const SIGNALS_CONNECT = `${SIGNALS.url}?connect`;"), "Signals' Connect panel");
-  // Each card opens its app and connects an agent on that app's own page, and names the origin it lives on.
-  assert.match(tryPage, /href=\{PULSE\.url\.replace\(\/overview\$\/, ""\)\}>\s*Open Pulse/);
-  assert.match(tryPage, /href=\{PULSE_CONNECT\}>\s*Connect an agent/);
-  assert.match(tryPage, /href=\{SIGNALS\.url\}>\s*Open Signals/);
-  assert.match(tryPage, /href=\{SIGNALS_CONNECT\}>\s*Connect an agent/);
-  assert.ok(tryPage.includes("const host = (url: string) => new URL(url).host;"), "the card names its app's origin");
-  assert.match(tryPage, /\{host\(PULSE\.url\)\}/);
-  assert.match(tryPage, /\{host\(SIGNALS\.url\)\}/);
-  assert.doesNotMatch(tryPage, /Download|\.exe|window\.open|extension/i, "no downloads, no popup dock, no extension");
-  // The connect step names the agents the landing's Works with row shows, Cursor no longer among them (TIN-1088).
-  assert.match(tryPage, /Add it to Claude, ChatGPT or Grok as a remote MCP server\./);
+/** /try's markup between two class names (or to the end of the component). */
+const tryPart = (from: string, to?: string) => {
+  const start = tryPage.indexOf(from);
+  assert.ok(start >= 0, from);
+  const end = to ? tryPage.indexOf(to, start) : -1;
+  return tryPage.slice(start, end < 0 ? undefined : end);
+};
+
+test("/try is two phases: the hero maps them, phase 1 is three steps, phase 2 is optional (TIN-1094)", () => {
+  assert.match(tryPage, /<h1>\s*Your agent, a demo app, <em>one drag\.<\/em>\s*<\/h1>/);
+  assert.equal(SITE_PAGES.try.title, "Try APC: your agent, a demo app, one drag");
+  // The hero's map: two cards, phase 2 marked optional, linking the two sections; no CTA of its own (the button is in step 1).
+  const rail = tryPart('className="try-rail"', "</nav>");
+  assert.match(rail, /href="#phase-1">\s*<small>Phase 1<\/small>\s*<b>Try APC<\/b>/);
+  assert.match(rail, /href="#phase-2" className="opt">\s*<small>\s*Phase 2 <i>optional<\/i>\s*<\/small>\s*<b>Get even more out of APC<\/b>/);
+  assert.doesNotMatch(tryPart('className="page-hero"', 'className="try-phase"'), /className="btn|page-cta-row/, "the hero has no button");
+  assert.match(tryPage, /<section className="try-phase" id="phase-1" aria-labelledby="phase-1-title">/);
+  assert.match(tryPage, /<section className="try-more rv" id="phase-2" aria-labelledby="phase-2-title">/);
+  // Phase 1: three steps, in order, then the line that ends it.
+  const steps = tryPart('className="try-steps"', 'className="try-examples"');
+  assert.deepEqual([...steps.matchAll(/<b>([^<]+)<\/b>/g)].map((m) => m[1]), ["Open Pulse", "Connect your agent", "Point and ask"]);
+  assert.deepEqual([...steps.matchAll(/<span className="n">(\d)<\/span>/g)].map((m) => m[1]), ["1", "2", "3"]);
+  assert.doesNotMatch(tryPage, /Add a second app|DONE_IN_HERO/, "Signals is no step: it is phase 2");
+  assert.match(steps, /Add it to Claude, ChatGPT or Grok as a remote MCP server\./, "the agents the landing's Works with row shows (TIN-1088)");
   assert.doesNotMatch(tryPage, /Cursor/);
+  assert.match(steps, /Drag your agent's mark from Pulse's agent bar onto a bar, a customer or a step, and ask about "this"\./);
+  assert.ok(tryPage.indexOf('className="try-end"') > tryPage.indexOf('className="try-examples"') && tryPage.indexOf('className="try-end"') < tryPage.indexOf('id="phase-2"'), "phase 1 ends before phase 2");
+  assert.match(tryPart('className="try-end"', "</p>"), /<b>That is APC\.<\/b> You pointed, and your agent read the data behind it\. You can stop here\./);
+  assert.match(tryPart('className="try-aside'), /Cut it off any time\.[\s\S]*keeps the other/);
+  assert.doesNotMatch(tryPage, /Download|\.exe|window\.open|extension/i, "no downloads, no popup dock, no extension");
 });
 
-test("Try it's steps do not overlap, and only the starter question stands out", () => {
-  const steps = [...tryPage.matchAll(/\{ title: "([^"]+)", text: "((?:[^"\\]|\\.)*)" \}/g)].map((m) => ({ title: m[1]!, text: m[2]! }));
-  assert.deepEqual(steps.map((s) => s.title), ["Open Pulse", "Connect your agent", "Point and ask", "Add a second app"]);
-  assert.match(steps[1]!.text, /MCP address/);
-  assert.doesNotMatch(steps[1]!.text, /drop|drag/i, "step 2 connects; pointing is step 3");
-  assert.match(steps[2]!.text, /^Drag your agent's mark from Pulse's agent bar/);
-  assert.match(steps[3]!.text, /Signals' own address/);
-  assert.equal(tryPage.match(/className="try-starter\b/g)?.length, 1);
-  const starter = tryPage.slice(tryPage.indexOf('className="try-starter'), tryPage.indexOf('className="try-aside'));
-  assert.match(starter, /href=\{TRY_POST\}>Tallyfin's offer to Team teams in North America</);
-  assert.match(starter, /href=\{TRY_CUSTOMER\}>Deep Harbor Logistics</);
-  assert.match(starter, /Which of our customers did this offer take\?/);
-  assert.match(starter, /How do the two connect\?/);
-  assert.match(tryPage.slice(tryPage.indexOf('className="try-aside')), /Cut it off any time\./);
-  assert.match(tryPage.slice(tryPage.indexOf('className="try-aside')), /keeps the other/);
-  assert.match(pagesCss, /\.try-starter\s*\{[^}]*border:\s*1px solid var\(--accent-line\)/);
-  assert.match(pagesCss, /\.try-aside\s*\{[^}]*color:\s*var\(--muted\)/);
-  assert.match(pagesCss, /\.try-ask\s*\{[^}]*background:\s*var\(--ink-bubble\);[^}]*color:\s*var\(--ink-fg\)/);
+test("/try's buttons: Open Pulse in step 1 by connection (TIN-1090, TIN-1087), one Open Signals to its Connect panel (TIN-1091)", () => {
+  const OUT = /\{\.\.\.OUT\}/;
+  assert.match(tryPage, /const OUT = \{ target: "_blank", rel: "noopener" \} as const;/);
+  // Exactly two buttons on the page: Open Pulse, the only filled one, and Open Signals.
+  assert.deepEqual([...tryPage.matchAll(/className="btn ([a-z]+)"/g)].map((m) => m[1]), ["primary", "ghost"]);
+  const step1 = tryPart('<li className={stepClass("open"', '<li className={stepClass("connect"');
+  assert.match(step1, /<a className="btn primary" href=\{pulse\.openHref\} \{\.\.\.OUT\}>\s*Open Pulse <span aria-hidden="true">↗<\/span>/);
+  assert.match(step1, /<span className="try-host">\{host\(PULSE_ORIGIN\)\}<\/span>/);
+  // Its target in both states comes from the shared connection state (connected.test.ts: Overview, else Agents).
+  assert.match(step1, /pulse\.connected\s*\?\s*"Your agent is already connected, so Pulse opens on its overview, with the charts to point at\."\s*:\s*"A demo app: product analytics for a made-up SaaS, with its customers, plans, seats and monthly activity\. It opens a private copy for you, on its Agents page\."/);
+  // Phase 2: one button, always Signals' Connect panel, and no "Connect an agent" anywhere.
+  assert.ok(tryPage.includes("const SIGNALS_CONNECT = `${SIGNALS.url}?connect`;"));
+  const more = tryPart('id="phase-2"', 'className="try-aside');
+  assert.match(more, /<a className="btn ghost" href=\{SIGNALS_CONNECT\} \{\.\.\.OUT\}>\s*Open Signals <span aria-hidden="true">↗<\/span>/);
+  assert.equal(tryPage.match(/href=\{SIGNALS_CONNECT\}/g)?.length, 1);
+  assert.doesNotMatch(tryPage, /Connect an agent|href=\{SIGNALS\.url\}/, "Signals keeps only Open Signals, to ?connect");
+  assert.doesNotMatch(more, /pulse\.|connected/, "Signals has no state on /try");
+  assert.match(more, /It opens with an agent already made and its MCP address showing\./, "true once TIN-1093 is in production");
+  assert.match(more, /\{host\(SIGNALS\.url\)\}/);
+  // The cross-app question, worded as before, inside phase 2.
+  assert.match(more, /href=\{TRY_POST\} \{\.\.\.OUT\}>\s*Tallyfin's offer to Team teams in North America\s*<\/a>/);
+  assert.match(more, /href=\{TRY_CUSTOMER\} \{\.\.\.OUT\}>\s*Deep Harbor Logistics\s*<\/a>/);
+  assert.match(more, /Which of our customers did this offer take\?/);
+  assert.match(more, /How do the two connect\?/);
+  assert.ok(tryPage.includes("const TRY_POST = `${SIGNALS.url}?post=post_013`;"));
+  assert.ok(tryPage.includes('const TRY_CUSTOMER = inPulse("/customers/cus_0048");'));
+  // Every link to an app opens a new tab, so /try stays open beside it.
+  for (const link of tryPage.matchAll(/<a [^>]*href=\{(?!`)[^}]+\}[^>]*>/g)) assert.match(link[0], OUT, link[0]);
+  assert.match(pagesCss, /\.try-more\s*\{[^}]*border:\s*1px dashed var\(--accent-line\)/, "phase 2 is a dashed card");
+  assert.match(pagesCss, /\.try-rail a\.opt\s*\{[^}]*border-style:\s*dashed/);
 });
 
-test("/try shows Pulse connected from the hero's hint only, and the name as text", () => {
+test("/try's examples: a bar, a customer, a step of the bridge, each with its deep link into Pulse and two questions", () => {
+  assert.ok(tryPage.includes("const inPulse = (path: string) => `${PULSE_ORIGIN}${path}`;"), "on the origin Open Pulse uses");
+  const examples = tryPart('className="try-examples"', 'className="try-end"');
+  assert.match(examples, /<h3 id="examples-title">What "this" can mean<\/h3>/);
+  assert.deepEqual([...examples.matchAll(/<small>([^<]+)<\/small>/g)].map((m) => m[1]), ["A bar of a chart", "A customer", "A step of the bridge"]);
+  assert.equal(examples.match(/<article className="try-ex rv">/g)?.length, 3, "three examples, not four");
+  for (const [name, part] of [["TRY_BAR", "TRY_BAR.label"], ["TRY_CUSTOMER_ROW", "TRY_CUSTOMER_ROW.name"], ["TRY_BRIDGE", "TRY_BRIDGE.label"]] as const) {
+    assert.match(examples, new RegExp(`<a href=\\{inPulse\\(${name}\\.path\\)\\} \\{\\.\\.\\.OUT\\}>\\s*\\{${part.replace(".", "\\.")}\\}\\s*</a>`), name);
+    assert.match(examples, new RegExp(`<Asks asks=\\{${name}\\.asks\\} />`), name);
+  }
+  // What the examples show (scripts/test/site-try-examples.test.mjs pins every number to Pulse's own functions).
+  assert.equal(TRY_BAR.label, "March 2026");
+  assert.equal(TRY_BAR.series.length, 18);
+  assert.equal(TRY_BAR.series[11], TRY_BAR.active, "the accented bar (BAR_ON) is March");
+  assert.match(tryPage, /const BAR_ON = 11;/);
+  assert.equal(TRY_CUSTOMER_ROW.name, "Lumen Delta Systems");
+  assert.equal(TRY_BRIDGE.label, "September 2026");
+  assert.deepEqual(TRY_BRIDGE.steps.map((s) => s.label), ["Start", "New", "Reactivated", "Churned", "End"]);
+  for (const ex of [TRY_BAR, TRY_CUSTOMER_ROW, TRY_BRIDGE]) {
+    assert.equal(ex.asks.length, 2);
+    for (const a of ex.asks) assert.match(a, /^[A-Z][^"<>]+\?$/, a);
+  }
+  // The drawings are decoration: the text says the same, and the agent's mark sits on the pointed part.
+  assert.equal(examples.match(/className="try-ex-art" aria-hidden="true"/g)?.length, 3);
+  assert.equal(tryPage.match(/<AgentMark size=\{26\} className="try-ex-pin" \/>/g)?.length, 3);
+});
+
+test("/try shows Pulse connected from the hero's hint only: only Connect your agent is done, Open Pulse is where to start", () => {
   // TIN-1072: the hint is read through pulse-status.ts (TTL, schema, cleanName; pulse-status.test.ts), never fetched.
   assert.doesNotMatch(tryPage, /sessionStorage|localStorage|fetch\(|useEffect|dangerouslySetInnerHTML|innerHTML/, "no storage of its own, no request, no HTML");
   assert.match(tryPage, /const pulse = usePulseView\(\);/);
-  assert.match(tryPage, /\{pulse\.agentName \? `\$\{pulse\.agentName\} connected` : "Connected directly"\}/, "a text node, or Connected directly");
-  assert.match(tryPage, /<a href=\{pulse\.openHref\}>\s*Open Pulse/);
-  assert.match(tryPage, /className=\{pulse\.connected \? "try-app on rv" : "try-app rv"\}/);
-  assert.match(tryPage, /const DONE_IN_HERO = 3;/);
-  for (const room of [".try-step.done", ".try-step.next", ".try-app.on", ".try-conn"]) {
-    assert.ok(pagesCss.includes(room), `pages.css keeps room for ${room}`);
+  // Decided by Tomas (TIN-1094): connected, step 2 is done, step 1 is "start here", step 3 is as it was.
+  assert.match(tryPage, /const stepClass = \(step: Step, connected: boolean\) => \(!connected \? "try-step rv" : step === "connect" \? "try-step done rv" : step === "open" \? "try-step next rv" : "try-step rv"\);/);
+  for (const step of ["open", "connect", "point"]) assert.match(tryPage, new RegExp(`<li className=\\{stepClass\\("${step}", pulse\\.connected\\)\\}>`));
+  // Who is connected: in the hero once, and in step 2, as text nodes.
+  const status = tryPart("{pulse.connected && (", "</p>");
+  assert.match(status, /<p className="try-status">\s*<span className="try-conn">/);
+  assert.match(status, /\{pulse\.agentName \? `\$\{pulse\.agentName\} connected` : "Connected directly"\}/);
+  assert.match(status, /to Pulse, from the home page\.<span className="try-status-more"> Start at step 1: it opens ready to point\.<\/span>/);
+  assert.match(tryPage, /\{pulse\.agentName \? `\$\{pulse\.agentName\} is connected to Pulse\.` : "Your agent is connected to Pulse\."\}<\/span> Nothing to do here\./);
+  assert.match(pagesCss, /\.try-step\.done b::after\s*\{[^}]*content:\s*"done on the home page";/);
+  assert.match(pagesCss, /\.try-step\.next b::after\s*\{[^}]*content:\s*"start here";/);
+  for (const room of [".try-step.done", ".try-step.next", ".try-status .try-conn", ".try-step.done .try-conn-sentence"]) {
+    assert.ok(pagesCss.includes(room), `pages.css styles ${room}`);
   }
+  assert.doesNotMatch(pagesCss, /\.try-app\.on|\.try-starter|\.try-side|\.try-links|\.try-joiner/, "the old walk's rules are gone");
   assert.match(pagesCss, /TIN-1072/);
   assert.match(tryPage, /TIN-1072/);
+});
+
+test("/try at 375 px: the phase cards collapse and step 1's button reaches the first screen; nothing is wider than the page", () => {
+  const phone = pagesCss.slice(pagesCss.indexOf("@media (max-width: 760px) {"));
+  // The cards become one compact row: their descriptions go, the row stays two columns.
+  assert.match(phone, /\.try-rail span\s*\{\s*display:\s*none;/);
+  assert.doesNotMatch(phone, /\.try-rail\s*\{[^}]*grid-template-columns/, "two cards side by side, not stacked");
+  assert.match(phone, /\.try-status-more,\s*\.try-phase-head p:not\(\.landing-who\)\s*\{\s*display:\s*none;/);
+  // Below 980 px every /try grid is one column; at 760 px the examples stack their drawing over their text.
+  const narrow = pagesCss.slice(pagesCss.indexOf("@media (max-width: 980px) {"), pagesCss.indexOf("@media (max-width: 760px) {"));
+  assert.match(narrow, /\.try-grid,\s*\.build-grid\s*\{\s*grid-template-columns:\s*1fr;/);
+  assert.match(narrow, /\.try-more-grid\s*\{\s*grid-template-columns:\s*1fr;/);
+  assert.match(phone, /\.try-ex\s*\{\s*grid-template-columns:\s*1fr;/);
+  // Every /try grid track can shrink (minmax(0, …)) or is the drawing's fixed 240 px column that the phone layout drops.
+  const tracks = [...pagesCss.slice(0, pagesCss.indexOf("/* ───────── /build")).matchAll(/grid-template-columns:\s*([^;]+);/g)].map((m) => m[1]!);
+  for (const t of tracks) assert.ok(/^(minmax\(0, [^)]+\)(?:\s+minmax\(0, [^)]+\))*|repeat\(\d, minmax\(0, 1fr\)\)|44px 1fr|1fr 1fr|240px minmax\(0, 1fr\))$/.test(t), `a /try track that cannot shrink: ${t}`);
+  // The step's tag never splits at 375 px.
+  assert.match(pagesCss, /\.try-step b::after\s*\{[^}]*white-space:\s*nowrap;/);
 });
 
 test("/build is one page: four numbered rows, the payload from Pulse beside them, the packages, the guides, the open list", () => {
@@ -197,7 +278,7 @@ function declarationsOf(css: string, selector: string): Record<string, string> {
   return out;
 }
 
-test("the ink, chip and reserved connected-walk pairings pass 4.5:1 (3:1 for the check) in both themes", () => {
+test("the ink, chip, connected-walk and two-phase /try pairings pass 4.5:1 (3:1 for the checks) in both themes, over the dot field", () => {
   const blockOf = (selector: string) => {
     const open = shellCss.indexOf("{", shellCss.indexOf(selector));
     return Object.fromEntries([...shellCss.slice(open + 1, shellCss.indexOf("}", open)).matchAll(/--([a-z0-9-]+):\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]));
@@ -242,6 +323,10 @@ test("the ink, chip and reserved connected-walk pairings pass 4.5:1 (3:1 for the
   const connCheckToken = tokenOf(declarationsOf(pagesCss, ".try-conn i::after")["border"]);
   const connDiscToken = bgOf(".try-conn i");
   const connTextToken = colorOf(".try-conn");
+  const connPillBgToken = bgOf(".try-status .try-conn");
+  const endCheckToken = tokenOf(declarationsOf(pagesCss, ".try-end i::after")["border"]);
+  const endDiscToken = bgOf(".try-end i");
+  const barLabelToken = tokenOf(declarationsOf(pagesCss, ".try-ex-bars text")["fill"]);
   const nextPillToken = colorOf(".try-step.next b::after");
   const nextPillBgToken = bgOf(".try-step.next b::after");
   const nextNumberToken = colorOf(".try-step.next .n");
@@ -291,19 +376,60 @@ test("the ink, chip and reserved connected-walk pairings pass 4.5:1 (3:1 for the
       [`done step title (${titleToken}) on the worst field`, c(titleToken), field],
       [`done step text (${bodyToken}) on --bg`, c(bodyToken), bg],
       [`done step text (${bodyToken}) on the worst field`, c(bodyToken), field],
-      [`"done in the hero" pill (${pillToken}) on --bg`, c(pillToken), bg],
-      [`"done in the hero" pill (${pillToken}) on the worst field`, c(pillToken), field],
-      [`connected label (${connTextToken}) on --bg`, c(connTextToken), bg],
-      [`connected label (${connTextToken}) on --card over the worst field`, c(connTextToken), card],
+      [`"done on the home page" pill (${pillToken}) on --bg`, c(pillToken), bg],
+      [`"done on the home page" pill (${pillToken}) on the worst field`, c(pillToken), field],
+      // The hero's connected pill keeps a solid surface: --ok as text over the bare field is 3.36:1 in light (TIN-1094).
+      [`connected pill (${connTextToken} on ${connPillBgToken}) over the worst field`, c(connTextToken), c(connPillBgToken, field)],
       [`"start here" pill (${nextPillToken}) on ${nextPillBgToken} over the worst field`, c(nextPillToken), c(nextPillBgToken, field)],
       [`next step number (${nextNumberToken} on ${nextNumberBgToken})`, c(nextNumberToken), c(nextNumberBgToken)],
     ];
+    // /try in two phases (TIN-1094): every text the page adds, its token read from pages.css, over each surface it sits
+    // on. Phase 2's card is --card with --accent-soft fading over its top, so its text is held to both.
+    const phase2 = parse(t["accent-soft"]!, card);
+    const surfaces: Record<string, Rgb> = { "the worst field": field, "--card over the field": card, "--card-solid": c("card-solid"), "phase 2's top": phase2 };
+    const onTry: [string, string[]][] = [
+      [".try-status", ["the worst field"]],
+      [".try-rail a", ["--card over the field"]],
+      [".try-rail small", ["--card over the field"]],
+      [".try-rail b", ["--card over the field"]],
+      [".try-opt", ["--card over the field", "phase 2's top"]],
+      [".try-phase-head p:not(.landing-who)", ["the worst field"]],
+      [".try-step p", ["the worst field"]],
+      [".try-step.done .try-conn-sentence", ["the worst field"]],
+      [".try-host", ["the worst field", "--card-solid"]],
+      [".try-ex-body", ["--card over the field"]],
+      [".try-ex-body small", ["--card over the field"]],
+      [".try-ex-body a", ["--card over the field"]],
+      [".try-ex-row", ["--card-solid"]],
+      [".try-ex-row b", ["--card-solid"]],
+      [".try-ex-row .num", ["--card-solid"]],
+      [".try-ex-bridge li", ["--card-solid"]],
+      [".try-ex-bridge b", ["--card-solid"]],
+      [".try-end", ["the worst field"]],
+      [".try-end b", ["the worst field"]],
+      [".try-more-head p:not(.landing-who)", ["--card over the field", "phase 2's top"]],
+      [".try-app b", ["--card-solid"]],
+      [".try-app > p", ["--card-solid"]],
+      [".try-join-app", ["--card over the field", "phase 2's top"]],
+      [".try-join-cap", ["--card over the field", "phase 2's top"]],
+      [".try-move", ["--card over the field", "phase 2's top"]],
+      [".try-move small", ["--card over the field", "phase 2's top"]],
+      [".try-move a", ["--card over the field", "phase 2's top"]],
+      [".try-aside", ["the worst field"]],
+      [".try-aside b", ["the worst field"]],
+    ];
+    for (const [selector, on] of onTry) {
+      const token = colorOf(selector);
+      for (const surface of on) text.push([`${selector} (${token}) on ${surface}`, c(token, surfaces[surface]), surfaces[surface]!]);
+    }
+    text.push([`the bar's label (${barLabelToken}) on --tint over --card`, c(barLabelToken), parse(t["tint"]!, card)]);
     for (const [label, a, b] of text) assert.ok(contrast(a, b) >= 4.5, `${name}: ${label} is ${contrast(a, b).toFixed(2)}:1 (below 4.5:1)`);
 
     const graphics: [string, Rgb, Rgb][] = [
       [`done check (${checkToken} on ${discToken})`, c(checkToken), c(discToken)],
       [`connected check (${connCheckToken} on ${connDiscToken})`, c(connCheckToken), c(connDiscToken)],
       [`done disc (${discToken}) on --bg`, c(discToken), bg],
+      [`phase 1's end check (${endCheckToken} on ${endDiscToken})`, c(endCheckToken), c(endDiscToken)],
     ];
     for (const [label, a, b] of graphics) assert.ok(contrast(a, b) >= 3, `${name}: ${label} is ${contrast(a, b).toFixed(2)}:1 (below 3:1)`);
   }

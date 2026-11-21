@@ -26,7 +26,7 @@ export type SitePage = "landing" | "try" | "build";
 /** Each page, its path and its title. */
 export const SITE_PAGES: Record<SitePage, { path: string; title: string }> = {
   landing: { path: "/", title: "Agent Pointed Context: point your AI agent at what you see" },
-  try: { path: "/try", title: "Try APC: your agent, two demo apps, one drag" },
+  try: { path: "/try", title: "Try APC: your agent, a demo app, one drag" },
   build: { path: "/build", title: "Build with APC: make your app pointable" },
 };
 
