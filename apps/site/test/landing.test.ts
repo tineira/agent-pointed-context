@@ -505,8 +505,8 @@ test("the old anchors land on the new pages", () => {
 test("the top bar leads to the pages from everywhere: Try it, Build it, Docs, Spec, GitHub and the theme toggle, and nothing of the Dock", () => {
   assert.match(site, /href=\{SITE_PAGES\.try\.path\}[^>]*>Try it</);
   assert.match(site, /href=\{SITE_PAGES\.build\.path\}[^>]*>Build it</);
-  assert.match(site, /href=\{DOCS\}>Docs</);
-  assert.match(site, /href=\{`\$\{DOCS\}\/spec`\}>Spec</);
+  assert.match(site, /<a href=\{DOCS\} aria-current=\{props\.docsAt === DOCS \? "page" : undefined\}>Docs</);
+  assert.match(site, /<a href=\{`\$\{DOCS\}\/spec`\} aria-current=\{props\.docsAt === `\$\{DOCS\}\/spec` \? "page" : undefined\}>Spec</);
   assert.match(site, /href=\{REPO\}[^>]*>\s*GitHub/);
   assert.match(site, /className="site-theme-toggle"/);
   assert.doesNotMatch(site, /Your dock|\/api\/|fetch\(/, "the site asks no server about the visitor");
