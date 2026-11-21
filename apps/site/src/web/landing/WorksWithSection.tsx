@@ -1,6 +1,6 @@
 import { AgentIcon } from "../agent-icon.tsx";
 
-/** The agents named under the hero, by their logos (products.ts). */
+/** The agents named under the hero, by their logos (agent-logos.ts, through model/products.ts). */
 const AGENTS = [
   { brand: "claude", name: "Claude" },
   { brand: "openai", name: "ChatGPT" },
@@ -10,18 +10,19 @@ const AGENTS = [
 
 export function WorksWithSection() {
   return (
-    <section className="landing-works rv" aria-label="Compatible agents">
-      <ul className="landing-agents" aria-label="Works with">
+    <section className="wrap landing-works rv" aria-label="Compatible agents">
+      <p className="landing-works-lab">Works with</p>
+      <ul className="landing-agents">
         {AGENTS.map((a) => (
           <li key={a.brand}>
             <span aria-hidden="true">
-              <AgentIcon clientName={null} brandId={a.brand} size={16} />
+              <AgentIcon clientName={null} brandId={a.brand} size={23} />
             </span>
             {a.name}
           </li>
         ))}
-        <li>any agent that takes an MCP server</li>
       </ul>
+      <p className="landing-compat">and any agent that accepts a remote MCP server</p>
     </section>
   );
 }

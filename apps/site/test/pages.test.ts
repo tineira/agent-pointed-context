@@ -130,9 +130,18 @@ test("no page links an href the footer also carries: the landing, /try and /buil
   assert.deepEqual(FOOTER_LINKS.map((l) => l.href), ["/docs/spec", "https://doi.org/10.5281/zenodo.23383101", "https://doi.org/10.5281/zenodo.23382909", V1]);
   const footerLink = /\{PAPER\}|\{RECORDS\}|\{V1\}|href=\{`\$\{DOCS\}\/spec`\}|href="(?:\/docs\/spec|\/v1\/?)"|10\.5281\/zenodo/;
   assert.ok(landingSources.length >= 2, "the landing's root and its sections");
-  landingSources.forEach((source, i) => assert.doesNotMatch(source, footerLink, `landing source #${i} links a footer link itself`));
+  // The landing's standard section (TIN-1067) links the spec and both records, and the landing passes exactly what it
+  // links (STANDARD_LINKS, its cards' hrefs) to its footer, as /build does. Every other landing source links none.
+  const standard = read("apps/site/src/web/landing/StandardSection.tsx");
+  const landingRoot = read("apps/site/src/web/landing.tsx");
+  landingSources
+    .filter((source) => source !== standard)
+    .forEach((source, i) => assert.doesNotMatch(source, footerLink, `landing source #${i} links a footer link itself`));
+  assert.match(standard, /export const STANDARD_LINKS = CARDS\.map\(\(c\) => c\.href\);/);
+  assert.doesNotMatch(standard.slice(standard.indexOf("export const STANDARD_LINKS")), /\{PAPER\}|\{RECORDS\}|\{V1\}|href=\{`/, "the section links footer hrefs only through CARDS");
+  assert.match(landingRoot, /<SiteFooter onPage=\{STANDARD_LINKS\} \/>/);
   assert.doesNotMatch(tryPage, footerLink, "TryPage links a footer link itself");
-  for (const source of [...landingSources, tryPage]) assert.doesNotMatch(source, /<SiteFooter onPage/, "a page that links none of the footer's passes none to its footer");
+  for (const source of [...landingSources.filter((s) => s !== landingRoot), tryPage]) assert.doesNotMatch(source, /<SiteFooter onPage/, "a page that links none of the footer's passes none to its footer");
 });
 
 test("neither the Dock nor Autio is named on /try or /build", () => {
