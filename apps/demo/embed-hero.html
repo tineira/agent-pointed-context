@@ -6,6 +6,8 @@
     <meta name="referrer" content="no-referrer" />
     <!-- The origin this view talks to by postMessage: filled in by the Worker (src/worker/index.ts, /embed/hero). -->
     <meta name="apc-embed-parent" content="" />
+    <!-- The hero's marker: the Worker frames this answer only if the page it serves carries it (heroDocument, src/worker/embed.ts). -->
+    <meta name="apc-embed-view" content="hero" />
     <title>Pulse · live hero</title>
     <!-- No inline script or style, no third party (the view's CSP: src/worker/embed.ts). -->
     <link rel="stylesheet" href="/src/web/embed/embed.css" />

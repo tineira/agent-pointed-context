@@ -31,13 +31,20 @@ export function createEmbedApi(sid: string) {
       if (answer.status !== 200 || !answer.json) throw Object.assign(new Error(`state: ${answer.status}`), { status: answer.status });
       return answer.json;
     },
-    /** A new Direct agent for the hero (its own grant): 200 with the grant, 400 `too_many` at the cap, 429 rate limited. */
-    addAgent: () => post<GrantState & { ok?: boolean; error?: string }>("/grants/agent", {}),
+    /**
+     * The hero's agent (its own grant), idempotent: the sandbox makes it on the first call and returns it on every later
+     * one. 200 with the grant and `made`, 400 `too_many` at the cap, 429 rate limited.
+     */
+    embedAgent: () => post<GrantState & { made?: boolean; ok?: boolean; error?: string }>("/grants/embed", {}),
     reportView: (view: unknown) => post<{ ok: boolean }>("/view", view),
     pin: (grantId: string, target: FocusTarget) => post<{ ok: boolean; error?: string }>("/pin", { grant_id: grantId, target }),
     unpin: (grantId: string) => post<{ ok: boolean }>("/unpin", { grant_id: grantId }),
-    /** The sandbox's messages (presence, pins, grants), with the page's heartbeat; reconnects with backoff, as Pulse does. */
-    connect(onMessage: (message: ServerMessage) => void): () => void {
+    /**
+     * The sandbox's messages (presence, pins, grants), with the page's heartbeat; reconnects with backoff, as Pulse does.
+     * `onLink` runs on every open (the first and each reconnect) and on every close: what changed while the socket was
+     * down (a revoke, the agent's initialize, the sandbox ending) is not replayed, so the page reads the state again.
+     */
+    connect(onMessage: (message: ServerMessage) => void, onLink?: () => void): () => void {
       let socket: WebSocket | null = null;
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       let retry: ReturnType<typeof setTimeout> | undefined;
@@ -50,6 +57,7 @@ export function createEmbedApi(sid: string) {
           const ws = socket;
           ws?.send("ping");
           heartbeat = setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send("ping"), HEARTBEAT_MS);
+          onLink?.();
         };
         socket.onmessage = (event) => {
           if (event.data === "pong") return;
@@ -62,6 +70,8 @@ export function createEmbedApi(sid: string) {
         socket.onclose = () => {
           clearInterval(heartbeat);
           if (closed) return;
+          // Closed: the sandbox may have ended (its handshake then fails too), so the page reads the state again.
+          onLink?.();
           retry = setTimeout(open, delay);
           delay = Math.min(60_000, delay * 2);
         };

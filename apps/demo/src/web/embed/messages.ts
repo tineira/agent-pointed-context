@@ -34,13 +34,22 @@ export function parentOriginFrom(content: string | null | undefined): string | n
 }
 
 /**
- * The status the landing may know (§ 5): connected once the hero's own grant exists and its agent has sent
- * `initialize` (`client_name`), never from presence; and that agent's name, cleaned, or null.
+ * Whether the hero's agent is connected: its grant exists and its agent sent `initialize` with a name (`client_name`),
+ * as Pulse's own pages read it (an empty name is not connected). Never from presence. The view and the landing's status
+ * both read this, so they never disagree.
  */
-export function pulseStatus(grant: GrantState | null, name: string | null | undefined): Extract<EmbedMessage, { type: "apc:pulse-status" }> {
-  const connected = !!grant && grant.client_name !== null;
-  return { type: "apc:pulse-status", connected, agentName: connected ? cleanName(name ?? grant!.client_name) : null };
+export function agentConnected(grant: GrantState | null | undefined): boolean {
+  return !!grant?.client_name;
 }
+
+/** The status the landing may know (§ 5): whether the hero's agent is connected, and its name, cleaned, or null. */
+export function pulseStatus(grant: GrantState | null, name: string | null | undefined): Extract<EmbedMessage, { type: "apc:pulse-status" }> {
+  const connected = agentConnected(grant);
+  return { type: "apc:pulse-status", connected, agentName: connected ? cleanName(name || grant!.client_name) : null };
+}
+
+/** What the landing is told when the hero has no agent to speak of: the sandbox ended, or its grant was revoked. */
+export const NOT_CONNECTED: Extract<EmbedMessage, { type: "apc:pulse-status" }> = { type: "apc:pulse-status", connected: false, agentName: null };
 
 /** An `apc:theme` from the parent, or null for anything else (another origin, another window, another shape). */
 export function themeFrom(event: { origin: string; source: unknown; data: unknown }, parentOrigin: string | null, parent: unknown): Scheme | null {

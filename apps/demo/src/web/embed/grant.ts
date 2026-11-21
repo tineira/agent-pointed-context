@@ -1,20 +1,18 @@
 /**
  * The hero's one agent (TIN-1070, design TIN-1063 § 4 rule 3, with Tomas's one-click decision of 2026-11-21): the hero
- * makes its own unrestricted Direct grant when it opens, and only one per sandbox.
+ * gets its own unrestricted Direct grant when it opens, and only one per sandbox.
  *
- * - It remembers the grant's id in Pulse's localStorage, per sandbox (`apc:embed-hero-grant:<sid>`), and reuses it only
- *   while it still qualifies: in the sandbox's grants, unrestricted (`regions === null`), not a dock's.
- * - One make at a time: callers on the page share one promise (React StrictMode, a remount), and Pulse's tabs take
- *   turns under a Web Lock, each looking again at what is remembered once it holds it.
+ * - **The sandbox decides, idempotently** (`POST /api/s/:sid/grants/embed`, Sandbox.ensureEmbedGrant): it makes the
+ *   sandbox's one hero grant on the first call and returns that same grant on every later one, while it still qualifies
+ *   (unrestricted, Direct, not a dock's). So an answer lost on the way, a reload, a second tab or blocked storage never
+ *   makes a second grant: nothing on the page has to remember it.
+ * - Callers on one page share one call (React StrictMode, a remount): one request, not two.
  * - It never shows another grant's secret: not the sandbox's first agent, not a restricted one, not one made on the
- *   Agents page.
+ *   Agents page. The page shows only the grant this call returned, found again in the state by its id.
  */
 import type { GrantState, SandboxState } from "./api.ts";
 
-export const EMBED_GRANT_LOCK = "apc-pulse-embed-grant";
-export const embedGrantKey = (sid: string): string => `apc:embed-hero-grant:${sid}`;
-
-/** The remembered grant, if it still qualifies; null otherwise. A dock grant's secret is empty in the state, so it never shows. */
+/** The hero's grant as the state lists it, if it still qualifies; null otherwise (revoked, restricted, a dock's, no secret). */
 export function qualifyingGrant(state: SandboxState, id: string | null): GrantState | null {
   if (!id) return null;
   const grant = state.grants.find((g) => g.id === id);
@@ -26,63 +24,29 @@ export function qualifyingGrant(state: SandboxState, id: string | null): GrantSt
 export type EmbedGrantError = "too_many" | "rate_limited" | "failed";
 export type EmbedGrantResult = { ok: true; grantId: string; made: boolean } | { ok: false; error: EmbedGrantError };
 
-/** What making the grant needs; the page passes the real ones, a test fakes them. */
-export interface EmbedGrantDeps {
-  state(): Promise<SandboxState>;
-  mint(): Promise<{ status: number; json: { id?: string; ok?: boolean; error?: string } | null }>;
-  storage: { get(key: string): string | null; set(key: string, value: string): void };
-  locks?: { request<T>(name: string, callback: () => Promise<T>): Promise<T> };
-}
+/** The sandbox's answer to `POST /grants/embed`, as the page reads it (a test fakes it). */
+export type EmbedMint = () => Promise<{ status: number; json: { id?: string; made?: boolean; ok?: boolean; error?: string } | null }>;
 
 const inFlight = new Map<string, Promise<EmbedGrantResult>>();
 
-/** The hero's grant for this sandbox: the remembered one, else a new one. Shared by concurrent callers. */
-export function ensureEmbedGrant(sid: string, deps: EmbedGrantDeps): Promise<EmbedGrantResult> {
+/** The hero's grant for this sandbox, from the sandbox (made once, then the same one). Shared by concurrent callers. */
+export function ensureEmbedGrant(sid: string, mint: EmbedMint): Promise<EmbedGrantResult> {
   let run = inFlight.get(sid);
   if (!run) {
-    const once = () => resolveGrant(sid, deps);
-    run = (deps.locks ? deps.locks.request(EMBED_GRANT_LOCK, once) : once()).catch((): EmbedGrantResult => ({ ok: false, error: "failed" })).finally(() => inFlight.delete(sid));
+    run = ask(mint).catch((): EmbedGrantResult => ({ ok: false, error: "failed" })).finally(() => inFlight.delete(sid));
     inFlight.set(sid, run);
   }
   return run;
 }
 
-async function resolveGrant(sid: string, deps: EmbedGrantDeps): Promise<EmbedGrantResult> {
-  const key = embedGrantKey(sid);
-  const remembered = deps.storage.get(key);
-  if (remembered && qualifyingGrant(await deps.state(), remembered)) return { ok: true, grantId: remembered, made: false };
-  const answer = await deps.mint();
+async function ask(mint: EmbedMint): Promise<EmbedGrantResult> {
+  const answer = await mint();
   if (answer.status === 429) return { ok: false, error: "rate_limited" };
   if (answer.status === 400 && answer.json?.error === "too_many") return { ok: false, error: "too_many" };
   const id = answer.json?.id;
   if (answer.status !== 200 || typeof id !== "string") return { ok: false, error: "failed" };
-  deps.storage.set(key, id);
-  return { ok: true, grantId: id, made: true };
+  return { ok: true, grantId: id, made: answer.json?.made === true };
 }
-
-/** Web Locks, where the browser has them, in the shape ensureEmbedGrant takes. */
-export function browserLocks(): EmbedGrantDeps["locks"] {
-  const locks = (globalThis as { navigator?: { locks?: { request<T>(name: string, cb: () => Promise<T>): Promise<T> } } }).navigator?.locks;
-  return locks ? { request: (name, callback) => locks.request(name, callback) } : undefined;
-}
-
-/** Pulse-origin localStorage, which can throw (blocked storage): a failed read is nothing remembered, a failed write is skipped. */
-export const browserStorage: EmbedGrantDeps["storage"] = {
-  get: (key) => {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  set: (key, value) => {
-    try {
-      localStorage.setItem(key, value);
-    } catch {
-      // not remembered: the next open makes another grant, which the cap bounds
-    }
-  },
-};
 
 /** A second product on the hero's address, while it still uses it (Pulse's rule, TIN-358: an hour after its last call). */
 export function activeConflict(g: GrantState, now = Date.now()): GrantState["conflict"] {

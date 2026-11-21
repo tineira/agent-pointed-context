@@ -20,8 +20,8 @@ import { openSession } from "../session.ts";
 import { EmbedAgentBar, type EmbedBarAgent } from "./agent-bar.tsx";
 import { createEmbedApi, EMBED_VIEW, type EmbedApi, type GrantState, type SandboxState } from "./api.ts";
 import { HeroChart, heroSeries, monthName, monthShort } from "./chart.tsx";
-import { activeConflict, browserLocks, browserStorage, ensureEmbedGrant, type EmbedGrantError } from "./grant.ts";
-import { pulseStatus, type createPoster } from "./messages.ts";
+import { activeConflict, ensureEmbedGrant, qualifyingGrant, type EmbedGrantError } from "./grant.ts";
+import { agentConnected, NOT_CONNECTED, pulseStatus, type createPoster } from "./messages.ts";
 
 type Poster = ReturnType<typeof createPoster>;
 
@@ -31,13 +31,19 @@ const READING_MS = 6000;
 /** The calls the agent window lists, newest last. */
 const CALLS_SHOWN = 6;
 
-const ERRORS: Record<EmbedGrantError | "session" | "rate_limited_session" | "expired" | "revoked", string> = {
+/** The first wait before reading the state again after a failed read, and the longest. */
+const RETRY_FIRST_MS = 2000;
+const RETRY_MAX_MS = 30_000;
+
+const ERRORS: Record<EmbedGrantError | "session" | "rate_limited_session" | "expired" | "revoked" | "read" | "read_limited", string> = {
   rate_limited: "Pulse is making too many new agents right now. Try again in a minute.",
   rate_limited_session: "Too many new demos from your network in the last minute. Try again in a minute.",
   too_many: "This demo sandbox already has the most agents it can hold (20). Open Pulse to use one of them.",
   failed: "Pulse could not make your agent's address. Reload to try again, or open Pulse.",
   session: "Pulse could not open your demo sandbox. Reload to try again, or open Pulse.",
   expired: "This demo sandbox ended (they last 6 hours idle). Reload to start a new one.",
+  read: "Pulse did not answer. Trying again…",
+  read_limited: "Pulse is busy right now. Trying again in a moment…",
   revoked: "This agent's address was revoked in Pulse. Reload to get a new one.",
 };
 
@@ -56,7 +62,8 @@ export function EmbedHero(props: { poster: Poster }) {
         return;
       }
       const api = createEmbedApi(sid);
-      const result = await ensureEmbedGrant(sid, { state: api.state, mint: api.addAgent, storage: browserStorage, locks: browserLocks() });
+      // The sandbox makes the hero's one grant, or returns the one it made (idempotent: a reload never makes another).
+      const result = await ensureEmbedGrant(sid, api.embedAgent);
       if (!live) return;
       if (!result.ok) return setOpened({ error: ERRORS[result.error] });
       // A new agent: say what the hero shows, so the agent's get_current_view names a screen (§ 4).
@@ -132,33 +139,71 @@ function Live(props: { sid: string; grantId: string; poster: Poster }) {
   stateRef.current = state;
   const litTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refresh = useCallback(
-    () =>
-      api.state().then(setState, (e: { status?: number }) => {
-        if (e?.status === 404) setFailure(ERRORS.expired);
-      }),
-    [api],
-  );
+  // The state is the truth (B-3 of PR #245's review): read on mount, on every socket open and close (what changed while
+  // it was down is not replayed), and on any message the view does not fold in itself. The sandbox gone (404) or no
+  // longer this browser's (403) ends the view; any other failure (a 429, the network, a 5xx) shows inline and reads
+  // again with backoff, so the view never stays on "Opening…".
+  const [ended, setEnded] = useState(false);
+  const retry = useRef<{ timer: ReturnType<typeof setTimeout> | null; delay: number }>({ timer: null, delay: RETRY_FIRST_MS });
+  const alive = useRef(true);
+  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+  const refresh = useCallback(() => refreshRef.current(), []);
+  refreshRef.current = async () => {
+    try {
+      const next = await api.state();
+      if (!alive.current) return;
+      if (retry.current.timer) clearTimeout(retry.current.timer);
+      retry.current = { timer: null, delay: RETRY_FIRST_MS };
+      setFailure(null);
+      setState(next);
+    } catch (error) {
+      if (!alive.current) return;
+      const status = (error as { status?: number })?.status;
+      if (status === 404 || status === 403) {
+        setEnded(true);
+        setState(null);
+        return;
+      }
+      setFailure(status === 429 ? ERRORS.read_limited : ERRORS.read);
+      if (!retry.current.timer) {
+        const delay = retry.current.delay;
+        retry.current = { delay: Math.min(RETRY_MAX_MS, delay * 2), timer: setTimeout(() => {
+          retry.current.timer = null;
+          void refreshRef.current();
+        }, delay) };
+      }
+    }
+  };
   useEffect(() => {
+    alive.current = true;
     void refresh();
+    return () => {
+      alive.current = false;
+      if (retry.current.timer) clearTimeout(retry.current.timer);
+      retry.current = { timer: null, delay: RETRY_FIRST_MS };
+    };
   }, [refresh]);
 
-  const grant: GrantState | null = state?.grants.find((g) => g.id === grantId) ?? null;
+  // Only the grant the sandbox gave the hero, and only while it qualifies (revoked, it is gone).
+  const grant: GrantState | null = state ? qualifyingGrant(state, grantId) : null;
   const name = grant ? (displayNames([grant]).get(grant.id) ?? grant.label) : "Your agent";
-  const connected = !!grant?.client_name;
+  const connected = agentConnected(grant);
   const pinnedMonth = typeof grant?.pin?.params?.month === "string" ? grant.pin.params.month : null;
   const pinnedMonthRef = useRef(pinnedMonth);
   pinnedMonthRef.current = pinnedMonth;
 
-  // The landing learns only whether the agent is connected, and its cleaned name (§ 5).
+  // The landing learns only whether the agent is connected, and its cleaned name (§ 5): not connected once the sandbox
+  // ended or the grant is gone, whatever it said before.
   useEffect(() => {
-    if (state) poster.status(pulseStatus(grant, grant ? name : null));
-  }, [state, grant, name, poster]);
+    if (ended) poster.status(NOT_CONNECTED);
+    else if (state) poster.status(pulseStatus(grant, grant ? name : null));
+  }, [ended, state, grant, name, poster]);
 
   // The sandbox's messages: this agent's calls, waits and pin; anything else refreshes the state.
+  // Not once the sandbox ended: nothing is left to listen to.
   useEffect(
     () =>
-      api.connect((message) => {
+      ended ? undefined : api.connect((message) => {
         if (message.type === "activity") return;
         if (message.type === "presence") {
           const event = message.event;
@@ -188,8 +233,8 @@ function Live(props: { sid: string; grantId: string; poster: Poster }) {
           return;
         }
         void refresh();
-      }),
-    [api, grantId, refresh],
+      }, () => void refresh()),
+    [api, grantId, refresh, ended],
   );
   useEffect(() => () => {
     if (litTimer.current) clearTimeout(litTimer.current);
@@ -231,15 +276,32 @@ function Live(props: { sid: string; grantId: string; poster: Poster }) {
 
   const motionOf = (id: string): AgentMotion =>
     motionFor({
-      connected: !!grant?.client_name && id === grantId,
+      connected: connected && id === grantId,
       waiting: waitOpen(openWaits, id, { path: "direct" }),
       busy: busyAt !== null && Date.now() - busyAt < 1500,
       seenAt,
       now: Date.now(),
     });
 
-  if (failure) return <Frame agent={<p className="note note-error" role="status">{failure}</p>} />;
-  if (!state) return <Frame agent={<p className="note" role="status">Opening your Pulse demo…</p>} />;
+  if (ended) return <Frame agent={<p className="note note-error" role="status">{ERRORS.expired}</p>} />;
+  if (!state) {
+    return (
+      <Frame
+        agent={
+          failure ? (
+            <div className="note note-error" role="status">
+              <p>{failure}</p>
+              <button type="button" className="btn" onClick={() => void refresh()}>
+                Try again now
+              </button>
+            </div>
+          ) : (
+            <p className="note" role="status">Opening your Pulse demo…</p>
+          )
+        }
+      />
+    );
+  }
   if (!grant) return <Frame agent={<p className="note note-error" role="status">{ERRORS.revoked}</p>} />;
 
   const url = `${location.origin}/mcp/${sid}/${grant.secret}`;
@@ -274,6 +336,11 @@ function Live(props: { sid: string; grantId: string; poster: Poster }) {
             {conflict && (
               <p className="note note-error" role="alert">
                 Another app is using this address. Give each app its own: open Pulse, beside this demo, to make another.
+              </p>
+            )}
+            {failure && (
+              <p className="note note-error" role="status">
+                {failure}
               </p>
             )}
             {notice && (

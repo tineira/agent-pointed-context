@@ -235,6 +235,13 @@ export class Sandbox extends DurableObject<Env> {
       // already there
     }
     this.sql.exec("update grants set dock = 1 where dock is null and id in (select grant_id from hub_links)");
+    // The landing hero's own grant (TIN-1070) says so itself, in the statement that makes it: one per sandbox, found
+    // again by the hero on every open, so a lost answer or a reload never makes a second one.
+    try {
+      this.sql.exec("alter table grants add column embed integer");
+    } catch {
+      // already there
+    }
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Pulse", grants: () => this.linkGrants() });
     this.consent = new DockConsent(sqlKv(this.sql));
     if (this.wake) this.wake.useStore(kvWakeStore(sqlKv(this.sql)));
@@ -668,12 +675,29 @@ export class Sandbox extends DurableObject<Env> {
     return !exists && this.directFull() ? { ok: false, error: "too_many" } : { ok: true, grant: await this.addRestrictedGrant(region) };
   }
 
+  /**
+   * The landing hero's agent (TIN-1070, design TIN-1063 § 4 rule 3): the sandbox's one hero grant, made on the hero's
+   * first open and returned as it is on every later one, so the hero's call is idempotent. Only a grant that still
+   * qualifies is returned: unrestricted, Direct (no dock link, not made for a dock). Revoked, it is gone, and the next
+   * open makes a new one. A new one counts against MAX_DIRECT_GRANTS like any Direct agent. The flag is written in the
+   * statement that makes the grant, so no failure between two writes can leave a hero grant the hero does not find.
+   */
+  async ensureEmbedGrant(): Promise<{ ok: boolean; error?: "too_many"; grant?: Grant; made?: boolean }> {
+    const found = this.sql
+      .exec<{ id: string }>("select id from grants where embed = 1 and regions is null and (dock is null or dock = 0) and id not in (select grant_id from hub_links) order by created_at limit 1")
+      .toArray()[0];
+    const existing = found ? this.grants().find((g) => g.id === found.id) : undefined;
+    if (existing) return { ok: true, grant: existing, made: false };
+    if (this.directFull()) return { ok: false, error: "too_many" };
+    return { ok: true, grant: await this.addAgentGrant(true), made: true };
+  }
+
   /** Another agent with full access: one URL and one mark per client, so each client's behaviour is measured apart. */
-  async addAgentGrant(): Promise<Grant> {
+  async addAgentGrant(embed = false): Promise<Grant> {
     const g = newDirectGrant();
     const direct = this.linkGrants().filter((x) => x.path === "direct").map((x) => x.id);
     const n = this.grants().filter((x) => !x.regions && direct.includes(x.id)).length + 1;
-    this.sql.exec("insert into grants (id, secret, label, regions, created_at) values (?, ?, ?, null, ?)", g.id, g.secret, `Agent ${n}`, g.created_at);
+    this.sql.exec("insert into grants (id, secret, label, regions, created_at, embed) values (?, ?, ?, null, ?, ?)", g.id, g.secret, `Agent ${n}`, g.created_at, embed ? 1 : null);
     this.broadcast({ type: "grants" });
     return this.grants().find((x) => x.id === g.id)!;
   }

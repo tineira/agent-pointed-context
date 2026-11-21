@@ -31,7 +31,7 @@
  */
 
 import { SITE_CSP } from "../apps/site/src/worker/csp.ts";
-import { embedHeroCsp } from "../apps/demo/src/worker/embed.ts";
+import { EMBED_HERO_MARKER, effectiveFrameAncestors, embedHeroCsp } from "../apps/demo/src/worker/embed.ts";
 import { startWorkerd } from "./lib/dock-workerd.mjs";
 
 const PRODUCTION = process.argv.includes("--production");
@@ -169,11 +169,12 @@ async function readDocs(t) {
 async function readFraming(t) {
   const get = async (path, headers = {}) => {
     const response = await withDeadline(runtime.send(`${PULSE}${path}`, { headers: { "user-agent": USER_AGENT, ...headers }, redirect: "manual" }), STEP_MS, `GET ${PULSE}${path}`);
-    await response.arrayBuffer();
+    const body = await response.text();
     const h = (name) => response.headers.get(name);
-    return { status: response.status, csp: h("content-security-policy"), frame: h("x-frame-options"), sniff: h("x-content-type-options"), referrer: h("referrer-policy"), location: h("location") };
+    return { status: response.status, body, csp: h("content-security-policy"), frame: h("x-frame-options"), sniff: h("x-content-type-options"), referrer: h("referrer-policy"), location: h("location") };
   };
-  const deny = (r) => /(^|;)\s*frame-ancestors 'none'\s*(;|$)/.test(r.csp ?? "") && r.frame === "DENY" && r.sniff === "nosniff";
+  // The effective directive, the first one, as a browser reads it (CSP3): a later 'none' would not forbid anything.
+  const deny = (r) => effectiveFrameAncestors(r.csp) === "'none'" && r.frame === "DENY" && r.sniff === "nosniff";
   const shown = (r) => `HTTP ${r.status}; CSP ${r.csp}; X-Frame-Options ${r.frame}; nosniff ${r.sniff}`;
   for (const path of ["/", "/agents", "/connect/dock", "/api/health", "/zzz-probe"]) {
     const r = await get(path);
@@ -186,6 +187,10 @@ async function readFraming(t) {
   const hero = await get("/embed/hero", { "sec-fetch-dest": "iframe" });
   t.check(hero.status === 200 && hero.csp === embedHeroCsp([DOCK]) && hero.frame === "DENY" && hero.sniff === "nosniff" && hero.referrer === "no-referrer",
     "Pulse /embed/hero in a frame carries its policy (frame-ancestors https://apc.tineira.com only), DENY, nosniff, no-referrer", shown(hero));
+  // The body proves it is the hero (B-1 of PR #245's review): its marker, its parent filled in, its own entry, and not the
+  // full app's entry (an SPA fallback would carry the hero's policy otherwise).
+  const isHero = hero.body.includes(EMBED_HERO_MARKER) && hero.body.includes(`<meta name="apc-embed-parent" content="${DOCK}" />`) && /src="\/assets\/embedHero-[A-Za-z0-9_-]+\.js"/.test(hero.body) && !/src="\/assets\/main-[A-Za-z0-9_-]+\.js"/.test(hero.body);
+  t.check(hero.status === 200 && isHero, "Pulse /embed/hero serves the hero's own page (its marker, its parent and its entry; not the full app's)", `HTTP ${hero.status}; ${hero.body.length} bytes`);
 }
 
 /** The production smoke's steps, against the real hub. */

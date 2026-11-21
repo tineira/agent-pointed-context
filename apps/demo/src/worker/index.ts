@@ -11,7 +11,7 @@ import type { ApcProfile } from "@tineira/apc-protocol";
 import { apcJsonResponse, apcManifest, handleDockGiveBack, profilesRefusal } from "@tineira/apc-server";
 import { REGIONS, type Region } from "../model/seed.ts";
 import { givenBack, isOwnerStateRequest, ownerRequestRefusal, publicOrigin } from "./dock-app.ts";
-import { applyFramingHeaders, EMBED_HERO_PATH, embedAncestors, embedHeroCsp, embedMessageOrigin, embedParentOrigin, type EmbedEnv } from "./embed.ts";
+import { applyFramingHeaders, EMBED_HERO_PATH, embedAncestors, embedHeroCsp, embedMessageOrigin, embedParentOrigin, heroDocument, type EmbedEnv } from "./embed.ts";
 import { SANDBOX_TTL_MS, servedProfiles, type Env } from "./sandbox.ts";
 
 export { Sandbox } from "./sandbox.ts";
@@ -19,20 +19,23 @@ export { WakeBudget } from "./wake-budget.ts";
 
 const COOKIE = "apc_session";
 type Stub = DurableObjectStub<import("./sandbox.ts").Sandbox>;
-type Vars = { sid: string; owner: string };
+/** `heroCsp`: set only by the /embed/hero route, once the document it serves proved it is the hero (TIN-1070). */
+type Vars = { sid: string; owner: string; heroCsp?: string };
 
 const app = new Hono<{ Bindings: Env & EmbedEnv; Variables: Vars }>();
 
 // Framing (TIN-1070): no Pulse answer may be framed by any site (frame-ancestors 'none', X-Frame-Options: DENY), with
-// nosniff and no-referrer, except the hero view's own 200, which only EMBED_PARENT_ORIGIN may frame. Registered first, so
-// the early answers of the middleware below (profilesRefusal, the M6 refusals, a 404) carry them too. What the assets
-// answer before the Worker runs gets the same headers from public/_headers. A WebSocket upgrade (101) is left as it is.
+// nosniff and no-referrer, except the hero view's own 200, which only EMBED_PARENT_ORIGIN may frame. That exception is
+// never read from the URL or the status alone: the /embed/hero route sets it only after the document it serves proved it
+// is the hero (heroDocument: its marker and entry, not the full app's). Registered first, so the early answers of the
+// middleware below (profilesRefusal, the M6 refusals, a 404) carry the headers too. What the assets answer before the
+// Worker runs gets the same headers from public/_headers. A WebSocket upgrade (101) is left as it is.
 app.use("*", async (c, next) => {
   await next();
   if (c.res.status === 101) return;
-  const hero = c.req.method === "GET" && new URL(c.req.url).pathname === EMBED_HERO_PATH && c.res.status === 200 ? embedParentOrigin(c.env) : null;
+  const heroCsp = c.req.method === "GET" && new URL(c.req.url).pathname === EMBED_HERO_PATH && c.res.status === 200 ? c.get("heroCsp") : undefined;
   c.res = new Response(c.res.body, c.res);
-  applyFramingHeaders(c.res.headers, hero ? { csp: embedHeroCsp(embedAncestors(hero)) } : null);
+  applyFramingHeaders(c.res.headers, heroCsp ? { csp: heroCsp } : null);
 });
 
 // A typo in APC_PROFILES serves no agent path at all, with the reason in the log and in the answer
@@ -292,6 +295,16 @@ app.post("/api/s/:sid/grants/agent", async (c) => {
   const result = await rpc(c.env, c.var.sid, (s) => s.tryAddAgent(), 1);
   return result.ok ? c.json(result.grant) : c.json({ ok: false, error: result.error }, 400);
 });
+/**
+ * The landing hero's agent (TIN-1070): the sandbox's one hero grant, made once and returned on every later call, so an
+ * answer lost on the way or a reload never makes a second one. Owner only, like every /api/s/:sid route (M6).
+ */
+app.post("/api/s/:sid/grants/embed", async (c) => {
+  if (!offers(c.env, "direct")) return c.json({ error: "dock_only" }, 404);
+  // Idempotent, so a retry after a lost connection is safe (it returns the grant the first try made).
+  const result = await rpc(c.env, c.var.sid, (s) => s.ensureEmbedGrant());
+  return result.ok && result.grant ? c.json({ ...result.grant, made: result.made === true }) : c.json({ ok: false, error: result.error }, 400);
+});
 /** apc_link (APC 0.4): the person unlinks an agent shown as one; both grants stay. */
 app.post("/api/s/:sid/grants/:id/unlink", async (c) => {
   const result = await rpc(c.env, c.var.sid, (s) => s.unlinkGrant(c.req.param("id")));
@@ -359,8 +372,13 @@ app.get(EMBED_HERO_PATH, async (c) => {
   for (const h of ["if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range", "range"]) headers.delete(h);
   const asset = await c.env.ASSETS.fetch(new Request(new URL("/embed-hero", c.req.url), { method: "GET", headers }));
   if (asset.status !== 200) return asset;
-  const messageOrigin = embedMessageOrigin(parent, c.req.header("referer"));
-  const html = (await asset.text()).replace(/<meta name="apc-embed-parent" content=""\s*\/?>/, `<meta name="apc-embed-parent" content="${messageOrigin.replace(/[&"<>]/g, "")}" />`);
+  const html = heroDocument(await asset.text(), embedMessageOrigin(parent, c.req.header("referer")));
+  // Not the hero's page (an SPA fallback, a renamed asset): an error that cannot be framed, never the full app.
+  if (!html) {
+    console.error("Pulse /embed/hero: the asset is not the hero's page (marker or entry missing); answering 500");
+    return c.json({ error: "hero_unavailable" }, 500, { "cache-control": "no-store" });
+  }
+  c.set("heroCsp", embedHeroCsp(embedAncestors(parent)));
   return c.body(html, 200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
 });
 app.all("/embed/*", (c) => c.json({ error: "not_found" }, 404));

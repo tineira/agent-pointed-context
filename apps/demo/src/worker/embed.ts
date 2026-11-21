@@ -17,9 +17,15 @@ export const LOCAL_DEV_PARENTS: readonly string[] = ["http://localhost:5202", "h
 
 const dev = () => !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
 
-/** EMBED_PARENT_ORIGIN when it is exactly one https origin; null otherwise (then /embed/hero answers 404). */
+/**
+ * EMBED_PARENT_ORIGIN when it is exactly one concrete https origin: no path, and a hostname of two or more DNS labels (no `*`,
+ * which `URL` keeps and a CSP source would read as a wildcard). Null otherwise, and then /embed/hero answers 404.
+ */
 export function embedParentOrigin(env: EmbedEnv): string | null {
-  return originOf((env.EMBED_PARENT_ORIGIN ?? "").trim(), ["https:"]);
+  const origin = originOf((env.EMBED_PARENT_ORIGIN ?? "").trim(), ["https:"]);
+  if (!origin) return null;
+  const host = new URL(origin).hostname;
+  return /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(host) ? origin : null;
 }
 
 /** Every origin that may frame the hero: the configured one, and under `vite dev` only, the local parents. */
@@ -57,14 +63,45 @@ export function embedHeroCsp(ancestors: readonly string[]): string {
   ].join("; ");
 }
 
-/** True only if a policy explicitly forbids every framing (`frame-ancestors 'none'`): such a policy is kept as it is. */
+/**
+ * The policy's effective `frame-ancestors`: its first occurrence, as a browser reads it (CSP3 § 2.2.1 ignores a repeated
+ * directive), with the sources lower-cased and single-spaced. Null when the policy has none.
+ */
+export function effectiveFrameAncestors(csp: string | null): string | null {
+  for (const directive of (csp ?? "").split(";")) {
+    const [name, ...sources] = directive.trim().split(/\s+/);
+    if (name?.toLowerCase() === "frame-ancestors") return sources.join(" ").toLowerCase();
+  }
+  return null;
+}
+
+/** True only if a policy's effective `frame-ancestors` is `'none'` and nothing else: such a policy is kept as it is. */
 export function forbidsFraming(csp: string | null): boolean {
-  if (!csp) return false;
-  return csp.split(";").some((d) => /^\s*frame-ancestors\s+'none'\s*$/i.test(d));
+  return effectiveFrameAncestors(csp) === "'none'";
 }
 
 /** Exactly the hero's path. Anything else under /embed/ is a 404. */
 export const EMBED_HERO_PATH = "/embed/hero";
+
+/** The marker only the hero's page carries (embed-hero.html): the document itself says it is the hero. */
+export const EMBED_HERO_MARKER = '<meta name="apc-embed-view" content="hero" />';
+const PARENT_PLACEHOLDER = '<meta name="apc-embed-parent" content="" />';
+/** The hero's entry script: built (`/assets/embedHero-<hash>.js`) or under `vite dev` (`/src/web/embed-hero.tsx`). */
+const HERO_ENTRY = /<script type="module"[^>]*\ssrc="(\/assets\/embedHero-[A-Za-z0-9_-]+\.js|\/src\/web\/embed-hero\.tsx)"/;
+/** The full app's entry (index.html): never in a page that may be framed. */
+const APP_ENTRY = /src="(\/assets\/main-[A-Za-z0-9_-]+\.js|\/src\/web\/main\.tsx)"/;
+
+const once = (text: string, part: string) => text.indexOf(part) !== -1 && text.indexOf(part) === text.lastIndexOf(part);
+
+/**
+ * The hero's page with its parent filled in, only if the document proves it is the hero: the marker and the parent's
+ * placeholder each exactly once, the hero's entry script, and not the full app's entry. Null otherwise (an SPA fallback,
+ * a renamed or missing asset), and then the Worker answers a deny-framed error, never the hero's policy.
+ */
+export function heroDocument(html: string, messageOrigin: string): string | null {
+  if (!once(html, EMBED_HERO_MARKER) || !once(html, PARENT_PLACEHOLDER) || !HERO_ENTRY.test(html) || APP_ENTRY.test(html)) return null;
+  return html.replace(PARENT_PLACEHOLDER, `<meta name="apc-embed-parent" content="${messageOrigin.replace(/[&"<>]/g, "")}" />`);
+}
 
 /**
  * The headers every Pulse answer carries, set on `headers` in place. The hero's own 200 gets its policy; every other

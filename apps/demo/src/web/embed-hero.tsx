@@ -29,8 +29,9 @@ if (window.self === window.top) {
     </StrictMode>,
   );
 
-  // The view's height, for the landing to size the frame (it clamps it): on every change of the page's size.
-  const measure = () => poster.resize(document.documentElement.scrollHeight);
+  // The view's height, for the landing to size the frame (it clamps it): on every change of the page's size. The body's
+  // own box, not the document's scrollHeight, which never drops below the frame's height: the frame can shrink back too.
+  const measure = () => poster.resize(document.body.getBoundingClientRect().height);
   new ResizeObserver(measure).observe(document.body);
   measure();
 }
