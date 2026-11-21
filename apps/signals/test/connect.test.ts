@@ -10,8 +10,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { durableObjectRoom, installWorkersStandIn } from "@tineira/apc-conformance/workers";
+import { sqlKv } from "@tineira/apc-server";
 import { forbidsFraming } from "../../demo/src/worker/embed.ts";
 import * as tabA from "../src/web/connect-grant.ts";
+import { createStateReader, RETRY_FIRST_MS } from "../src/web/state-reads.ts";
 
 installWorkersStandIn();
 const { Feed, MAX_DIRECT_GRANTS } = await import(new URL("../src/worker/feed.ts", import.meta.url).href);
@@ -34,7 +36,8 @@ const ASSETS = { fetch: async () => new Response("<!doctype html><title>Signals<
 
 /** One visitor's browser on one feed: the page's calls, as it sends them, through the real Worker. */
 async function browser(env: Record<string, string> = DEPLOY) {
-  const feed = new Feed(durableObjectRoom().ctx, env);
+  const room = durableObjectRoom();
+  const feed = new Feed(room.ctx, env);
   const { owner } = await feed.init();
   const workerEnv = { ...env, ASSETS, FEED: { idFromName: (name: string) => name, get: () => feed } };
   const headers = { "content-type": "application/json", cookie: `apc_signals=${SID}.${owner}`, origin: ORIGIN, "sec-fetch-site": "same-origin" };
@@ -44,7 +47,9 @@ async function browser(env: Record<string, string> = DEPLOY) {
     return { status: response.status, json: (await response.json().catch(() => null)) as Answer["json"] };
   };
   const grants = async () => ((await feed.state()) as { grants: Grant[] }).grants;
-  return { feed, send, request, grants, headers, workerEnv };
+  /** The rows flagged as the connect grant, read from the feed's own table. */
+  const flagged = () => room.db.prepare("select id from grants where connect = 1").all().map((r) => (r as { id: string }).id);
+  return { room, feed, send, request, grants, flagged, headers, workerEnv };
 }
 
 test("arriving to connect means ?connect or #connect; nothing else", () => {
@@ -135,22 +140,132 @@ test("revoked, the connect grant is gone: the same page does not make another, t
   assert.deepEqual((await grants()).map((g) => g.id), [next.grantId]);
 });
 
-test("only a qualifying grant is returned: never one made with Connect an agent, never one linked to a dock grant", async () => {
-  const { feed, send, grants } = await browser();
+test("never a grant made with Connect an agent; the connect grant stays the one across an apc_link and an Unlink", async () => {
+  const { room, feed, send, grants, flagged } = await browser();
   // An agent made on purpose with the panel's button is never the connect grant.
   const own = await feed.addDirectGrant();
   const connect = (await send()).json!;
   assert.equal(connect.made, true);
   assert.notEqual(connect.grant_id, own.grant_id);
-  // Linked to a dock grant (apc_link), it is one agent with two paths: no longer the Direct one ?connect shows.
-  const links = (feed as unknown as { links: { partnerOf: (id: string) => string | null } }).links;
-  const partnerOf = links.partnerOf.bind(links);
-  links.partnerOf = (id) => (id === connect.grant_id ? "g_dock" : partnerOf(id));
-  const replaced = (await send()).json!;
-  assert.equal(replaced.made, true);
-  assert.notEqual(replaced.grant_id, connect.grant_id);
-  assert.equal((await send()).json?.grant_id, replaced.grant_id, "and that new one is returned from then on");
-  assert.equal((await grants()).length, 3, "nothing was revoked or replaced in place");
+  // The agent links its Direct grant with a dock grant (apc_link, APC 0.4): the link changes neither grant, so a reload of
+  // ?connect returns the same grant (Pulse excludes only dock grants, its hub_links; Signals keeps those inline).
+  room.db.exec(`insert into grants (id, secret, hub, agent, created_at, state) values ('g_dock', '${"d".repeat(32)}', 'https://dock.test', 'ag_1', '2026-11-21T00:00:00.000Z', 'live')`);
+  const kv = sqlKv((room.ctx as { storage: { sql: Parameters<typeof sqlKv>[0] } }).storage.sql);
+  kv.put(`link:${connect.grant_id}`, "g_dock");
+  kv.put("link:g_dock", connect.grant_id!);
+  const linked = (await grants()).find((g) => g.id === connect.grant_id) as unknown as { linked_with: string | null };
+  assert.equal(linked.linked_with, "g_dock", "the two grants are one agent");
+  const whileLinked = (await send()).json!;
+  assert.deepEqual([whileLinked.grant_id, whileLinked.made], [connect.grant_id, false], "linked, a reload returns the same grant");
+  // The person unlinks it from the agent bar: still the same one, and only it carries the flag.
+  assert.deepEqual(await feed.unlinkGrant(connect.grant_id!), { ok: true });
+  const afterUnlink = (await send()).json!;
+  assert.deepEqual([afterUnlink.grant_id, afterUnlink.made], [connect.grant_id, false]);
+  assert.deepEqual(flagged(), [connect.grant_id], "never more than one grant carries the connect flag");
+  // Revoked, the next visit makes a new one, and it is again the only flagged row.
+  await feed.revokeGrant(connect.grant_id!);
+  const next = (await send()).json!;
+  assert.equal(next.made, true);
+  assert.deepEqual(flagged(), [next.grant_id]);
+  assert.deepEqual((await grants()).filter((g) => g.path === "direct").map((g) => g.id).sort(), [own.grant_id, next.grant_id].sort());
+});
+
+test("the database holds at most one connect grant, whatever writes to it", async () => {
+  const { room, send, flagged } = await browser();
+  const first = (await send()).json!;
+  assert.throws(() => room.db.exec(`insert into grants (id, secret, created_at, connect) values ('g_second', '${"e".repeat(32)}', '2026-11-21T00:00:00.000Z', 1)`), /UNIQUE/);
+  assert.deepEqual(flagged(), [first.grant_id]);
+});
+
+test("the connect route calls the feed once: a feed error is a 500, never retried into a second grant", async () => {
+  const { workerEnv, headers } = await browser();
+  let calls = 0;
+  const failing = {
+    isOwner: async () => true,
+    ensureConnectGrant: async () => {
+      calls++;
+      throw new Error("Durable Object reset because its code was updated.");
+    },
+  };
+  const env = { ...workerEnv, FEED: { idFromName: (name: string) => name, get: () => failing } };
+  const response = (await worker.fetch(new Request(`${ORIGIN}/api/s/${SID}/grants/connect`, { method: "POST", headers, body: "{}" }), env)) as Response;
+  assert.equal(response.status, 500);
+  assert.equal(calls, 1, "one attempt");
+});
+
+test("every /api POST leaves no body unread, the connect route and the refusals in front of it too (the reload hang)", async () => {
+  const { headers, workerEnv, send } = await browser();
+  const post = async (path: string, h: Record<string, string> = headers, body = "{}") => {
+    const request = new Request(`${ORIGIN}${path}`, { method: "POST", headers: h, body });
+    const response = (await worker.fetch(request, workerEnv)) as Response;
+    await response.arrayBuffer();
+    return { status: response.status, bodyUsed: request.bodyUsed };
+  };
+  assert.deepEqual(await post(`/api/s/${SID}/grants/connect`), { status: 200, bodyUsed: true }, "the connect route");
+  const id = (await send()).json!.grant_id!;
+  assert.deepEqual(await post(`/api/s/${SID}/grants/${id}/revoke`), { status: 200, bodyUsed: true }, "Revoke");
+  assert.deepEqual(await post(`/api/s/${SID}/grants/agent`), { status: 200, bodyUsed: true }, "Connect an agent");
+  assert.deepEqual(await post(`/api/s/${SID}/grants/connect`, { ...headers, origin: "https://evil.test" }), { status: 403, bodyUsed: true }, "an M6 refusal");
+  assert.deepEqual(await post(`/api/s/${SID}/grants/connect`, { ...headers, cookie: "" }), { status: 403, bodyUsed: true }, "no cookie");
+  assert.deepEqual(await post("/api/nope"), { status: 404, bodyUsed: true }, "an unknown /api path");
+  // A body past the cap is cancelled, not buffered: the answer still comes.
+  assert.equal((await post(`/api/s/${SID}/grants/connect`, headers, "x".repeat(200 * 1024))).status, 200);
+});
+
+test("a failed state read after ?connect is read again: the page never stays on Loading (the reload hang)", async () => {
+  // The reviewers' sequence: the mount's read (1) is superseded by the read after the connect call (2), and read 2 fails
+  // (the local runtime's 500, or a 5xx, a 429 or the network in production). Before the fix the page kept no state.
+  const timers: Array<{ fn: () => void; ms: number }> = [];
+  const states: string[] = [];
+  const failures: Array<string | null> = [];
+  let releaseFirst!: () => void;
+  const answers: Array<() => Promise<string>> = [
+    () => new Promise((resolve) => (releaseFirst = () => resolve("first"))),
+    async () => Promise.reject(Object.assign(new Error("/state: 500"), { status: 500 })),
+    async () => "after retry",
+  ];
+  const reader = createStateReader<string>({
+    read: () => answers.shift()!(),
+    onState: (s) => states.push(s),
+    onFailure: (f) => failures.push(f),
+    setTimer: (fn, ms) => timers.push({ fn, ms }),
+    clearTimer: () => undefined,
+  });
+  const mount = reader.refresh();
+  await reader.refresh(); // the read after the connect call: fails
+  releaseFirst();
+  await mount; // superseded: dropped
+  assert.deepEqual(states, [], "nothing to show yet");
+  assert.deepEqual(failures, ["failed"], "the failure is shown inline");
+  assert.equal(timers.length, 1, "and a read again is scheduled");
+  assert.equal(timers[0]!.ms, RETRY_FIRST_MS);
+  timers.shift()!.fn();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(states, ["after retry"], "the retry draws the page");
+  assert.deepEqual(failures, ["failed", null], "and clears the error");
+});
+
+test("a state read: 403 or 404 ends the page without retrying, a 429 says so and retries with backoff", async () => {
+  const run = async (statuses: number[]) => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const failures: Array<string | null> = [];
+    const reader = createStateReader<string>({
+      read: async () => Promise.reject(Object.assign(new Error("x"), { status: statuses.shift() })),
+      onState: () => undefined,
+      onFailure: (f) => failures.push(f),
+      setTimer: (fn, ms) => timers.push({ fn, ms }),
+      clearTimer: () => undefined,
+    });
+    await reader.refresh();
+    if (timers.length) {
+      timers.shift()!.fn();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    return { failures, delays: timers.map((t) => t.ms) };
+  };
+  assert.deepEqual(await run([404]), { failures: ["ended"], delays: [] });
+  assert.deepEqual(await run([403]), { failures: ["ended"], delays: [] });
+  assert.deepEqual(await run([429, 429]), { failures: ["limited", "limited"], delays: [RETRY_FIRST_MS * 2] });
 });
 
 test("the connect grant counts against the Direct cap, and a dock-only Signals makes none", async () => {

@@ -8,6 +8,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { apcJsonResponse, apcManifest, handleDockGiveBack, profilesRefusal } from "@tineira/apc-server";
 import { givenBack, isOwnerStateRequest, ownerRequestRefusal, publicOrigin } from "../../../demo/src/worker/dock-app.ts";
 import { applyFramingHeaders } from "../../../demo/src/worker/embed.ts";
+import { drain } from "./drain.ts";
 import { FEED_TTL_MS, servedProfiles, type Env, type Feed } from "./feed.ts";
 
 export { Feed } from "./feed.ts";
@@ -27,6 +28,15 @@ app.use("*", async (c, next) => {
   if (c.res.status === 101) return;
   c.res = new Response(c.res.body, c.res);
   applyFramingHeaders(c.res.headers, null);
+});
+
+// An unread POST body under /api is drained after the route, whatever it answered (drain.ts, as Pulse's TIN-995): else the
+// local runtime answers the next request on that connection, the page's state read, with a 500. Registered before the
+// other /api middleware, so their early answers (the M6 refusals, a 403, a rate limit) are covered too.
+app.use("/api/*", async (c, next) => {
+  await next();
+  const body = c.req.raw.bodyUsed ? null : c.req.raw.body;
+  if (body) await drain(body);
 });
 
 // A typo in APC_PROFILES serves no agent path at all, with the reason in the log and in the answer

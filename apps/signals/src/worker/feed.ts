@@ -108,7 +108,8 @@ interface Grant {
   pairing_expires_at: string | null;
   /**
    * 1 on the feed's one connect grant (TIN-1093): the Direct agent `?connect` made, written in the statement that
-   * makes it, so `ensureConnectGrant` finds it again on a reload, a second tab or after a lost answer.
+   * makes it, so `ensureConnectGrant` finds it again on a reload, a second tab or after a lost answer. At most one row
+   * carries it (a partial unique index).
    */
   connect: number | null;
 }
@@ -187,6 +188,12 @@ export class Feed extends DurableObject<Env> {
     // connected, and they stay live (a feed lives 6 hours, and the hub sends initialize before anything else, H1).
     this.sql.exec("delete from agent_focus where grant_id in (select id from grants where hub is not null and agent is null and state is null)");
     this.sql.exec("delete from grants where hub is not null and agent is null and state is null");
+    // The connect grant is one per feed (TIN-1093): the database refuses a second flagged row, whatever the code does.
+    try {
+      this.sql.exec("create unique index if not exists grants_one_connect on grants (connect) where connect = 1");
+    } catch (error) {
+      console.error("Signals: the one-connect-grant index could not be made", error);
+    }
     this.links = new ApcLinks(sqlKv(this.sql), { appName: "Signals", grants: () => this.grants().map((g) => ({ id: g.id, path: pathOf(g) })) });
     this.consent = new DockConsent(sqlKv(this.sql));
   }
@@ -327,17 +334,16 @@ export class Feed extends DurableObject<Env> {
   /**
    * The agent `?connect` arrives with (TIN-1093, Pulse's hero model, TIN-1070): the feed's one connect grant, made on
    * the first call and returned as it is on every later one, so a reload, a second tab or an answer lost on the way never
-   * makes a second one. Only a grant that still qualifies is returned: Direct (no hub) and not linked to a dock grant
-   * (apc_link). Revoked, it is gone, and the next call makes a new one; this call never revokes or replaces anything.
+   * makes a second one. The grant it returns is Direct (no hub, no dock agent): Pulse's rule, whose `hub_links` are its
+   * dock grants, which Signals keeps inline (hub, agent). An apc_link to a dock grant (APC 0.4) changes neither grant, so
+   * the connect grant stays the connect grant across a link and an Unlink (fix round 1 of PR #249). Revoked, it is gone,
+   * and the next call makes a new one; this call never revokes or replaces anything.
    * A new one counts against MAX_DIRECT_GRANTS like any Direct agent. Synchronous from the lookup to the insert (no
    * await), so two calls cannot interleave in the Durable Object; the flag is written in the statement that makes the grant.
    */
   async ensureConnectGrant(): Promise<{ ok: boolean; error?: string; grant_id?: string; made?: boolean }> {
     if (!this.offers("direct")) return { ok: false, error: "dock_only" };
-    const found = this.sql
-      .exec<{ id: string }>("select id from grants where connect = 1 and hub is null and agent is null order by created_at, id")
-      .toArray()
-      .find((g) => !this.links.partnerOf(g.id));
+    const found = this.sql.exec<{ id: string }>("select id from grants where connect = 1 and hub is null and agent is null limit 1").toArray()[0];
     if (found) return { ok: true, grant_id: found.id, made: false };
     if (this.directFull()) return { ok: false, error: "too_many" };
     return { ok: true, grant_id: this.insertDirectGrant(true), made: true };
