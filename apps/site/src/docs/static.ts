@@ -9,6 +9,7 @@
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { ANCHOR_ALIASES, exampleRegion, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "./markdown.ts";
 import { DOC_PAGES, EXAMPLES_DIR, type DocPage } from "./pages.ts";
+import { DOCS, footerLinks, SITE_PAGES } from "../web/site-pages.ts";
 
 /** Where a page's Markdown is served: /docs/spec.md for /docs/spec, /docs/overview.md for /docs itself. */
 export function docMarkdownPath(page: DocPage): string {
@@ -85,17 +86,60 @@ export function docTitle(source: string): string {
   return title?.t === "heading" ? plainText(title.c) : "APC docs";
 }
 
-/** The page as src/web/docs.tsx draws it, as HTML: the same header, navigation, standard note, text and footer. */
+/** The agent mark of src/web/agent-mark.tsx, as markup; `id` keeps the gradient ids of the header's and the footer's marks apart. */
+function agentMarkHtml(size: number, id: string): string {
+  return `<svg class="site-mark" width="${size}" height="${size}" viewBox="0 0 48 48" aria-hidden="true"><defs><radialGradient id="${id}" cx="38%" cy="28%" r="80%"><stop offset="0" stop-color="#4a505e"/><stop offset="0.55" stop-color="#23262e"/><stop offset="1" stop-color="#0e0f13"/></radialGradient></defs><path d="M24 3.5c10.6 0 19.5 7.6 19.5 19.2 0 12.4-8.2 21.8-20.3 21.8C11.6 44.5 4.5 36 4.5 24.6 4.5 12.6 12.6 3.5 24 3.5Z" fill="url(#${id})" stroke="rgb(255 255 255 / 0.5)" stroke-width="1.2"/><g class="site-mark-lid"><g class="site-mark-pupils"><rect x="16.6" y="18.5" width="4.4" height="9.6" rx="2.2" fill="#fff"/><rect x="27" y="18.5" width="4.4" height="9.6" rx="2.2" fill="#fff"/></g></g></svg>`;
+}
+
+/** The site's header (SiteHeader in src/web/site.tsx, on the docs page): the same markup, so a page with no script wears the same frame. Its theme toggle waits for the script, which replaces this page. */
+export function siteHeaderHtml(): string {
+  const nav = [
+    `<a href="${SITE_PAGES.try.path}">Try it</a>`,
+    `<a href="${SITE_PAGES.build.path}">Build it</a>`,
+    `<a href="${DOCS}" aria-current="page">Docs</a>`,
+    `<a href="${DOCS}/spec">Spec</a>`,
+    `<a href="${REPO}" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>`,
+  ].join("");
+  const toggle =
+    `<button class="site-theme-toggle" type="button" aria-label="Switch the theme" title="Light or dark. Follows your system until you choose.">` +
+    `<svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>` +
+    `<svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg></button>`;
+  return [
+    `<header class="site-nav"><div class="wrap site-nav-inner">`,
+    `<a class="site-brand" href="/">${agentMarkHtml(28, "apc-mark-head")}Agent Pointed Context <small>APC</small></a>`,
+    `<nav class="site-nav-links" aria-label="Site">${nav}</nav>`,
+    `<div class="site-nav-right">${toggle}<a class="btn ghost sm site-nav-cta" href="${SITE_PAGES.build.path}">Add APC to your app</a><a class="btn primary sm site-nav-cta" href="${SITE_PAGES.try.path}">Try the demo</a></div>`,
+    `</div></header>`,
+  ].join("");
+}
+
+/** The site's footer (SiteFooter in src/web/site.tsx); the docs' note links the spec, so the footer leaves that link out. */
+export function siteFooterHtml(): string {
+  const links = footerLinks([`${DOCS}/spec`]);
+  const list = links.map((l) => `<li><a${l.href.startsWith("/v1") ? ' class="muted"' : ""} href="${escapeHtml(l.href)}">${escapeHtml(l.label)}</a></li>`).join("");
+  return [
+    `<footer class="site-foot"><div class="wrap site-foot-grid"><div>`,
+    `<a class="site-brand" href="/">${agentMarkHtml(26, "apc-mark-foot")}Agent Pointed Context</a>`,
+    `<p class="site-foot-fine">An open standard built on the Model Context Protocol. Code MIT; docs and spec CC BY 4.0. The agents' marks are trademarks of their owners.</p></div>`,
+    links.length > 0 ? `<div><h5>Standard and research</h5><ul>${list}</ul></div>` : "",
+    `</div></footer>`,
+  ].join("");
+}
+
+/** The page as src/web/docs.tsx draws it, as HTML: the site's header and footer around the same navigation, standard note, text and docs footer. */
 export function docPageHtml(page: DocPage, source: string, examples: Record<string, string>): string {
   const nav = DOC_PAGES.map((p) => `<a href="${p.path}"${p === page ? ' aria-current="page"' : ""}>${escapeHtml(p.nav)}</a>`).join("");
   return [
+    `<div class="site-shell"><div class="site-page">`,
+    siteHeaderHtml(),
     `<main class="docs">`,
-    `<header class="docs-head"><a class="kicker" href="/">Agent Pointed Context</a><span class="row small"><a href="/dock">Your dock</a><a href="${REPO}">GitHub</a></span></header>`,
     `<nav class="docs-nav" aria-label="Docs">${nav}</nav>`,
     `<aside class="docs-standard" role="note"><b>APC ${APC_STANDARD_VERSION}.</b> The standard is frozen and changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.</aside>`,
     `<article class="docs-body">${blocks(parseMarkdown(source), page.file, examples)}</article>`,
-    `<footer class="docs-foot"><p>The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT. Source of this page: <a href="${REPO}/blob/main/${page.file}">${page.file}</a>. This page as Markdown: <a href="${docMarkdownPath(page)}">${docMarkdownPath(page)}</a>.</p><p><a href="/">Home</a> · <a href="/v1/">Version 1, as described in the paper</a></p></footer>`,
+    `<footer class="docs-foot"><p>The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT. Source of this page: <a href="${REPO}/blob/main/${page.file}">${page.file}</a>. This page as Markdown: <a href="${docMarkdownPath(page)}">${docMarkdownPath(page)}</a>.</p></footer>`,
     `</main>`,
+    siteFooterHtml(),
+    `</div></div>`,
   ].join("\n");
 }
 

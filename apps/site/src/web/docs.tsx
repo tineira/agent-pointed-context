@@ -4,12 +4,18 @@
  * bundled as text and rendered here as React elements; code samples come from the type-checked, tested examples
  * in src/docs/examples. Static, like the landing: the Worker never runs for /docs. The build also writes each page
  * as HTML with its text in it, and as Markdown at /docs/<page>.md, so the docs read without JavaScript (src/docs/static.ts).
+ *
+ * The docs wear the site's frame (TIN-1069): the shell's header with the theme toggle and the footer, both themes
+ * from the shell's tokens. No dot field sits behind the text — reading comes first, so a docs page keeps the plain
+ * background and its surfaces stay the tokens the worst-case contrast test proves (test/docs-frame.test.ts).
  */
 import { useEffect, useMemo, type ReactNode } from "react";
 import { APC_STANDARD_VERSION } from "@tineira/apc-protocol";
 import { exampleRegion, fragmentTarget, parseMarkdown, plainText, REPO, resolveHref, type Block, type Inline } from "../docs/markdown.ts";
 import { DOC_PAGES, docPageAt, EXAMPLES_DIR, type DocPage } from "../docs/pages.ts";
 import { docMarkdownPath } from "../docs/static.ts";
+import { DOCS } from "./site-pages.ts";
+import { SiteFooter, SiteHeader } from "./site.tsx";
 import overview from "../docs/pages/overview.md?raw";
 import spec from "../docs/pages/spec.md?raw";
 import integrate from "../docs/pages/integrate.md?raw";
@@ -113,35 +119,32 @@ export function Docs({ path }: { path: string }) {
     if (id) document.getElementById(id)?.scrollIntoView();
   }, [page]);
   return (
-    <main className="docs">
-      <header className="docs-head">
-        <a className="kicker" href="/">Agent Pointed Context</a>
-        <span className="row small">
-          <a href="/dock">Your dock</a>
-          <a href={REPO}>GitHub</a>
-        </span>
-      </header>
-      <Nav current={page} />
-      <aside className="docs-standard" role="note">
-        <b>APC {APC_STANDARD_VERSION}.</b> The standard is frozen and changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.
-      </aside>
-      <article className="docs-body">
-        {page ? <Blocks blocks={blocks} file={page.file} /> : (
-          <>
-            <h1>No such page</h1>
-            <p>There is no docs page at {path}. Start from the <a href="/docs">overview</a>.</p>
-          </>
-        )}
-      </article>
-      <footer className="docs-foot">
-        <p>
-          The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT.
-          {page && <> Source of this page: <a href={`${REPO}/blob/main/${page.file}`}>{page.file}</a>. This page as Markdown: <a href={docMarkdownPath(page)}>{docMarkdownPath(page)}</a>.</>}
-        </p>
-        <p>
-          <a href="/">Home</a> · <a href="/v1/">Version 1, as described in the paper</a>
-        </p>
-      </footer>
-    </main>
+    <div className="site-shell">
+      <div className="site-page">
+        <SiteHeader page="docs" />
+        <main className="docs">
+          <Nav current={page} />
+          <aside className="docs-standard" role="note">
+            <b>APC {APC_STANDARD_VERSION}.</b> The standard is frozen and changes only by the <a href="/docs/spec#versioning-and-compatibility">versioning and compatibility policy</a>.
+          </aside>
+          <article className="docs-body">
+            {page ? <Blocks blocks={blocks} file={page.file} /> : (
+              <>
+                <h1>No such page</h1>
+                <p>There is no docs page at {path}. Start from the <a href="/docs">overview</a>.</p>
+              </>
+            )}
+          </article>
+          <footer className="docs-foot">
+            <p>
+              The text of these docs and of the APC specification is licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; the code, the examples included, is MIT.
+              {page && <> Source of this page: <a href={`${REPO}/blob/main/${page.file}`}>{page.file}</a>. This page as Markdown: <a href={docMarkdownPath(page)}>{docMarkdownPath(page)}</a>.</>}
+            </p>
+          </footer>
+        </main>
+        {/* The docs' own note links the spec, so the footer leaves its Spec link out; home and Version 1 it carries. */}
+        <SiteFooter onPage={[`${DOCS}/spec`]} />
+      </div>
+    </div>
   );
 }
