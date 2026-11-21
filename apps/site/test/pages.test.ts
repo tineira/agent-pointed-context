@@ -50,6 +50,9 @@ test("Try it walks Connect, Point, then Join, with each app on its own address a
   assert.match(tryPage, /\{host\(PULSE\.url\)\}/);
   assert.match(tryPage, /\{host\(SIGNALS\.url\)\}/);
   assert.doesNotMatch(tryPage, /Download|\.exe|window\.open|extension/i, "no downloads, no popup dock, no extension");
+  // The connect step names the agents the landing's Works with row shows, Cursor no longer among them (TIN-1088).
+  assert.match(tryPage, /Add it to Claude, ChatGPT or Grok as a remote MCP server\./);
+  assert.doesNotMatch(tryPage, /Cursor/);
 });
 
 test("Try it's steps do not overlap, and only the starter question stands out", () => {

@@ -92,11 +92,12 @@ test("the hero says what APC is, offers the two ways in, and links the full vide
   assert.match(heroSection, /<div className="landing-hero-stage">\s*<HeroStage \/>\s*<\/div>/);
 });
 
-test("Works with names Claude, ChatGPT, Cursor and Grok by their logos, and any remote MCP agent", () => {
-  const agents = [...worksWith.matchAll(/\{ brand: "([a-z]+)", name: "([^"]+)" \}/g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(agents, [["claude", "Claude"], ["openai", "ChatGPT"], ["cursor", "Cursor"], ["grok", "Grok"]]);
+test("Works with names Claude, ChatGPT, Grok and Grok bot by their logos, and any remote MCP agent", () => {
+  const agents = [...worksWith.matchAll(/\{ brand: "([a-z-]+)", name: "([^"]+)" \}/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(agents, [["claude", "Claude"], ["openai", "ChatGPT"], ["grok", "Grok"], ["grok-bot", "Grok bot"]]);
   const brands = read("apps/site/src/web/agent-brands.ts");
-  for (const [brand] of agents) assert.match(brands, new RegExp(`^\\s+${brand}: mark\\(PATHS\\.${brand},`, "m"), `${brand} has a vector logo in agent-logos.ts`);
+  // Each named brand has its logo: a vector mark, or the Grok bot's raster PNG (TIN-365), the one image.
+  for (const [brand] of agents) assert.match(brands, new RegExp(`^\\s+(?:"${brand}"|${brand}): (?:mark\\(PATHS\\.${brand},|\\{ image: GROK_BOT_PNG \\})`, "m"), `${brand} has its logo in agent-brands.ts`);
   assert.match(worksWith, /<AgentIcon clientName=\{null\} brandId=\{a\.brand\} size=\{23\} \/>/);
   assert.match(worksWith, /<span aria-hidden="true">\s*<AgentIcon/, "the name says it; the logo is not read twice");
   assert.match(worksWith, /<p className="landing-compat">and any agent that accepts a remote MCP server<\/p>/);
