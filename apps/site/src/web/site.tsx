@@ -7,6 +7,7 @@
 import { useEffect, useRef } from "react";
 import { AgentMark } from "./agent-mark.tsx";
 import { createDotField, type CanvasLike } from "./dot-field.ts";
+import { attachTextMask } from "./dot-field-mask.ts";
 import { DOCS, REPO, SITE_PAGES, footerLinks, type SitePage } from "./site-pages.ts";
 import { currentTheme, subscribeTheme, useTheme } from "./theme.ts";
 
@@ -21,22 +22,46 @@ export function SiteBackdrop() {
     const canvas = canvasRef.current;
     if (!canvas || typeof window === "undefined") return;
     const mq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+    const isReduced = () => mq?.matches ?? false;
     const field = createDotField({
       canvas: canvas as unknown as CanvasLike,
       createOffscreenCanvas: () => document.createElement("canvas") as unknown as CanvasLike,
       getSize: () => ({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio || 1 }),
       getScrollY: () => window.scrollY,
       isHidden: () => document.hidden,
-      isReducedMotion: () => mq?.matches ?? false,
+      isReducedMotion: isReduced,
       getTheme: () => currentTheme(),
     });
-    const onResize = () => field.resize();
-    const onScroll = () => field.onScroll();
+    const maskRoot = canvas.closest(".site-shell")?.querySelector(".site-page") ?? document.body;
+    const mask = maskRoot
+      ? attachTextMask({
+          root: maskRoot,
+          getViewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
+          isActive: () => !document.hidden && !isReduced() && !field.isDegraded(),
+          onRects: (rects) => field.setTextRects(rects),
+        })
+      : null;
+
+    const onResize = () => {
+      mask?.schedule();
+      field.resize();
+    };
+    const onScroll = () => {
+      mask?.schedule();
+      field.onScroll();
+    };
     const onPointer = (e: PointerEvent) => field.onPointerMove(e.clientX, e.clientY);
-    const onVisibility = () => field.onVisibilityChange();
-    const onMotion = () => field.onReducedMotionChange();
+    const onVisibility = () => {
+      field.onVisibilityChange();
+      if (!document.hidden) mask?.schedule();
+    };
+    const onMotion = () => {
+      field.onReducedMotionChange();
+      if (!isReduced()) mask?.schedule();
+    };
     const unsubTheme = subscribeTheme(() => field.onThemeChange());
 
+    mask?.measureNow();
     field.start();
     window.addEventListener("resize", onResize, { passive: true });
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -45,6 +70,7 @@ export function SiteBackdrop() {
     mq?.addEventListener("change", onMotion);
 
     return () => {
+      mask?.stop();
       field.stop();
       unsubTheme();
       window.removeEventListener("resize", onResize);
