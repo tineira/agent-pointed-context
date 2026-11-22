@@ -66,6 +66,15 @@ test("connected: a quiet line with the agent's name, or Your agent without one, 
   assert.match(hostile, /&lt;b&gt;x&lt;\/b&gt; connected/);
 });
 
+test("a long agent name wraps inside the quiet line instead of widening the page at 375 px", () => {
+  const css = readFileSync(new URL("../src/web/styles/landing.css", import.meta.url), "utf8");
+  const rule = css.match(/\.landing-home \.landing-own-quiet h2 \{([^}]*)\}/);
+  assert.ok(rule, "the quiet line's heading has its own rule");
+  assert.match(rule[1]!, /min-width: 0;/, "the flex item may shrink below its longest word");
+  assert.match(rule[1]!, /overflow-wrap: anywhere;/, "a 40-character name with no space still breaks");
+  assert.match(css, /\.landing-home \.landing-own-quiet \{[^}]*flex-wrap: wrap;/);
+});
+
 test("the band follows the connection live: usePulseView subscribes to the hint the hero's frame saves", () => {
   const source = readFileSync(new URL("../src/web/landing/OwnAgentBand.ts", import.meta.url), "utf8");
   assert.match(source, /h\(OwnAgentBandView, \{ view: usePulseView\(\), onUseOwnAgent: scrollUpAndOpen \}\)/);

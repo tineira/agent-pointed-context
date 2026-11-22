@@ -249,6 +249,9 @@ main.landing.landing-home {
 }
 
 .landing-home .landing-own-quiet h2 {
+  /* A name up to 40 characters with no break (cleanName's cap) wraps inside the card at 375 px. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: inherit;
   font-weight: 600;
