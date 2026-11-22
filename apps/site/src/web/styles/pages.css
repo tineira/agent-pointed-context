@@ -1,6 +1,7 @@
-/* Styles for the /try and /build pages (TIN-1068, from the winning prototype's #/try and #/build views, round 3):
-   the page heroes, the walk's numbered steps beside the two app cards, the starter question, the numbered rows
-   beside the payload, the packages and the guides. Tokens and shared chrome come from shell.css. */
+/* Styles for the /try and /build pages (TIN-1068, from the winning prototype's #/try and #/build views, round 3; /try
+   in two phases since TIN-1094, from Fable's accepted prototype): the page heroes; on /try the map of the two phases,
+   phase 1's numbered steps beside step 3's examples, the line that ends it, and phase 2's dashed card; on /build the
+   numbered rows beside the payload, the packages and the guides. Tokens and shared chrome come from shell.css. */
 
 /* ───────── shared page hero (both pages) ───────── */
 
@@ -53,13 +54,116 @@
 .page-back a {
   color: var(--fg);
 }
+/* ───────── /try: the hero's connection line and its map of the two phases (TIN-1094) ───────── */
 
-/* ───────── /try: the walk ───────── */
+/* Connected only (TIN-1072): who is connected, once, at the top. The pill keeps a solid surface: --ok as text over
+   the bare dot field is 3.36:1 in the light theme; on --card-solid it passes (apps/site/test/pages.test.ts). */
+.try-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 20px;
+  font-size: 15.5px;
+  color: var(--muted);
+}
+
+.try-status .try-conn {
+  margin-left: 0;
+  font-size: 13px;
+  padding: 4px 11px 4px 5px;
+  border: 1px solid var(--ok);
+  border-radius: 99px;
+  background: var(--card-solid);
+}
+
+.try-rail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 30px;
+  max-width: 760px;
+}
+
+.try-rail a {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 14px 18px 15px;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--card);
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.4;
+  transition: border-color 0.2s, transform 0.2s var(--ease);
+}
+
+.try-rail a:hover {
+  border-color: var(--accent-line);
+  transform: translateY(-1px);
+}
+
+/* Phase 2 is optional before anyone scrolls: a dashed card, and a dashed "optional" pill. */
+.try-rail a.opt {
+  border-style: dashed;
+}
+
+.try-rail small {
+  font: 500 11.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.try-rail small i,
+.try-opt {
+  font: 500 11px var(--mono);
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px dashed var(--line3);
+  color: var(--muted);
+}
+
+.try-rail b {
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+/* ───────── /try, phase 1: the steps beside step 3's examples ───────── */
+
+.try-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  scroll-margin-top: 84px;
+}
+
+.try-phase-head h2,
+.try-more-head h2 {
+  font-size: clamp(28px, 3.6vw, 38px);
+  line-height: 1.08;
+  letter-spacing: var(--track);
+  margin: 8px 0 10px;
+}
+
+.try-phase-head p:not(.landing-who),
+.try-more-head p:not(.landing-who) {
+  max-width: 40em;
+  font-size: 17px;
+  color: var(--muted);
+}
 
 .try-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 56px;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1fr);
+  gap: 48px;
   align-items: start;
 }
 
@@ -86,6 +190,11 @@
   top: 46px;
   bottom: 0;
   border-left: 1px dashed var(--line2);
+}
+
+/* The last step of phase 1 ends the line: nothing hangs below it. */
+.try-step:last-child {
+  padding-bottom: 0;
 }
 
 .try-step:last-child::before {
@@ -117,9 +226,27 @@
   font-size: 16px;
 }
 
-/* Room for the "Pulse already connected" walk (TIN-1072 fills it from Pulse; nothing here renders it yet):
-   steps done in the hero get a checked disc and quieter (solid --muted, never opacity) titles, the first open one is
-   marked "start here". The check is --btn-fg on --ok; apps/site/test/pages.test.ts holds every pair to 4.5:1 (text) and 3:1 (check). */
+/* Step 1 carries the button (TIN-1090); its target follows the connection (TIN-1087). */
+.try-step-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 14px;
+}
+
+.try-step-cta .try-host {
+  margin-left: 0;
+}
+
+.try-step-note {
+  margin-top: 8px;
+  font-size: 14.5px;
+}
+
+/* The "Pulse already connected" walk (TIN-1072, TIN-1094): only "Connect your agent" is done, with a checked disc
+   and quieter (solid --muted, never opacity) text; "Open Pulse" is marked "start here". The check is --btn-fg on
+   --ok; apps/site/test/pages.test.ts holds every pair to 4.5:1 (text) and 3:1 (check). */
 
 .try-step.done .n {
   font-size: 0;
@@ -142,6 +269,12 @@
   color: var(--muted);
 }
 
+/* The done step still says who is connected, in --fg: the check carries the green. */
+.try-step.done .try-conn-sentence {
+  color: var(--fg);
+  font-weight: 600;
+}
+
 .try-step.next .n {
   background: var(--accent);
   border-color: var(--accent);
@@ -155,10 +288,11 @@
   padding: 2px 8px;
   border-radius: 99px;
   vertical-align: 3px;
+  white-space: nowrap;
 }
 
 .try-step.done b::after {
-  content: "done in the hero";
+  content: "done on the home page";
   border: 1px solid var(--line2);
   color: var(--muted);
 }
@@ -170,65 +304,10 @@
   border: 1px solid var(--accent-line);
 }
 
-.try-side {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.try-app {
-  border: 1px solid var(--line2);
-  border-radius: 18px;
-  background: var(--card);
-  padding: 22px 24px;
-}
-
-.try-app .row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.try-app b {
-  font-size: 21px;
-  letter-spacing: -0.02em;
-  color: var(--fg);
-}
-
-.try-app > p {
-  color: var(--muted);
-  font-size: 15.5px;
-  margin: 8px 0 14px;
-}
-
-.try-links {
-  display: flex;
-  gap: 18px;
-  font-size: 14.5px;
-  flex-wrap: wrap;
-}
-
-.try-links a {
-  color: var(--fg);
-  text-underline-offset: 4px;
-  text-decoration-color: var(--line2);
-}
-
-.try-links a:hover {
-  text-decoration-color: var(--accent);
-}
-
 .try-host {
   font: 11.5px var(--mono);
   color: var(--muted);
   margin-left: auto;
-}
-
-/* Room for the connected Pulse card (TIN-1072): a green border, a check and "<agent> connected". */
-
-.try-app.on {
-  border-color: var(--ok);
 }
 
 .try-conn {
@@ -261,11 +340,335 @@
   transform: rotate(45deg);
 }
 
-.try-wires {
-  height: 54px;
-  margin: -8px 0;
+/* Step 3's examples: what "this" can mean. Each draws a real place in Pulse with the demo world's numbers
+   (try-examples.ts), with the agent's mark on the pointed part. */
+.try-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.try-examples-head .landing-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.try-examples-head h3,
+.try-cross h3 {
+  font-size: 26px;
+  line-height: 1.1;
+  letter-spacing: var(--track);
+  margin-top: 10px;
+}
+
+.try-ex {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  border: 1px solid var(--line2);
+  border-radius: 18px;
+  background: var(--card);
+  overflow: hidden;
+}
+
+.try-ex-art {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  border-right: 1px solid var(--line);
+  background: var(--tint);
+  min-width: 0;
+}
+
+.try-ex-body {
+  padding: 16px 20px 18px;
+  min-width: 0;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.try-ex-body small {
   display: block;
+  font: 500 11.5px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  margin-bottom: 6px;
+}
+
+.try-ex-body a {
+  color: var(--fg);
+  text-underline-offset: 4px;
+  text-decoration-color: var(--line3);
+}
+
+.try-ex-body a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.try-asks {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.try-asks .try-ask {
+  margin-top: 0;
+  font-size: 14.5px;
+  padding: 7px 12px;
+}
+
+.try-ex-pin {
+  position: absolute;
+}
+
+/* The chart: its eighteen bars to scale, March 2026 in the accent, the mark above it. */
+.try-ex-bars {
+  position: relative;
   width: 100%;
+  max-width: 252px;
+}
+
+.try-ex-bars svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.try-ex-bars rect {
+  fill: var(--line3);
+}
+
+.try-ex-bars rect.on {
+  fill: var(--accent);
+}
+
+.try-ex-bars text {
+  font: 600 12px var(--mono);
+  fill: var(--fg);
+}
+
+/* The mark sits on March's bar: x 147–173 and y 17–43 of the drawing's 252 × 96. */
+.try-ex-bars .try-ex-pin {
+  left: 58.3%;
+  top: 17.7%;
+  width: 10.3%;
+  height: auto;
+}
+
+.try-ex-row {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: 10px;
+  background: var(--card-solid);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.try-ex-row b {
+  grid-column: 1 / -1;
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.try-ex-row .mono {
+  grid-column: 1 / -1;
+  font: 11.5px var(--mono);
+}
+
+.try-ex-row .num {
+  grid-column: 1 / -1;
+  font: 600 12.5px var(--mono);
+  color: var(--fg);
+}
+
+.try-ex-row .num::after {
+  content: " seats";
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.try-ex-row .try-ex-pin {
+  right: -9px;
+  top: -11px;
+}
+
+.try-ex-bridge {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.try-ex-bridge li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 5px 6px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--card-solid);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.try-ex-bridge b {
+  font: 600 12.5px var(--mono);
+  color: var(--fg);
+}
+
+.try-ex-bridge li.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.try-ex-bridge .try-ex-pin {
+  right: -8px;
+  bottom: -12px;
+}
+
+/* Where phase 1 ends, said out loud: everything after this line is extra. */
+.try-end {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.try-end::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed var(--line2);
+  min-width: 24px;
+}
+
+.try-end b {
+  color: var(--fg);
+}
+
+.try-end i {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ok);
+  position: relative;
+}
+
+.try-end i::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 4.5px;
+  width: 4px;
+  height: 9px;
+  border: solid var(--btn-fg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* ───────── /try, phase 2: optional, a dashed card with Signals and the cross-app question ───────── */
+
+.try-more {
+  border: 1px dashed var(--accent-line);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, var(--accent-soft), transparent 55%),
+    var(--card);
+  padding: 36px 38px 38px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  scroll-margin-top: 84px;
+}
+
+.try-more-head .landing-who {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.try-more-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 40px;
+  align-items: start;
+}
+
+.try-more-col {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.try-app {
+  border: 1px solid var(--line2);
+  border-radius: 18px;
+  background: var(--card-solid);
+  padding: 22px 24px;
+}
+
+.try-app .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.try-app b {
+  font-size: 21px;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+
+.try-app > p {
+  color: var(--muted);
+  font-size: 15.5px;
+  margin: 8px 0 16px;
+}
+
+.try-join {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.try-join-app {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--fg);
+}
+
+.try-join-app svg {
+  width: 20px;
+  height: 20px;
+}
+
+.try-wires {
+  flex: 1;
+  height: 4px;
+  min-width: 16px;
+  display: block;
 }
 
 .try-wires path {
@@ -282,38 +685,14 @@
   }
 }
 
-.try-joiner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: center;
+.try-join-cap {
   font: 12px var(--mono);
   color: var(--muted);
   text-align: center;
-  padding: 0 8px;
 }
 
-/* ───────── /try: the starter question and the Revoke note ───────── */
-
-.try-starter {
-  margin-top: 8px;
-  border: 1px solid var(--accent-line);
-  border-radius: 22px;
-  background:
-    linear-gradient(180deg, var(--accent-soft), transparent),
-    var(--card);
-  padding: 34px 38px;
-  display: grid;
-  grid-template-columns: 210px 1fr 1fr;
-  gap: 30px;
-  align-items: start;
-}
-
-.try-starter h3 {
-  font-size: 26px;
-  line-height: 1.1;
-  letter-spacing: var(--track);
-  margin-top: 10px;
+.try-cross {
+  gap: 22px;
 }
 
 .try-move {
@@ -344,6 +723,8 @@
   border-radius: 13px 13px 13px 4px;
   font-size: 15.5px;
 }
+
+/* ───────── /try: the Revoke note ───────── */
 
 .try-aside {
   margin: 0 0 8px;
@@ -547,14 +928,13 @@
     gap: 36px;
   }
 
-  .try-starter {
+  .try-more-grid {
     grid-template-columns: 1fr;
-    padding: 24px;
-    gap: 22px;
+    gap: 32px;
   }
 
-  .try-starter h3 {
-    margin-top: 6px;
+  .try-more {
+    padding: 26px 24px 28px;
   }
 
   .build-code {
@@ -592,6 +972,67 @@
     font-size: 19px;
   }
 
+  .try-step:last-child {
+    padding-bottom: 0;
+  }
+
+  /* Phones: the two phase cards collapse to one compact row (Tomas, TIN-1094), so step 1 and its Open Pulse button
+     reach the first screen. Desktop keeps the cards. */
+  .try-rail {
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  .try-rail a {
+    padding: 8px 12px 9px;
+    border-radius: 11px;
+    gap: 1px;
+  }
+
+  .try-rail span {
+    display: none;
+  }
+
+  .try-rail small {
+    font-size: 10.5px;
+  }
+
+  .try-rail small i {
+    margin-left: 4px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  .try-rail b {
+    font-size: 14.5px;
+    line-height: 1.3;
+  }
+
+  .try-status {
+    margin-top: 16px;
+    font-size: 14.5px;
+  }
+
+  /* Also for the first screen: step 1's "start here" says where to start, and the steps say what phase 1 is. */
+  .try-status-more,
+  .try-phase-head p:not(.landing-who) {
+    display: none;
+  }
+
+  .try-phase {
+    gap: 24px;
+  }
+
+  .try-phase-head h2,
+  .try-more-head h2 {
+    margin-bottom: 6px;
+  }
+
+  .try-phase-head p:not(.landing-who),
+  .try-more-head p:not(.landing-who) {
+    font-size: 16px;
+  }
+
   .try-app {
     padding: 18px 20px;
   }
@@ -599,6 +1040,56 @@
   .try-host {
     margin-left: 0;
     width: 100%;
+  }
+
+  .try-step-cta .try-host {
+    width: auto;
+  }
+
+  .try-ex {
+    grid-template-columns: 1fr;
+  }
+
+  .try-ex-art {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 14px 18px 16px;
+  }
+
+  .try-ex-row {
+    grid-template-columns: auto auto 1fr;
+    max-width: 300px;
+  }
+
+  .try-ex-row .num {
+    grid-column: auto;
+    text-align: right;
+  }
+
+  .try-ex-bridge {
+    max-width: 320px;
+  }
+
+  .try-examples-head h3,
+  .try-cross h3 {
+    font-size: 23px;
+  }
+
+  .try-end {
+    align-items: flex-start;
+  }
+
+  .try-end::after {
+    display: none;
+  }
+
+  .try-more {
+    padding: 22px 18px 24px;
+    border-radius: 18px;
+  }
+
+  .try-join-cap {
+    text-align: left;
   }
 
   .build-h2 {

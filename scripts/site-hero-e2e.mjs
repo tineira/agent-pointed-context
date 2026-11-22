@@ -272,14 +272,15 @@ try {
         await shot("1440-dark-5-pinned");
       } else check(`${tag}: the frame has an agent and a bar to pin`, false);
 
-      // /try learns it (Option A): the card shows the agent, the steps done in the hero, Signals first.
+      // /try learns it (TIN-1072; two phases since TIN-1094): the hero names the agent, only "Connect your agent" is
+      // done, "Open Pulse" is where to start and opens Pulse's overview.
       await send("Page.navigate", { url: `${SITE}/try` });
-      await until("/try", () => evaluate(`!!document.querySelector(".try-app")`));
+      await until("/try", () => evaluate(`!!document.querySelector(".try-steps")`));
       await sleep(800);
-      const t = await evaluate(`({ on: !!document.querySelector(".try-app.on"), conn: document.querySelector(".try-conn")?.textContent ?? null, done: document.querySelectorAll(".try-step.done").length, next: [...document.querySelectorAll(".try-step.next b")].map((b) => b.textContent), link: document.querySelector(".try-app.on .try-links a")?.href ?? null })`);
-      check(`${tag}: /try shows Pulse connected`, t.on && /connected$/.test(t.conn ?? ""), t.conn ?? "no badge");
-      check(`${tag}: /try marks the steps done in the hero, Signals first`, t.done === 3 && t.next.length === 1 && /second app/i.test(t.next[0]), JSON.stringify(t));
-      check(`${tag}: /try links Pulse's overview`, t.link === `${PULSE}/overview`, t.link ?? "");
+      const t = await evaluate(`({ conn: document.querySelector(".try-status .try-conn")?.textContent ?? null, done: [...document.querySelectorAll(".try-step.done b")].map((b) => b.textContent), next: [...document.querySelectorAll(".try-step.next b")].map((b) => b.textContent), link: document.querySelector(".try-step.next .btn.primary")?.href ?? null })`);
+      check(`${tag}: /try shows Pulse connected`, /connected$/.test(t.conn ?? ""), t.conn ?? "no badge");
+      check(`${tag}: /try marks Connect your agent done, Open Pulse first`, t.done.join() === "Connect your agent" && t.next.join() === "Open Pulse", JSON.stringify(t));
+      check(`${tag}: /try's Open Pulse goes to the overview`, t.link === `${PULSE}/overview`, t.link ?? "");
       await shot("1440-dark-6-try");
       await send("Page.navigate", { url: `${SITE}/` });
       await until("the stage", () => evaluate(`!!document.querySelector(".hero-stage")`));
