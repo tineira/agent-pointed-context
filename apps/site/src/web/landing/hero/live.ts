@@ -26,12 +26,52 @@ export const FRAME_ALLOW = "clipboard-write";
 export type FramePhase = "loading" | "ready" | "failed";
 
 /**
- * The component that can mount the frame: it starts on the simulated demo, whatever hint is stored, and switches on the
- * demo's "Use your own agent" (the Back button returns). HeroStage renders it; pulse-status.test.ts renders it too.
+ * "Use your own agent", from anywhere on the page (TIN-1104): the stage's panel and title bar, and the band under the
+ * hero. In-page module state only, no global and no message: a request is kept until the hero takes it, so one made
+ * before the hero has mounted is not lost, and the hero takes it once (`takeRealHeroOpen`). A request when the frame
+ * is already live changes nothing: there is only ever the one frame HeroStageHost mounts.
+ */
+let openRequested = false;
+const openListeners = new Set<() => void>();
+
+/** Asks the hero to put Pulse's real view in place of the simulated stage. Every subscriber hears it. */
+export function openRealHero(): void {
+  openRequested = true;
+  for (const listener of [...openListeners]) listener();
+}
+
+/** Calls `listener` on every request to open the real hero, whoever made it (TIN-1103 hides the "Try me" arrow on it). */
+export function subscribeRealHeroOpen(listener: () => void): () => void {
+  openListeners.add(listener);
+  return () => void openListeners.delete(listener);
+}
+
+/** Whether a request is waiting, clearing it: only the hero takes requests. */
+export function takeRealHeroOpen(): boolean {
+  const requested = openRequested;
+  openRequested = false;
+  return requested;
+}
+
+/** The hero's side: takes a request already waiting, then each new one, and calls `open` for it. Returns the unsubscribe. */
+export function listenForRealHeroOpen(open: () => void): () => void {
+  const take = () => {
+    if (takeRealHeroOpen()) open();
+  };
+  const unsubscribe = subscribeRealHeroOpen(take);
+  take();
+  return unsubscribe;
+}
+
+/**
+ * The component that can mount the frame: it starts on the simulated demo, whatever hint is stored, and switches on
+ * "Use your own agent" (`openRealHero`, from the demo or the band; the Back button returns). HeroStage renders it;
+ * pulse-status.test.ts renders it too.
  */
 export function HeroStageHost(props: { demo: (useOwnAgent: () => void) => ReactNode }): ReactElement {
   const [live, setLive] = useState(false);
-  return h(HeroSwitch, { live, demo: props.demo(() => setLive(true)), onBack: () => setLive(false) });
+  useEffect(() => listenForRealHeroOpen(() => setLive(true)), []);
+  return h(HeroSwitch, { live, demo: props.demo(openRealHero), onBack: () => setLive(false) });
 }
 
 /** The stage: the simulated demo until the visitor asks for their own agent, then Pulse's live view. */
@@ -40,6 +80,7 @@ export function HeroSwitch(props: { live: boolean; demo: ReactNode; onBack: () =
 }
 
 export function PulseFrame(props: { onBack: () => void }): ReactElement {
+  const figureRef = useRef<HTMLElement | null>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [phase, setPhase] = useState<FramePhase>("loading");
@@ -50,6 +91,8 @@ export function PulseFrame(props: { onBack: () => void }): ReactElement {
   useEffect(() => {
     // No hint survives a new frame: /try waits for this frame's first apc:pulse-status.
     clearPulseStatus();
+    // The button that opened it is gone (the stage's) or far below (the band's): focus goes to the live stage.
+    figureRef.current?.focus({ preventScroll: true });
     let ready = false;
     const timer = setTimeout(() => {
       if (!ready) setPhase("failed");
@@ -87,7 +130,7 @@ export function PulseFrame(props: { onBack: () => void }): ReactElement {
 
   return h(
     "figure",
-    { className: "hero-stage hero-live", "data-phase": phase, "aria-label": "Pulse, live: connect your own agent and point it at a bar", "aria-busy": phase === "loading" },
+    { ref: figureRef, tabIndex: -1, className: "hero-stage hero-live", "data-phase": phase, "aria-label": "Pulse, live: connect your own agent and point it at a bar", "aria-busy": phase === "loading" },
     h(
       "div",
       { className: "hero-live-bar" },

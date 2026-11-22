@@ -22,6 +22,8 @@ const landingRoot = read("apps/site/src/web/landing.tsx");
 const sectionOf = (name: string) => read(`apps/site/src/web/landing/${name}.tsx`);
 const heroSection = sectionOf("HeroSection");
 const worksWith = sectionOf("WorksWithSection");
+/** The band under the hero (TIN-1104), plain createElement so own-agent-band.test.ts renders it. */
+const ownAgentBand = read("apps/site/src/web/landing/OwnAgentBand.ts");
 const pathsSection = sectionOf("PathsSection");
 const howSection = sectionOf("HowItWorksSection");
 const accessSection = sectionOf("AccessSection");
@@ -49,12 +51,13 @@ const flat = (source: string) => source.replace(/\s+/g, " ");
 
 test("the landing runs its sections in order, then the footer", () => {
   const order = [...landingRoot.slice(landingRoot.indexOf("<main"), landingRoot.indexOf("</main>")).matchAll(/<([A-Z][A-Za-z]+) \/>/g)].map((m) => m[1]);
-  assert.deepEqual(order, ["HeroSection", "WorksWithSection", "PathsSection", "HowItWorksSection", "AccessSection", "StandardSection", "ClosingSection"]);
+  assert.deepEqual(order, ["HeroSection", "OwnAgentBand", "WorksWithSection", "PathsSection", "HowItWorksSection", "AccessSection", "StandardSection", "ClosingSection"]);
   assert.ok(landingRoot.indexOf("</main>") < landingRoot.indexOf("<SiteFooter"), "the footer follows the closing call");
   assert.match(landingRoot, /<main className="landing landing-home">/);
   // Each section says what it is, in the order the page shows it.
   const headings: [string, string, RegExp][] = [
     ["hero", heroSection, /<p className="landing-eyebrow landing-dot">An open standard, built on MCP<\/p>/],
+    ["own-agent band", ownAgentBand, /h\("h2", \{ id: "landing-own-title" \}, "Now use your own agent"\)/],
     ["works with", worksWith, /<p className="landing-works-lab">Works with<\/p>/],
     ["paths", pathsSection, /<h2>Try it<\/h2>[^]*<h2>Build it<\/h2>/],
     ["inside a point", howSection, /<p className="landing-idx">How it works<\/p>\s*<h2>\s*Inside a point<span className="landing-dotc">\.<\/span>/],
@@ -433,6 +436,11 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
       ["standard card hover (--muted on --tint over --card)", muted, tintOnCard],
       ["standard card hover (--accent-text on --tint over --card)", accentText, tintOnCard],
       ["diagram label (--accent-text on --bg)", accentText, bg],
+      // The own-agent band (TIN-1104): its card and its quiet line are --card over the field.
+      ["own-agent band heading (--fg on --card over worst field)", fg, card],
+      ["own-agent band line (--muted on --card over worst field)", muted, card],
+      ["own-agent band link (--fg on --card over worst field)", fg, card],
+      ["own-agent quiet link (--accent-text on --card over worst field)", accentText, card],
       // The connected Try it card (TIN-1089): its pill is solid, so no dot-field pixel shows through it.
       ["connected pill (--ok on --card-solid)", ok, cardSolid],
       ["connected pill, the check (--btn-fg on --ok)", btnFg, ok],
