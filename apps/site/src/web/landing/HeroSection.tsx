@@ -1,9 +1,11 @@
 import { SITE_PAGES, VIDEO } from "../site-pages.ts";
 import { HeroStage } from "./HeroStage.tsx";
+import { TryMeArrow } from "./hero/try-me.ts";
 
 /**
  * The hero: what APC is and the two ways in, beside the stage (HeroStage, its own step). The full video is a link to
- * YouTube, never an embed: its cookies would break the one-cookie promise.
+ * YouTube, never an embed: its cookies would break the one-cookie promise. The "Try me" arrow (TIN-1103) sits in the
+ * grid, between the copy and the stage, and places itself.
  */
 export function HeroSection() {
   return (
@@ -30,6 +32,7 @@ export function HeroSection() {
         <div className="landing-hero-stage">
           <HeroStage />
         </div>
+        <TryMeArrow />
       </div>
     </section>
   );

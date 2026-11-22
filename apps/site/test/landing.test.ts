@@ -441,6 +441,11 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
       ["own-agent band line (--muted on --card over worst field)", muted, card],
       ["own-agent band link (--fg on --card over worst field)", fg, card],
       ["own-agent quiet link (--accent-text on --card over worst field)", accentText, card],
+      // The hero's "Try me" label (TIN-1103, hero.css .try-me-label): --accent-text bare over the field, beside the copy.
+      ["Try me label (--accent-text) on --bg", accentText, bg],
+      ["Try me label (--accent-text) on glowMax", accentText, onGlowMax],
+      ["Try me label (--accent-text) on glowMax + haze", accentText, glowPlusHazeB],
+      [`Try me label (--accent-text) on worst field (${worstCanvasLabel} + haze)`, accentText, worstField],
       // The connected Try it card (TIN-1089): its pill is solid, so no dot-field pixel shows through it.
       ["connected pill (--ok on --card-solid)", ok, cardSolid],
       ["connected pill, the check (--btn-fg on --ok)", btnFg, ok],
@@ -448,6 +453,13 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
     for (const [label, a, b] of pairs) {
       const ratio = contrast(a, b);
       assert.ok(ratio >= 4.5, `${name}: ${label} is ${ratio.toFixed(2)}:1 (below 4.5:1)`);
+    }
+    // The Try me arrow's curve and head (--accent) are decoration (aria-hidden; the label above says it at 4.5:1), kept
+    // at 3:1 over the field's glow and haze. Under a passing gutter ring or tag (the worst case) light's is 2.9:1.
+    const accent = parseColor(t["accent"]!, bg);
+    for (const [label, under] of [["--bg", bg], ["glowMax", onGlowMax], ["glowMax + haze", glowPlusHazeB]] as const) {
+      const ratio = contrast(accent, under);
+      assert.ok(ratio >= 3, `${name}: Try me arrow (--accent) on ${label} is ${ratio.toFixed(2)}:1 (below 3:1)`);
     }
   }
 });

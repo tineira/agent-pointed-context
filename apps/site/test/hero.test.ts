@@ -134,7 +134,8 @@ test("the message travels and fades in transforms and opacity only, and stands s
   for (const k of keyframes) for (const prop of k.matchAll(/\{\s*([a-z]+):/g)) assert.ok(["transform", "opacity"].includes(prop[1]!), prop[1]);
   assert.match(motion, /frames\.push\(\{ transform: /);
   assert.match(motion, /if \(o\.reduce \|\| typeof el\.animate !== "function"\) \{/);
-  assert.match(stage, /\/\/ Self-play on load[^\n]*\n\s*useEffect\(\(\) => \{\s*if \(reduceRef\.current\) return;/, "no self-play under reduced motion");
+  // No self-play under reduced motion: the stage is the visitor's at once (and the Try me arrow shows, TIN-1103).
+  assert.match(stage, /\/\/ Self-play on load[^\n]*\n(\s*\/\/[^\n]*\n)*\s*useEffect\(\(\) => \{\s*if \(reduceRef\.current\) return tryMe\.ready\(\);/, "no self-play under reduced motion");
   const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
   for (const animated of [".hero-chat > *", ".hero-offer", ".hero-tool-dot", '.hero-bar[data-apc-presence="read"]']) assert.ok(reduced.includes(animated), animated);
 });

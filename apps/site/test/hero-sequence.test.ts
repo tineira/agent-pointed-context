@@ -11,6 +11,7 @@ import { test } from "node:test";
 import { createClock, type Clock } from "../src/web/landing/hero/clock.ts";
 import type { HeroData } from "../src/web/landing/hero/data.ts";
 import { createHeroSequence, type ChatItem, type HeroSequence } from "../src/web/landing/hero/sequence.ts";
+import { createTryMe } from "../src/web/landing/hero/try-me.ts";
 
 const data = JSON.parse(readFileSync(new URL("../src/web/hero-data.json", import.meta.url), "utf8")) as HeroData;
 const at = (month: string) => data.months.findIndex((m) => m.month === month);
@@ -193,4 +194,41 @@ test("every timer is cleared when a wait is cut short, when a pin replaces anoth
   sequence.dispose();
   clock.dispose();
   assert.equal(time.pending, 0, "leaving the page clears them all");
+});
+
+test("the Try me arrow shows once the stage's own pin is over, its turn line said, and not before (TIN-1103)", async () => {
+  const { time, sequence, s, untilAnswer } = stage();
+  const arrow = createTryMe(() => null);
+  // HeroStage: `await sequence.pin(index, "self"); over();`, where over() is tryMe.ready().
+  void sequence.pin(at("2026-03"), "self").then(() => arrow.ready());
+  await time.advance(500);
+  assert.equal(arrow.phase(), "waiting", "while the message travels");
+  await untilAnswer();
+  assert.equal(arrow.phase(), "waiting", "the answer is not the end: the turn line comes after it");
+  await time.advance(1000);
+  assert.ok(s.chat.some((i) => i.type === "turn"));
+  assert.equal(arrow.phase(), "shown");
+});
+
+test("the stage's own pin cut short by an unpin is over too: the arrow shows; cut short by a pin, the pin dismissed it", async () => {
+  {
+    const { time, sequence } = stage();
+    const arrow = createTryMe(() => null);
+    void sequence.pin(at("2026-03"), "self").then(() => arrow.ready());
+    await time.advance(800);
+    sequence.unpin();
+    await time.advance(50);
+    assert.equal(arrow.phase(), "shown");
+  }
+  {
+    const { time, sequence } = stage();
+    const arrow = createTryMe(() => null);
+    void sequence.pin(at("2026-03"), "self").then(() => arrow.ready());
+    await time.advance(800);
+    // HeroStage's onPin: tryMe.dismiss(), then the visitor's pin.
+    arrow.dismiss();
+    void sequence.pin(at("2026-01"), "visitor");
+    await time.advance(5000);
+    assert.equal(arrow.phase(), "dismissed", "never drawn");
+  }
 });
