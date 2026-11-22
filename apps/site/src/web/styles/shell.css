@@ -19,6 +19,7 @@
   --chip: #161b26;
   --accent: #ff9f1c;
   --accent-text: #ff9f1c;
+  --try-pill-fg: #1b1000;
   --accent-soft: rgb(255 159 28 / 0.14);
   --accent-line: rgb(255 159 28 / 0.5);
   --btn: #ff9f1c;
@@ -84,6 +85,7 @@
   --chip: #f0efe7;
   --accent: #c4501d;
   --accent-text: #943914;
+  --try-pill-fg: #fffdf5;
   --accent-soft: rgb(196 80 29 / 0.1);
   --accent-line: rgb(196 80 29 / 0.5);
   --btn: #272821;
@@ -146,6 +148,7 @@
     --chip: #f0efe7;
     --accent: #c4501d;
     --accent-text: #943914;
+    --try-pill-fg: #fffdf5;
     --accent-soft: rgb(196 80 29 / 0.1);
     --accent-line: rgb(196 80 29 / 0.5);
     --btn: #272821;

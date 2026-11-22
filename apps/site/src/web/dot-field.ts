@@ -45,7 +45,7 @@ export const DOT_FIELD_SPECS: Record<Theme, DotFieldPaletteSpec> = {
     dot: { r: 255, g: 255, b: 255, a: 0.085 },
     glowMin: { r: 255, g: 190, b: 90, a: 0.06 },
     glowMax: { r: 235, g: 136, b: 24, a: 0.2 },
-    glowPeak: { r: 235, g: 136, b: 24, a: 0.52 },
+    glowPeak: { r: 255, g: 170, b: 40, a: 0.9 },
     ringRgb: [235, 136, 24],
     ringAlphaMax: 0.12,
     ringDotAlphaMax: 0.2,
@@ -56,7 +56,7 @@ export const DOT_FIELD_SPECS: Record<Theme, DotFieldPaletteSpec> = {
     dot: { r: 60, g: 54, b: 38, a: 0.12 },
     glowMin: { r: 216, g: 128, b: 56, a: 0.06 },
     glowMax: { r: 224, g: 122, b: 46, a: 0.22 },
-    glowPeak: { r: 210, g: 102, b: 34, a: 0.55 },
+    glowPeak: { r: 216, g: 76, b: 30, a: 0.95 },
     ringRgb: [224, 122, 46],
     ringAlphaMax: 0.14,
     ringDotAlphaMax: 0.22,
@@ -300,8 +300,9 @@ export function normalizeTextRects(
 export function glowAlpha(spec: DotFieldPaletteSpec, rawK: number, rawOpen = 0): number {
   const k = Math.min(1, Math.max(0, rawK));
   const open = Math.min(1, Math.max(0, rawOpen));
-  const maxA = spec.glowMax.a + (spec.glowPeak.a - spec.glowMax.a) * open;
-  return spec.glowMin.a + (maxA - spec.glowMin.a) * k;
+  // Weighted, not offset, so the ends are exact: the cap at open 0, the peak at open 1 (no 0.8999… for 0.9).
+  const maxA = spec.glowMax.a * (1 - open) + spec.glowPeak.a * open;
+  return spec.glowMin.a * (1 - k) + maxA * k;
 }
 
 export interface DotFieldPalette {

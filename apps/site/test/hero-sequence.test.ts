@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { createClock, type Clock } from "../src/web/landing/hero/clock.ts";
 import type { HeroData } from "../src/web/landing/hero/data.ts";
 import { createHeroSequence, type ChatItem, type HeroSequence } from "../src/web/landing/hero/sequence.ts";
-import { createTryMe } from "../src/web/landing/hero/try-me.ts";
+import { createTryMe, TRY_ME_DELAY_MS } from "../src/web/landing/hero/try-me.ts";
 
 const data = JSON.parse(readFileSync(new URL("../src/web/hero-data.json", import.meta.url), "utf8")) as HeroData;
 const at = (month: string) => data.months.findIndex((m) => m.month === month);
@@ -196,39 +196,59 @@ test("every timer is cleared when a wait is cut short, when a pin replaces anoth
   assert.equal(time.pending, 0, "leaving the page clears them all");
 });
 
-test("the Try me arrow shows once the stage's own pin is over, its turn line said, and not before (TIN-1103)", async () => {
-  const { time, sequence, s, untilAnswer } = stage();
-  const arrow = createTryMe(() => null);
-  // HeroStage: `await sequence.pin(index, "self"); over();`, where over() is tryMe.ready().
-  void sequence.pin(at("2026-03"), "self").then(() => arrow.ready());
-  await time.advance(500);
-  assert.equal(arrow.phase(), "waiting", "while the message travels");
-  await untilAnswer();
-  assert.equal(arrow.phase(), "waiting", "the answer is not the end: the turn line comes after it");
-  await time.advance(1000);
-  assert.ok(s.chat.some((i) => i.type === "turn"));
-  assert.equal(arrow.phase(), "shown");
+test("the Try me arrow shows 5 s after the stage starts, on the stage's clock: a hidden tab holds it (TIN-1106)", async () => {
+  const { time, clock, sequence } = stage();
+  const arrow = createTryMe();
+  // HeroStage: `void clock.wait(TRY_ME_DELAY_MS, due.signal).then(() => { if (!due.signal.aborted) tryMe.ready("agent"); })`.
+  const due = new AbortController();
+  void clock.wait(TRY_ME_DELAY_MS, due.signal).then(() => {
+    if (!due.signal.aborted) arrow.ready("agent");
+  });
+  void sequence.pin(at("2026-03"), "self");
+  await time.advance(3000);
+  clock.pause();
+  await time.advance(5000);
+  assert.equal(arrow.view().phase, "waiting", "the tab was hidden: the wait held");
+  clock.resume();
+  await time.advance(1999);
+  assert.equal(arrow.view().phase, "waiting");
+  await time.advance(1);
+  assert.deepEqual(arrow.view(), { step: "agent", phase: "shown" }, "5 s of the stage's own time, whatever the self-play is doing");
 });
 
-test("the stage's own pin cut short by an unpin is over too: the arrow shows; cut short by a pin, the pin dismissed it", async () => {
-  {
-    const { time, sequence } = stage();
-    const arrow = createTryMe(() => null);
-    void sequence.pin(at("2026-03"), "self").then(() => arrow.ready());
-    await time.advance(800);
-    sequence.unpin();
-    await time.advance(50);
-    assert.equal(arrow.phase(), "shown");
-  }
-  {
-    const { time, sequence } = stage();
-    const arrow = createTryMe(() => null);
-    void sequence.pin(at("2026-03"), "self").then(() => arrow.ready());
-    await time.advance(800);
-    // HeroStage's onPin: tryMe.dismiss(), then the visitor's pin.
-    arrow.dismiss();
-    void sequence.pin(at("2026-01"), "visitor");
-    await time.advance(5000);
-    assert.equal(arrow.phase(), "dismissed", "never drawn");
-  }
+test("the stage gone before the 5 s: the arrow never shows", async () => {
+  const { time, clock } = stage();
+  const arrow = createTryMe();
+  const due = new AbortController();
+  void clock.wait(TRY_ME_DELAY_MS, due.signal).then(() => {
+    if (!due.signal.aborted) arrow.ready("agent");
+  });
+  await time.advance(1000);
+  due.abort();
+  await time.advance(10_000);
+  assert.equal(arrow.view().phase, "waiting");
+});
+
+test("after the visitor's pin, Try me moves to Use your own agent once that pin is over; a newer pin wins", async () => {
+  const { time, sequence, s, untilAnswer } = stage();
+  const arrow = createTryMe();
+  arrow.ready("agent");
+  let pinRun = 0;
+  // HeroStage's onPin: tryMe.interacted(); const run = ++pinRun; sequence.pin(...).then(() => pinRun === run && ready("own")).
+  const pin = (month: string) => {
+    arrow.interacted();
+    const run = ++pinRun;
+    void sequence.pin(at(month), "visitor").then(() => {
+      if (pinRun === run) arrow.ready("own");
+    });
+  };
+  pin("2026-01");
+  assert.deepEqual(arrow.view(), { step: "own", phase: "waiting" }, "the first arrow goes at once");
+  await time.advance(800);
+  pin("2026-02");
+  await untilAnswer();
+  assert.equal(arrow.view().phase, "waiting", "the first pin, cut short, does not show it; the second is not over yet");
+  await time.advance(3000);
+  assert.ok(s.chat.some((i) => i.type === "answer"));
+  assert.deepEqual(arrow.view(), { step: "own", phase: "shown" });
 });

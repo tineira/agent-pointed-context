@@ -5,7 +5,9 @@
  * Out, to the parent's origin only (never "*"):
  * - `{ type: "apc:embed-ready" }`, once, when the view has mounted;
  * - `{ type: "apc:pulse-status", connected, agentName }`, after the first state load and whenever either changes;
- * - `{ type: "apc:embed-resize", height }`, when the view's height changes.
+ * - `{ type: "apc:embed-resize", height }`, when the view's height changes;
+ * - `{ type: "apc:embed-anchor", connect }`, where the view shows its "Connect your agent" box (x, y, width, height in
+ *   the view's CSS px), or null when it shows none, whenever that changes: the landing's arrow points at it (TIN-1106).
  *
  * In: `{ type: "apc:theme", scheme: "light" | "dark" }`, taken only from the parent's origin and the parent window.
  */
@@ -17,7 +19,16 @@ export type Scheme = "light" | "dark";
 export type EmbedMessage =
   | { type: "apc:embed-ready" }
   | { type: "apc:pulse-status"; connected: boolean; agentName: string | null }
-  | { type: "apc:embed-resize"; height: number };
+  | { type: "apc:embed-resize"; height: number }
+  | { type: "apc:embed-anchor"; connect: AnchorBox | null };
+
+/** A box in the view, in CSS px, rounded. */
+export interface AnchorBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 /**
  * The origin the Worker wrote into the page (`<meta name="apc-embed-parent">`): one http(s) origin, or null, and then
@@ -64,6 +75,7 @@ export function createPoster(parentOrigin: string | null, target: { postMessage(
   let readySent = false;
   let lastStatus = "";
   let lastHeight = -1;
+  let lastAnchor: string | null = null;
   const send = (message: EmbedMessage) => {
     if (parentOrigin && target) target.postMessage(message, parentOrigin);
   };
@@ -86,6 +98,14 @@ export function createPoster(parentOrigin: string | null, target: { postMessage(
       if (!Number.isFinite(h) || h <= 0 || h === lastHeight) return;
       lastHeight = h;
       send({ type: "apc:embed-resize", height: h });
+    },
+    /** The Connect box, sent the first time and then only when it moved, resized, appeared or went. */
+    anchor: (box: { x: number; y: number; width: number; height: number } | null) => {
+      const connect = box && [box.x, box.y, box.width, box.height].every(Number.isFinite) && box.width > 0 && box.height > 0 ? { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) } : null;
+      const key = JSON.stringify(connect);
+      if (key === lastAnchor) return;
+      lastAnchor = key;
+      send({ type: "apc:embed-anchor", connect });
     },
   };
 }

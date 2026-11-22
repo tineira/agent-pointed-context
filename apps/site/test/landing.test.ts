@@ -89,7 +89,7 @@ test("the hero says what APC is, offers the two ways in, and links the full vide
   assert.match(read("apps/site/src/web/pulse-status.ts"), /export const PULSE_HERO = `\$\{PULSE_ORIGIN\}\/embed\/hero`;/);
   assert.match(read("apps/site/src/pulse-origin.ts"), /export const PULSE_ORIGIN = "https:\/\/pulse\.apc\.tineira\.com";/);
   // Click-gated: the frame is PulseFrame's, which HeroSwitch renders only when live, and live starts false.
-  assert.match(landing, /props\.live \? h\(PulseFrame, \{ onBack: props\.onBack \}\) : h\(Fragment, null, props\.demo\)/);
+  assert.match(landing, /props\.live \? h\(PulseFrame, \{ onBack: props\.onBack, events: props\.events \}\) : h\(Fragment, null, props\.demo\)/);
   assert.match(landing, /const \[live, setLive\] = useState\(false\);/);
   // The stage is its own step's: the hero only places it.
   assert.match(heroSection, /<div className="landing-hero-stage">\s*<HeroStage \/>\s*<\/div>/);
@@ -461,6 +461,10 @@ test("text, links and buttons pass 4.5:1 contrast over solid bg, worst-case dot 
       const ratio = contrast(accent, under);
       assert.ok(ratio >= 3, `${name}: Try me arrow (--accent) on ${label} is ${ratio.toFixed(2)}:1 (below 3:1)`);
     }
+    // Over the stage (TIN-1106), the label is a solid pill: --try-pill-fg on --accent, whatever window is under it.
+    const pillFg = parseColor(t["try-pill-fg"]!, bg);
+    const pill = contrast(pillFg, accent);
+    assert.ok(pill >= 4.5, `${name}: Try me pill (--try-pill-fg on --accent) is ${pill.toFixed(2)}:1 (below 4.5:1)`);
   }
 });
 

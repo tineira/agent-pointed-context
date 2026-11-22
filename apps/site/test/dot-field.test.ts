@@ -358,11 +358,12 @@ test("glow merges wander and pointer into one non-stacking pass capped by glowPe
   }
 });
 
-test("masked cap equals today's glowMax alpha and open peak matches the tuned values in both themes", () => {
+test("masked cap equals today's glowMax alpha and the open peak is the site prototype's (TIN-1106) in both themes", () => {
   assert.equal(DOT_FIELD_SPECS.dark.glowMax.a, 0.2);
   assert.equal(DOT_FIELD_SPECS.light.glowMax.a, 0.22);
-  assert.equal(DOT_FIELD_SPECS.dark.glowPeak.a, 0.52);
-  assert.equal(DOT_FIELD_SPECS.light.glowPeak.a, 0.55);
+  // The prototype's glow(k) at k = 1: dark rgba(255,170,40,0.9), light rgba(216,76,30,0.95).
+  assert.deepEqual(DOT_FIELD_SPECS.dark.glowPeak, { r: 255, g: 170, b: 40, a: 0.9 });
+  assert.deepEqual(DOT_FIELD_SPECS.light.glowPeak, { r: 216, g: 76, b: 30, a: 0.95 });
 
   for (const theme of ["dark", "light"] as const) {
     const spec = DOT_FIELD_SPECS[theme];
