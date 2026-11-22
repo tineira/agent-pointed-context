@@ -306,8 +306,8 @@ export function Agents(props: { api: Api; sid: string; state: SandboxState; init
           <p className="hint">To cut an agent, use ⊘ next to its mark in the bar at the top.</p>
         </section>
       )}
-      {/* Wake on pin (TIN-973): a card per Grok bot agent connected directly, below the list (its element stays as it is). */}
-      {(!state.v2 || state.profiles?.includes("direct")) && <WakeOnPinList api={api} grants={state.grants.filter((g) => !hubLinked.has(g.id))} names={names} onChanged={props.onChanged} />}
+      {/* Wake on pin (TIN-973): a card per Grok bot agent connected directly, below the list (its element stays as it is). The dock sentence in it shows only when a dock agent is linked (TIN-1098). */}
+      {(!state.v2 || state.profiles?.includes("direct")) && <WakeOnPinList api={api} grants={state.grants.filter((g) => !hubLinked.has(g.id))} names={names} dockLinked={(state.hub_links ?? []).length > 0} onChanged={props.onChanged} />}
       {/* On the v2 deploy without Direct, the dock manages the agents (TIN-410): this screen is Pulse's settings only. */}
       {!state.v2 && (
       <section className="card">
