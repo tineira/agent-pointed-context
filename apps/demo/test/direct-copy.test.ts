@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { DIRECT_HINT, DIRECT_INTRO, DIRECT_STEPS, directOffered } from "../src/web/direct-copy.ts";
+import { DIRECT_HINT, DIRECT_INTRO, DIRECT_STEPS, barDockHint, directOffered } from "../src/web/direct-copy.ts";
 
 /** The standard's deploy (apps/demo/wrangler.jsonc): v2, both profiles; the chooser reads the state's profiles. */
 const STANDARD = { profiles: ["direct", "dock"] };
@@ -26,7 +26,7 @@ test("the profiles decide: the Direct copy where Direct is offered, the dock cop
 
 test("the Direct copy is the /try walk: the Agents page's address, a remote MCP server, the drag from the top, the question", () => {
   assert.equal(DIRECT_STEPS.length, 4, "the four steps");
-  assert.match(DIRECT_HINT, /Make one on the Agents page/, "the hint names the Agents page");
+  assert.match(DIRECT_HINT, /Press Connect an agent on the Agents page/, "the hint names the Agents page");
   assert.match(DIRECT_HINT, /MCP address, with Copy/);
   assert.match(DIRECT_HINT, /Copy prompt/);
   assert.match(DIRECT_HINT, /remote MCP server/);
@@ -58,4 +58,17 @@ test("Wake on pin mentions the dock only when a dock agent is linked", () => {
   assert.match(wake, /props\.dockLinked && " An agent that also has Wake on pin in your dock/, "the dock sentence sits behind the prop");
   const pages = readFileSync(new URL("../src/web/pages.tsx", import.meta.url), "utf8");
   assert.match(pages, /dockLinked=\{\(state\.hub_links \?\? \[\]\)\.length > 0\}/, "the Agents screen passes whether a dock agent is linked");
+});
+
+test("the agent bar's dock hint is off where Direct is offered and stays on a dock-only deploy (TIN-1100)", () => {
+  assert.deepEqual(barDockHint(directOffered(STANDARD)), { dockHint: null }, "the standard deploy turns the hint off");
+  assert.deepEqual(barDockHint(directOffered(DOCK_ONLY)), {}, "a dock-only deploy leaves the bar's default hint");
+  const bar = readFileSync(new URL("../src/web/agent-bar.tsx", import.meta.url), "utf8");
+  assert.match(bar, /\.\.\.barDockHint\(props\.offersDirect\)/, "Pulse's bar sets the property at creation");
+  const app = readFileSync(new URL("../src/web/App.tsx", import.meta.url), "utf8");
+  assert.match(app, /<AgentBar\s+agents=\{barAgents\}\s+offersDirect=\{offersDirect\}/, "the app passes what its profiles offer");
+  const signals = readFileSync(new URL("../../signals/src/web/agent-bar.tsx", import.meta.url), "utf8");
+  assert.match(signals, /\.\.\.\(props\.offersDirect \? \{ dockHint: null \} : \{\}\)/, "Signals' bar sets the property only where Direct is offered");
+  const signalsApp = readFileSync(new URL("../../signals/src/web/app.tsx", import.meta.url), "utf8");
+  assert.match(signalsApp, /<AgentBar [^>]*offersDirect=\{offersDirect\}/, "Signals passes what its profiles offer");
 });

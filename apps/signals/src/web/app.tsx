@@ -383,7 +383,7 @@ function Feed({ sid }: { sid: string }) {
         say(message);
         refresh();
       });
-  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpinEntry} onRevoke={revoke} onUnlink={unlink} />;
+  const bar = <AgentBar agents={barAgents} onOpen={openPin} onUnpin={unpinEntry} onRevoke={revoke} onUnlink={unlink} offersDirect={offersDirect} />;
   return (
     <Shell
       mobile={

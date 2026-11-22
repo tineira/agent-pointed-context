@@ -368,6 +368,7 @@ function Sandbox({ sid }: { sid: string }) {
             // APC v2 (TIN-394): the standard agent bar. apc.tineira.com keeps its own marks below.
             <AgentBar
               agents={barAgents}
+              offersDirect={offersDirect}
               onOpen={(id) => {
                 // A linked agent has two grants and maybe two pins: open the one not on this page, else the first.
                 const held = [id, partners.get(id)].flatMap((gid) => state.grants.filter((g) => g.id === gid && g.pin));
