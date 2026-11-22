@@ -28,9 +28,9 @@ import { TRY_BAR, TRY_BRIDGE, TRY_CUSTOMER_ROW } from "./try-examples.ts";
 const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
 /** Signals' Connect panel: its one button, connected or not (TIN-1091). */
 const SIGNALS_CONNECT = `${SIGNALS.url}?connect`;
-/** The cross-app question in the demos' fixed shared world (TIN-621): an offer in Signals, a customer who left in Pulse. */
 /** Every link into Pulse is on the origin "Open Pulse" uses (pulse-status.ts). */
 const inPulse = (path: string) => `${PULSE_ORIGIN}${path}`;
+/** The cross-app question in the demos' fixed shared world (TIN-621): an offer in Signals, a customer who left in Pulse. */
 const TRY_POST = `${SIGNALS.url}?post=post_013`;
 const TRY_CUSTOMER = inPulse("/customers/cus_0048");
 /** Each app names the origin it lives on (the real host in production). */
