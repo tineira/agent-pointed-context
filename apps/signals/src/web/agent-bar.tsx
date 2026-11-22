@@ -7,7 +7,7 @@ import { createElement, useEffect, useRef } from "react";
 
 defineAgentBar();
 
-export function AgentBar(props: { agents: BarAgent[]; onOpen: (id: string) => void; onUnpin: (id: string) => void; onRevoke: (id: string) => void; onUnlink: (id: string) => void }) {
+export function AgentBar(props: { agents: BarAgent[]; onOpen: (id: string) => void; onUnpin: (id: string) => void; onRevoke: (id: string) => void; onUnlink: (id: string) => void; offersDirect: boolean }) {
   const ref = useRef<ApcAgentsElement | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -30,5 +30,7 @@ export function AgentBar(props: { agents: BarAgent[]; onOpen: (id: string) => vo
   useEffect(() => {
     if (ref.current) ref.current.agents = props.agents;
   }, [props.agents]);
-  return createElement("apc-agents", { ref, class: "agent-bar" });
+  // dockHint null at creation where Direct is offered (TIN-1100): React 19 sets the property before the element connects,
+  // so the bar never reads the hub's localStorage key. A dock-only deploy keeps the hint.
+  return createElement("apc-agents", { ref, class: "agent-bar", ...(props.offersDirect ? { dockHint: null } : {}) });
 }

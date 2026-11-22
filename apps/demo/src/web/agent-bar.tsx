@@ -8,6 +8,7 @@ import { defineAgentBar, type ApcAgentsElement, type BarAgent, type BarStrings }
 import { createElement, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AgentIcon } from "./agent-icon.tsx";
+import { barDockHint } from "./direct-copy.ts";
 import { forwardStrings, usePulseStrings } from "./apc-strings.ts";
 
 defineAgentBar();
@@ -27,6 +28,8 @@ export function AgentBar(props: {
   onWarning: (id: string) => void;
   onRevoke: (id: string) => void;
   onUnlink: (id: string) => void;
+  /** Whether the deploy offers Direct (APC_PROFILES): then the bar's "get the dock" hint stays off (TIN-1100). */
+  offersDirect: boolean;
   /** The bar's words, for another language; left out, from `PulseStringsContext`, else English. */
   strings?: Partial<BarStrings>;
 }) {
@@ -71,5 +74,7 @@ export function AgentBar(props: {
     if (ref.current) ref.current.agents = props.agents;
   }, [props.agents]);
 
-  return createElement("apc-agents", { ref, class: "agent-bar" });
+  // dockHint null at creation where Direct is offered, as the hero and the embed do: React 19 sets a custom element's known
+  // property before it connects, so the bar never reads the hub's localStorage key. A dock-only deploy keeps the hint.
+  return createElement("apc-agents", { ref, class: "agent-bar", ...barDockHint(props.offersDirect) });;
 }
