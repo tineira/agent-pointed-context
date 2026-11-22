@@ -47,8 +47,12 @@ function when(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** The cards, for the Direct agents that have Wake on pin offered or set; nothing when none has. */
-export function WakeOnPinList(props: { api: Api; grants: GrantState[]; names: Map<string, string>; onChanged: () => void }) {
+/**
+ * The cards, for the Direct agents that have Wake on pin offered or set; nothing when none has. The dock
+ * sentence shows only when a dock agent is linked (TIN-1098): where Pulse offers Direct, this card does
+ * not otherwise mention the dock.
+ */
+export function WakeOnPinList(props: { api: Api; grants: GrantState[]; names: Map<string, string>; dockLinked: boolean; onChanged: () => void }) {
   const shown = props.grants.filter((g) => g.wake_offer || g.wake);
   // wake_on_pin's link: opens that agent's card and brings it into view, on load and in a page already open (hashchange).
   // The hash is then taken off the address, so a reload does not open it again; closing the card by hand closes it for good.
@@ -84,7 +88,8 @@ export function WakeOnPinList(props: { api: Api; grants: GrantState[]; names: Ma
     <section className="card">
       <h2>Wake on pin</h2>
       <p className="hint">
-        For Grok bot connected directly: when you point it while it isn't working, Pulse wakes it through a Grok Bot webhook. Each wake starts a new Grok Bot run ({LIMITS_TEXT}). An agent that also has Wake on pin in your dock is woken by whichever of the two you pin.
+        For Grok bot connected directly: when you point it while it isn't working, Pulse wakes it through a Grok Bot webhook. Each wake starts a new Grok Bot run ({LIMITS_TEXT}).
+        {props.dockLinked && " An agent that also has Wake on pin in your dock is woken by whichever of the two you pin."}
       </p>
       {shown.map((g) => (
         <details

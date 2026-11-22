@@ -486,7 +486,7 @@ function Feed({ sid }: { sid: string }) {
               , which shows the same company.
             </p>
           </section>
-          <section className="panel muted small">Drag an agent onto a post, or onto its offer, targeting, code or text: its mark at the top. Your agent reads it with this feed's own tools.</section>
+          <section className="panel muted small">Point an agent at a post, or at its offer, targeting, code or text: drag its mark from the top. Your agent reads it with this feed's own tools.</section>
           <section className="panel muted small">
             <StartOver site="Signals" wipes={["the agents you connected here, and their pins", "your view of this feed"]} reset={() => call(`${base}/reset`, {})} />
           </section>
