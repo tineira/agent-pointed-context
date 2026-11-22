@@ -12,7 +12,8 @@
  *
  * "Use your own agent" (the panel's action, and the title bar's shortcut) puts Pulse's real hero view in place of the
  * stage (hero/live.ts, TIN-1071): only then does the page frame Pulse, and Pulse set its sandbox cookie, as the copy
- * beside each says. "Back to the demo" brings the simulated stage back.
+ * beside each says. "Back to the demo" brings the simulated stage back. The panel and the title bar ask for it with
+ * `openRealHero` (hero/live.ts), which the band under the hero calls too (OwnAgentBand, TIN-1104).
  */
 import { focusAttrs } from "@tineira/apc-protocol";
 import { enablePinning, initials, pinBadgeX, pinTouch, type AgentState, type BarAgent } from "@tineira/apc-web";

@@ -126,6 +126,8 @@ main.landing.landing-home {
 
 .landing-home .landing-hero-stage {
   min-width: 0;
+  /* The band's "Use your own agent ↑" scrolls here: clear of the sticky top bar. */
+  scroll-margin-top: 100px;
 }
 
 .landing-home .landing-hero-copy .landing-eyebrow {
@@ -187,6 +189,83 @@ main.landing.landing-home {
 .landing-home .landing-watch span {
   color: var(--accent-text);
   font-size: 11px;
+}
+
+/* the band under the hero (TIN-1104, OwnAgentBand): "Now use your own agent" in the accent border of the stage's own
+   panel (.hero-offer-card), copy on the left and the two ways on the right; once connected, a quiet line. */
+.landing-home .landing-own {
+  margin-bottom: 44px;
+}
+
+.landing-home .landing-own-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px 32px;
+  padding: 24px 30px;
+  border: 1.5px solid var(--accent-line);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: 0 0 0 6px var(--accent-soft);
+}
+
+.landing-home .landing-own-copy h2 {
+  margin: 0 0 4px;
+  font-size: clamp(22px, 2.6vw, 28px);
+  line-height: 1.15;
+  color: var(--fg);
+}
+
+.landing-home .landing-own-copy p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.landing-home .landing-own-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  flex-shrink: 0;
+}
+
+.landing-home .landing-own-open {
+  font-size: 14px;
+  color: var(--fg);
+  text-underline-offset: 3px;
+}
+
+.landing-home .landing-own-quiet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 12px 18px;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 15px;
+  color: var(--fg);
+}
+
+.landing-home .landing-own-quiet h2 {
+  /* A name up to 40 characters with no break (cleanName's cap) wraps inside the card at 375 px. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+
+.landing-home .landing-own-quiet a {
+  color: var(--accent-text);
+  text-underline-offset: 3px;
+}
+
+/* The live stage takes the focus when it opens (hero/live.ts): its ring keeps the stage's corners. */
+.landing-home .hero-live:focus-visible {
+  border-radius: 22px;
 }
 
 /* works with */
@@ -911,6 +990,16 @@ main.landing.landing-home {
 
   .landing-home .landing-hero {
     padding: 28px 0 36px;
+  }
+
+  .landing-home .landing-own {
+    margin-bottom: 36px;
+  }
+
+  .landing-home .landing-own-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 22px 20px;
   }
 
   .landing-home .landing-lede,

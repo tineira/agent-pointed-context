@@ -1,11 +1,13 @@
 /**
- * The landing of apc.tineira.com (TIN-1067): the hero (with its stage, HeroStage), Works with, the two paths, Inside a
- * point, Your agent. Your permission., Free, open and versioned, and the closing call. One component file per section.
+ * The landing of apc.tineira.com (TIN-1067): the hero (with its stage, HeroStage), the band that offers your own agent
+ * (OwnAgentBand, TIN-1104), Works with, the two paths, Inside a point, Your agent. Your permission., Free, open and
+ * versioned, and the closing call. One component file per section.
  */
 import { AccessSection } from "./landing/AccessSection.tsx";
 import { ClosingSection } from "./landing/ClosingSection.tsx";
 import { HeroSection } from "./landing/HeroSection.tsx";
 import { HowItWorksSection } from "./landing/HowItWorksSection.tsx";
+import { OwnAgentBand } from "./landing/OwnAgentBand.ts";
 import { PathsSection } from "./landing/PathsSection.tsx";
 import { STANDARD_LINKS, StandardSection } from "./landing/StandardSection.tsx";
 import { WorksWithSection } from "./landing/WorksWithSection.tsx";
@@ -21,6 +23,7 @@ export function Landing() {
         <SiteHeader page="landing" />
         <main className="landing landing-home">
           <HeroSection />
+          <OwnAgentBand />
           <WorksWithSection />
           <PathsSection />
           <HowItWorksSection />
