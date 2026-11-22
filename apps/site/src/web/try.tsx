@@ -30,7 +30,7 @@ const [PULSE, SIGNALS] = APPS as [(typeof APPS)[number], (typeof APPS)[number]];
 const SIGNALS_CONNECT = `${SIGNALS.url}?connect`;
 /** Every link into Pulse is on the origin "Open Pulse" uses (pulse-status.ts). */
 const inPulse = (path: string) => `${PULSE_ORIGIN}${path}`;
-/** The cross-app question in the demos' fixed shared world (TIN-621): an offer in Signals, a customer who left in Pulse. */
+/** The cross-app question in the demos' fixed shared world (TIN-621): `TRY_POST`, an offer in Signals, and `TRY_CUSTOMER`, a customer who left in Pulse. */
 const TRY_POST = `${SIGNALS.url}?post=post_013`;
 const TRY_CUSTOMER = inPulse("/customers/cus_0048");
 /** Each app names the origin it lives on (the real host in production). */
