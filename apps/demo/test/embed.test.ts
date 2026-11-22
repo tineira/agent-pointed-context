@@ -245,6 +245,17 @@ test("the hero posts to its parent's origin only, ready once, status on change, 
     [{ type: "apc:embed-resize", height: 613 }, PARENT],
   ]);
   assert.ok(!JSON.stringify(sent).includes("s_g_mine") && !JSON.stringify(sent).includes("g_mine"));
+  // The Connect box (TIN-1106): rounded, sent the first time and on a change only, null when it goes.
+  sent.length = 0;
+  poster.anchor({ x: 10.4, y: 20.6, width: 300.2, height: 200 });
+  poster.anchor({ x: 10.2, y: 21, width: 300, height: 200.1 });
+  poster.anchor({ x: 0, y: 0, width: 0, height: 0 });
+  poster.anchor(null);
+  poster.anchor({ x: Number.NaN, y: 0, width: 10, height: 10 });
+  assert.deepEqual(sent, [
+    [{ type: "apc:embed-anchor", connect: { x: 10, y: 21, width: 300, height: 200 } }, PARENT],
+    [{ type: "apc:embed-anchor", connect: null }, PARENT],
+  ]);
   // No parent origin: nothing is sent.
   const none: unknown[] = [];
   const silent = createPoster(null, { postMessage: (m) => none.push(m) });

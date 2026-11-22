@@ -31,7 +31,20 @@ if (window.self === window.top) {
 
   // The view's height, for the landing to size the frame (it clamps it): on every change of the page's size. The body's
   // own box, not the document's scrollHeight, which never drops below the frame's height: the frame can shrink back too.
-  const measure = () => poster.resize(document.body.getBoundingClientRect().height);
-  new ResizeObserver(measure).observe(document.body);
+  // And where the Connect box is, for the landing's arrow (TIN-1106): on every change of size or of the view.
+  let queued = 0;
+  const measure = () => {
+    queued = 0;
+    poster.resize(document.body.getBoundingClientRect().height);
+    const connect = document.querySelector(".connect")?.getBoundingClientRect();
+    poster.anchor(connect ? { x: connect.left, y: connect.top, width: connect.width, height: connect.height } : null);
+  };
+  const soon = () => {
+    if (!queued) queued = requestAnimationFrame(measure);
+  };
+  new ResizeObserver(soon).observe(document.body);
+  new MutationObserver(soon).observe(document.getElementById("root")!, { childList: true, subtree: true });
+  window.addEventListener("resize", soon);
+  window.addEventListener("scroll", soon, { passive: true });
   measure();
 }

@@ -15,8 +15,10 @@
  * beside each says. "Back to the demo" brings the simulated stage back. The panel and the title bar ask for it with
  * `openRealHero` (hero/live.ts), which the band under the hero calls too (OwnAgentBand, TIN-1104).
  *
- * The "Try me" arrow beside the stage (hero/try-me.ts, TIN-1103) shows once the stage's own pin is over, and goes on the
- * visitor's first press on the agent, tap, keyboard arming, pin, or "Use your own agent" (which try-me.ts hears itself).
+ * The hero's arrow (hero/try-me.ts, TIN-1103, TIN-1106): "Try me" at the agent 5 s after the stage starts (at once under
+ * reduced motion); after the visitor's first press on the agent, tap, keyboard arming or pin, "Try me" at "Use your own
+ * agent", once their pin is over (or a few seconds after a press that pinned nothing); after "Use your own agent" (which
+ * try-me.ts hears itself), "Do this" at Pulse's Connect box, which the live frame reports through `events`.
  */
 import { focusAttrs } from "@tineira/apc-protocol";
 import { enablePinning, initials, pinBadgeX, pinTouch, type AgentState, type BarAgent } from "@tineira/apc-web";
@@ -31,7 +33,7 @@ import { FocusCard, Json } from "./hero/json.tsx";
 import { HeroStageHost } from "./hero/live.ts";
 import { carryMark, sendMessage } from "./hero/motion.ts";
 import { createHeroSequence, type ChatItem } from "./hero/sequence.ts";
-import { tryMe } from "./hero/try-me.ts";
+import { TRY_ME_DELAY_MS, TRY_ME_OWN_DELAY_MS, tryMe } from "./hero/try-me.ts";
 import { usePulseView } from "../pulse-status.ts";
 
 /** What "Use your own agent" does, said beside it (invariant 5 of TIN-1063: no request to Pulse before the click). */
@@ -66,12 +68,16 @@ export function HeroStage() {
   }, []);
   return (
     <HeroStageHost
+      events={LIVE_EVENTS}
       demo={(useOwnAgent) =>
         data ? <Stage data={data} onUseOwnAgent={useOwnAgent} /> : <figure className="hero-stage hero-stage-loading" aria-busy="true" aria-label="A demo of pointing an agent at a chart, loading" />
       }
     />
   );
 }
+
+/** The live frame's news for the arrow: its status, its Connect box, and "Back to the demo". */
+const LIVE_EVENTS = { status: tryMe.connection, connectBox: tryMe.setConnectBox, back: tryMe.back };
 
 function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
   const { months } = props.data;
@@ -97,6 +103,9 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
   const selfPlay = useRef<AbortController | null>(null);
   const litTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextId = useRef(0);
+  // The second arrow's reveal: the visitor's latest pin (only its end counts), and the wait after a press that pinned nothing.
+  const pinRun = useRef(0);
+  const ownWait = useRef<AbortController | null>(null);
   const reduceRef = useRef(reduce);
   reduceRef.current = reduce;
 
@@ -155,6 +164,22 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
 
   const unpin = useCallback(() => sequence.unpin(), [sequence]);
 
+  /**
+   * The visitor touched the agent: the first arrow goes, and the second shows a few seconds later unless a pin takes
+   * over (then it shows when that pin is over).
+   */
+  const interacted = useCallback(() => {
+    tryMe.interacted();
+    if (ownWait.current) return;
+    const wait = new AbortController();
+    ownWait.current = wait;
+    const run = pinRun.current;
+    void clock.wait(TRY_ME_OWN_DELAY_MS, wait.signal).then(() => {
+      if (ownWait.current === wait) ownWait.current = null;
+      if (!wait.signal.aborted && pinRun.current === run) tryMe.ready("own");
+    });
+  }, [clock]);
+
   // Standard pinning on the stage: drag the agent (or its badge) onto a bar, tap it and then a bar, or the keyboard.
   useEffect(() => {
     const stage = stageRef.current;
@@ -165,8 +190,13 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
         const index = months.findIndex((m) => m.month === target.params?.month);
         if (index < 0) return;
         stopSelfPlay();
-        tryMe.dismiss();
-        void sequence.pin(index, "visitor");
+        tryMe.interacted();
+        ownWait.current?.abort();
+        ownWait.current = null;
+        const run = ++pinRun.current;
+        void sequence.pin(index, "visitor").then(() => {
+          if (pinRun.current === run) tryMe.ready("own");
+        });
       },
     });
   }, [months, sequence, stopSelfPlay]);
@@ -185,19 +215,31 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
     };
   }, [stopSelfPlay]);
 
-  // The "Try me" arrow goes for good on a press on the agent (a drag starts there), or the agent armed by a tap or a key.
+  // The first interaction with the agent: a press on it (a drag starts there), or the agent armed by a tap or a key.
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
-    const pressed = (e: PointerEvent) => e.target instanceof Element && e.target.closest("[data-apc-mark]") && tryMe.dismiss();
-    const armed = (e: Event) => (e as CustomEvent<{ id: string | null } | null>).detail?.id && tryMe.dismiss();
+    const pressed = (e: PointerEvent) => e.target instanceof Element && e.target.closest("[data-apc-mark]") && interacted();
+    const armed = (e: Event) => (e as CustomEvent<{ id: string | null } | null>).detail?.id && interacted();
     stage.addEventListener("pointerdown", pressed, true);
     window.addEventListener("apc-armed", armed);
     return () => {
       stage.removeEventListener("pointerdown", pressed, true);
       window.removeEventListener("apc-armed", armed);
+      ownWait.current?.abort();
+      ownWait.current = null;
     };
-  }, []);
+  }, [interacted]);
+
+  // The first arrow: 5 s after the stage starts (TIN-1106), on the stage's clock; at once under reduced motion.
+  useEffect(() => {
+    if (reduceRef.current) return tryMe.ready("agent");
+    const due = new AbortController();
+    void clock.wait(TRY_ME_DELAY_MS, due.signal).then(() => {
+      if (!due.signal.aborted) tryMe.ready("agent");
+    });
+    return () => due.abort();
+  }, [clock]);
 
   // A hidden tab holds the demo where it is (every wait goes through the clock); leaving the page clears every timer.
   useEffect(() => {
@@ -212,38 +254,28 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
     };
   }, [clock, sequence]);
 
-  // Self-play on load: one pin, then the visitor's turn. None under reduced motion. Once it is over, however it ended
-  // (its answer given, or cut short), or at once under reduced motion, the "Try me" arrow may show.
+  // Self-play on load: one pin, then the visitor's turn. None under reduced motion.
   useEffect(() => {
-    if (reduceRef.current) return tryMe.ready();
+    if (reduceRef.current) return;
     const index = months.findIndex((m) => m.month === SELF_PLAY_MONTH);
     const play = new AbortController();
     selfPlay.current = play;
-    let left = false;
-    const over = () => {
-      if (!left) tryMe.ready();
-    };
     void (async () => {
       await clock.wait(1100, play.signal);
       const stage = stageRef.current;
       const bar = barRefs.current[index];
       const mark = stage?.querySelector<HTMLElement>(".apc-agents__mark");
-      if (play.signal.aborted || !stage || !bar || !mark || reduceRef.current) return over();
+      if (play.signal.aborted || !stage || !bar || !mark || reduceRef.current) return;
       const carried = carryMark({ stage, mark, bar, wait: clock.wait });
       play.signal.addEventListener("abort", carried.cancel, { once: true });
       bar.classList.add("apc-target");
       const arrived = await carried.done;
       bar.classList.remove("apc-target");
-      if (!arrived || play.signal.aborted) return over();
+      if (!arrived || play.signal.aborted) return;
       selfPlay.current = null;
-      // The stage's own pin ends once its turn line is said, or when a pin or an unpin cuts it short.
       await sequence.pin(index, "self");
-      over();
     })();
-    return () => {
-      left = true;
-      play.abort();
-    };
+    return () => play.abort();
   }, [months, clock, sequence]);
 
   // The badge sits astride the pinned bar's right edge, just below its top, as Pulse places it.

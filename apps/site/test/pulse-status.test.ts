@@ -108,6 +108,14 @@ test("a message counts only from Pulse's origin and the frame's own window, in t
     { type: "apc:embed-resize", height: Number.NaN },
     { type: "apc:embed-resize", height: Number.POSITIVE_INFINITY },
     { type: "apc:embed-resize" },
+    { type: "apc:embed-anchor" },
+    { type: "apc:embed-anchor", connect: "box" },
+    { type: "apc:embed-anchor", connect: [1, 2, 3, 4] },
+    { type: "apc:embed-anchor", connect: { x: 1, y: 2, width: 3 } },
+    { type: "apc:embed-anchor", connect: { x: "1", y: 2, width: 3, height: 4 } },
+    { type: "apc:embed-anchor", connect: { x: 1, y: 2, width: -3, height: 4 } },
+    { type: "apc:embed-anchor", connect: { x: 1, y: Number.NaN, width: 3, height: 4 } },
+    { type: "apc:embed-anchor", connect: { x: 1e9, y: 2, width: 3, height: 4 } },
   ]) {
     assert.equal(at(data), null, JSON.stringify(data));
   }
@@ -117,6 +125,9 @@ test("a message counts only from Pulse's origin and the frame's own window, in t
   assert.deepEqual(at({ type: "apc:embed-resize", height: 612.4 }), { type: "apc:embed-resize", height: 612 });
   assert.deepEqual(at({ type: "apc:pulse-status", connected: true, agentName: "Claude‮\u0007 Code" }), { type: "apc:pulse-status", connected: true, agentName: "Claude Code" });
   assert.deepEqual(at({ type: "apc:pulse-status", connected: false, agentName: "Claude" }), { type: "apc:pulse-status", connected: false, agentName: null });
+  // The Connect box (TIN-1106): rounded, bounded numbers only, or null when the view shows none.
+  assert.deepEqual(at({ type: "apc:embed-anchor", connect: { x: 10.4, y: -3.6, width: 320.5, height: 240, extra: "x" } }), { type: "apc:embed-anchor", connect: { x: 10, y: -4, width: 321, height: 240 } });
+  assert.deepEqual(at({ type: "apc:embed-anchor", connect: null, sid: "x" }), { type: "apc:embed-anchor", connect: null });
   // Status only: whatever else a message carries is dropped.
   assert.deepEqual(at({ type: "apc:pulse-status", connected: true, agentName: null, secret: "s", sid: "x" }), { type: "apc:pulse-status", connected: true, agentName: null });
 });

@@ -48,11 +48,16 @@ export function cleanName(raw: unknown): string | null {
 export type EmbedMessage =
   | { type: "apc:embed-ready" }
   | { type: "apc:pulse-status"; connected: boolean; agentName: string | null }
-  | { type: "apc:embed-resize"; height: number };
+  | { type: "apc:embed-resize"; height: number }
+  /** Where the view shows its "Connect your agent" box, in the frame's own CSS px, or null when it shows none (TIN-1106). */
+  | { type: "apc:embed-anchor"; connect: { x: number; y: number; width: number; height: number } | null };
+
+/** The largest coordinate an anchor may carry: twice the tallest frame, and wider than any screen. */
+const ANCHOR_MAX = 4 * FRAME_MAX;
 
 /**
  * A message from the hero frame, or null: another origin, another window (or none), or any shape the contract does
- * not name. The name is cleaned here, and the height clamped.
+ * not name. The name is cleaned here, the height clamped, and the anchor's numbers bounded and rounded.
  */
 export function embedMessage(event: { origin: string; source: unknown; data: unknown }, frame: unknown, origin: string = PULSE_ORIGIN): EmbedMessage | null {
   if (event.origin !== origin || !frame || event.source !== frame) return null;
@@ -70,6 +75,18 @@ export function embedMessage(event: { origin: string; source: unknown; data: unk
       const h = data.height;
       if (typeof h !== "number" || !Number.isFinite(h)) return null;
       return { type: "apc:embed-resize", height: Math.round(Math.min(FRAME_MAX, Math.max(FRAME_MIN, h))) };
+    }
+    case "apc:embed-anchor": {
+      if (data.connect === null) return { type: "apc:embed-anchor", connect: null };
+      const c = data.connect as Record<string, unknown> | null;
+      if (!c || typeof c !== "object" || Array.isArray(c)) return null;
+      const n = (v: unknown, min: number) => (typeof v === "number" && Number.isFinite(v) && v >= min && v <= ANCHOR_MAX ? Math.round(v) : null);
+      const x = n(c.x, -ANCHOR_MAX);
+      const y = n(c.y, -ANCHOR_MAX);
+      const width = n(c.width, 0);
+      const height = n(c.height, 0);
+      if (x === null || y === null || width === null || height === null) return null;
+      return { type: "apc:embed-anchor", connect: { x, y, width, height } };
     }
     default:
       return null;
