@@ -14,6 +14,9 @@
  * stage (hero/live.ts, TIN-1071): only then does the page frame Pulse, and Pulse set its sandbox cookie, as the copy
  * beside each says. "Back to the demo" brings the simulated stage back. The panel and the title bar ask for it with
  * `openRealHero` (hero/live.ts), which the band under the hero calls too (OwnAgentBand, TIN-1104).
+ *
+ * The "Try me" arrow beside the stage (hero/try-me.ts, TIN-1103) shows once the stage's own pin is over, and goes on the
+ * visitor's first press on the agent, tap, keyboard arming, pin, or "Use your own agent" (which try-me.ts hears itself).
  */
 import { focusAttrs } from "@tineira/apc-protocol";
 import { enablePinning, initials, pinBadgeX, pinTouch, type AgentState, type BarAgent } from "@tineira/apc-web";
@@ -28,6 +31,7 @@ import { FocusCard, Json } from "./hero/json.tsx";
 import { HeroStageHost } from "./hero/live.ts";
 import { carryMark, sendMessage } from "./hero/motion.ts";
 import { createHeroSequence, type ChatItem } from "./hero/sequence.ts";
+import { tryMe } from "./hero/try-me.ts";
 import { usePulseView } from "../pulse-status.ts";
 
 /** What "Use your own agent" does, said beside it (invariant 5 of TIN-1063: no request to Pulse before the click). */
@@ -161,6 +165,7 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
         const index = months.findIndex((m) => m.month === target.params?.month);
         if (index < 0) return;
         stopSelfPlay();
+        tryMe.dismiss();
         void sequence.pin(index, "visitor");
       },
     });
@@ -180,6 +185,20 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
     };
   }, [stopSelfPlay]);
 
+  // The "Try me" arrow goes for good on a press on the agent (a drag starts there), or the agent armed by a tap or a key.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const pressed = (e: PointerEvent) => e.target instanceof Element && e.target.closest("[data-apc-mark]") && tryMe.dismiss();
+    const armed = (e: Event) => (e as CustomEvent<{ id: string | null } | null>).detail?.id && tryMe.dismiss();
+    stage.addEventListener("pointerdown", pressed, true);
+    window.addEventListener("apc-armed", armed);
+    return () => {
+      stage.removeEventListener("pointerdown", pressed, true);
+      window.removeEventListener("apc-armed", armed);
+    };
+  }, []);
+
   // A hidden tab holds the demo where it is (every wait goes through the clock); leaving the page clears every timer.
   useEffect(() => {
     const follow = () => (document.visibilityState === "hidden" ? clock.pause() : clock.resume());
@@ -193,28 +212,38 @@ function Stage(props: { data: HeroData; onUseOwnAgent: () => void }) {
     };
   }, [clock, sequence]);
 
-  // Self-play on load: one pin, then the visitor's turn. None under reduced motion.
+  // Self-play on load: one pin, then the visitor's turn. None under reduced motion. Once it is over, however it ended
+  // (its answer given, or cut short), or at once under reduced motion, the "Try me" arrow may show.
   useEffect(() => {
-    if (reduceRef.current) return;
+    if (reduceRef.current) return tryMe.ready();
     const index = months.findIndex((m) => m.month === SELF_PLAY_MONTH);
     const play = new AbortController();
     selfPlay.current = play;
+    let left = false;
+    const over = () => {
+      if (!left) tryMe.ready();
+    };
     void (async () => {
       await clock.wait(1100, play.signal);
       const stage = stageRef.current;
       const bar = barRefs.current[index];
       const mark = stage?.querySelector<HTMLElement>(".apc-agents__mark");
-      if (play.signal.aborted || !stage || !bar || !mark || reduceRef.current) return;
+      if (play.signal.aborted || !stage || !bar || !mark || reduceRef.current) return over();
       const carried = carryMark({ stage, mark, bar, wait: clock.wait });
       play.signal.addEventListener("abort", carried.cancel, { once: true });
       bar.classList.add("apc-target");
       const arrived = await carried.done;
       bar.classList.remove("apc-target");
-      if (!arrived || play.signal.aborted) return;
+      if (!arrived || play.signal.aborted) return over();
       selfPlay.current = null;
-      void sequence.pin(index, "self");
+      // The stage's own pin ends once its turn line is said, or when a pin or an unpin cuts it short.
+      await sequence.pin(index, "self");
+      over();
     })();
-    return () => play.abort();
+    return () => {
+      left = true;
+      play.abort();
+    };
   }, [months, clock, sequence]);
 
   // The badge sits astride the pinned bar's right edge, just below its top, as Pulse places it.
