@@ -18,6 +18,7 @@ import {
   TRY_ME_CLEAR,
   TRY_ME_DELAY_MS,
   TRY_ME_LABELS,
+  TRY_ME_OVER_REACH,
   TRY_ME_SCALES,
   TRY_ME_STACKED_SCALES,
   TryMeArrow,
@@ -186,12 +187,22 @@ test("steps 2 and 3 beside the copy: from above the copy's first line, over the 
     assert.equal(p.onStage, false, `${step}: the label sits in the copy's column, on the field`);
     const label = { left: l.grid.left + p.x + p.labelX, top: l.grid.top + p.y + p.labelY };
     assert.ok(label.left + TRY_ME_LABELS[step === "own" ? "Try me" : "Do this"].width * 1.8 <= l.stage.left, `${step}: label left of the stage`);
-    assert.ok(label.top + 24 * 1.8 <= TEXTS_DESKTOP[0]!.top, `${step}: label above the copy's first line`);
+    assert.ok(label.top + 26 * 1.8 <= TEXTS_DESKTOP[0]!.top, `${step}: label above the copy's first line`);
+    assert.ok(target.top - COPY_DESKTOP.stage.top <= TRY_ME_OVER_REACH, `${step}: near the stage's top edge`);
     const t = tip(p, l.grid);
     assert.ok(t.y < target.top && t.x > target.left && t.x < target.right, `${step}: the tip is just over the target`);
     assert.ok(p.ny > 0 && p.nx > 0, `${step}: it comes down and right onto the target`);
     assert.ok(inGrid(p, l), `${step}: inside the grid, at most TRY_ME_ABOVE over it`);
   }
+});
+
+test("a target far under the stage's top edge (the agent window under the chart, ~1024 px) is not reached over that edge", () => {
+  // At 1024 px the two columns stay, but the agent window sits under the chart: its button is ~380 px under the stage's top.
+  const l: TryMeLayout = { grid: box(40, 117, 984, 900), copy: box(40, 173, 400, 640), stage: box(440, 117, 984, 900), anchor: box(40, 618, 185, 640), texts: [box(40, 173, 400, 193), box(40, 215, 400, 409), box(40, 431, 400, 520), box(40, 546, 185, 591), box(197, 546, 377, 591), box(40, 618, 185, 640)], target: box(820, 497, 960, 517) };
+  const p = placeTryMe("own", l);
+  assert.ok(p, "it still finds a way in");
+  assert.notEqual(p!.dir, "over");
+  assert.ok(p!.height < 200, "a short arrow beside the button, not one across the app window");
 });
 
 test("on phones: smaller, down at the stage beside the video link, then pills inside the stage beside each target", () => {

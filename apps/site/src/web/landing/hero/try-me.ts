@@ -178,10 +178,12 @@ export const TRY_ME_STACKED_SCALES = [1.4, 1] as const;
 export const TRY_ME_CLEAR = 12;
 /** And the ink this far from the copy's text. */
 const TEXT_PAD = 4;
+/** How far under the stage's top edge a target may sit for an arrow to arc over that edge onto it. */
+export const TRY_ME_OVER_REACH = 120;
 /** How far above the grid an arrow may reach (the hero's own top padding, under the header). */
 export const TRY_ME_ABOVE = 44;
 /** Each label's size at scale 1 (15 px, bold, upper case, rotated -5°), with room to spare. */
-export const TRY_ME_LABELS = { "Try me": { width: 76, height: 24 }, "Do this": { width: 84, height: 24 } } as const;
+export const TRY_ME_LABELS = { "Try me": { width: 76, height: 26 }, "Do this": { width: 84, height: 26 } } as const;
 export type TryMeLabel = keyof typeof TRY_ME_LABELS;
 /** The pill's padding around a label on the stage, at scale 1. */
 const PILL_PAD = { x: 8, y: 3 };
@@ -283,9 +285,14 @@ const agentDown =
     return { dir: "down", scale: k, onStage: false, label, s, c1: { x: s.x + 22 * k, y: s.y - 4 * k }, c2: { x: s.x + 30 * k, y: s.y + 10 * k }, t };
   };
 
-/** Steps 2 and 3, beside the copy: from above the copy's first line, over the stage's top edge, down onto the target. */
+/**
+ * Steps 2 and 3, beside the copy: from above the copy's first line, over the stage's top edge, down onto the target.
+ * Only for a target near that edge (TRY_ME_OVER_REACH): a target lower in the stage (the agent window under the chart,
+ * around 1024 px) would take the arc across the app window, so the next way in is used instead.
+ */
 const over: Template = (l, target, k, size) => {
-  const label = { left: l.stage.left - 8 - size.width, top: l.stage.top + 6, right: l.stage.left - 8, bottom: l.stage.top + 6 + size.height };
+  if (target.top - l.stage.top > TRY_ME_OVER_REACH) return null;
+  const label = { left: l.stage.left - 8 - size.width, top: l.stage.top + 2, right: l.stage.left - 8, bottom: l.stage.top + 2 + size.height };
   const s = { x: label.right + 6 * k, y: (label.top + label.bottom) / 2 };
   const t = { x: target.left + 14 * k, y: target.top - 8 };
   const peak = Math.min(s.y, t.y) - 30 * k;
