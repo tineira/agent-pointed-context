@@ -9,15 +9,20 @@
  *   and reaches glowPeak in open space; DOM reads are coalesced to one frame outside drawFrame.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   createDotField,
   createFrameGuard,
   distanceToRect,
+  DOT_BASE_SIZE_PX,
   DOT_FIELD_PALETTES,
   DOT_FIELD_SPECS,
+  DOT_GLOW_MAX_SIZE_PX,
   glowAlpha,
   normalizeTextRects,
+  projectTextRects,
+  TEXT_MASK_HEADING_PAD_PX,
   TEXT_MASK_MARGIN_PX,
   TEXT_MASK_PAD_PX,
   TEXT_MASK_SELECTOR,
@@ -26,7 +31,13 @@ import {
   type CanvasLike,
   type TextRect,
 } from "../src/web/dot-field.ts";
-import { createFrameThrottledMeasure, measureTextRects } from "../src/web/dot-field-mask.ts";
+import {
+  createFrameThrottledMeasure,
+  measureTextRects,
+  parseTranslateTransform,
+  type ComputedStyleLike,
+  type RectReadable,
+} from "../src/web/dot-field-mask.ts";
 import type { Theme } from "../src/web/theme.ts";
 
 interface RecordedContext {
@@ -495,6 +506,7 @@ test("normalizeTextRects filters invalid/offscreen rects, pads, and prunes conta
   ];
   const normalized = normalizeTextRects(raw, viewport, TEXT_MASK_MARGIN_PX, TEXT_MASK_PAD_PX);
   assert.equal(normalized.length, 2, `expected 2 kept rects, got ${JSON.stringify(normalized)}`);
+  assert.ok(normalized[1]!.left <= 100 - (DOT_GLOW_MAX_SIZE_PX / 2 + 4), "padding expands rect beyond dot half-width + italic overhang");
   assert.deepEqual(normalized[0], {
     left: 100 - TEXT_MASK_PAD_PX,
     top: -20 - TEXT_MASK_PAD_PX,
@@ -507,6 +519,10 @@ test("normalizeTextRects filters invalid/offscreen rects, pads, and prunes conta
     right: 500 + TEXT_MASK_PAD_PX,
     bottom: 320 + TEXT_MASK_PAD_PX,
   });
+
+  // With cullY = false (document-space caching), offscreen vertical rects are retained for scroll projection.
+  const fullDoc = normalizeTextRects(raw, viewport, TEXT_MASK_MARGIN_PX, TEXT_MASK_PAD_PX, false);
+  assert.equal(fullDoc.length, 4, "retains above- and below-viewport rects when cullY is false");
 
   // Openness against the pruned list matches openness against the unpruned padded list at every grid point.
   const unpruned = raw
@@ -521,6 +537,341 @@ test("normalizeTextRects filters invalid/offscreen rects, pads, and prunes conta
       );
     }
   }
+});
+
+test("pad constants cover glowing dot half-width plus italic overhangs and selector includes every required token verbatim", () => {
+  const dotMaxHalfWidth = DOT_GLOW_MAX_SIZE_PX / 2;
+  assert.equal(DOT_BASE_SIZE_PX, 1.2);
+  assert.equal(DOT_GLOW_MAX_SIZE_PX, 3.4);
+  assert.ok(
+    TEXT_MASK_PAD_PX >= dotMaxHalfWidth + 4,
+    `TEXT_MASK_PAD_PX (${TEXT_MASK_PAD_PX}) must cover dot max half-width (${dotMaxHalfWidth}) + body italic overhang (>= 4 px)`,
+  );
+  assert.ok(
+    TEXT_MASK_HEADING_PAD_PX >= dotMaxHalfWidth + 10.3,
+    `TEXT_MASK_HEADING_PAD_PX (${TEXT_MASK_HEADING_PAD_PX}) must cover dot max half-width (${dotMaxHalfWidth}) + measured h1 italic em overhang (>= 10.3 px)`,
+  );
+  assert.ok(TEXT_MASK_HEADING_PAD_PX > TEXT_MASK_PAD_PX, "heading pad exceeds body pad");
+
+  // Parse selector token-by-token so dropping a short token like `p` or `a` always fails.
+  const tokens = new Set(TEXT_MASK_SELECTOR.split(",").map((s) => s.trim()));
+  for (const required of [
+    "[data-text-mask]",
+    "header.site-nav",
+    "figure.hero-stage",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "li",
+    "figcaption",
+    "blockquote",
+    "pre",
+    "code",
+    "dt",
+    "dd",
+    "th",
+    "td",
+    "label",
+    "summary",
+    "legend",
+    "caption",
+    "a",
+    "button",
+    "em",
+    "small",
+    "b",
+    "strong",
+    "svg text",
+    ".kicker",
+    ".landing-who",
+    ".try-ask",
+    ".try-host",
+    ".try-join-app",
+    ".try-ex-row",
+    ".build-chip",
+    ".build-code-idx",
+    ".landing-conn",
+  ]) {
+    assert.ok(tokens.has(required), `TEXT_MASK_SELECTOR missing exact token "${required}"`);
+  }
+});
+
+test("scrolling between measuring and drawing shifts document rects and tracks sticky/fixed rects so the cap holds on every frame", () => {
+  for (const theme of ["dark", "light"] as const) {
+    const spec = DOT_FIELD_SPECS[theme];
+    const h = makeHarness({ width: 1200, height: 800, theme });
+
+    // Measured once at scrollY = 0: one visible paragraph, one far-below-fold paragraph, one sticky header,
+    // and one sticky side panel (like `.build-code` sticking at top: 92px inside a grid [340, 1100]).
+    const measured: TextRect[] = [
+      { left: 100, top: 260, right: 500, bottom: 380 }, // visible at scrollY = 0
+      { left: 100, top: 1020, right: 500, bottom: 1140 }, // below initial viewport
+      { left: 0, top: 0, right: 1200, bottom: 64, stickyMinTop: 0, stickyMaxTop: 2936 }, // sticky header
+      { left: 620, top: 340, right: 1080, bottom: 640, stickyMinTop: 92, stickyMaxTop: 800 }, // sticky card
+      { left: 900, top: 700, right: 1100, bottom: 760, fixed: true }, // fixed badge
+    ];
+    h.field.setTextRects(measured, 0);
+    h.field.start();
+
+    // Simulate a fast flick (~50 px/frame) without re-measuring: park pointer right on the moving text.
+    for (let step = 1; step <= 6; step++) {
+      const scrollY = step * 50;
+      h.setScrollY(scrollY);
+      const movedTop = 260 - scrollY;
+      const movedBottom = 380 - scrollY;
+      const centerY = Math.max(20, (movedTop + movedBottom) / 2);
+      h.field.onPointerMove(300, centerY);
+      h.main.rec.fillRectCalls.length = 0;
+      h.stepFrame(step * 16);
+
+      let checkedInside = 0;
+      for (const call of h.main.rec.fillRectCalls) {
+        const cx = call.x + call.w / 2;
+        const cy = call.y + call.h / 2;
+        const alpha = parseAlpha(call.fillStyle);
+        if (cx >= 100 && cx <= 500 && cy >= movedTop && cy <= movedBottom) {
+          checkedInside += 1;
+          assert.ok(
+            alpha <= spec.glowMax.a + 1e-6,
+            `${theme} scrollY=${scrollY}: dot inside scrolled text at (${cx},${cy}) exceeded glowMax (${alpha} > ${spec.glowMax.a})`,
+          );
+        }
+      }
+      assert.ok(checkedInside > 0, `${theme} scrollY=${scrollY}: sampled dots over scrolled text`);
+    }
+
+    // Jump straight down to scrollY = 800 (bringing the initially offscreen rect into [220, 340],
+    // while sticky header stays at [0, 64], sticky card is pushed up to [0, 300], fixed stays at [700, 760]).
+    // Place pointer right on the bottom edge (y = 345) so half its radius hits [220, 340] and half hits open space below.
+    h.setScrollY(800);
+    h.field.onPointerMove(300, 345);
+    h.main.rec.fillRectCalls.length = 0;
+    h.stepFrame(160);
+    let belowFoldChecked = 0;
+    let openSpaceStrong = 0;
+    for (const call of h.main.rec.fillRectCalls) {
+      const cx = call.x + call.w / 2;
+      const cy = call.y + call.h / 2;
+      const alpha = parseAlpha(call.fillStyle);
+      if (cx >= 100 && cx <= 500 && cy >= 220 && cy <= 340) {
+        belowFoldChecked += 1;
+        assert.ok(alpha <= spec.glowMax.a + 1e-6, `${theme}: below-fold rect at scrollY=800 exceeded glowMax: ${alpha}`);
+      } else if (cy >= 340 + TEXT_MASK_MARGIN_PX && Math.hypot(cx - 300, cy - 345) < 80) {
+        if (alpha > spec.glowMax.a + 0.05) openSpaceStrong += 1;
+      }
+    }
+    assert.ok(belowFoldChecked > 0, `${theme}: below-fold text masked without re-measure`);
+    assert.ok(openSpaceStrong > 0, `${theme}: open space below scrolled text still rises past glowMax`);
+
+    // Verify exact sticky and fixed projection math across scroll positions.
+    const proj300 = projectTextRects(measured, 300, 800, TEXT_MASK_MARGIN_PX);
+    const header300 = proj300.find((r) => r.right === 1200);
+    const stickyCard300 = proj300.find((r) => r.left === 620);
+    const fixed300 = proj300.find((r) => r.left === 900);
+    assert.deepEqual(header300, { left: 0, top: 0, right: 1200, bottom: 64 });
+    assert.deepEqual(stickyCard300, { left: 620, top: 92, right: 1080, bottom: 392 });
+    assert.deepEqual(fixed300, { left: 900, top: 700, right: 1100, bottom: 760 });
+
+    // Once scrolled past stickyMaxTop - stickyMinTop (800 - 92 = 708), sticky card scrolls out with its parent.
+    const proj750 = projectTextRects(measured, 750, 800, TEXT_MASK_MARGIN_PX);
+    const stickyCard750 = proj750.find((r) => r.left === 620);
+    assert.deepEqual(stickyCard750, { left: 620, top: 50, right: 1080, bottom: 350 });
+
+    h.field.stop();
+  }
+});
+
+test("measureTextRects unions .rv-wait / mid-transition transforms with final resting positions, applies heading pad, and extracts sticky bounds", () => {
+  assert.deepEqual(parseTranslateTransform("none"), { tx: 0, ty: 0 });
+  assert.deepEqual(parseTranslateTransform("matrix(1, 0, 0, 1, 0, 22)"), { tx: 0, ty: 22 });
+  assert.deepEqual(parseTranslateTransform("matrix(1, 0, 0, 1, 0, 13.8)"), { tx: 0, ty: 13.8 });
+  assert.deepEqual(parseTranslateTransform("matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -4, 22, 0, 1)"), {
+    tx: -4,
+    ty: 22,
+  });
+
+  // 1) `.rv-wait` block translated down by 22 px: union covers both final resting top (300) and start bottom (362).
+  const rvWrapper: RectReadable = {
+    tagName: "DIV",
+    getBoundingClientRect: () => ({ left: 80, top: 322, right: 600, bottom: 422 }),
+  };
+  const rvParagraph: RectReadable = {
+    tagName: "P",
+    parentElement: rvWrapper,
+    getBoundingClientRect: () => ({ left: 100, top: 322, right: 500, bottom: 362 }),
+  };
+  // 2) `h1` + italic `em` inside it: gets TEXT_MASK_HEADING_PAD_PX.
+  const heading: RectReadable = {
+    tagName: "H1",
+    getBoundingClientRect: () => ({ left: 100, top: 100, right: 420, bottom: 166 }),
+  };
+  const headingEm: RectReadable = {
+    tagName: "EM",
+    closest: (sel) => (sel.includes("h1") ? heading : null),
+    getBoundingClientRect: () => ({ left: 300, top: 96, right: 430, bottom: 172 }),
+  };
+  // 3) Sticky container `.build-code` (top: 92px) inside `.build-grid` [340, 1100].
+  const buildGrid: RectReadable = {
+    tagName: "SECTION",
+    getBoundingClientRect: () => ({ left: 80, top: 340, right: 1120, bottom: 1100 }),
+  };
+  const buildCode: RectReadable = {
+    tagName: "DIV",
+    parentElement: buildGrid,
+    getBoundingClientRect: () => ({ left: 600, top: 340, right: 1100, bottom: 740 }),
+  };
+  const buildPre: RectReadable = {
+    tagName: "PRE",
+    parentElement: buildCode,
+    getBoundingClientRect: () => ({ left: 628, top: 440, right: 1072, bottom: 712 }),
+  };
+
+  const styles = new Map<RectReadable, ComputedStyleLike>([
+    [rvWrapper, { transform: "matrix(1, 0, 0, 1, 0, 22)" }],
+    [buildCode, { position: "sticky", top: "92px" }],
+  ]);
+
+  const rects = measureTextRects(
+    { querySelectorAll: () => [rvParagraph, heading, headingEm, buildPre] },
+    { width: 1200, height: 800 },
+    { getComputedStyle: (el) => styles.get(el) ?? null },
+  );
+
+  // Reveal paragraph covers final resting top (322 - 22 = 300) AND initial translated bottom (362), plus pad.
+  const rvRect = rects.find((r) => r.left === 100 - TEXT_MASK_PAD_PX && r.right === 500 + TEXT_MASK_PAD_PX);
+  assert.deepEqual(rvRect, {
+    left: 100 - TEXT_MASK_PAD_PX,
+    top: 300 - TEXT_MASK_PAD_PX,
+    right: 500 + TEXT_MASK_PAD_PX,
+    bottom: 362 + TEXT_MASK_PAD_PX,
+  });
+
+  // Heading and its italic `em` both receive TEXT_MASK_HEADING_PAD_PX (14 px), covering the >10 px overhang.
+  const h1Rect = rects.find((r) => r.left === 100 - TEXT_MASK_HEADING_PAD_PX);
+  const emRect = rects.find((r) => r.right === 430 + TEXT_MASK_HEADING_PAD_PX);
+  assert.deepEqual(h1Rect, {
+    left: 100 - TEXT_MASK_HEADING_PAD_PX,
+    top: 100 - TEXT_MASK_HEADING_PAD_PX,
+    right: 420 + TEXT_MASK_HEADING_PAD_PX,
+    bottom: 166 + TEXT_MASK_HEADING_PAD_PX,
+  });
+  assert.deepEqual(emRect, {
+    left: 300 - TEXT_MASK_HEADING_PAD_PX,
+    top: 96 - TEXT_MASK_HEADING_PAD_PX,
+    right: 430 + TEXT_MASK_HEADING_PAD_PX,
+    bottom: 172 + TEXT_MASK_HEADING_PAD_PX,
+  });
+
+  // Sticky `<pre>` child inside `.build-code` records exact sticky clamp metadata.
+  const stickyRect = rects.find((r) => r.left === 628 - TEXT_MASK_PAD_PX);
+  assert.deepEqual(stickyRect, {
+    left: 628 - TEXT_MASK_PAD_PX,
+    top: 440 - TEXT_MASK_PAD_PX,
+    right: 1072 + TEXT_MASK_PAD_PX,
+    bottom: 712 + TEXT_MASK_PAD_PX,
+    stickyMinTop: 92 + 100 - TEXT_MASK_PAD_PX,
+    stickyMaxTop: 1100 - 400 + 100 - TEXT_MASK_PAD_PX,
+  });
+
+  // Mid-transition (ty = 13.8): final resting position (y = 300) is STILL capped at glowMax on that frame.
+  styles.set(rvWrapper, { transform: "matrix(1, 0, 0, 1, 0, 13.8)" });
+  const midParagraph: RectReadable = {
+    tagName: "P",
+    parentElement: rvWrapper,
+    getBoundingClientRect: () => ({ left: 100, top: 313.8, right: 500, bottom: 353.8 }),
+  };
+  const midRects = measureTextRects(
+    { querySelectorAll: () => [midParagraph] },
+    { width: 1200, height: 800 },
+    { getComputedStyle: (el) => styles.get(el) ?? null },
+  );
+  assert.equal(midRects[0]!.top, 300 - TEXT_MASK_PAD_PX);
+  assert.equal(midRects[0]!.bottom, 353.8 + TEXT_MASK_PAD_PX);
+  assert.equal(textMaskOpenness(250, 300, midRects), 0, "final resting top stays fully masked mid-reveal");
+});
+
+test("first frame after reduced motion turns off or after a hidden tab returns measures before drawing", () => {
+  // Scenario A: starts with reduced motion ON (no initial measure), then turns OFF.
+  const h1 = makeHarness({ width: 900, height: 600, reduced: true, theme: "dark" });
+  let reduced = true;
+  let hidden = false;
+  let currentTextRect: TextRect = { left: 100, top: 200, right: 400, bottom: 320 };
+  const mask1 = createFrameThrottledMeasure({
+    isActive: () => !hidden && !reduced && !h1.field.isDegraded(),
+    measure: () => h1.field.setTextRects([currentTextRect], 0),
+  });
+  mask1.measureNow(); // inactive under reduced motion -> skipped
+  h1.field.start();
+  h1.field.onPointerMove(250, 260);
+
+  // Reduced motion turns off: measureNow runs synchronously BEFORE onReducedMotionChange schedules first rAF.
+  reduced = false;
+  h1.setReduced(false);
+  mask1.measureNow();
+  h1.field.onReducedMotionChange();
+  h1.main.rec.fillRectCalls.length = 0;
+  h1.stepFrame(16); // very first animated frame
+  let checkedFirst = 0;
+  for (const call of h1.main.rec.fillRectCalls) {
+    const cx = call.x + call.w / 2;
+    const cy = call.y + call.h / 2;
+    if (cx >= 100 && cx <= 400 && cy >= 200 && cy <= 320) {
+      checkedFirst += 1;
+      assert.ok(parseAlpha(call.fillStyle) <= DOT_FIELD_SPECS.dark.glowMax.a + 1e-6);
+    }
+  }
+  assert.ok(checkedFirst > 0, "first frame after reduced-motion off capped text region");
+  h1.field.stop();
+
+  // Scenario B: tab hides, layout shifts while hidden, then tab returns.
+  const h2 = makeHarness({ width: 900, height: 600, theme: "light" });
+  hidden = false;
+  reduced = false;
+  currentTextRect = { left: 100, top: 100, right: 400, bottom: 180 };
+  const mask2 = createFrameThrottledMeasure({
+    isActive: () => !hidden && !reduced && !h2.field.isDegraded(),
+    measure: () => h2.field.setTextRects([currentTextRect], 0),
+  });
+  mask2.measureNow();
+  h2.field.start();
+  h2.stepFrame(16);
+
+  hidden = true;
+  h2.setHidden(true);
+  h2.field.onVisibilityChange();
+  // Text moves to a new location while hidden.
+  currentTextRect = { left: 450, top: 260, right: 750, bottom: 380 };
+  h2.field.onPointerMove(600, 320);
+
+  // Tab returns: measureNow runs BEFORE onVisibilityChange schedules the first resumed frame.
+  hidden = false;
+  h2.setHidden(false);
+  mask2.measureNow();
+  h2.field.onVisibilityChange();
+  h2.main.rec.fillRectCalls.length = 0;
+  h2.stepFrame(60_016);
+  let checkedResume = 0;
+  for (const call of h2.main.rec.fillRectCalls) {
+    const cx = call.x + call.w / 2;
+    const cy = call.y + call.h / 2;
+    if (cx >= 450 && cx <= 750 && cy >= 260 && cy <= 380) {
+      checkedResume += 1;
+      assert.ok(parseAlpha(call.fillStyle) <= DOT_FIELD_SPECS.light.glowMax.a + 1e-6);
+    }
+  }
+  assert.ok(checkedResume > 0, "first frame after returning from hidden tab capped new text region");
+  h2.field.stop();
+
+  // Guard SiteBackdrop's wiring in site.tsx so resume/resize/theme always measure before drawing.
+  const siteSrc = readFileSync(new URL("../src/web/site.tsx", import.meta.url), "utf8");
+  assert.match(siteSrc, /onVisibility\s*=\s*\(\)\s*=>\s*\{\s*if\s*\(!document\.hidden\)\s*mask\?\.measureNow\(\);\s*field\.onVisibilityChange\(\);/s);
+  assert.match(siteSrc, /onMotion\s*=\s*\(\)\s*=>\s*\{\s*if\s*\(!isReduced\(\)\)\s*mask\?\.measureNow\(\);\s*field\.onReducedMotionChange\(\);/s);
+  assert.match(siteSrc, /onResize\s*=\s*\(\)\s*=>\s*\{\s*mask\?\.measureNow\(\);\s*field\.resize\(\);/s);
+  assert.match(siteSrc, /subscribeTheme\(\(\)\s*=>\s*\{\s*mask\?\.measureNow\(\);\s*field\.onThemeChange\(\);/s);
 });
 
 test("frame-throttled text mask coalesces bursts to one frame, respects active state, and covers shared site text selectors", () => {
@@ -591,7 +942,4 @@ test("frame-throttled text mask coalesces bursts to one frame, respects active s
   );
   assert.equal(seenSelector, TEXT_MASK_SELECTOR);
   assert.equal(rects.length, 1);
-  for (const token of ["[data-text-mask]", "header.site-nav", "figure.hero-stage", "h1", "p", "li", "a", "button", "code", "pre", "figcaption"]) {
-    assert.ok(TEXT_MASK_SELECTOR.includes(token), `TEXT_MASK_SELECTOR includes ${token}`);
-  }
 });

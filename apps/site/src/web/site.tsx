@@ -37,29 +37,32 @@ export function SiteBackdrop() {
       ? attachTextMask({
           root: maskRoot,
           getViewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
+          getScrollY: () => window.scrollY,
           isActive: () => !document.hidden && !isReduced() && !field.isDegraded(),
-          onRects: (rects) => field.setTextRects(rects),
+          onRects: (rects, scrollY) => field.setTextRects(rects, scrollY),
         })
       : null;
 
     const onResize = () => {
-      mask?.schedule();
+      mask?.measureNow();
       field.resize();
     };
     const onScroll = () => {
-      mask?.schedule();
       field.onScroll();
     };
     const onPointer = (e: PointerEvent) => field.onPointerMove(e.clientX, e.clientY);
     const onVisibility = () => {
+      if (!document.hidden) mask?.measureNow();
       field.onVisibilityChange();
-      if (!document.hidden) mask?.schedule();
     };
     const onMotion = () => {
+      if (!isReduced()) mask?.measureNow();
       field.onReducedMotionChange();
-      if (!isReduced()) mask?.schedule();
     };
-    const unsubTheme = subscribeTheme(() => field.onThemeChange());
+    const unsubTheme = subscribeTheme(() => {
+      mask?.measureNow();
+      field.onThemeChange();
+    });
 
     mask?.measureNow();
     field.start();

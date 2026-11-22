@@ -65,22 +65,46 @@ export const DOT_FIELD_SPECS: Record<Theme, DotFieldPaletteSpec> = {
   },
 };
 
-/** Axis-aligned rectangle in viewport CSS pixels describing a text region to keep capped at glowMax. */
+/**
+ * Axis-aligned rectangle in CSS pixels describing a text region to keep capped at glowMax.
+ * Coordinates are measured at a reference `scrollY` (recorded by `setTextRects`) and projected to
+ * the current viewport per frame using `scrollDeltaY = currentScrollY - measuredScrollY`:
+ * - default (document flow): shifts vertically by `-scrollDeltaY`;
+ * - `fixed: true`: stays pinned in viewport coordinates;
+ * - `stickyMinTop` + `stickyMaxTop`: shifts by `-scrollDeltaY` clamped to
+ *   `[stickyMinTop, stickyMaxTop - scrollDeltaY]` so `position: sticky` elements track with zero
+ *   DOM reads during scroll.
+ */
 export interface TextRect {
   readonly left: number;
   readonly top: number;
   readonly right: number;
   readonly bottom: number;
+  readonly fixed?: boolean;
+  readonly stickyMinTop?: number;
+  readonly stickyMaxTop?: number;
 }
+
+/** Base and maximum glowing dot square size (CSS px) drawn by `drawGlows`. */
+export const DOT_BASE_SIZE_PX = 1.2;
+export const DOT_GLOW_MAX_SIZE_PX = 3.4;
 
 /** Smooth fade distance (CSS px) outside each text rectangle from glowMax to glowPeak. */
 export const TEXT_MASK_MARGIN_PX = 32;
 
 /**
- * Safety padding (CSS px) added to measured DOM text rectangles so italic/ascender overhangs and a
- * glowing dot's half-width (at most 1.7 px) never bleed above glowMax onto any glyph pixel.
+ * Safety padding (CSS px) added to measured DOM text rectangles so body italic/ascender overhangs
+ * and a glowing dot's half-width (`DOT_GLOW_MAX_SIZE_PX / 2 = 1.7 px`) never bleed above glowMax
+ * onto any glyph pixel.
  */
-export const TEXT_MASK_PAD_PX = 4;
+export const TEXT_MASK_PAD_PX = 6;
+
+/**
+ * Larger safety padding (CSS px) for headings (`h1`–`h6` and their inline children such as italic
+ * Georgia `em` inside tight `line-height: 0.98` display headlines), where glyph ink can overhang
+ * the element's border box by up to ~10 px plus the glowing dot's 1.7 px half-width.
+ */
+export const TEXT_MASK_HEADING_PAD_PX = 14;
 
 /**
  * Shared selector covering text-bearing elements across every page that mounts SiteBackdrop
@@ -92,9 +116,9 @@ export const TEXT_MASK_SELECTOR = [
   "figure.hero-stage",
   "h1, h2, h3, h4, h5, h6",
   "p, li, figcaption, blockquote, pre, code, dt, dd, th, td, label, summary, legend, caption",
-  "a, button, small, b, strong",
+  "a, button, em, small, b, strong",
   "svg text",
-  ".kicker, .landing-who, .try-ask, .try-host, .try-join-app, .build-chip, .build-code-idx, .landing-conn",
+  ".kicker, .landing-who, .try-ask, .try-host, .try-join-app, .try-ex-row, .build-chip, .build-code-idx, .landing-conn",
 ].join(", ");
 
 /** Euclidean distance from (x, y) to the axis-aligned rectangle (0 inside or on its edges). */
@@ -141,15 +165,65 @@ export function textMaskOpenness(
   return t * t * (3 - 2 * t);
 }
 
+function sameScrollBehavior(a: TextRect, b: TextRect): boolean {
+  if (Boolean(a.fixed) !== Boolean(b.fixed)) return false;
+  const aSticky = a.stickyMinTop !== undefined && a.stickyMaxTop !== undefined;
+  const bSticky = b.stickyMinTop !== undefined && b.stickyMaxTop !== undefined;
+  if (aSticky !== bSticky) return false;
+  if (!aSticky) return true;
+  return (
+    Math.abs((a.stickyMinTop! - a.top) - (b.stickyMinTop! - b.top)) < 0.01 &&
+    Math.abs((a.stickyMaxTop! - a.top) - (b.stickyMaxTop! - b.top)) < 0.01
+  );
+}
+
 /**
- * Filter, pad, viewport-cull and deduplicate raw DOM rectangles into the compact list read per
- * frame. Removing any rectangle contained in another preserves exact mask distances everywhere.
+ * Project cached text rectangles from their measured `scrollY` into the current viewport at
+ * `currentScrollY` (`scrollDeltaY = currentScrollY - measuredScrollY`), culling any rectangle
+ * outside `[-margin, viewportHeight + margin]`. Pure math — zero DOM reads — so every frame
+ * during scrolling has exact mask coordinates.
+ */
+export function projectTextRects(
+  rects: readonly TextRect[],
+  scrollDeltaY: number,
+  viewportHeight: number,
+  margin: number = TEXT_MASK_MARGIN_PX,
+): TextRect[] {
+  if (rects.length === 0 || viewportHeight <= 0) return [];
+  const safeMargin = Math.max(0, margin);
+  const out: TextRect[] = [];
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i]!;
+    let top: number;
+    let bottom: number;
+    if (r.fixed) {
+      top = r.top;
+      bottom = r.bottom;
+    } else if (r.stickyMinTop !== undefined && r.stickyMaxTop !== undefined) {
+      const h = r.bottom - r.top;
+      top = Math.min(r.stickyMaxTop - scrollDeltaY, Math.max(r.stickyMinTop, r.top - scrollDeltaY));
+      bottom = top + h;
+    } else {
+      top = r.top - scrollDeltaY;
+      bottom = r.bottom - scrollDeltaY;
+    }
+    if (bottom + safeMargin < 0 || top - safeMargin > viewportHeight) continue;
+    out.push({ left: r.left, top, right: r.right, bottom });
+  }
+  return out;
+}
+
+/**
+ * Filter, pad, cull and deduplicate raw DOM rectangles into the compact list stored between layout
+ * changes. Removing any rectangle contained in another with the same scroll behavior preserves
+ * exact mask distances at every scroll position.
  */
 export function normalizeTextRects(
   raw: readonly TextRect[],
   viewport: { width: number; height: number },
   margin: number = TEXT_MASK_MARGIN_PX,
   pad: number = TEXT_MASK_PAD_PX,
+  cullY = true,
 ): TextRect[] {
   if (viewport.width <= 0 || viewport.height <= 0 || raw.length === 0) return [];
   const safeMargin = Math.max(0, margin);
@@ -169,8 +243,26 @@ export function normalizeTextRects(
     const right = r.right + safePad;
     const bottom = r.bottom + safePad;
     if (right + safeMargin < 0 || left - safeMargin > viewport.width) continue;
-    if (bottom + safeMargin < 0 || top - safeMargin > viewport.height) continue;
-    visible.push({ left, top, right, bottom });
+    if (cullY && (bottom + safeMargin < 0 || top - safeMargin > viewport.height)) continue;
+    if (r.fixed) {
+      visible.push({ left, top, right, bottom, fixed: true });
+    } else if (
+      r.stickyMinTop !== undefined &&
+      r.stickyMaxTop !== undefined &&
+      Number.isFinite(r.stickyMinTop) &&
+      Number.isFinite(r.stickyMaxTop)
+    ) {
+      visible.push({
+        left,
+        top,
+        right,
+        bottom,
+        stickyMinTop: r.stickyMinTop - safePad,
+        stickyMaxTop: r.stickyMaxTop - safePad,
+      });
+    } else {
+      visible.push({ left, top, right, bottom });
+    }
   }
   if (visible.length <= 1) return visible;
 
@@ -181,6 +273,7 @@ export function normalizeTextRects(
     for (let j = 0; j < visible.length; j++) {
       if (i === j) continue;
       const other = visible[j]!;
+      if (!sameScrollBehavior(other, cand)) continue;
       if (
         other.left <= cand.left &&
         other.top <= cand.top &&
@@ -360,8 +453,12 @@ export interface DotFieldController {
   onScroll: () => void;
   onPointerMove: (x: number, y: number) => void;
   onThemeChange: () => void;
-  /** Replace the cached viewport text rectangles read per frame (no DOM work inside draw). */
-  setTextRects: (rects: readonly TextRect[]) => void;
+  /**
+   * Replace the cached text rectangles and the `scrollY` at which they were measured
+   * (defaults to the current `env.getScrollY()`). `drawFrame` projects them to the current scroll
+   * with zero DOM reads.
+   */
+  setTextRects: (rects: readonly TextRect[], measuredScrollY?: number) => void;
   isRunning: () => boolean;
   isDegraded: () => boolean;
 }
@@ -397,6 +494,7 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
   let tags: GutterTag[] = [];
   let nextTag = 0;
   let textRects: readonly TextRect[] = [];
+  let textRectsScrollY = 0;
 
   const isStatic = () => env.isReducedMotion() || guard.degraded;
 
@@ -469,7 +567,7 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
    * (wander + pointer), clearing the base dot underneath first so alphas never stack past the
    * dot's cap (glowMax inside text rectangles, fading smoothly to glowPeak in open space).
    */
-  function drawGlows(c: DotFieldPalette, lights: readonly GlowLight[], off: number) {
+  function drawGlows(c: DotFieldPalette, lights: readonly GlowLight[], off: number, scrollDeltaY: number) {
     if (!cx || lights.length === 0) return;
     const cols = Math.ceil(width / GAP) + 2;
     const minGy = -2;
@@ -498,11 +596,13 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
       }
     }
 
+    const frameRects = projectTextRects(textRects, scrollDeltaY, height, textMaskMargin);
+    const sizeSpan = DOT_GLOW_MAX_SIZE_PX - DOT_BASE_SIZE_PX;
     for (const { gx, gy, k } of cells.values()) {
       const x = gx * GAP + GAP / 2;
       const y = gy * GAP + GAP / 2 - off;
-      const open = textMaskOpenness(x, y, textRects, textMaskMargin);
-      const s = 1.2 + k * 2.2;
+      const open = textMaskOpenness(x, y, frameRects, textMaskMargin);
+      const s = DOT_BASE_SIZE_PX + k * sizeSpan;
       cx.clearRect(x - s / 2 - 1, y - s / 2 - 1, s + 2, s + 2);
       cx.fillStyle = c.glow(k, open);
       cx.fillRect(x - s / 2, y - s / 2, s, s);
@@ -511,7 +611,8 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
 
   function drawFrame(frameNow: number, forceStill: boolean) {
     if (!canDraw() || !cx) return;
-    const rawOff = (env.getScrollY() * 0.25) % GAP;
+    const scrollY = env.getScrollY();
+    const rawOff = (scrollY * 0.25) % GAP;
     const off = rawOff < 0 ? rawOff + GAP : rawOff;
     const c = palette();
     cx.setTransform(1, 0, 0, 1, 0, 0);
@@ -533,7 +634,7 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
         strength: Math.min(1, (4000 - (frameNow - lastMove)) / 1200),
       });
     }
-    drawGlows(c, lights, off);
+    drawGlows(c, lights, off, scrollY - textRectsScrollY);
 
     if (width >= TAG_MIN_WIDTH) {
       if (frameNow > nextTag) {
@@ -633,8 +734,9 @@ export function createDotField(env: DotFieldEnv): DotFieldController {
         drawFrame(now(), isStatic());
       }
     },
-    setTextRects(rects: readonly TextRect[]) {
+    setTextRects(rects: readonly TextRect[], measuredScrollY?: number) {
       textRects = rects;
+      textRectsScrollY = measuredScrollY ?? env.getScrollY();
     },
     isRunning() {
       return rafId !== null;
