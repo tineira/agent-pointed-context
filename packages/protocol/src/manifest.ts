@@ -34,6 +34,10 @@
  *   the URL of its OAuth protected-resource metadata, on its origin. A reader never requires either: the
  *   standard does not fix how agents authenticate (`GrantRequirement`).
  * - **`dock`** (a hub): where it takes pairings, `pair` and `confirm`, as absolute URLs on its origin.
+ * - **`mobile`** (APC 1.4, an app, optional): `false` when the app does not offer its page on a phone (a
+ *   desktop-only app). The core's mobile rule (`APC_MOBILE_MEDIA`, item 9 in `core.ts`) then does not bind
+ *   it, for an app that claims 1.4.0 or later. Left out, `true` or anything else: the rule applies. A reader
+ *   keeps it only when it is a boolean and never refuses a file over it.
  *
  * A hub reads an app's `apc.json` when the app asks to pair (`POST {hub}/apc/pair`) and refuses the
  * pairing when it is missing (`apc_json_missing`), answered with a redirect (`apc_json_redirected`), cannot be read as one (`apc_json_invalid`), names
@@ -80,6 +84,11 @@ export interface ApcManifest {
   dock?: { pair: string; confirm: string };
   /** APC 0.13: the app's same-origin first-pairing page, without a fragment. */
   dock_connect?: string;
+  /**
+   * APC 1.4, an app: `false` when it does not offer its page on a phone, so the mobile rule does not bind it
+   * (from a claim of 1.4.0). Kept only when the file gave a boolean; left out means the rule applies.
+   */
+  mobile?: boolean;
 }
 
 /** A profile an MCP endpoint serves (APC 0.11). */
@@ -183,6 +192,8 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
     if (!connect || (raw.dock_connect as string).includes("#")) return bad("dock_connect is not a fragment-free URL on its origin");
     manifest.dock_connect = connect;
   }
+  // APC 1.4, an app's: kept when it is a boolean, otherwise left out (the mobile rule applies), never a reason to refuse.
+  if (!profiles.includes("hub") && typeof raw.mobile === "boolean") manifest.mobile = raw.mobile;
   if (profiles.includes("direct")) {
     const connect = isObject(raw.direct) ? onOrigin(raw.direct.connect, origin) : null;
     if (!connect) return bad("direct.connect is not a URL on its origin");

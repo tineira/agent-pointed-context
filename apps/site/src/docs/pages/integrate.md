@@ -133,7 +133,7 @@ The page's event stream is how the server knows a page is open, and how presence
 - **In Chromium / Playwright**, drive real browser input so Chromium sets `isTrusted: true`: in-page marks use pointer events (not HTML5 `draggable`), so move the real pointer from the mark's centre to the target's centre (`page.mouse.move` / `down` / `move` / `up`, or `Input.dispatchMouseEvent` over CDP; `Input.dispatchTouchEvent` for touch taps on mobile); for a cross-window dock drop, send `Input.dispatchDragEvent` (`dragEnter`, `dragOver`, `drop`) over CDP with `application/x-apc-agent`. [Automating drops in Chromium](/docs/conformance#automating-drops-in-chromium) shows both helpers.
 - **In a unit or DOM test without real browser input**, pass `trusted: () => true` to `enablePinning` (in test harnesses only, never in production — page scripts cannot reach `enablePinning`'s options) or drive `createTapPin` directly as `orders-conformance.ts` does for `page.mobile`.
 
-On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile), and [phones](/docs/ux#phones) in the UX guide).
+On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile), and [phones](/docs/ux#phones) in the UX guide). An app that is only for the desktop declares `"mobile": false` in its `apc.json` instead (`apcManifest({ …, mobile: false })`, since 1.4) and is not held to the phone rules.
 
 ### The agent in the page
 

@@ -173,6 +173,8 @@ On a phone there is no dock window, extension or desktop pet to drag from, so th
 
 The reference viewport is 375 × 812 (`APC_MOBILE_VIEWPORT`). An app that claims 0.6.0 or later **MUST** give the conformance suite its page on a phone.
 
+**Desktop-only apps (since 1.4).** An app that does not offer its page on a phone says `"mobile": false` in its [`apc.json`](#apcjson). An app that claims 1.4.0 or later and says so is not bound by this section: it need not keep its agents in an uncollapsible bar in such a viewport, need not pin or unpin by touch, and gives the conformance suite no page on a phone. Opened in such a viewport anyway, its page **SHOULD** tell the person that pointing an agent needs a larger screen. The rest of the core binds it at any width, the bar for a Direct agent and Revoke in the bar included ([the agent in the page](#the-agent-in-the-page)). Left out, `true` or any value that is not a boolean, the key changes nothing: this section applies.
+
 This is interoperability, not presentation: with no mouse and no dock window, a page that hides the agents or cannot be tapped leaves the person with no way to point, so the conformance suite checks it (`page.mobile`). Where the bar sits on a phone, that it stays reachable while the page scrolls without covering content, how "tap to pin" looks, and how large a finger target is, are [the UX guide's](/docs/ux#phones), not the contract's; that an armed agent shows it is armed and can be cancelled is the **SHOULD** above.
 
 ### The agent in the page
@@ -426,6 +428,7 @@ Every APC origin **MUST** say what it is at `GET {origin}/.well-known/apc.json`,
 - `mcp.endpoints` (0.11, optional): the exact MCP endpoints of the origin and the profiles each serves; when present, only they cover a URL ([below](#mcpendpoints-011)).
 - `direct.connect` (with `"direct"`): the page on the same origin where the person connects an agent directly.
 - `direct.auth` and `direct.resource_metadata` (optional, information only): how agents authenticate (`"url"`, `"oauth"`) and, with OAuth, the protected-resource metadata URL on the origin. A reader never requires them.
+- `mobile` (since 1.4, optional, an app's): `false` for an app that does not offer its page on a phone, which [Mobile](#mobile) then does not bind (from a claim of 1.4.0). A reader takes it only as a boolean, never refuses a file over it, and ignores it in a hub's file.
 
 **Deprecated from 1.1.0, unchanged until 2.0**, four clauses of this section and no others: `dock_connect`; a hub's `dock: { pair, confirm }`; the rule below that a reader leaves `dock` out of an `mcp.endpoints` entry on an exact path; and the answer an app owes a dock agent dropped on an app that offers only Direct. The document, its path grammar and its matching rules stay, and so does the word `"dock"` in `profiles` — only its definition moves ([what 1.1 deprecates](#what-11-deprecates)).
 

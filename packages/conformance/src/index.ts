@@ -404,6 +404,8 @@ const NOT_011 = { note: "not checked: the app's apc.json claims a standard befor
 const NO_WAIT_EVENTS = { note: "not checked: the app sends no wait events (APC 0.11: optional, and only for an app that claims and releases its place for a wait atomically), so its page shows no waiting" };
 const PROBE_FAILED = { note: "not checked: the wait-event probe failed in an earlier check, which reports why" };
 const DOCK_WAITS = { note: "not checked on the Dock profile: a dock agent waits on the hub, so the page shows no waiting for a dock grant (APC 0.11)" };
+const NO_MOBILE_PAGE = { note: "not checked: the adapter gives no page.mobile (the check that the adapter for a phone is given says whether it is required)" };
+const DESKTOP_ONLY = { note: "not checked: apc.json declares a desktop-only app (\"mobile\": false, APC 1.4), which the mobile rule does not bind" };
 
 /** The wait events of one grant among presence messages, checked for their exact shape (APC 0.11), oldest first. */
 function waitEventsOf(messages: PresenceMessage[], grantId: string): Array<PresenceWaitEvent["state"]> {
@@ -1146,23 +1148,31 @@ function randomLike(like: string): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(Math.max(like.length, 16))), (x) => alphabet[x % alphabet.length]).join("");
 }
 
-/** The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin. */
+/**
+ * The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin.
+ * From 1.4 an app whose `apc.json` says `"mobile": false` (a desktop-only app) is not bound by it.
+ */
 function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): ConformanceCheck[] {
   const [first, second] = app.targets;
   const { width, height } = APC_MOBILE_VIEWPORT;
-  const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (${app.profile}): mobile ${width}x${height}: ${name}`, run });
+  const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): mobile ${width}x${height}: ${name}`, run);
   return [
-    check("the page adapter for a phone is given (required of an app that claims 0.6.0 or later)", async () => {
+    check("the page adapter for a phone is given (required of an app that claims 0.6.0 or later, unless it claims 1.4.0 or later with mobile: false)", async () => {
       if (mobile) return;
       const conn = await app.connect();
       const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
       const response = await (app.fetch ? app.fetch(request) : fetch(request));
-      const claimed = ((await response.json().catch(() => ({}))) as { standard?: unknown }).standard;
-      expect(typeof claimed === "string" && compareStandard(claimed, "0.6.0") < 0, `apc.json claims standard ${String(claimed)}, which requires the mobile rule to be checked: give page.mobile in the adapter (ApcMobilePage: agentBar, pinByTouch, unpinByTouch)`);
+      const file = (await response.json().catch(() => ({}))) as { standard?: unknown; mobile?: unknown };
+      const claimed = file.standard;
+      if (typeof claimed === "string" && compareStandard(claimed, "0.6.0") < 0) return;
+      // APC 1.4: a desktop-only app opts out, and only a claim that has the key can use it.
+      if (typeof claimed === "string" && compareStandard(claimed, "1.4.0") >= 0 && file.mobile === false) return DESKTOP_ONLY;
+      const hint = file.mobile === false ? ` (mobile: false takes an app out of the rule only from a claim of 1.4.0)` : `, or declare a desktop-only app with "mobile": false in apc.json and a claim of 1.4.0 or later`;
+      expect(false, `apc.json claims standard ${String(claimed)}, which requires the mobile rule to be checked: give page.mobile in the adapter (ApcMobilePage: agentBar, pinByTouch, unpinByTouch)${hint}`);
     }),
 
     check("every agent is shown in the page, and the agent bar cannot be collapsed or hidden", async () => {
-      if (!mobile) return;
+      if (!mobile) return NO_MOBILE_PAGE;
       const a = await app.connect();
       const b = await app.connect();
       await app.page.setOpen(true);
@@ -1172,7 +1182,7 @@ function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): Co
     }),
 
     check("a person pins with a finger, no mouse drag, and the agent reads the pin; unpin works by touch too", async () => {
-      if (!mobile) return;
+      if (!mobile) return NO_MOBILE_PAGE;
       const conn = await app.connect();
       const { grantId } = conn;
       await app.page.setOpen(true);
