@@ -61,6 +61,8 @@ test("apcManifest declares a desktop-only app with mobile: false, and says nothi
   const read = parseApcManifest(JSON.parse(JSON.stringify(desktop)), origin);
   assert.ok(read.ok && read.manifest.mobile === false, "a reader takes it back as written");
   assert.ok(!("mobile" in apcManifest({ name: "Orders", origin, profiles: ["direct"], connect: "/agents" })), "left out, the file says nothing: the mobile rule applies");
+  // Plain JavaScript (an env var read as a string): said at start, rather than a file that silently keeps the rule.
+  assert.throws(() => apcManifest({ name: "Orders", origin, profiles: ["direct"], connect: "/agents", mobile: "false" as unknown as boolean }), /mobile must be true or false/);
 });
 
 test("apcManifest with mcp.endpoints (APC 0.11): it builds only a file readers take as written, and never judges the profiles offered now", () => {

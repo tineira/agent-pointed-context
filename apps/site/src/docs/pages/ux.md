@@ -89,7 +89,7 @@ The rule that matters is the spec's [Mobile](/docs/spec#mobile): the agents are 
 
 Check the page with touch emulation, as `scripts/mobile-e2e.mjs` does for Pulse and Signals, or give the suite's `page.mobile` adapter ([conformance](/docs/conformance#run-it-from-code)).
 
-**A desktop-only app** (`"mobile": false`, since 1.4) skips all of this. Opened on a phone anyway, it says so in one line where the bar would be, for example "Pointing an agent needs a larger screen.", rather than showing marks that cannot be tapped. Its Direct agents' bar still never collapses, whatever the width.
+**A desktop-only app** (`"mobile": false` with a claim of 1.4.0 or later) skips all of this. Opened on a phone anyway, it says so in one line beside the bar, for example "Pointing an agent needs a larger screen.". The bar itself stays: while it shows a Direct agent it is never collapsed or hidden, whatever the width, and Revoke stays in it.
 
 ## Pairing and consent cards
 

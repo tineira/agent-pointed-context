@@ -25,7 +25,8 @@ export type ApcMcpDeclaration = { mcpPath?: string; endpoints?: undefined } | { 
  * be empty.
  *
  * `mobile: false` (APC 1.4) declares a desktop-only app: one that does not offer its page on a phone, which the
- * core's mobile rule then does not bind. Left out, the file says nothing and the rule applies.
+ * core's mobile rule then does not bind, given a claim of 1.4.0 or later (this file always claims
+ * `APC_STANDARD_VERSION`). Left out, the file says nothing and the rule applies. Anything but a boolean throws.
  */
 export function apcManifest(o: { name: string; origin: string; profiles: readonly ApcProfile[]; connect?: string; dockConnect?: string; mobile?: boolean } & ApcMcpDeclaration): ApcManifest {
   if (typeof o.mcpPath === "string") checkMcpPath(o.mcpPath);
@@ -44,7 +45,8 @@ export function apcManifest(o: { name: string; origin: string; profiles: readonl
     if (url.origin !== o.origin || url.username || url.password || url.href.includes("#") || !["http:", "https:"].includes(url.protocol)) throw new Error("apcManifest: dockConnect must be a fragment-free URL on the app origin");
     manifest.dock_connect = url.href;
   }
-  if (typeof o.mobile === "boolean") manifest.mobile = o.mobile;
+  if (o.mobile !== undefined && typeof o.mobile !== "boolean") throw new Error(`apcManifest: mobile must be true or false, not ${JSON.stringify(o.mobile)}`);
+  if (o.mobile !== undefined) manifest.mobile = o.mobile;
   return manifest;
 }
 

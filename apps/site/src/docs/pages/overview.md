@@ -23,7 +23,7 @@ An app offers one profile or both. The core (the three channels, the two APC too
 | The data goes | from the app to your agent | from the app through your dock to your agent |
 | Good for | one app, no third party in the path | one agent that follows you across apps |
 
-On a phone there is nothing to drag from, so every app shows its agents in its own page, and a finger pins with a tap.
+On a phone there is nothing to drag from, so every app that offers its page on a phone shows its agents in its own page, and a finger pins with a tap. An app made only for the desktop says so in its `apc.json` (since 1.4).
 
 You can try both at [apc.tineira.com](/): open your [dock](/dock), or connect directly to Signals, one of the two demo apps.
 

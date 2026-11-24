@@ -10,14 +10,16 @@ import { APC_JSON_PATH } from "@tineira/apc-protocol";
 import { apcConformance, ConformanceError, type ApcAppAdapter, type ConformanceCheck } from "../src/index.ts";
 import { CORE_ORIGIN, coreFixture } from "./core-fixture.ts";
 
-/** The core fixture, with its `apc.json` replaced by `file` and its phone adapter kept or left out. */
-function app(file: Record<string, unknown>, withMobile: boolean): ApcAppAdapter {
+const MANIFEST = { name: "Core", origin: CORE_ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }] }, direct: { connect: `${CORE_ORIGIN}/agents` } };
+
+/** The core fixture, with its `apc.json` answered by `answer` (or replaced by `file`) and its phone adapter kept or left out. */
+function app(file: Record<string, unknown> | ((request: Request) => Response), withMobile: boolean): ApcAppAdapter {
   const { adapter } = coreFixture();
   const inner = adapter.fetch!;
-  const manifest = { name: "Core", origin: CORE_ORIGIN, profiles: ["direct"], mcp: { path: "/mcp/", endpoints: [{ path: "/mcp/{secret}", profiles: ["direct"] }] }, direct: { connect: `${CORE_ORIGIN}/agents` }, ...file };
+  const answer = typeof file === "function" ? file : () => Response.json({ ...MANIFEST, ...file });
   return {
     ...adapter,
-    fetch: async (request: Request) => (new URL(request.url).pathname === APC_JSON_PATH ? Response.json(manifest) : inner(request)),
+    fetch: async (request: Request) => (new URL(request.url).pathname === APC_JSON_PATH ? answer(request) : inner(request)),
     page: withMobile ? adapter.page : { ...adapter.page, mobile: undefined },
   };
 }
@@ -58,7 +60,7 @@ for (const [label, file] of [
 
 test("the hint names the opt-out, and why a claim before 1.4.0 cannot use it", async () => {
   await assert.rejects(given(mobileChecks(app({ standard: "1.4.0" }, false))).run(), /declare a desktop-only app with "mobile": false in apc\.json and a claim of 1\.4\.0 or later/);
-  await assert.rejects(given(mobileChecks(app({ standard: "1.3.0", mobile: false }, false))).run(), /takes an app out of the rule only from a claim of 1\.4\.0/);
+  await assert.rejects(given(mobileChecks(app({ standard: "1.3.0", mobile: false }, false))).run(), /takes an app out of the rule only with a claim from 1\.4\.0 within 1\.x/);
 });
 
 test("a claim before 0.6.0 still needs no page.mobile, with no note on the first check", async () => {
@@ -72,4 +74,38 @@ test("with page.mobile given, the mobile checks run even when apc.json says mobi
     await check.run();
     assert.equal(check.note, undefined, `${check.name} ran`);
   }
+});
+
+/** Fails closed (review of #259): only an apc.json the suite reads as a manifest of this major can waive the adapter. */
+const desktop = { standard: "1.4.0", mobile: false };
+for (const [label, answer] of [
+  ["a newer major (2.0.0) with mobile: false", () => Response.json({ ...MANIFEST, standard: "2.0.0", mobile: false })],
+  ["a standard that is not a version (\"1.5.invalid\") with mobile: false", () => Response.json({ ...MANIFEST, standard: "1.5.invalid", mobile: false })],
+  ["a standard that is not a version (\"1.4\") with mobile: false", () => Response.json({ ...MANIFEST, standard: "1.4", mobile: false })],
+  ["an empty standard, with no mobile key", () => Response.json({ ...MANIFEST, standard: "" })],
+  ["no standard, with mobile: false", () => Response.json({ ...MANIFEST, mobile: false })],
+  ["a hub's file with mobile: false", () => Response.json({ name: "Dock", standard: "1.4.0", origin: CORE_ORIGIN, profiles: ["hub"], mcp: { path: "/mcp/" }, dock: { pair: `${CORE_ORIGIN}/apc/pair`, confirm: `${CORE_ORIGIN}/apc/confirm` }, mobile: false })],
+  ["a file that names another origin", () => Response.json({ ...MANIFEST, ...desktop, origin: "https://elsewhere.test" })],
+  ["an HTTP 404 whose body says mobile: false", () => Response.json({ ...MANIFEST, ...desktop }, { status: 404 })],
+  ["an HTTP 500 whose body says mobile: false", () => Response.json({ ...MANIFEST, ...desktop }, { status: 500 })],
+  ["a redirect to a file that says mobile: false", () => new Response(null, { status: 302, headers: { location: `${CORE_ORIGIN}/elsewhere.json` } })],
+  ["a body that is JSON null", () => new Response("null", { headers: { "content-type": "application/json" } })],
+  ["a body that is not JSON", () => new Response("mobile: false", { headers: { "content-type": "application/json" } })],
+] as const) {
+  test(`without page.mobile, ${label} fails closed with a ConformanceError`, async () => {
+    await assert.rejects(given(mobileChecks(app(answer, false))).run(), (error: unknown) => {
+      assert.ok(error instanceof ConformanceError, `a ConformanceError, not ${String(error)}`);
+      return true;
+    });
+  });
+}
+
+test("the fetch for apc.json does not follow redirects", async () => {
+  let seen: RequestRedirect | undefined;
+  const a = app((request) => {
+    seen = request.redirect;
+    return Response.json({ ...MANIFEST, ...desktop });
+  }, false);
+  await given(mobileChecks(a)).run();
+  assert.equal(seen, "manual");
 });

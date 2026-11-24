@@ -193,7 +193,7 @@ export function parseApcManifest(raw: unknown, origin: string): { ok: true; mani
     manifest.dock_connect = connect;
   }
   // APC 1.4, an app's: kept when it is a boolean, otherwise left out (the mobile rule applies), never a reason to refuse.
-  if (!profiles.includes("hub") && typeof raw.mobile === "boolean") manifest.mobile = raw.mobile;
+  if (!profiles.includes("hub") && Object.hasOwn(raw, "mobile") && typeof raw.mobile === "boolean") manifest.mobile = raw.mobile;
   if (profiles.includes("direct")) {
     const connect = isObject(raw.direct) ? onOrigin(raw.direct.connect, origin) : null;
     if (!connect) return bad("direct.connect is not a URL on its origin");
