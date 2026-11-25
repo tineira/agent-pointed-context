@@ -60,8 +60,8 @@ test("the static header and footer carry the same links as the React ones, and t
  */
 const DOCS_TEXT_SHA256: Record<string, string> = {
   "apps/site/src/docs/pages/agents.md": "0270957100668bdd5a308ed8471d6279f4136b76d743c1e2050bd32a9e95361c",
-  "apps/site/src/docs/pages/conformance.md": "abb8745db8b299b616074644e858ef7c1cd5c6f2d8e1a2ec458a437e4e1b91d1",
-  "apps/site/src/docs/pages/integrate.md": "16885fd66cb0b28ecbc2da4d7e6f134f6b9ef46eefec17905a83063028f84e30",
+  "apps/site/src/docs/pages/conformance.md": "170e2d27e089810c098a58f3e5971dc352a2dd2a2a06f84a6b0ff81e4b797dbb",
+  "apps/site/src/docs/pages/integrate.md": "67c7995419080b71fb0f9659a77d0d70881b5b4fbf768cc61ba30584e2cb8998",
   "apps/site/src/docs/pages/overview.md": "0bc84d741427d08c0af035a9d6e0d9e8d1bead1d0d924f3c73d48d12be549998",
   "apps/site/src/docs/pages/spec.md": "4f5e75be96c13bf9364ded6360a0f29be5257a9101786be6d1abf9755a42ce9c",
   "apps/site/src/docs/pages/ux.md": "ebbe37533d62c46f4da3535cbfcf4be061f9c4df9e01dd0a199b75a705ce4b65",
