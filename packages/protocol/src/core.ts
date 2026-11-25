@@ -43,7 +43,8 @@
  * 8. **`apc.json`** (APC 0.5): what the app is, at `GET {origin}/.well-known/apc.json`: its name, the
  *    standard, its origin, its profiles, where its MCP URLs live, its connect page (`manifest.ts`).
  * 9. **Mobile** (APC 0.6): on a phone or any touch viewport (`APC_MOBILE_MEDIA`) the app shows its agents
- *    in its own page, on both profiles (below).
+ *    in its own page, on both profiles (below), unless its `apc.json` says `"mobile": false` (APC 1.4: a
+ *    desktop-only app).
  *
  * `@tineira/apc-conformance` checks an app against this core, given its MCP endpoint and a small adapter for
  * what happens in the page.
@@ -271,6 +272,12 @@ export function isRevokedAnswer(body: unknown): body is RevokedAnswer {
  * How the bar sits on a phone, that it stays reachable while the page scrolls, how "tap to pin" looks and
  * the size of a finger target are the UX guide's (apc.tineira.com/docs/ux#phones), not the contract's.
  * While an agent is armed the page SHOULD show that it is and give a way to cancel.
+ *
+ * **Desktop-only apps (APC 1.4).** An app that does not offer its page on a phone says `"mobile": false`
+ * in its `apc.json` (`ApcManifest.mobile`), and from a claim of 1.4.0 the rules above do not bind it.
+ * Opened in such a viewport anyway, its page SHOULD tell the person that pointing an agent needs a larger
+ * screen. The rest of the core still holds at any width: a Direct agent's bar is never collapsed or
+ * hidden, and Revoke is in the bar.
  *
  * `APC_MOBILE_VIEWPORT` is the reference viewport the conformance suite and the apps are checked at.
  */

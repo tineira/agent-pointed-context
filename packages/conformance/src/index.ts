@@ -8,7 +8,8 @@
  * (`GET {origin}/.well-known/apc.json`, through the adapter's `fetch`): its shape, its origin, the
  * standard, and that its profiles and `mcp.path` match what the app serves. Since 0.6 an adapter may
  * also give `page.mobile` (the page on a phone): the suite then checks that every agent is shown in the
- * page, that the bar cannot be collapsed, and that a finger can pin and unpin with no mouse drag. Since 0.9
+ * page, that the bar cannot be collapsed, and that a finger can pin and unpin with no mouse drag (required from 0.6,
+ * except of a desktop-only app, whose `apc.json` says `"mobile": false` from 1.4). Since 0.9
  * an app on the Dock profile gives `dock` too: the suite pairs it with a stand-in hub (`standInHub`) and checks
  * the pairing code (the owner's code is new for each consent and the app sends that one to the hub; it keeps no grant
  * when the hub does not acknowledge the code; wrong codes and the code's time running out give the grant back;
@@ -129,7 +130,8 @@ export interface ApcLinkAdapter {
 
 /**
  * The person's page on a phone (APC 0.6): a viewport of `APC_MOBILE_VIEWPORT` with a touch pointer and no
- * mouse. Optional in the adapter; with it the suite runs the mobile checks. An app's own test can model
+ * mouse. Required of an app that claims 0.6.0 or later, except a desktop-only app (`"mobile": false`, APC 1.4); with it
+ * the suite runs the mobile checks. An app's own test can model
  * the page with the pieces of @tineira/apc-web (the bar's collapse rule, tap to pin); the real thing is a browser
  * with touch emulation (`scripts/mobile-e2e.mjs` does that for Pulse and Signals).
  */
@@ -322,7 +324,11 @@ export interface ApcAppAdapter {
     takePresence(): PresenceMessage[];
     /** The person's Revoke in the agent bar; false when the app refuses. */
     revoke(grantId: string): Promise<boolean>;
-    /** The page on a phone (APC 0.6). Left out: the mobile checks are skipped. */
+    /**
+     * The page on a phone (APC 0.6). Required of an app that claims 0.6.0 or later, unless its `apc.json` claims 1.4.0 or
+     * later (within this major) with `"mobile": false`, a desktop-only app. Left out, the other mobile checks pass with a
+     * note that they were not checked.
+     */
     mobile?: ApcMobilePage;
   };
   /** An app that offers both profiles: the `apc_link` checks run too. */
@@ -404,6 +410,8 @@ const NOT_011 = { note: "not checked: the app's apc.json claims a standard befor
 const NO_WAIT_EVENTS = { note: "not checked: the app sends no wait events (APC 0.11: optional, and only for an app that claims and releases its place for a wait atomically), so its page shows no waiting" };
 const PROBE_FAILED = { note: "not checked: the wait-event probe failed in an earlier check, which reports why" };
 const DOCK_WAITS = { note: "not checked on the Dock profile: a dock agent waits on the hub, so the page shows no waiting for a dock grant (APC 0.11)" };
+const NO_MOBILE_PAGE = { note: "not checked: the adapter gives no page.mobile (the check that the adapter for a phone is given says whether it is required)" };
+const DESKTOP_ONLY = { note: "not checked: apc.json declares a desktop-only app (\"mobile\": false, APC 1.4), which the mobile rule does not bind" };
 
 /** The wait events of one grant among presence messages, checked for their exact shape (APC 0.11), oldest first. */
 function waitEventsOf(messages: PresenceMessage[], grantId: string): Array<PresenceWaitEvent["state"]> {
@@ -1146,23 +1154,44 @@ function randomLike(like: string): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(Math.max(like.length, 16))), (x) => alphabet[x % alphabet.length]).join("");
 }
 
-/** The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin. */
+/**
+ * The mobile rule (APC 0.6): on a phone the agents are in the page, never collapsed, and a finger can pin and unpin.
+ * From 1.4 an app whose `apc.json` says `"mobile": false` (a desktop-only app) is not bound by it.
+ */
 function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): ConformanceCheck[] {
   const [first, second] = app.targets;
   const { width, height } = APC_MOBILE_VIEWPORT;
-  const check = (name: string, run: () => Promise<void>): ConformanceCheck => ({ name: `${app.name} (${app.profile}): mobile ${width}x${height}: ${name}`, run });
+  const check = (name: string, run: () => Promise<void | { note: string }>): ConformanceCheck => noted(`${app.name} (${app.profile}): mobile ${width}x${height}: ${name}`, run);
   return [
-    check("the page adapter for a phone is given (required of an app that claims 0.6.0 or later)", async () => {
+    check("the page adapter for a phone is given (required of an app that claims 0.6.0 or later, unless it claims 1.4.0 or later with mobile: false)", async () => {
       if (mobile) return;
-      const conn = await app.connect();
-      const request = new Request(`${new URL(conn.mcpUrl).origin}${APC_JSON_PATH}`, { headers: { accept: "application/json" } });
-      const response = await (app.fetch ? app.fetch(request) : fetch(request));
-      const claimed = ((await response.json().catch(() => ({}))) as { standard?: unknown }).standard;
-      expect(typeof claimed === "string" && compareStandard(claimed, "0.6.0") < 0, `apc.json claims standard ${String(claimed)}, which requires the mobile rule to be checked: give page.mobile in the adapter (ApcMobilePage: agentBar, pinByTouch, unpinByTouch)`);
+      // Fail closed: only an apc.json this suite reads as a manifest can waive the phone adapter, never a guess.
+      const origin = new URL((await app.connect()).mcpUrl).origin;
+      const where = `${origin}${APC_JSON_PATH}`;
+      const closed = `the page adapter for a phone (page.mobile: agentBar, pinByTouch, unpinByTouch) is required unless apc.json says otherwise, and`;
+      let response: Response;
+      try {
+        const request = new Request(where, { headers: { accept: "application/json" }, redirect: "manual" });
+        response = await (app.fetch ? app.fetch(request) : fetch(request));
+      } catch (error) {
+        throw new ConformanceError(`${closed} GET ${where} failed (${String(error)})`);
+      }
+      expect(response.status === 200, `${closed} GET ${where} answered HTTP ${response.status}`);
+      const parsed = parseApcManifest(await response.json().catch(() => undefined), origin);
+      expect(parsed.ok, `${closed} ${where} is ${parsed.ok ? "" : `${parsed.error} (${parsed.detail})`}`);
+      const m = parsed.manifest;
+      if (compareStandard(m.standard, "0.6.0") < 0) return;
+      // APC 1.4: a desktop-only app opts out, and only a claim of this major from 1.4.0 can use it (parseApcManifest keeps
+      // mobile only as a boolean, and never for a hub).
+      const support = standardSupport(m.standard, APC_STANDARD_VERSION);
+      const sameMajor = support.ok && m.standard.split(".")[0] === APC_STANDARD_VERSION.split(".")[0];
+      if (m.mobile === false && sameMajor && compareStandard(m.standard, "1.4.0") >= 0) return DESKTOP_ONLY;
+      const hint = m.mobile === false ? ` (mobile: false takes an app out of the rule only with a claim from 1.4.0 within ${APC_STANDARD_VERSION.split(".")[0]}.x)` : `, or declare a desktop-only app with "mobile": false in apc.json and a claim of 1.4.0 or later`;
+      expect(false, `apc.json claims standard ${m.standard}, which requires the mobile rule to be checked: give page.mobile in the adapter (ApcMobilePage: agentBar, pinByTouch, unpinByTouch)${hint}`);
     }),
 
     check("every agent is shown in the page, and the agent bar cannot be collapsed or hidden", async () => {
-      if (!mobile) return;
+      if (!mobile) return NO_MOBILE_PAGE;
       const a = await app.connect();
       const b = await app.connect();
       await app.page.setOpen(true);
@@ -1172,7 +1201,7 @@ function mobileChecks(app: ApcAppAdapter, mobile: ApcMobilePage | undefined): Co
     }),
 
     check("a person pins with a finger, no mouse drag, and the agent reads the pin; unpin works by touch too", async () => {
-      if (!mobile) return;
+      if (!mobile) return NO_MOBILE_PAGE;
       const conn = await app.connect();
       const { grantId } = conn;
       await app.page.setOpen(true);

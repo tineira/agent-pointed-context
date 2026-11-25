@@ -100,3 +100,19 @@ test("versions of the standard compare as numbers, and the Direct-only answer na
   assert.ok(compareStandard("0.4.9", "0.5.0") < 0);
   assert.match(directOnlyNote("Signals"), /^Signals connects agents directly, not through a dock\. Connect your agent to Signals on its own URL/);
 });
+
+test("mobile: false is kept for an app, anything else is left out and never refuses the file (APC 1.4)", () => {
+  const off = parseApcManifest(app({ standard: "1.4.0", mobile: false }), O);
+  assert.ok(off.ok && off.manifest.mobile === false, "a desktop-only app keeps mobile: false");
+  const on = parseApcManifest(app({ standard: "1.4.0", mobile: true }), O);
+  assert.ok(on.ok && on.manifest.mobile === true);
+  for (const odd of ["false", 0, null, {}, []]) {
+    const parsed = parseApcManifest(app({ standard: "1.4.0", mobile: odd }), O);
+    assert.ok(parsed.ok, `mobile: ${JSON.stringify(odd)} does not make the file invalid`);
+    assert.ok(!("mobile" in parsed.manifest), `mobile: ${JSON.stringify(odd)} is left out, so the mobile rule applies`);
+  }
+  const without = parseApcManifest(app({ standard: "1.4.0" }), O);
+  assert.ok(without.ok && !("mobile" in without.manifest), "left out, the mobile rule applies");
+  const hub = parseApcManifest({ name: "APC dock", standard: "1.4.0", origin: O, profiles: ["hub"], mcp: { path: "/mcp/" }, dock: { pair: `${O}/apc/pair`, confirm: `${O}/apc/confirm` }, mobile: false }, O);
+  assert.ok(hub.ok && !("mobile" in hub.manifest), "mobile is an app's key: a hub's is ignored");
+});

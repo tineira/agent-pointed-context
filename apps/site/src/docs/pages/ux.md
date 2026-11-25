@@ -10,7 +10,7 @@ Presentation moved out of [the spec](/docs/spec) so that the contract holds only
 - **A state is shown only when the app's data says so.** Never guessed from timing, and `waiting` only from the wait signal ([states](#states)).
 - **A logo says which agent is connected, never that it is verified.** No vendor's mascot is drawn ([logos](#logos)).
 - **Revoke is in the agent bar, and the bar is never collapsed or hidden while it shows a Direct agent.**
-- **On a phone the agents are in the page and a finger can pin and unpin.** Mobile is interoperability, not presentation: the conformance suite checks it ([phones](#phones), [Mobile](/docs/spec#mobile)).
+- **On a phone the agents are in the page and a finger can pin and unpin.** Mobile is interoperability, not presentation: the conformance suite checks it ([phones](#phones), [Mobile](/docs/spec#mobile)). A desktop-only app says `"mobile": false` in its `apc.json` instead (since 1.4).
 
 The pairing rules that look like screen rules but are security rules (the code is shown only on the app owner's page, the dock names the app's host on a request, the consent names the hub's host, an unverified app's warning names the domain first and defaults to Deny, what an unverified app gives is marked untrusted) are in the spec too, in [the Dock profile](/docs/spec#the-dock-profile) and [the hub's trust model](/docs/spec#the-hubs-trust-model).
 
@@ -88,6 +88,8 @@ The rule that matters is the spec's [Mobile](/docs/spec#mobile): the agents are 
 <!-- include ux-snippets.ts#tap -->
 
 Check the page with touch emulation, as `scripts/mobile-e2e.mjs` does for Pulse and Signals, or give the suite's `page.mobile` adapter ([conformance](/docs/conformance#run-it-from-code)).
+
+**A desktop-only app** (`"mobile": false` with a claim of 1.4.0 or later) skips all of this. Opened on a phone anyway, it says so in one line beside the bar, for example "Pointing an agent needs a larger screen.". The bar itself stays: while it shows a Direct agent it is never collapsed or hidden, whatever the width, and Revoke stays in it.
 
 ## Pairing and consent cards
 

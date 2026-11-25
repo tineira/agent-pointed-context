@@ -60,12 +60,12 @@ test("the static header and footer carry the same links as the React ones, and t
  */
 const DOCS_TEXT_SHA256: Record<string, string> = {
   "apps/site/src/docs/pages/agents.md": "0270957100668bdd5a308ed8471d6279f4136b76d743c1e2050bd32a9e95361c",
-  "apps/site/src/docs/pages/conformance.md": "7047fb263027f96b90001ee3649bf691c5a66be4038b847a8a941b7dc9e73b09",
-  "apps/site/src/docs/pages/integrate.md": "98c55744a5f715839a40aa6c91e89634a63d3bad135bc5b01d132d24003146fc",
-  "apps/site/src/docs/pages/overview.md": "02e6d8f080d4d5c1d0b181dce963bf87edbf754f7cd3fa187cb81a80323bb47a",
-  "apps/site/src/docs/pages/spec.md": "4f69e52219da10050854f08f1cf1e476e888aa96fa67571e84fa4c395b105e10",
-  "apps/site/src/docs/pages/ux.md": "3093f6eccffbe9e1f492948e0266ee748850ad07171d52e1e1304d5eb6fd58e2",
-  "packages/protocol/CHANGELOG.md": "b21307feb183316845523a181d5d5840e00899bdd1c438a5c6a98a0d33445361",
+  "apps/site/src/docs/pages/conformance.md": "abb8745db8b299b616074644e858ef7c1cd5c6f2d8e1a2ec458a437e4e1b91d1",
+  "apps/site/src/docs/pages/integrate.md": "16885fd66cb0b28ecbc2da4d7e6f134f6b9ef46eefec17905a83063028f84e30",
+  "apps/site/src/docs/pages/overview.md": "0bc84d741427d08c0af035a9d6e0d9e8d1bead1d0d924f3c73d48d12be549998",
+  "apps/site/src/docs/pages/spec.md": "4f5e75be96c13bf9364ded6360a0f29be5257a9101786be6d1abf9755a42ce9c",
+  "apps/site/src/docs/pages/ux.md": "ebbe37533d62c46f4da3535cbfcf4be061f9c4df9e01dd0a199b75a705ce4b65",
+  "packages/protocol/CHANGELOG.md": "93b6ba3d9985bb1b0d6a239f819c7fbc700e5a00bd45a3663fbac14ac5999e40",
 };
 
 test("the docs' text is frozen: every page's source, and the protocol changelog, matches its committed fingerprint", () => {

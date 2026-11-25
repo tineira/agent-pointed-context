@@ -31,7 +31,7 @@ for (const check of apcConformance({
 })) test(check.name, check.run);
 ```
 
-`page.mobile` (`ApcMobilePage`: `agentBar`, `pinByTouch`, `unpinByTouch`) is required of an app that claims 0.6.0 or later; `@tineira/apc-web`'s README shows how to build it from `barCanCollapse` and `createTapPin`. A Dock app also gives `dock` (the stand-in hub `standInHub`, the pairing code, and from 0.10 `dock.lifecycle`). The docs have two whole adapters: a Direct app with a bearer token (https://apc.tineira.com/docs/integrate#a-complete-direct-app-with-a-bearer-token) and Orders, on both profiles (https://apc.tineira.com/docs/conformance#run-it-from-code).
+`page.mobile` (`ApcMobilePage`: `agentBar`, `pinByTouch`, `unpinByTouch`) is required of an app that claims 0.6.0 or later, except a desktop-only app: one whose `apc.json` claims 1.4.0 or later and says `"mobile": false` passes without it, and the mobile checks say they were not checked; `@tineira/apc-web`'s README shows how to build it from `barCanCollapse` and `createTapPin`. A Dock app also gives `dock` (the stand-in hub `standInHub`, the pairing code, and from 0.10 `dock.lifecycle`). The docs have two whole adapters: a Direct app with a bearer token (https://apc.tineira.com/docs/integrate#a-complete-direct-app-with-a-bearer-token) and Orders, on both profiles (https://apc.tineira.com/docs/conformance#run-it-from-code).
 
 `runConformance(adapter)` runs them all and returns a report; `httpConformance` / `runHttpConformance` are the HTTP checks as a library. `@tineira/apc-conformance/workers` runs a Cloudflare Durable Object on Node's SQLite with fake pages, so the suite can run against a Worker with no network.
 

@@ -33,7 +33,7 @@ Whether an agent is listening now (APC 0.11): fold each presence message into `f
 
 On a phone (APC 0.6, the reference viewport `APC_MOBILE_VIEWPORT`, 375 x 812) `<apc-agents>` stays in the page, uncollapsed, at the bottom of the viewport, and `enablePinning` turns a tap on a mark, then a tap on a target, into a pin. Two pieces of that are exported, so an app's own test can model its phone page with the same rules: `barCanCollapse(agents, mobile)` (false on a phone, always) and `createTapPin({ onPin })` (the tap-to-pin controller `enablePinning` runs: `toggle(grantId)` arms an agent, `tap({ element, target })` pins it and answers `"pinned"`).
 
-[`@tineira/apc-conformance`](https://www.npmjs.com/package/@tineira/apc-conformance) checks the mobile rule through the adapter's `page.mobile` (`ApcMobilePage`), required of an app that claims 0.6.0 or later. With these two pieces, and your server's own pin routes:
+[`@tineira/apc-conformance`](https://www.npmjs.com/package/@tineira/apc-conformance) checks the mobile rule through the adapter's `page.mobile` (`ApcMobilePage`), required of an app that claims 0.6.0 or later unless its `apc.json` declares a desktop-only app (`"mobile": false`, from 1.4). With these two pieces, and your server's own pin routes:
 
 ```ts
 import { barCanCollapse, createTapPin, type BarAgent } from "@tineira/apc-web";

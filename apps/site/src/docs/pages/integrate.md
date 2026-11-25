@@ -133,7 +133,7 @@ The page's event stream is how the server knows a page is open, and how presence
 - **In Chromium / Playwright**, drive real browser input so Chromium sets `isTrusted: true`: in-page marks use pointer events (not HTML5 `draggable`), so move the real pointer from the mark's centre to the target's centre (`page.mouse.move` / `down` / `move` / `up`, or `Input.dispatchMouseEvent` over CDP; `Input.dispatchTouchEvent` for touch taps on mobile); for a cross-window dock drop, send `Input.dispatchDragEvent` (`dragEnter`, `dragOver`, `drop`) over CDP with `application/x-apc-agent`. [Automating drops in Chromium](/docs/conformance#automating-drops-in-chromium) shows both helpers.
 - **In a unit or DOM test without real browser input**, pass `trusted: () => true` to `enablePinning` (in test harnesses only, never in production — page scripts cannot reach `enablePinning`'s options) or drive `createTapPin` directly as `orders-conformance.ts` does for `page.mobile`.
 
-On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile), and [phones](/docs/ux#phones) in the UX guide).
+On a phone, `@tineira/apc-web` already keeps the bar in the page, uncollapsed, at the bottom of the viewport, with finger-sized marks, and turns a tap on a mark into "tap to pin". Check your own layout at 375 × 812 ([mobile](/docs/spec#mobile), and [phones](/docs/ux#phones) in the UX guide). An app that is only for the desktop declares `"mobile": false` in its `apc.json` instead (`apcManifest({ …, mobile: false })`, with a claim of 1.4.0 or later) and is not held to the phone rules; its Direct agents' bar, with Revoke, still never collapses at any width.
 
 ### The agent in the page
 
@@ -346,7 +346,7 @@ The reference examples send presence on a page event stream. Without a long-live
 - Every pointable element has `data-focus`; targets carry ids and keys only.
 - `get_current_view` and `wait_for_focus` are registered on every grant.
 - Every tool runs inside the wrapper: revoke check, `attention`, presence, `then`.
-- The agent bar is on every page, with Revoke; on a phone it stays in the page.
+- The agent bar is on every page, with Revoke; on a phone it stays in the page (unless the app is desktop-only, `"mobile": false`).
 - If you show agents as pets: `<apc-pets>` in the header, its states fed only by what the page knows, its colours following the page's scheme.
 - Revoke answers `revoked` to every method (403 with a secret URL; 401 with a bearer token, `revokedResponse(host, at, { bearer: true })`); an unknown grant 404 (a plain 401 with a bearer token).
 - `wait_for_focus` holds one wait per grant, and a pin is marked seen only once delivered.
